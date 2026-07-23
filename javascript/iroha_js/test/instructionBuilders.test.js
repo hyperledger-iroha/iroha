@@ -274,6 +274,8 @@ function buildLocal8Literal(address) {
 const DOMAIN_ID = "wonderland.sora";
 const ACCOUNT_SIGNATORY =
   "ED0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
+const SEED_11_ED25519_PUBLIC_KEY_HEX =
+  "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const ACCOUNT_PUBLIC_KEY = hexToBytes(ACCOUNT_SIGNATORY.slice(6));
 const ACCOUNT_ADDRESS = AccountAddress.fromAccount({ publicKey: ACCOUNT_PUBLIC_KEY,
 });
@@ -1300,7 +1302,7 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
 baseTest("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
   const abiHashBytes = Buffer.alloc(32, 0xbb);
-  const signer = `ed25519:ed0120${"11".repeat(32)}`;
+  const signer = `ed25519:ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`;
   const signature = `ed25519:${"22".repeat(64)}`;
   const signerCanonical = signer.split(":")[1];
   const signatureCanonical = signature.split(":")[1].toUpperCase();
@@ -3859,7 +3861,7 @@ descriptorTest("ZK-X.509 identity builders reject malformed inputs", () => {
 
 descriptorTest("ZK-X.509 local verifier rejects tampered dev fixtures", () => {
   const otherAccount = AccountAddress.fromAccount({
-    publicKey: new Uint8Array(32).fill(11),
+    publicKey: hexToBytes(SEED_11_ED25519_PUBLIC_KEY_HEX),
   }).toI105(SORA_I105_DISCRIMINANT);
   const fixtureInput = {
     caRootJson: { root: "boi-root-ca", version: 1 },
@@ -7801,6 +7803,31 @@ test("buildCreateElectionInstruction accepts byte-array eligibleRoot", () => {
   assert.deepEqual(payload.eligible_root, toByteArray(Buffer.alloc(32, 0x44)));
 });
 
+test("buildCreateElectionInstruction rejects coercible non-byte eligibleRoot entries", () => {
+  for (const entry of ["1", true, null]) {
+    const eligibleRoot = new Array(32).fill(0);
+    eligibleRoot[0] = entry;
+    assert.throws(
+      () =>
+        buildCreateElectionInstruction({
+          electionId: "election-coercible",
+          options: 2,
+          eligibleRoot,
+          startTs: 100,
+          endTs: 200,
+          ballotVerifyingKey: "halo2/ipa:vk_ballot",
+          tallyVerifyingKey: "halo2/ipa:vk_tally",
+          domainTag: "zk",
+        }),
+      (error) => {
+        assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+        assert.match(String(error?.message), /eligibleRoot\[0\]/i);
+        return true;
+      },
+    );
+  }
+});
+
 test("buildCreateElectionInstruction rejects unsafe timestamps", () => {
   const tooLarge = (BigInt(Number.MAX_SAFE_INTEGER) + 1n).toString(10);
   assert.throws(
@@ -7860,6 +7887,29 @@ test("buildSubmitBallotInstruction rejects non-byte nullifier arrays", () => {
       return true;
     },
   );
+});
+
+test("buildSubmitBallotInstruction rejects coercible non-byte ciphertext entries", () => {
+  for (const entry of ["1", true, null]) {
+    assert.throws(
+      () =>
+        buildSubmitBallotInstruction({
+          electionId: "ref-1",
+          ciphertext: [entry],
+          ballotProof: {
+            backend: "halo2/ipa",
+            proof: Buffer.from("proof"),
+            verifyingKeyRef: "halo2/ipa:vk_ballot",
+          },
+          nullifier: Buffer.alloc(32, 0x33),
+        }),
+      (error) => {
+        assert.equal(error?.code, ValidationErrorCode.VALUE_OUT_OF_RANGE);
+        assert.match(String(error?.message), /ciphertext\[0\]/i);
+        return true;
+      },
+    );
+  }
 });
 
 test("buildSubmitBallotInstruction rejects empty ciphertext", () => {

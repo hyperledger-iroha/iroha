@@ -16,18 +16,21 @@ object ContractJsonParser {
     fun parseCallResponse(payload: ByteArray): ContractCallResponse {
         val root = expectObject(parse(payload, "contract call response"), "contract call response")
         return ContractCallResponse(
-            ok = root["ok"] == true,
-            submitted = root["submitted"] == true,
+            ok = requiredBoolean(root["ok"], "contract call response.ok"),
+            submitted = requiredBoolean(root["submitted"], "contract call response.submitted"),
             dataspace = requiredString(root["dataspace"], "contract call response.dataspace"),
             codeHashHex = HttpClientTransport.normalizeHex32(requiredString(root["code_hash_hex"], "contract call response.code_hash_hex"), "codeHashHex"),
             abiHashHex = HttpClientTransport.normalizeHex32(requiredString(root["abi_hash_hex"], "contract call response.abi_hash_hex"), "abiHashHex"),
-            creationTimeMs = asLong(root["creation_time_ms"], "contract call response.creation_time_ms"),
-            contractAddress = optionalString(root["contract_address"]),
+            creationTimeMs = asNonNegativeLong(
+                root["creation_time_ms"],
+                "contract call response.creation_time_ms",
+            ),
+            contractAddress = optionalString(root["contract_address"], "contract call response.contract_address"),
             txHashHex = if (root.containsKey("tx_hash_hex") && root["tx_hash_hex"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["tx_hash_hex"], "contract call response.tx_hash_hex"), "txHashHex")
             else null,
             pipelineStatus = optionalObject(root["pipeline_status"], "contract call response.pipeline_status"),
-            entrypoint = optionalString(root["entrypoint"]),
+            entrypoint = optionalString(root["entrypoint"], "contract call response.entrypoint"),
             transactionTtlMs = asOptionalNonNegativeLong(
                 root["transaction_ttl_ms"],
                 "contract call response.transaction_ttl_ms",
@@ -54,12 +57,12 @@ object ContractJsonParser {
             status = requiredString(receipt["status"], "$path.status"),
             transport = requiredString(receipt["transport"], "$path.transport"),
             dataspace = requiredString(receipt["dataspace"], "$path.dataspace"),
-            contractAlias = optionalString(receipt["contract_alias"]),
-            contractAddress = optionalString(receipt["contract_address"]),
+            contractAlias = optionalString(receipt["contract_alias"], "$path.contract_alias"),
+            contractAddress = optionalString(receipt["contract_address"], "$path.contract_address"),
             codeHashHex = optionalHash(receipt["code_hash_hex"], "$path.code_hash_hex"),
             abiHashHex = optionalHash(receipt["abi_hash_hex"], "$path.abi_hash_hex"),
             txHashHex = optionalHash(receipt["tx_hash_hex"], "$path.tx_hash_hex"),
-            entrypoint = optionalString(receipt["entrypoint"]),
+            entrypoint = optionalString(receipt["entrypoint"], "$path.entrypoint"),
             entrypointHashHex = optionalHash(receipt["entrypoint_hash_hex"], "$path.entrypoint_hash_hex"),
             gasLimit = gasLimit,
             gasUsed = asOptionalNonNegativeLong(receipt["gas_used"], "$path.gas_used"),
@@ -79,7 +82,7 @@ object ContractJsonParser {
             ok = true,
             resolvedMultisigAccountId = requiredExactAccountId(root["resolved_multisig_account_id"], "multisig response.resolved_multisig_account_id"),
             submitted = optionalBoolean(root["submitted"], "multisig response.submitted"),
-            proposalId = optionalString(root["proposal_id"]),
+            proposalId = optionalString(root["proposal_id"], "multisig response.proposal_id"),
             instructionsHash = if (root.containsKey("instructions_hash") && root["instructions_hash"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["instructions_hash"], "multisig response.instructions_hash"), "instructionsHash")
             else null,
@@ -98,9 +101,9 @@ object ContractJsonParser {
     fun parseGovernanceContractResponse(payload: ByteArray): GovernanceContractResponse {
         val root = expectObject(parse(payload, "governance contract response"), "governance contract response")
         return GovernanceContractResponse(
-            found = root["found"] == true,
+            found = requiredBoolean(root["found"], "governance contract response.found"),
             contractAddress = requiredString(root["contract_address"], "governance contract response.contract_address"),
-            dataspace = optionalString(root["dataspace"]),
+            dataspace = optionalString(root["dataspace"], "governance contract response.dataspace"),
             codeHashHex = if (root.containsKey("code_hash_hex") && root["code_hash_hex"] != null)
                 HttpClientTransport.normalizeHex32(requiredString(root["code_hash_hex"], "governance contract response.code_hash_hex"), "codeHashHex")
             else null,
@@ -121,9 +124,9 @@ object ContractJsonParser {
     }
 
     private fun requiredString(value: Any?, path: String): String {
-        val string = optionalString(value)
-        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
-        return string.trim()
+        check(value is String) { "$path must be a string" }
+        check(value.isNotBlank()) { "$path must be a non-empty string" }
+        return value.trim()
     }
 
     private fun requiredExactAccountId(value: Any?, path: String): String {
@@ -136,15 +139,16 @@ object ContractJsonParser {
     }
 
     private fun requiredExactString(value: Any?, path: String): String {
-        val string = if (value is String) value else value?.toString()
-        check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
-        check(string.trim() == string) { "$path must not contain surrounding whitespace" }
-        return string
+        check(value is String) { "$path must be a string" }
+        check(value.isNotBlank()) { "$path must be a non-empty string" }
+        check(value.trim() == value) { "$path must not contain surrounding whitespace" }
+        return value
     }
 
-    private fun optionalString(value: Any?): String? {
+    private fun optionalString(value: Any?, path: String): String? {
         if (value == null) return null
-        return if (value is String) value.trim().ifEmpty { null } else value.toString()
+        check(value is String) { "$path must be a string when present" }
+        return value.trim().ifEmpty { null }
     }
 
     private fun optionalHash(value: Any?, path: String): String? {
@@ -159,6 +163,11 @@ object ContractJsonParser {
 
     private fun optionalBoolean(value: Any?, path: String): Boolean? {
         if (value == null) return null
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
+    }
+
+    private fun requiredBoolean(value: Any?, path: String): Boolean {
         check(value is Boolean) { "$path must be a boolean" }
         return value
     }
@@ -178,6 +187,12 @@ object ContractJsonParser {
         return parsed
     }
 
+    private fun asNonNegativeLong(value: Any?, path: String): Long {
+        val parsed = asLong(value, path)
+        check(parsed >= 0) { "$path must be non-negative" }
+        return parsed
+    }
+
     private fun requiredList(value: Any?, path: String): List<Any?> {
         check(value is List<*>) { "$path must be an array" }
         return value
@@ -191,7 +206,8 @@ object ContractJsonParser {
 
     private fun optionalBase64(value: Any?, path: String): String? {
         if (value == null) return null
-        val literal = if (value is String) value.trim() else value.toString().trim()
+        check(value is String) { "$path must be a base64 string when present" }
+        val literal = value.trim()
         check(literal.isNotEmpty()) { "$path must be a non-empty base64 string" }
         val decoded = try {
             Base64.getDecoder().decode(literal)

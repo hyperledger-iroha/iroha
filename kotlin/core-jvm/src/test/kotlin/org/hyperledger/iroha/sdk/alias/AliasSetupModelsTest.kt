@@ -8,6 +8,7 @@ import java.nio.file.Paths
 import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.client.JsonEncoder
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -921,7 +922,7 @@ class AliasSetupModelsTest {
         ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L)
 
     private fun account(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     private fun asset(): String {

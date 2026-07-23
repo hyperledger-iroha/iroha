@@ -17,6 +17,15 @@ DEFAULT_RESOURCES_DIR = Path("java/iroha_android/src/test/resources")
 DEFAULT_FIXTURES_PATH = DEFAULT_RESOURCES_DIR / "transaction_payloads.json"
 DEFAULT_MANIFEST_PATH = DEFAULT_RESOURCES_DIR / "transaction_fixtures.manifest.json"
 DEFAULT_STATE_PATH = Path("artifacts/android_fixture_regen_state.json")
+MAX_TRANSACTION_NONCE = 0xFFFF_FFFF
+
+
+def is_valid_transaction_nonce(value: object) -> bool:
+    return value is None or (
+        isinstance(value, int)
+        and not isinstance(value, bool)
+        and 1 <= value <= MAX_TRANSACTION_NONCE
+    )
 
 
 def decode_base64(value: str, context: str) -> bytes:
@@ -167,7 +176,7 @@ def load_payload_fixtures(path: Path) -> Dict[str, PayloadFixture]:
                 raise ValueError(
                     f"fixture entry {name} in {path} has invalid time_to_live_ms"
                 )
-            if nonce is not None and (not isinstance(nonce, int) or isinstance(nonce, bool)):
+            if not is_valid_transaction_nonce(nonce):
                 raise ValueError(f"fixture entry {name} in {path} has invalid nonce")
             mapping[name] = PayloadFixture(
                 encoded=encoded,
@@ -266,7 +275,7 @@ def compare(
         ):
             errors.append(f"manifest fixture has invalid time_to_live_ms: {entry}")
             continue
-        if nonce is not None and (not isinstance(nonce, int) or isinstance(nonce, bool)):
+        if not is_valid_transaction_nonce(nonce):
             errors.append(f"manifest fixture has invalid nonce: {entry}")
             continue
 

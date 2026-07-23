@@ -175,7 +175,7 @@ postconditions, shared Rust/Verus kernels, sealed projection builders and
 identity extractors, and fail-closed production call-site expressions. The
 checker also seals the complete token stream of each authoritative production
 call item, so retaining the reviewed kernel snippet behind a newly inserted
-bypass is not accepted. Fifteen of the 22 call items are sealed. Seven remain
+bypass is not accepted. Seventeen of the 24 call items are sealed. Seven remain
 explicitly unfrozen while the reply-route ownership patch changes
 `v2_runtime.rs::{pop_next_with_ownership, enqueue_classified_command,
 enqueue_completion_batch, commit_canonical_body_available}`,
@@ -202,8 +202,10 @@ immutable, source-manifest-bound release evidence set. The current boundary is:
   blocked until the remaining production paths are sealed and one fresh pinned
   source-bound evidence set verifies the complete contract; and
 - successor verification reaches six pure status, runner, startup, historical
-  block-sync, and terminal Apply-boundary kernels. Crash/restart scheduling and
-  the full epoch-boundary action map remain outside those safety refinements.
+  block-sync, and terminal Apply-boundary kernels. Crash/restart scheduling,
+  recovery-scoped eager CommitQC-discovery scheduling, late canonical
+  lane-ownership rehydration at rollover, and the full epoch-boundary action
+  map remain outside those safety refinements.
 
 Earlier pinned Verus result counts predate this 17-claim source closure and
 remain diagnostic only. In addition, the progress-witness target still depends

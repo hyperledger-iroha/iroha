@@ -33,13 +33,13 @@ import org.junit.Test;
 public final class IrohaPeerTransportV1Tests {
   @Test
   public void wireLimitsCannotExceedV1HardCeilings() {
-    new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 12_288);
+    new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_576);
     assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 12_288));
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 24_576));
     assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 12_288));
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 24_576));
     assertThrows(IllegalArgumentException.class,
-        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 12_289));
+        () -> new IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_577));
   }
 
   @Test
@@ -424,7 +424,7 @@ public final class IrohaPeerTransportV1Tests {
   public void enforcesFirstReleaseProfileSchemasAndRetailTwentyFourKiBBodyBound() {
     assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES);
     assertEquals(24_576, IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineNoteEncodedBytes());
-    assertEquals(12_288, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES);
+    assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES);
 
     final byte[] boundaryBytes = new byte[24_576];
     Arrays.fill(boundaryBytes, (byte) 0x5a);

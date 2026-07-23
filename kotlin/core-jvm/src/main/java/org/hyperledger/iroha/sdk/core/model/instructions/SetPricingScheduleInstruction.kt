@@ -421,20 +421,20 @@ class SetPricingScheduleInstruction private constructor(
                     CreditPolicy.builder()
                         .setSettlementWindowSecs(parseLong(arguments, "schedule.credit.settlement_window_secs"))
                         .setSettlementGraceSecs(parseLong(arguments, "schedule.credit.settlement_grace_secs"))
-                        .setLowBalanceAlertBps(parseLong(arguments, "schedule.credit.low_balance_alert_bps").toInt())
+                        .setLowBalanceAlertBps(parseInt(arguments, "schedule.credit.low_balance_alert_bps"))
                         .build(),
                 )
 
             val discountBuilder = DiscountSchedule.builder()
-                .setLoyaltyMonthsRequired(parseLong(arguments, "schedule.discounts.loyalty_months_required").toInt())
-                .setLoyaltyDiscountBps(parseLong(arguments, "schedule.discounts.loyalty_discount_bps").toInt())
+                .setLoyaltyMonthsRequired(parseInt(arguments, "schedule.discounts.loyalty_months_required"))
+                .setLoyaltyDiscountBps(parseInt(arguments, "schedule.discounts.loyalty_discount_bps"))
             var discountIndex = 0
             while (arguments.containsKey("schedule.discounts.commitment_tiers.$discountIndex.minimum_commitment_gib_month")) {
                 val base = "schedule.discounts.commitment_tiers.$discountIndex."
                 discountBuilder.addCommitmentTier(
                     CommitmentDiscountTier.builder()
                         .setMinimumCommitmentGibMonth(parseLong(arguments, "${base}minimum_commitment_gib_month"))
-                        .setDiscountBps(parseLong(arguments, "${base}discount_bps").toInt())
+                        .setDiscountBps(parseInt(arguments, "${base}discount_bps"))
                         .build(),
                 )
                 discountIndex++
@@ -464,6 +464,14 @@ class SetPricingScheduleInstruction private constructor(
 
         private fun parseLong(arguments: Map<String, String>, key: String): Long =
             require(arguments, key).toLong()
+
+        private fun parseInt(arguments: Map<String, String>, key: String): Int {
+            val value = parseLong(arguments, key)
+            require(value >= Int.MIN_VALUE.toLong() && value <= Int.MAX_VALUE.toLong()) {
+                "Instruction argument '$key' is outside the signed 32-bit integer range"
+            }
+            return value.toInt()
+        }
 
         private fun require(arguments: Map<String, String>, key: String): String {
             val value = arguments[key]

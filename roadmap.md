@@ -979,13 +979,15 @@ scan limited to repository policy text plus intentional guard-test fixtures.
 **Status:** exact V1 implementation and local release-fixture validation
 complete; audited live deployment evidence pending.
 
-The first release has exactly three production remote profiles: Ethereum
-mainnet, BNB Smart Chain mainnet, and TRON mainnet, each paired with SORA Taira
-Sumeragi-v2 chain id `fc56984b-2be7-431d-840e-21514d1883f0` and I105
-discriminant `369` (`0x0171`). The archived pre-v2 Taira chain is not a
-settlement target. Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles.
-Solana, TON, generic proof backends, arbitrary assets, Nexus settlement, and
-compatibility manifests are not part of SCCP V1.
+The canonical production release-evidence corridor has exactly three remote
+profiles: Ethereum mainnet, BNB Smart Chain mainnet, and TRON mainnet, each
+paired with SORA Taira Sumeragi-v2 chain id
+`fc56984b-2be7-431d-840e-21514d1883f0` and I105 discriminant `369`
+(`0x0171`). The archived pre-v2 Taira chain is not a settlement target.
+Sepolia, BSC testnet, Nile, and Shasta remain exact test profiles. Solana
+testnet remains an implemented SCCP V1 runtime and SDK profile outside this
+production evidence corridor. TON, generic proof backends, arbitrary assets,
+Nexus settlement, and compatibility manifests are not part of SCCP V1.
 
 The live node admits only Sumeragi-v2 wire revision 3 and dispatches the worker
 to the serialized v2 height runner; the legacy actor is never selected under a
@@ -1097,9 +1099,11 @@ The remaining SCCP release work is external, independently verifiable evidence:
 No fixture key, signal-binding circuit, synthetic receipt, unavailable lane,
 or self-consistent proof-controlled roster counts as production evidence.
 
-SCCP V1 is only Taira↔Ethereum, Taira↔BSC, and Taira↔TRON. Solana, TON,
-generic proof jobs/artifacts, and retired route-manifest workflows are excluded
-from the first release and must not appear as launch blockers or evidence rows.
+The signed SCCP V1 production evidence corridor is only Taira↔Ethereum,
+Taira↔BSC, and Taira↔TRON. Solana testnet remains implemented outside that
+fixture and must not appear in its lane inventory, blockers, or evidence rows.
+TON, generic proof jobs/artifacts, and retired route-manifest workflows remain
+excluded from the first release.
 
 ## Release and Stabilization
 
@@ -25331,7 +25335,8 @@ regressions, one layered daemon ownership regression, and two root configuration
 geometry regressions yield the 473-test checkpoint, still across 30
 modules and 53 pre-network legs. One configuration-fingerprint, two historical-
 recovery-kernel, and one shared authenticated source-credit regression yield
-the current 477-test inventory with the same module and leg counts. Mechanical reconciliation adds 16 non-ignored Kura, successor/refinement,
+the historical 477-test checkpoint with the same module and leg counts.
+Mechanical reconciliation adds 16 non-ignored Kura, successor/refinement,
 CommitQC-admission, recovery, runner, watchdog, P2P-geometry, and daemon-genesis
 tests; the lane-relay saturation test is a rename in place, not a fifth module
 test. A subsequent adversarial sidecar regression proves a same-tenure route
@@ -25580,15 +25585,32 @@ regression saturates certified-request, Normal, and Progress ownership while
 preserving the Completion reserve, then uses durable reducer retransmission to
 reconstruct the blocked Fetch after the exact authenticated response with a
 still-live matching logical request registration releases capacity. The gate
-  pins 477 required tests
-across 30 modules, including exact composite
+pins 477 required tests across 30 modules, including exact composite
 replay-FIFO ordering, its source-linked refinement projection, and
-recovery-derived successor identity plus sequential historical CommitQC/body
-catch-up. Post-decision regressions reject new durable timeout and TC formation
-after a local decision. Capacity regressions bind the real serialized-runtime
-Proposal-A/distinct-PrepareQC-B/TimeoutVote trace, bounded causal effect
-dispatch, deterministic reconstructible-Fetch preemption, full-capacity Fetch
-reconstruction, Decision filtering, and the canonical `EffectDispatch`
+recovery-derived successor identity plus sequential missing-height discovery
+and catch-up. A four-validator restart diagnostic showed that the recovering
+validator paid the complete 20-second quiet-round deadline at each missing
+height before starting CommitQC discovery. Recovery now seeds immediate
+discovery from durable v2 startup or an interrupted applied tip, carries that
+urgency only when an authenticated Commit-certificate response yields a
+discovered CommitQC which is admitted to, or coalesced with, serialized reducer
+ownership, and clears it after ordinary live finality. The outstanding
+request's `Some`-to-`None` transition proves only that ownership handoff, not
+reducer execution, Decision, durability, or historical-Kura provenance. This
+retains the existing request authentication, exact
+frozen-context and certificate checks, reducer ordering, and ordinary-height
+deadline; it does not add permanent normal-height fanout. The existing
+four-validator restart regression owns this sequential catch-up seam. Its
+fresh exact run,
+`sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart`,
+passed 1/1 in 79.82 seconds; all four peers shut down gracefully with empty
+stderr. This focused result does not promote a formal obligation or complete
+the broader release matrix. Post-decision regressions reject new durable
+timeout and TC formation after a local decision. Capacity regressions
+bind the real serialized-runtime Proposal-A/distinct-PrepareQC-B/TimeoutVote
+trace, bounded causal effect dispatch, deterministic reconstructible-Fetch
+preemption, full-capacity Fetch reconstruction, Decision filtering, and the
+canonical `EffectDispatch`
 watchdog lane. The timeout watchdog regression distinguishes a remote partial timeout
 pool, a durable local current-view timeout path, and exact same-/older-view
 locked Commit recovery. Before the three-corridor expansion, all
@@ -25859,17 +25881,30 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 509-test, 38-module, 61-leg pre-network
+- execute the fresh source-sealed 515-test, 38-module, 61-leg pre-network
   corridor. Its proposal-origin additions cover strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
-  and persistence failure; inventory presence is not execution evidence;
+  and persistence failure. Its final six regressions cover canonical view-zero
+  genesis bytes first proposed in a later round, the contention-tolerant restart
+  deadline, the successor's frozen predecessor CommitQC binding, Kura-first lane
+  rollover, incomplete-tip recovery, and terminal ingress filtering. Inventory
+  presence is not execution evidence;
 - mechanize the complete typed applied-height handoff rather than promoting its
   source tests to a liveness proof. Production independently rereads exact Kura
   sources for historical CommitQC, body, and lane-certificate responses; binds
   current-height global V2 output to the finality artifact; binds winning lane
   output to its durable Kura certificate/application receipt while revalidating
-  alternate proofs and superseding valid same-height losers; and binds Native
-  AMX, merge-share, and certified-sidecar traffic to their typed scopes and
+  alternate proofs and superseding valid same-height losers. The winning set is
+  now reconstructed from canonical finalized-block ownership, and missing tip
+  evidence keeps the same terminal height active instead of authorizing a
+  successor. Rollover rehydrates exact bounded ownership which block sync
+  installs after adapter construction, preserving the proposal request source
+  for a missing certificate. A canonical empty ownership set is already
+  complete even for result-bearing genesis or external-only blocks; external
+  entries alone are not lane obligations.
+  Formalize that Kura-first rollover and tip-only recovery rule. The
+  production handoff also binds Native AMX, merge-share, and certified-sidecar
+  traffic to their typed scopes and
   exact identities. Finalized-sidecar pruning retains winning data in the
   committed merge log and supersedes losing pending work. Manual, wrong-source,
   substituted, or otherwise untyped `Exact` output must remain owned and fail
@@ -25992,8 +26027,10 @@ runtime premise on the final signed source.
   by
   machine-checking the Rust trace mapping for full-context Applied/Recovered
   tokens, fail-closed complete-tip recovery, ordered startup prerequisites,
-  kind-specific publication, exact Async CommitQC import and ordinary reducer
-  body recovery, and terminal
+  kind-specific publication, recovery-scoped eager discovery with
+  ordinary-finality reset, exact Async CommitQC import and ordinary reducer
+  body recovery, Kura-first canonical lane-completion gating with tip-only
+  reopening plus late block-sync ownership rehydration, and terminal
   observer application without successor activation. The fail-closed static
   source mapping and its four mutation checks now bind the concrete runner,
   status, runtime, effect, and block-sync order, but the exact deductive
@@ -26068,16 +26105,17 @@ runtime premise on the final signed source.
   ownership regression, and two root configuration geometry regressions yield
   the 473-test checkpoint. One configuration-fingerprint, two historical-
   recovery-kernel, and one shared authenticated source-credit regression yield
-  the current 477-test inventory. The rollover slice covers historical Kura
+  the historical 477-test checkpoint. At that checkpoint, the rollover slice
+  covered historical Kura
   CommitQC, body,
   and lane-certificate rereads; current global V2; lane proof/supersession; Native
   AMX, merge-share, certified-sidecar, and untyped fail-closed boundaries. The
   network slice pins identical-retry coalescing and exact per-target FIFO
   ownership for distinct/cross-kind collisions. The four
-  integration names run as one module-filtered leg, while the complete
-  pre-network corridor now has 53 legs. Fresh full
-  discovery/serial execution and the clean source-sealed rerun remain pending
-  for all 477 names. The 30-module pre-network
+  integration names ran as one module-filtered leg, while the complete
+  pre-network corridor had 53 legs. Fresh full discovery/serial execution and
+  the clean source-sealed rerun were pending for all 477 names; the current
+  515-test target above supersedes that checkpoint. The 30-module pre-network
   production-liveness inventory includes completion
   ownership, installed destination rebind, unbound-Vote authority,
   exact-lock/consumer-epoch admission, transactional certified retirement,

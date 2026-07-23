@@ -239,8 +239,11 @@ final class SccpV1Tests: XCTestCase {
         let sponsor = try AccountAddress
             .fromAccount(publicKey: Data(repeating: 0x52, count: 32))
             .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+        var assetDefinitionBytes = Data(repeating: 0x53, count: 16)
+        assetDefinitionBytes[6] = (assetDefinitionBytes[6] & 0x0f) | 0x40
+        assetDefinitionBytes[8] = (assetDefinitionBytes[8] & 0x3f) | 0x80
         let assetDefinitionId = try XCTUnwrap(
-            AssetDefinitionAddress.encode(uuidBytes: Data(repeating: 0x53, count: 16))
+            AssetDefinitionAddress.encode(uuidBytes: assetDefinitionBytes)
         )
         let limits = [
             try FeeChargeLimit(
@@ -612,8 +615,13 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertEqual(registry.lanes[0].routes[0].routeId, "taira_bsc_xor")
         XCTAssertTrue(registry.lanes[0].nativeTrustAnchors.isEmpty)
         XCTAssertNil(registry.lanes[0].currentNativeTrustAnchorHash)
-        XCTAssertEqual(registry.lanes[0].routes[0].destination.semanticProofProfile.publicSignalSchemaHash, publicSignalSchemaHash())
-        let finalityAnchor = registry.lanes[0].routes[0].destination.soraFinalityAnchor
+        let outboundProofPolicy = registry.lanes[0].routes[0].destination.outboundProofPolicy
+        XCTAssertEqual(outboundProofPolicy.version, 1)
+        XCTAssertEqual(
+            outboundProofPolicy.semanticProfile.publicSignalSchemaHash,
+            publicSignalSchemaHash()
+        )
+        let finalityAnchor = outboundProofPolicy.soraFinalityAnchor
         XCTAssertEqual(finalityAnchor.protocolVersion, 3)
         XCTAssertEqual(finalityAnchor.checkpointContextId, Data(repeating: 0xa2, count: 32))
         XCTAssertEqual(finalityAnchor.checkpointFinalityArtifactHash, Data(repeating: 0xa3, count: 32))
@@ -831,7 +839,15 @@ final class SccpV1Tests: XCTestCase {
         let parsed = try SccpGroth16ProofRequestV1.parse(request)
         XCTAssertEqual(parsed.backend, .evmGroth16Bn254)
         XCTAssertEqual(parsed.targetNetwork, .bscMainnet)
+        XCTAssertEqual(
+            parsed.semanticProofProfileHash,
+            "0x\(parsed.semanticProofProfile.profileHash.hexEncodedString())"
+        )
         XCTAssertEqual(parsed.soraFinalityAnchor.anchorHash, finalityAnchor().hash)
+        XCTAssertEqual(
+            parsed.soraFinalityAnchorHash,
+            "0x\(parsed.soraFinalityAnchor.anchorHash.hexEncodedString())"
+        )
 
         var archivedIdentity = try jsonObject(request, mutableContainers: true)
         var archivedAnchor = archivedIdentity["sora_finality_anchor"] as! [String: Any]
@@ -890,7 +906,9 @@ final class SccpV1Tests: XCTestCase {
             ("sender_codec", 2),
             ("recipient_codec", 5),
             ("asset_home_domain", 4),
+            ("amount", ""),
             ("amount", "340282366920938463463374607431768211456"),
+            ("amount", "١"),
         ]
         for (field, invalid) in invalidTransferFields {
             var malformed = try jsonObject(bundle)
@@ -1002,6 +1020,9 @@ final class SccpV1Tests: XCTestCase {
         projection["Transfer"] = projectedTransfer
         wrongProjectionDomain["payload_projection"] = projection
         XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [wrongProjectionDomain]])))
+        var unicodeBindingHash = first
+        unicodeBindingHash["destination_binding_hash"] = "0x" + String(repeating: "١", count: 64)
+        XCTAssertThrowsError(try SccpRecentMessages.parse(jsonData(["items": [unicodeBindingHash]])))
         var wrongProjectionRoute = first
         projection = wrongProjectionRoute["payload_projection"] as! [String: Any]
         projectedTransfer = projection["Transfer"] as! [String: Any]

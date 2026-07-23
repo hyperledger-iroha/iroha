@@ -8,7 +8,8 @@ Usage:
 
 Packages built mobile SDK artifacts into dist/mobile-sdk:
   --apple    Package dist/NoritoBridge.xcframework and its artifact manifest.
-  --android  Package Kotlin core/client/offline-wallet Android release outputs.
+  --android  Package Kotlin core/client/offline-wallet Android release outputs,
+             generated native bridge bytes, and their embedded provenance.
 
 When neither --apple nor --android is passed, both platforms are packaged.
 USAGE
@@ -182,6 +183,23 @@ resolve_core_jar() {
   single_match "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
 }
 
+resolve_android_native_mode() {
+  local aar="$1"
+  python3 - "$aar" <<'PY'
+import json
+import sys
+import zipfile
+
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(sys.argv[1]) as archive:
+    manifest = json.loads(archive.read(entry))
+production = manifest.get("privacy_production_enabled")
+if type(production) is not bool:
+    raise SystemExit("native provenance privacy_production_enabled is not boolean")
+print("production" if production else "default")
+PY
+}
+
 record_artifact() {
   local path="$1"
   local kind="$2"
@@ -263,10 +281,17 @@ package_android() {
   local stage_checksums="$stage/SHA256SUMS.txt"
   local android_zip="$OUT_DIR/iroha-mobile-sdk-android-${VERSION}.zip"
   local maven_repo="$ROOT_DIR/dist/mobile-sdk-maven"
+  local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
   local core_jar
+  local native_mode
+  local generated_native_root
+  local generated_native_provenance
   local rel
 
   bash "$ROOT_DIR/scripts/check_mobile_sdk_artifacts.sh" --root "$ROOT_DIR" --android-only --require-built-android
+  native_mode="$(resolve_android_native_mode "$client_aar")"
+  generated_native_root="$ROOT_DIR/kotlin/client-android/build/generated/jniLibs/$native_mode"
+  generated_native_provenance="$ROOT_DIR/kotlin/client-android/build/generated/nativeProvenance/$native_mode/iroha/native-build-provenance-v1.json"
   rm -rf "$stage" "$android_zip"
   mkdir -p "$stage"
   : > "$stage_checksums"
@@ -278,18 +303,23 @@ package_android() {
     "$stage" \
     "$stage_checksums"
   copy_android_artifact \
-    "$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+    "$client_aar" \
     "client-android/client-android-release.aar" \
     "$stage" \
     "$stage_checksums"
   copy_android_artifact \
-    "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so" \
+    "$generated_native_root/arm64-v8a/libconnect_norito_bridge.so" \
     "native/arm64-v8a/libconnect_norito_bridge.so" \
     "$stage" \
     "$stage_checksums"
   copy_android_artifact \
-    "$ROOT_DIR/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so" \
+    "$generated_native_root/x86_64/libconnect_norito_bridge.so" \
     "native/x86_64/libconnect_norito_bridge.so" \
+    "$stage" \
+    "$stage_checksums"
+  copy_android_artifact \
+    "$generated_native_provenance" \
+    "native/native-build-provenance-v1.json" \
     "$stage" \
     "$stage_checksums"
 

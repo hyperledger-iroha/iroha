@@ -11,6 +11,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 import org.hyperledger.iroha.android.crypto.Blake2s;
+import org.hyperledger.iroha.android.crypto.Ed25519PublicKeyAdmission;
 
 public final class AccountAddress {
   public static final int DEFAULT_I105_DISCRIMINANT = 753;
@@ -335,6 +336,7 @@ public final class AccountAddress {
     UNKNOWN_DOMAIN_TAG("ERR_UNKNOWN_DOMAIN_TAG"),
     UNEXPECTED_EXTENSION_FLAG("ERR_UNEXPECTED_EXTENSION_FLAG"),
     UNKNOWN_CONTROLLER_TAG("ERR_UNKNOWN_CONTROLLER_TAG"),
+    INVALID_PUBLIC_KEY("ERR_INVALID_PUBLIC_KEY"),
     UNKNOWN_CURVE("ERR_UNKNOWN_CURVE"),
     MISSING_I105_SENTINEL("ERR_MISSING_I105_SENTINEL"),
     INVALID_I105_BASE("ERR_INVALID_I105_BASE"),
@@ -523,6 +525,7 @@ public final class AccountAddress {
         if (end > canonical.length) {
           throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
         }
+        validateControllerPublicKey(curveId, Arrays.copyOfRange(canonical, cursor, end));
         if (end != canonical.length) {
           throw new AccountAddressException(
               AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES, "unexpected trailing bytes in canonical payload");
@@ -570,6 +573,8 @@ public final class AccountAddress {
           if (cursor + keyLen > canonical.length) {
             throw new AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length");
           }
+          validateControllerPublicKey(
+              curveId, Arrays.copyOfRange(canonical, cursor, cursor + keyLen));
           cursor += keyLen;
           totalWeight += weight;
         }
@@ -593,6 +598,15 @@ public final class AccountAddress {
       default:
         throw new AccountAddressException(
             AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG, "unknown controller tag: " + controllerTag);
+    }
+  }
+
+  private static void validateControllerPublicKey(final int curveId, final byte[] publicKey)
+      throws AccountAddressException {
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(publicKey)) {
+      throw new AccountAddressException(
+          AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+          "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup");
     }
   }
 

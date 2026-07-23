@@ -26,6 +26,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
 #define CONNECT_NORITO_ERR_CANONICAL_JSON -503
+#define CONNECT_NORITO_ERR_VALIDATION_FEE_POLICY_PROOF -504
 
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_REQUEST 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_ORDERBOOK_KIND_ORDER_CANCEL 2
@@ -118,6 +119,36 @@ int32_t connect_norito_canonical_json_blake3_v1(
     unsigned long* out_canonical_json_len,
     uint8_t* out_hash,
     unsigned long out_hash_len);
+
+// Encodes the canonical Norito V1 request body for
+// POST /v1/validation-fee/policy/current/proof. The context id is validated
+// for symmetry with the verifier but is not serialized by the frozen request.
+int32_t connect_norito_validation_fee_current_policy_proof_request_v1(
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_request,
+    unsigned long* out_request_len);
+
+// Verifies one canonical Norito proof page against finality, its synthetic
+// ordinary-write witness, the complete registry, and all immutable deployment
+// bindings. On success it returns canonical JSON using schema
+// iroha.validation_fee.verified_policy_projection.v1. The output is cleared on
+// failure and must be released with connect_norito_free on success.
+int32_t connect_norito_validation_fee_current_policy_proof_verify_v1(
+    const uint8_t* proof_norito,
+    unsigned long proof_norito_len,
+    const uint8_t* chain_id,
+    unsigned long chain_id_len,
+    const uint8_t* bound_genesis_hash,
+    unsigned long bound_genesis_hash_len,
+    const uint8_t* policy_chain_genesis_hash,
+    unsigned long policy_chain_genesis_hash_len,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_projection_json,
+    unsigned long* out_projection_json_len);
 
 // ---------------- Chain discriminant helpers ----------------
 uint16_t connect_norito_get_chain_discriminant(void);
@@ -386,6 +417,22 @@ int32_t connect_norito_kagemusha_recipient_payment_request_verify_v2(
     uint8_t** out_digest_ptr,
     unsigned long* out_digest_len);
 
+// Build a reusable Torii lineage query from the receiver tuple. All selector
+// components are canonical UTF-8 text; no payment request is required.
+int32_t connect_norito_kagemusha_recipient_lineage_query_create_v2(
+    const uint8_t* chain_id_ptr,
+    unsigned long chain_id_len,
+    const uint8_t* recipient_ptr,
+    unsigned long recipient_len,
+    const uint8_t* receiver_device_id_ptr,
+    unsigned long receiver_device_id_len,
+    const uint8_t* asset_ptr,
+    unsigned long asset_len,
+    uint64_t trusted_checkpoint_height,
+    uint8_t** out_query_ptr,
+    unsigned long* out_query_len);
+
+// Retired request-bound ABI retained for link compatibility; always fails.
 int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
     const uint8_t* request_norito_ptr,
     unsigned long request_norito_len,
@@ -397,6 +444,63 @@ int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v1(
     unsigned long expected_evaluated_block_hash_len,
     uint8_t** out_lineage_ptr,
     unsigned long* out_lineage_len);
+
+// Verify the reusable lineage against the later signed payment request and a
+// caller-owned durable checkpoint. The second output is exactly 40 bytes:
+// evaluated height in big-endian order followed by HeightContextId bytes.
+int32_t connect_norito_kagemusha_recipient_registration_lineage_verify_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* lineage_norito_ptr,
+    unsigned long lineage_norito_len,
+    uint64_t verified_at_ms,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id_ptr,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_lineage_ptr,
+    unsigned long* out_lineage_len,
+    uint8_t** out_promoted_checkpoint_ptr,
+    unsigned long* out_promoted_checkpoint_len);
+
+int32_t connect_norito_kagemusha_recipient_receive_offer_create_v2(
+    const uint8_t* request_norito_ptr,
+    unsigned long request_norito_len,
+    const uint8_t* lineage_norito_ptr,
+    unsigned long lineage_norito_len,
+    const uint8_t* publisher_checkpoint_envelope_ptr,
+    unsigned long publisher_checkpoint_envelope_len,
+    uint8_t** out_offer_ptr,
+    unsigned long* out_offer_len);
+
+// Outputs canonical request, lineage, and non-empty opaque publisher envelope.
+int32_t connect_norito_kagemusha_recipient_receive_offer_project_v2(
+    const uint8_t* offer_norito_ptr,
+    unsigned long offer_norito_len,
+    uint8_t** out_request_ptr,
+    unsigned long* out_request_len,
+    uint8_t** out_lineage_ptr,
+    unsigned long* out_lineage_len,
+    uint8_t** out_publisher_checkpoint_envelope_ptr,
+    unsigned long* out_publisher_checkpoint_envelope_len);
+
+// Verifies the exact whole offer after app-owned publisher authentication.
+// Outputs canonical request, verified lineage, the same publisher envelope,
+// and the 40-byte promoted checkpoint.
+int32_t connect_norito_kagemusha_recipient_receive_offer_verify_v2(
+    const uint8_t* offer_norito_ptr,
+    unsigned long offer_norito_len,
+    uint64_t verified_at_ms,
+    uint64_t trusted_checkpoint_height,
+    const uint8_t* trusted_checkpoint_context_id_ptr,
+    unsigned long trusted_checkpoint_context_id_len,
+    uint8_t** out_request_ptr,
+    unsigned long* out_request_len,
+    uint8_t** out_lineage_ptr,
+    unsigned long* out_lineage_len,
+    uint8_t** out_publisher_checkpoint_envelope_ptr,
+    unsigned long* out_publisher_checkpoint_envelope_len,
+    uint8_t** out_promoted_checkpoint_ptr,
+    unsigned long* out_promoted_checkpoint_len);
 
 // Authorization signing uses a canonical local-only unsigned preparation.
 // It contains no signature or authenticatorData and cannot decode as an

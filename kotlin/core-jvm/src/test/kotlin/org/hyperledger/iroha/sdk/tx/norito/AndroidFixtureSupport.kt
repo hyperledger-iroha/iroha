@@ -22,7 +22,7 @@ internal data class TransactionPayloadFixture(
     val authority: String,
     val creationTimeMs: Long,
     val timeToLiveMs: Long?,
-    val nonce: Int?,
+    val nonce: Long?,
     val payload: Map<String, Any?>?,
     val encodedBase64: String?,
     val payloadHash: String?,
@@ -81,7 +81,7 @@ internal object AndroidFixtureSupport {
         val authority = requiredString(map["authority"], "$name.authority")
         val creationTimeMs = requiredLong(map["creation_time_ms"], "$name.creation_time_ms")
         val timeToLiveMs = optionalLong(map["time_to_live_ms"], "$name.time_to_live_ms")
-        val nonce = optionalInt(map["nonce"], "$name.nonce")
+        val nonce = optionalLong(map["nonce"], "$name.nonce")
         val payload = map["payload"]?.let { asMap(it, "$name.payload") }
         val encodedBase64 = optionalString(map["encoded"]) ?: optionalString(map["payload_base64"])
         return TransactionPayloadFixture(
@@ -298,7 +298,7 @@ internal object AndroidFixtureSupport {
             creationTimeMs = requiredLong(payload["creation_time_ms"], "$name.payload.creation_time_ms"),
             executable = executable,
             timeToLiveMs = optionalLong(payload["time_to_live_ms"], "$name.payload.time_to_live_ms"),
-            nonce = optionalInt(payload["nonce"], "$name.payload.nonce"),
+            nonce = optionalLong(payload["nonce"], "$name.payload.nonce"),
             feePayment = FeePaymentJson.parse(
                 payload["fee_payment"],
                 "$name.payload.fee_payment",
@@ -397,12 +397,6 @@ internal object AndroidFixtureSupport {
     private fun optionalLong(value: Any?, field: String): Long? {
         if (value == null) return null
         return requiredLong(value, field)
-    }
-
-    private fun optionalInt(value: Any?, field: String): Int? {
-        val longValue = optionalLong(value, field) ?: return null
-        require(longValue in Int.MIN_VALUE..Int.MAX_VALUE) { "$field must fit in Int" }
-        return longValue.toInt()
     }
 
     private fun asMap(value: Any?, field: String): Map<String, Any?> {

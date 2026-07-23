@@ -188,6 +188,19 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertTrue(d2.payload[88..<256].allSatisfy { $0 == 0 })
     }
 
+    func testStaticCandidatePreflightsExactBase45Boundary() throws {
+        let largestStaticMessage = try makeMessage(count: 342, seed: 3)
+        let staticText = try XCTUnwrap(
+            IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: largestStaticMessage)
+        )
+        XCTAssertEqual(staticText.utf8.count, 699)
+
+        let firstAnimatedMessage = try makeMessage(count: 343, seed: 4)
+        XCTAssertNil(
+            try IrohaPeerQRCodecV1.staticCompleteTextCandidate(for: firstAnimatedMessage)
+        )
+    }
+
     func testHeaderRepeatsAfterTwelveNonHeaderShards() throws {
         let message = try makeMessage(count: 2_048, seed: 5)
         let frames = try IrohaPeerQRCodecV1.animatedFrameTexts(for: message)
@@ -197,6 +210,21 @@ final class IrohaPeerQRV1Tests: XCTestCase {
         XCTAssertEqual(frames.last?.frameKind, .header)
         XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 2)
         XCTAssertEqual(frames.dropFirst().dropLast().count, 12)
+    }
+
+    func testMaximumStreamFrameCountsAndRepeatedHeaderText() throws {
+        let message = try makeMessage(count: 24_576, seed: 6)
+        let texts = try IrohaPeerQRCodecV1.animatedFrameTexts(for: message)
+        let frames = try texts.map { try IrohaPeerQRCodecV1.decodeFrame($0) }
+
+        XCTAssertEqual(texts.count, 157)
+        XCTAssertEqual(frames.filter { $0.frameKind == .header }.count, 13)
+        XCTAssertEqual(frames.filter { $0.frameKind == .data }.count, 96)
+        XCTAssertEqual(frames.filter { $0.frameKind == .parity }.count, 48)
+        let headerTexts = zip(texts, frames).compactMap { text, frame in
+            frame.frameKind == .header ? text : nil
+        }
+        XCTAssertEqual(Set(headerTexts).count, 1)
     }
 
     func testOutOfOrderPreheaderFramesAndPairParityRecoverMessage() throws {

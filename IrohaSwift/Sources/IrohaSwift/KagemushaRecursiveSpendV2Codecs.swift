@@ -226,6 +226,56 @@ public enum KagemushaRecursiveSpendCodecs {
         return preparation
     }
 
+    static func decodePeerSplitChangePrepareResultV4(
+        _ archive: Data,
+        inputOpenings: [KagemushaNoteOpening],
+        inputSummaries: [KagemushaRecursiveSpendBundleSummaryV4],
+        recipientRequest: KagemushaRecipientPaymentRequest,
+        changeAmount: KagemushaScaledAmount
+    ) throws -> KagemushaRecursiveSpendPeerSplitChangePreparationV4 {
+        var reader = KagemushaV2Reader(try payload(
+            archive,
+            schema: KagemushaRecursiveSpend.peerSplitChangePrepareResultWireNameV4,
+            field: "peerSplitChangePrepareResultV4"
+        ))
+        defer { reader.wipe() }
+        let version = try scalarUInt16(
+            reader.field(),
+            field: "peerSplitChangePrepareResultV4.version"
+        )
+        var openingPayload = try reader.field()
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        var openingArchive = frame(
+            KagemushaRecursiveSpend.noteOpeningWireName,
+            payload: openingPayload
+        )
+        defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
+        let opening = try decodeNoteOpening(openingArchive)
+        let output = try decodeNote(reader.field())
+        try reader.finish("peerSplitChangePrepareResultV4")
+        guard version == KagemushaRecursiveSpend.wireVersionV4 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerSplitChangePrepareResultV4.version"
+            )
+        }
+        let preparation = try KagemushaRecursiveSpendPeerSplitChangePreparationV4(
+            opening: opening,
+            output: output,
+            inputOpenings: inputOpenings,
+            inputSummaries: inputSummaries,
+            recipientRequest: recipientRequest,
+            changeAmount: changeAmount
+        )
+        var canonical = try encodePeerSplitChangePrepareResultV4(preparation)
+        defer { canonical.resetBytes(in: 0..<canonical.count) }
+        guard canonical == archive else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "peerSplitChangePrepareResultV4.canonical"
+            )
+        }
+        return preparation
+    }
+
     /// Encodes local encrypted Merkle membership data for one owned note.
     /// This archive is native-prover input only and must never enter peer or
     /// Torii payloads.
@@ -736,6 +786,28 @@ public enum KagemushaRecursiveSpendCodecs {
         writer.writeField(try note(preparation.output))
         return frame(
             KagemushaRecursiveSpend.redemptionChangePrepareResultWireNameV4,
+            payload: writer.data
+        )
+    }
+
+    static func encodePeerSplitChangePrepareResultV4(
+        _ preparation: KagemushaRecursiveSpendPeerSplitChangePreparationV4
+    ) throws -> Data {
+        var openingArchive = try encodeNoteOpening(preparation.opening)
+        defer { openingArchive.resetBytes(in: 0..<openingArchive.count) }
+        var writer = CompactNoritoWriter()
+        defer { writer.wipe() }
+        writer.writeField(uint16(KagemushaRecursiveSpend.wireVersionV4))
+        var openingPayload = try payload(
+            openingArchive,
+            schema: KagemushaRecursiveSpend.noteOpeningWireName,
+            field: "peerSplitChangePrepareResultV4.opening"
+        )
+        defer { openingPayload.resetBytes(in: 0..<openingPayload.count) }
+        writer.writeField(openingPayload)
+        writer.writeField(try note(preparation.output))
+        return frame(
+            KagemushaRecursiveSpend.peerSplitChangePrepareResultWireNameV4,
             payload: writer.data
         )
     }

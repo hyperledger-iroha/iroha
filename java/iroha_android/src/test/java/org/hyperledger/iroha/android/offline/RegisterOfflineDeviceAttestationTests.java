@@ -193,19 +193,19 @@ public final class RegisterOfflineDeviceAttestationTests {
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 0L, 1,
+                "00000000", accountId, registration, 1_900_000_000_000L, 0L, 1L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, 1_900_000_000_000L, 1L, 0,
+                "00000000", accountId, registration, 1_900_000_000_000L, 1L, 0L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
         () ->
             new RegisterOfflineDeviceAttestation(
-                "00000000", accountId, registration, Long.MAX_VALUE - 1, 2L, 1,
+                "00000000", accountId, registration, Long.MAX_VALUE - 1, 2L, 1L,
                 TEST_FEE_PAYMENT, Collections.emptyMap()));
     assertThrows(
         IllegalArgumentException.class,
@@ -216,7 +216,7 @@ public final class RegisterOfflineDeviceAttestationTests {
                 registration,
                 registration.expiresAtMs() - 1,
                 2L,
-                1,
+                1L,
                 TEST_FEE_PAYMENT,
                 Collections.emptyMap()));
   }
@@ -229,7 +229,7 @@ public final class RegisterOfflineDeviceAttestationTests {
         registration,
         1_900_000_000_000L,
         60_000L,
-        7,
+        7L,
         TEST_FEE_PAYMENT,
         Collections.emptyMap());
   }

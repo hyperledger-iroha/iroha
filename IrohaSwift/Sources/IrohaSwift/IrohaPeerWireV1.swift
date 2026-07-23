@@ -34,6 +34,22 @@ public extension IrohaPeerWireProfileV1 {
     }
 }
 
+public extension IrohaPeerWireKindV1 {
+    /// Exact native archive schema admitted for this Kagemusha IPM1 kind.
+    /// In particular, RECEIVE_REQUEST commits to the complete portable offer,
+    /// not only its nested signed payment request.
+    var requiredKagemushaCanonicalSchema: String {
+        switch self {
+        case .receiveRequest:
+            return KagemushaRecursiveSpend.recipientReceiveOfferWireName
+        case .payment:
+            return KagemushaRecursiveSpend.peerPaymentWireNameV4
+        case .acknowledgement:
+            return KagemushaRecursiveSpend.acknowledgementWireName
+        }
+    }
+}
+
 public enum IrohaPeerWireEncodingV1: UInt8, Sendable {
     case none = 0
     case zlib = 1
@@ -50,6 +66,11 @@ public enum IrohaPeerWireCompressionPolicyV1: Sendable {
 
 /// Allocation limits applied before an untrusted body is decompressed.
 public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
+    /// The binary IPM1 Kagemusha profile deliberately admits one complete
+    /// portable receiver-lineage offer on the smallest shared NFC rail. Text
+    /// and static-QR codecs retain their independent, smaller rail limits.
+    public static let maximumKagemushaProfileBytes = 24_576
+
     public let maximumCanonicalBytes: Int
     public let maximumOfflineNoteEncodedBytes: Int
     public let maximumKagemushaEncodedBytes: Int
@@ -57,7 +78,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     public init(
         maximumCanonicalBytes: Int = 32 * 1024,
         maximumOfflineNoteEncodedBytes: Int = 24_576,
-        maximumKagemushaEncodedBytes: Int = 12_288
+        maximumKagemushaEncodedBytes: Int = Self.maximumKagemushaProfileBytes
     ) {
         precondition(
             Self.areValid(
@@ -80,7 +101,7 @@ public struct IrohaPeerWireLimitsV1: Equatable, Sendable {
     ) -> Bool {
         (1...(32 * 1_024)).contains(maximumCanonicalBytes) &&
             (1...24_576).contains(maximumOfflineNoteEncodedBytes) &&
-            (1...12_288).contains(maximumKagemushaEncodedBytes)
+            (1...maximumKagemushaProfileBytes).contains(maximumKagemushaEncodedBytes)
     }
 
     public func maximumEncodedBytes(for profile: IrohaPeerWireProfileV1) throws -> Int {
@@ -412,15 +433,6 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
         canonicalPayload: Data
     ) throws {
         guard profile == .kagemusha else { return }
-        let schema: String
-        switch kind {
-        case .receiveRequest:
-            schema = KagemushaRecursiveSpend.recipientRequestWireName
-        case .payment:
-            schema = KagemushaRecursiveSpend.peerPaymentWireNameV4
-        case .acknowledgement:
-            schema = KagemushaRecursiveSpend.acknowledgementWireName
-        }
         do {
             // Transport acceptance is deliberately native-independent:
             // canonical compact Norito framing, checksum, and the exact
@@ -428,7 +440,7 @@ public struct IrohaPeerWireMessageV1: Equatable, Sendable {
             // in IrohaPeerKagemushaAdapterV1/KagemushaPeerPayload.
             try KagemushaRecursiveSpend.requireArchive(
                 canonicalPayload,
-                schema: schema,
+                schema: kind.requiredKagemushaCanonicalSchema,
                 field: "ipm1.kagemusha.\(kind)"
             )
         } catch {

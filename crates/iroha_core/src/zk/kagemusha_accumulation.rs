@@ -331,6 +331,8 @@ fn eq_proving_key(
     let hash_to_curve = Eq::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
+    #[cfg(test)]
+    record_key_construction(KeyConstruction::EqProving);
     IpaProvingKey::new(
         Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
         params.get_g().to_vec(),
@@ -353,6 +355,8 @@ fn eq_deciding_key(
         h,
         s,
     );
+    #[cfg(test)]
+    record_key_construction(KeyConstruction::EqDeciding);
     IpaDecidingKey::new(svk, params.get_g().to_vec())
 }
 
@@ -364,6 +368,8 @@ fn ep_proving_key(
     let hash_to_curve = Ep::hash_to_curve("Halo2-Parameters");
     let h = hash_to_curve(&[2]).to_affine();
     let s = Some(hash_to_curve(&[1]).to_affine());
+    #[cfg(test)]
+    record_key_construction(KeyConstruction::EpProving);
     IpaProvingKey::new(
         Domain::new(params.k() as usize, root_of_unity(params.k() as usize)),
         params.get_g().to_vec(),
@@ -386,7 +392,34 @@ fn ep_deciding_key(
         h,
         s,
     );
+    #[cfg(test)]
+    record_key_construction(KeyConstruction::EpDeciding);
     IpaDecidingKey::new(svk, params.get_g().to_vec())
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy)]
+enum KeyConstruction {
+    EqProving = 0,
+    EqDeciding = 1,
+    EpProving = 2,
+    EpDeciding = 3,
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static KEY_CONSTRUCTION_COUNTS: std::cell::Cell<[usize; 4]> = const {
+        std::cell::Cell::new([0; 4])
+    };
+}
+
+#[cfg(test)]
+fn record_key_construction(kind: KeyConstruction) {
+    KEY_CONSTRUCTION_COUNTS.with(|counts| {
+        let mut values = counts.get();
+        values[kind as usize] += 1;
+        counts.set(values);
+    });
 }
 
 /// Fold Eq accumulators under an explicit authenticated V4 degree.
@@ -656,6 +689,34 @@ mod tests {
         IpaAccumulator::new(xi, u)
     }
 
+    fn ep_accumulator(
+        params: &ParamsIPA<EpAffine>,
+        seed: u64,
+    ) -> IpaAccumulator<EpAffine, NativeLoader> {
+        let round_count = usize::try_from(params.k()).expect("test degree fits usize");
+        let xi = (0..round_count)
+            .map(|round| Fq::from(seed + round as u64 + 1))
+            .collect::<Vec<_>>();
+        let coefficients = ipa_h_coefficients(&xi, Fq::ONE);
+        let u = params
+            .get_g()
+            .iter()
+            .zip(coefficients)
+            .fold(Ep::identity(), |sum, (base, coefficient)| {
+                sum + *base * coefficient
+            })
+            .to_affine();
+        IpaAccumulator::new(xi, u)
+    }
+
+    fn reset_key_construction_counts() {
+        KEY_CONSTRUCTION_COUNTS.with(|counts| counts.set([0; 4]));
+    }
+
+    fn key_construction_counts() -> [usize; 4] {
+        KEY_CONSTRUCTION_COUNTS.with(std::cell::Cell::get)
+    }
+
     #[test]
     fn parity_key_builders_construct_consistent_requested_keys() {
         const K: u32 = 4;
@@ -755,5 +816,54 @@ mod tests {
             verify_and_decide_eq_accumulation_v4(&params, K, current, Some(parent), &tampered,)
                 .is_err()
         );
+    }
+
+    #[test]
+    fn v4_fold_and_decision_construct_only_their_required_key_material() {
+        const K: u32 = 4;
+
+        let eq_params = ParamsIPA::<EqAffine>::new(K);
+        let eq_current = eq_accumulator(&eq_params, 3);
+        let eq_parent = eq_accumulator(&eq_params, 19);
+        reset_key_construction_counts();
+        let (eq_proof, eq_expected) =
+            fold_eq_accumulators_v4(&eq_params, K, eq_current.clone(), Some(eq_parent.clone()))
+                .unwrap();
+        assert_eq!(key_construction_counts(), [1, 0, 0, 0]);
+
+        reset_key_construction_counts();
+        let eq_actual = verify_and_decide_eq_accumulation_v4(
+            &eq_params,
+            K,
+            eq_current,
+            Some(eq_parent),
+            &eq_proof,
+        )
+        .unwrap();
+        assert_eq!(key_construction_counts(), [0, 1, 0, 0]);
+        assert_eq!(eq_actual.xi, eq_expected.xi);
+        assert_eq!(eq_actual.u, eq_expected.u);
+
+        let ep_params = ParamsIPA::<EpAffine>::new(K);
+        let ep_current = ep_accumulator(&ep_params, 7);
+        let ep_parent = ep_accumulator(&ep_params, 23);
+        reset_key_construction_counts();
+        let (ep_proof, ep_expected) =
+            fold_ep_accumulators_v4(&ep_params, K, ep_current.clone(), Some(ep_parent.clone()))
+                .unwrap();
+        assert_eq!(key_construction_counts(), [0, 0, 1, 0]);
+
+        reset_key_construction_counts();
+        let ep_actual = verify_and_decide_ep_accumulation_v4(
+            &ep_params,
+            K,
+            ep_current,
+            Some(ep_parent),
+            &ep_proof,
+        )
+        .unwrap();
+        assert_eq!(key_construction_counts(), [0, 0, 0, 1]);
+        assert_eq!(ep_actual.xi, ep_expected.xi);
+        assert_eq!(ep_actual.u, ep_expected.u);
     }
 }

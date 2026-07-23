@@ -125,9 +125,9 @@ final class TransactionParityFixturesTests: XCTestCase {
                                       assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
                                       destination: canonicalDestination,
+                                      feePayment: fixture.payload.feePayment,
                                       ttlMs: fixture.payload.timeToLiveMs,
-                                      nonce: fixture.payload.nonce,
-                                      feePayment: fixture.payload.feePayment)
+                                      nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeMint(request: request,
                                                           keypair: keypair,
                                                           creationTimeMs: fixture.payload.creationTimeMs)
@@ -154,9 +154,9 @@ final class TransactionParityFixturesTests: XCTestCase {
                                       assetDefinitionId: assetDefinitionId,
                                       quantity: quantity,
                                       destination: canonicalDestination,
+                                      feePayment: fixture.payload.feePayment,
                                       ttlMs: fixture.payload.timeToLiveMs,
-                                      nonce: fixture.payload.nonce,
-                                      feePayment: fixture.payload.feePayment)
+                                      nonce: fixture.payload.nonce)
             return try SwiftTransactionEncoder.encodeBurn(request: request,
                                                           keypair: keypair,
                                                           creationTimeMs: fixture.payload.creationTimeMs)
@@ -548,7 +548,11 @@ private struct TransactionPayloadSpec: Decodable {
         executable = try container.decode(TransactionExecutable.self, forKey: .executable)
         timeToLiveMs = try container.decodeIfPresent(UInt64.self, forKey: .timeToLiveMs)
         nonce = try container.decodeIfPresent(UInt32.self, forKey: .nonce)
-        feePayment = try container.decode(FeePaymentIntent.self, forKey: .feePayment)
+        // The fixture loader uses `convertFromSnakeCase` for the surrounding
+        // payload. Decode the fee object as JSON first so its exact wire keys
+        // (`charge_limits`, `gas_limit`, …) reach FeePaymentIntent unchanged.
+        let feeValue = try container.decode(ToriiJSONValue.self, forKey: .feePayment)
+        feePayment = try feeValue.decode(as: FeePaymentIntent.self)
         metadata = try container.decodeIfPresent([String: String].self, forKey: .metadata) ?? [:]
     }
 

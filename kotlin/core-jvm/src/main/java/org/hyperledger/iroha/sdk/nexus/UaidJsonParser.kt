@@ -107,25 +107,27 @@ object UaidJsonParser {
     private fun asObjectOrNull(value: Any?, path: String): Map<String, Any>? =
         if (value == null) null else expectObject(value, path)
 
-    @Suppress("UNCHECKED_CAST")
-    private fun asArrayOrEmpty(value: Any?, path: String): List<Any> {
+    private fun asArrayOrEmpty(value: Any?, path: String): List<Any?> {
         if (value == null) return emptyList()
         check(value is List<*>) { "$path must be a JSON array" }
-        return value as List<Any>
+        return value
     }
 
     private fun asString(value: Any?, path: String): String {
-        checkNotNull(value) { "$path is missing" }
-        return if (value is String) value else value.toString()
+        check(value is String) { "$path must be a string" }
+        return value
     }
 
     private fun asOptionalString(value: Any?): String? {
         if (value == null) return null
-        return if (value is String) value else value.toString()
+        check(value is String) { "optional UAID response string field must be a string" }
+        return value
     }
 
     private fun asLong(value: Any?, path: String): Long {
-        return JsonNumbers.asLong(value, path)
+        val parsed = JsonNumbers.asLong(value, path)
+        check(parsed >= 0) { "$path must be an unsigned integer" }
+        return parsed
     }
 
     private fun asOptionalLong(value: Any?, path: String): Long? =
@@ -133,9 +135,9 @@ object UaidJsonParser {
 
     private fun asStringList(value: Any?, path: String): List<String> {
         val items = asArrayOrEmpty(value, path)
-        return items.mapNotNull { entry ->
-            if (entry == null) null
-            else if (entry is String) entry else entry.toString()
+        return items.mapIndexed { index, entry ->
+            check(entry is String) { "$path[$index] must be a string" }
+            entry
         }
     }
 

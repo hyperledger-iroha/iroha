@@ -31,6 +31,7 @@ use super::{
         ProductionDurablePredecessorIdentityProjection,
         production_durable_predecessor_identity_kernel,
     },
+    v2_lane_work::durable_lane_completion_matches_finality,
 };
 use crate::{
     kura::{CommitManifestBindingState, Kura, KuraV2CommitReceipt},
@@ -259,6 +260,29 @@ pub fn plan_v2_startup_replay(kura: &Kura) -> Result<V2StartupReplayPlan, V2Star
                     && artifact.height_context.parent_commit_qc.as_ref() != Some(&parent.commit_qc)
                 {
                     return Err(V2StartupReplayError::FinalityChainMismatch { height });
+                }
+                // Lane sidecars for historical incarnations may be retired by
+                // canonical lifecycle changes. Only the durable tip is the
+                // live crash boundary whose exact lane evidence must gate
+                // successor activation.
+                if height == durable_height_u64 {
+                    match durable_lane_completion_matches_finality(kura, artifact) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            return Ok(V2StartupReplayPlan {
+                                durable_height,
+                                audited_bootstrap_prefix_height,
+                                complete_prefix_height,
+                                pending_tip_height: Some(height),
+                            });
+                        }
+                        Err(_) => {
+                            return Err(V2StartupReplayError::InvalidReplayMetadata {
+                                height,
+                                reason: "durable lane completion evidence conflicts with finalized ownership",
+                            });
+                        }
+                    }
                 }
                 complete_prefix_height = height_index;
                 previous_finality = Some((height, artifact.clone()));
@@ -1260,9 +1284,10 @@ pub(crate) fn recover_active_height(
         }
     }
 
-    // A canonical block without its v2 sidecar is the deliberate crash window
-    // between Kura/WSV application and finality-artifact persistence. Resume
-    // exactly that height from its already-persisted context and WAL.
+    // A pending canonical tip is the deliberate crash window either before
+    // global finality publication or after global finality but before every
+    // canonical lane ownership has its certificate and application receipt.
+    // Resume exactly that height from its already-persisted context and WAL.
     let record = context_store
         .load(durable_height)?
         .ok_or(V2RecoveryError::MissingActiveContext(durable_height))?;
@@ -1719,9 +1744,16 @@ mod tests {
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_data_model::{
         ChainId,
-        block::{BlockHeader, SignedBlock, consensus_v2 as wire},
+        account::AccountId,
+        block::{
+            BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext, SignedBlock,
+            builder::BlockBuilder, consensus::SumeragiLanePayloadOwnership, consensus_v2 as wire,
+        },
         consensus::{ConsensusKeyId, ConsensusKeyRecord, ConsensusKeyRole, ConsensusKeyStatus},
+        nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
         peer::PeerId,
+        transaction::{TransactionBuilder, signed::TransactionResultInner},
+        trigger::DataTriggerSequence,
     };
 
     use super::{
@@ -1855,6 +1887,111 @@ mod tests {
             header.merkle_root = None;
         });
         valid.commit_unchecked().unpack(|_| {})
+    }
+
+    fn lane_owned_block_for_recovery(
+        state: &State,
+        context: &wire::HeightContext,
+        keys: &[KeyPair],
+    ) -> SignedBlock {
+        let lane_id = LaneId::SINGLE;
+        let dataspace_id = DataSpaceId::UNIVERSAL;
+        let lane_incarnation = state
+            .lane_incarnation_at_height(lane_id, context.height)
+            .expect("canonical lane incarnation is active");
+        let transaction_key =
+            KeyPair::try_from_seed(vec![0xD3; 32], Algorithm::Ed25519).expect("transaction key");
+        let transaction = TransactionBuilder::new(
+            context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let validators = context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .collect::<Vec<_>>();
+        let validator_count =
+            u32::try_from(validators.len()).expect("fixture validator count fits u32");
+        let min_quorum = u32::try_from(
+            crate::sumeragi::network_topology::commit_quorum_from_len(validators.len()).max(1),
+        )
+        .expect("fixture quorum fits u32");
+        let base_mode_tag = match context.mode {
+            wire::ConsensusMode::Permissioned => wire::PERMISSIONED_TAG,
+            wire::ConsensusMode::Npos => wire::NPOS_TAG,
+        };
+        let context_mode_tag = format!(
+            "{base_mode_tag}::height-context:{}::epoch:{}",
+            hex::encode(context.id().0.as_ref()),
+            context.epoch
+        );
+        let mut ownership = SumeragiLanePayloadOwnership {
+            proposal_height: context.height,
+            proposal_view: 0,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height: 1,
+            lane_block_view: 0,
+            subject_hash: Hash::prehashed([0; Hash::LENGTH]),
+            qc_mode_tag: LaneRelayEnvelope::lane_qc_mode_tag_for(
+                lane_id,
+                dataspace_id,
+                &context_mode_tag,
+            ),
+            accepted_candidate_indices: vec![0],
+            accepted_transaction_hashes: vec![Hash::from(entrypoint_hash)],
+            previous_lane_block_height: 0,
+            previous_lane_block_descriptor_hash: None,
+            lane_block_descriptor_hash: Some(Hash::prehashed([0; Hash::LENGTH])),
+            lane_block_descriptor_validator_set: validators,
+            lane_block_descriptor_validator_count: validator_count,
+            lane_block_descriptor_min_quorum: min_quorum,
+            payload_ownership_hash: Hash::prehashed([0; Hash::LENGTH]),
+            rbc_instance_hash: Hash::prehashed([0; Hash::LENGTH]),
+        };
+        let replay = ownership
+            .compute_replay_hashes()
+            .expect("fixture ownership replay material is canonical");
+        ownership.subject_hash = replay.subject_hash;
+        ownership.payload_ownership_hash = replay.payload_ownership_hash;
+        ownership.rbc_instance_hash = replay.rbc_instance_hash;
+        ownership.lane_block_descriptor_hash = Some(replay.lane_block_descriptor_hash);
+
+        let header = BlockHeader::new(
+            NonZeroU64::new(context.height).expect("non-zero fixture height"),
+            None,
+            None,
+            None,
+            context.height,
+            0,
+        );
+        let leader = usize::try_from(context.leader(0)).expect("leader index fits usize");
+        let mut builder = BlockBuilder::new(header);
+        builder.push_transaction(transaction);
+        builder.set_execution_context(Some(
+            BlockExecutionContextBundle::new(vec![ExternalExecutionContext::new(
+                entrypoint_hash,
+                lane_id,
+                dataspace_id,
+            )])
+            .with_lane_payload_ownerships(vec![ownership]),
+        ));
+        let mut block = builder.build_with_signature(
+            u64::try_from(leader).expect("leader index fits u64"),
+            keys[leader].private_key(),
+        );
+        block
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach canonical transaction result");
+        block
     }
 
     fn commit_to_state(state: &State, block: &CommittedBlock, context: &wire::HeightContext) {
@@ -2887,6 +3024,70 @@ mod tests {
             kura.v2_finality_artifact(1)
                 .expect("read finality")
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn finality_complete_tip_with_incomplete_lane_completion_reopens_same_height() {
+        let (verified, keys) = verified_context();
+        let context = verified.context().clone();
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_for(&kura, context.chain_id.clone());
+        let signed_block = lane_owned_block_for_recovery(&state, &context, &keys);
+        let block = ValidBlock::committed_from_replay_signed_block(signed_block);
+        kura.store_block(block.clone())
+            .expect("persist canonical lane-owned block");
+        commit_to_state(&state, &block, &context);
+        let artifact = authenticated_artifact_for(context.clone(), block.as_ref(), &keys);
+        persist_complete_height(kura.as_ref(), &state, &artifact);
+        let store =
+            V2ContextStore::open(kura.sumeragi_v2_storage_root()).expect("open context store");
+        store
+            .persist(&PersistedHeightContext::from_verified(&verified))
+            .expect("persist active context");
+
+        assert!(
+            kura.v2_finality_artifact_with_receipt(1)
+                .expect("read complete global finality")
+                .is_some(),
+            "the fixture must cross the complete global finality boundary"
+        );
+        assert!(
+            kura.read_lane_block_artifact(LaneId::SINGLE, 1).is_some(),
+            "the canonical ownership sidecar must already be durable"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(LaneId::SINGLE, 1)
+                .is_none(),
+            "the fixture must stop before the lane CommitQC is durable"
+        );
+        assert!(
+            kura.read_lane_block_application_receipt(LaneId::SINGLE, 1)
+                .is_none(),
+            "the fixture must stop before lane application receipt publication"
+        );
+
+        let plan = plan_v2_startup_replay(kura.as_ref())
+            .expect("classify missing lane completion as an interrupted durable tip");
+        assert_eq!(plan.durable_height(), 1);
+        assert_eq!(plan.complete_prefix_height(), 0);
+        assert_eq!(plan.pending_tip_height(), Some(1));
+
+        let recovered =
+            recover_active_height(kura.as_ref(), &state, None, keys[0].public_key().clone())
+                .expect("reopen the exact finalized lane-owned tip");
+        assert_eq!(recovered.verified_context().context(), &context);
+        let pending = recovered
+            .pending_kura_apply()
+            .expect("incomplete lane completion must retain the exact Apply binding");
+        assert_eq!(pending.context_id(), context.id());
+        assert_eq!(pending.height(), 1);
+        assert_eq!(pending.state_height(), 1);
+        assert_eq!(pending.block_hash(), block.as_ref().hash());
+        assert!(recovered.successor_activation().is_none());
+        assert!(
+            store.load(2).expect("inspect successor context").is_none(),
+            "recovery must not derive or persist a successor before lane completion"
         );
     }
 

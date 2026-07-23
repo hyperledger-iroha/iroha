@@ -159,8 +159,11 @@ where
 
 /// Deterministically derive parliament bodies directly from bonded citizen candidates.
 ///
-/// Each body is sampled independently with body-specific domain tags. Bond amounts are used only
-/// for eligibility before this function is called, so every bonded citizen has one draw.
+/// Each body is sampled independently with body-specific domain tags. A citizen is unique within
+/// one body's member/alternate roster, but may serve on multiple independently drawn bodies.
+/// Bond amounts are used only for eligibility before this function is called, so every bonded
+/// citizen has one draw per body. Proposal-time JIT sortition intentionally does not consume the
+/// persisted per-epoch seat budget; that budget governs accepted, persisted service assignments.
 pub fn derive_parliament_bodies_from_bonded_citizens<'a, I, B>(
     gov_cfg: &Governance,
     chain_id: &ChainId,
@@ -660,6 +663,60 @@ mod tests {
         assert!(
             distinct_member_lists.len() > 1,
             "body draws must not clone one shared membership list across all parliament bodies"
+        );
+    }
+
+    #[test]
+    fn forty_six_citizens_fill_all_default_body_members_independently() {
+        let chain_id: ChainId = "body-readiness-demo".into();
+        let beacon = [0x46; 32];
+        let epoch = 46u64;
+        let accounts: Vec<_> = (1..=46).map(mk_account).collect();
+        let cfg = Governance::default();
+
+        let bodies = derive_parliament_bodies_from_bonded_citizens(
+            &cfg,
+            &chain_id,
+            epoch,
+            &beacon,
+            accounts.iter().map(|account| (account, 100u128)),
+            CouncilDerivationKind::Fallback,
+        );
+
+        for (body, expected) in [
+            (ParliamentBody::RulesCommittee, 7),
+            (ParliamentBody::AgendaCouncil, 9),
+            (ParliamentBody::InterestPanel, 11),
+            (ParliamentBody::ReviewPanel, 13),
+            (ParliamentBody::PolicyJury, 25),
+            (ParliamentBody::OversightCommittee, 7),
+            (ParliamentBody::FmaCommittee, 5),
+        ] {
+            let roster = bodies.rosters.get(&body).expect("default body roster");
+            assert_eq!(roster.members.len(), expected, "{body:?} members");
+            let within_body: BTreeSet<_> =
+                roster.members.iter().chain(&roster.alternates).collect();
+            assert_eq!(
+                within_body.len(),
+                roster.members.len() + roster.alternates.len(),
+                "{body:?} must not repeat a citizen within its own roster"
+            );
+        }
+
+        let total_member_seats: usize = bodies
+            .rosters
+            .values()
+            .map(|roster| roster.members.len())
+            .sum();
+        let distinct_members: BTreeSet<_> = bodies
+            .rosters
+            .values()
+            .flat_map(|roster| roster.members.iter())
+            .collect();
+        assert_eq!(total_member_seats, 77);
+        assert!(
+            distinct_members.len() <= accounts.len(),
+            "independent body draws may reuse a citizen across bodies"
         );
     }
 

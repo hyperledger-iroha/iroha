@@ -7,6 +7,7 @@ import {
   AccountAddress,
   AccountAddressError,
   AccountAddressErrorCode,
+  encodeI105AccountAddress,
 } from "../src/address.js";
 import { AccountAddress as DistAccountAddress } from "../dist/address.js";
 
@@ -95,6 +96,29 @@ test("fromCanonicalBytes rejects non-canonical ed25519 encodings", () => {
       error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
       /non-canonical/i.test(error.message),
   );
+});
+
+test("encodeI105AccountAddress rejects invalid ed25519 controller keys", () => {
+  const canonical = Buffer.from(
+    AccountAddress.fromAccount({ publicKey: VALID_KEY }).canonicalBytes(),
+  );
+  const keyOffset = canonical.length - VALID_KEY.length;
+
+  for (const publicKey of [
+    SMALL_ORDER_KEY,
+    NON_CANONICAL_IDENTITY,
+    INVALID_COMPRESSED_KEY,
+    MIXED_TORSION_KEY,
+  ]) {
+    const tampered = Buffer.from(canonical);
+    tampered.set(publicKey, keyOffset);
+    assert.throws(
+      () => encodeI105AccountAddress(tampered),
+      (error) =>
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+    );
+  }
 });
 
 test("fromAccount rejects canonical-range bytes that do not decompress", () => {

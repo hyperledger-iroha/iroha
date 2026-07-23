@@ -48,7 +48,7 @@ public enum KagemushaNearbyEvent: Equatable, Sendable {
     case advertising(KagemushaNearbyPairingChallenge)
     case peerConnected
     case pairingChallenge(KagemushaNearbyPairingChallenge)
-    case receiveRequest(KagemushaRecipientPaymentRequest)
+    case receiveRequest(KagemushaRecipientReceiveOfferV2)
     case paymentQueued(KagemushaRecursiveSpendPeerPaymentV4)
     case paymentReceived(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgementQueued(KagemushaReceiverAcknowledgement)
@@ -123,34 +123,17 @@ enum KagemushaNearbyMessageKind: String, Codable, Sendable {
 }
 
 enum KagemushaNearbyEnvelopeCodec {
-    static let maximumEnvelopeBytes = 20 * 1024
+    /// Canonical authenticated Nearby plaintext. The exact IPM1 message is
+    /// carried once (without a text/base64 expansion), leaving ample room for
+    /// the 24,576-byte Kagemusha body below the 32 KiB Nearby record ceiling.
+    static let maximumEnvelopeBytes = 32_704
+    private static let magic = Data("PKNB1".utf8)
+    private static let headerBytes = 12
 
     struct Decoded: Equatable, Sendable {
         let messageKind: KagemushaNearbyMessageKind
         let payload: KagemushaPeerPayload?
         let pairingChallenge: KagemushaNearbyPairingChallenge?
-    }
-
-    private struct Envelope: Codable, Equatable {
-        let kind: KagemushaNearbyMessageKind
-        let payload: String
-        let contentType: String
-        let pairingChallenge: KagemushaNearbyPairingChallenge?
-
-        enum CodingKeys: String, CodingKey, CaseIterable {
-            case kind
-            case payload
-            case contentType
-            case pairingChallenge
-        }
-
-        func encode(to encoder: Encoder) throws {
-            var container = encoder.container(keyedBy: CodingKeys.self)
-            try container.encode(kind, forKey: .kind)
-            try container.encode(payload, forKey: .payload)
-            try container.encode(contentType, forKey: .contentType)
-            try container.encodeIfPresent(pairingChallenge, forKey: .pairingChallenge)
-        }
     }
 
     static func encode(
@@ -163,84 +146,149 @@ enum KagemushaNearbyEnvelopeCodec {
         case .payment, .acknowledgement:
             guard pairingChallenge == nil else { throw KagemushaNearbyError.invalidMessage }
         }
-        let text = try KagemushaPeerTextCodec.encode(payload)
-        let envelope = Envelope(
+        let message: IrohaPeerWireMessageV1
+        do {
+            message = try IrohaPeerKagemushaAdapterV1.wrap(payload)
+        } catch {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        return try encode(
             kind: messageKind(for: payload.kind),
-            payload: KagemushaPeerTextCodec.base64URLEncode(Data(text.utf8)),
-            contentType: payload.kind.contentType,
-            pairingChallenge: pairingChallenge
+            pairingChallenge: pairingChallenge,
+            ipmMessage: message.encoded
         )
-        return try encode(envelope)
     }
 
     static func encodeRejection() throws -> Data {
-        try encode(Envelope(
-            kind: .rejected,
-            payload: KagemushaPeerTextCodec.base64URLEncode(Data("rejected".utf8)),
-            contentType: "text/plain",
-            pairingChallenge: nil
-        ))
+        try encode(kind: .rejected, pairingChallenge: nil, ipmMessage: Data())
     }
 
     static func decode(_ data: Data) throws -> Decoded {
-        guard !data.isEmpty, data.count <= maximumEnvelopeBytes,
-              let object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        guard data.count >= headerBytes,
+              data.count <= maximumEnvelopeBytes,
+              data.prefix(magic.count) == magic,
+              data[7] == 0,
+              data[6] <= 3,
+              let decodedKind = messageKind(code: data[5]) else {
             throw KagemushaNearbyError.invalidMessage
         }
-        let baseKeys: Set<String> = ["kind", "payload", "contentType"]
-        let actualKeys = Set(object.keys)
-        guard actualKeys == baseKeys || actualKeys == baseKeys.union(["pairingChallenge"]) else {
+        let pairingChallenge = pairingChallenge(code: data[6])
+        let payloadLength = Int(
+            (UInt32(data[8]) << 24)
+                | (UInt32(data[9]) << 16)
+                | (UInt32(data[10]) << 8)
+                | UInt32(data[11])
+        )
+        guard payloadLength == data.count - headerBytes else {
             throw KagemushaNearbyError.invalidMessage
         }
-        let envelope: Envelope
-        do { envelope = try JSONDecoder().decode(Envelope.self, from: data) }
-        catch { throw KagemushaNearbyError.invalidMessage }
-        guard try encode(envelope) == data,
-              let payloadBytes = KagemushaPeerTextCodec.base64URLDecode(envelope.payload),
-              payloadBytes.count <= KagemushaPeerTransportContract.maximumTextEnvelopeBytes else {
-            throw KagemushaNearbyError.invalidMessage
-        }
-        if envelope.kind == .rejected {
-            guard envelope.contentType == "text/plain",
-                  envelope.pairingChallenge == nil,
-                  payloadBytes == Data("rejected".utf8) else {
+        if decodedKind == .rejected {
+            guard payloadLength == 0, pairingChallenge == nil else {
                 throw KagemushaNearbyError.invalidMessage
             }
             return Decoded(messageKind: .rejected, payload: nil, pairingChallenge: nil)
         }
-        guard let kind = KagemushaPeerPayloadKind(contentType: envelope.contentType),
-              messageKind(for: kind) == envelope.kind,
-              let text = String(data: payloadBytes, encoding: .utf8) else {
+        guard payloadLength > 0 else {
             throw KagemushaNearbyError.invalidMessage
         }
+        let messageBytes = data.subdata(in: headerBytes..<data.count)
         let payload: KagemushaPeerPayload
-        do { payload = try KagemushaPeerTextCodec.decode(text, expectedKind: kind) }
-        catch { throw KagemushaNearbyError.invalidMessage }
-        switch kind {
+        do {
+            let message = try IrohaPeerWireMessageV1.decode(
+                messageBytes,
+                expectedProfile: .kagemusha
+            )
+            payload = try IrohaPeerKagemushaAdapterV1.decode(message)
+        } catch {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        guard messageKind(for: payload.kind) == decodedKind else {
+            throw KagemushaNearbyError.invalidMessage
+        }
+        switch payload.kind {
         case .receiveRequest:
-            guard envelope.pairingChallenge != nil else {
+            guard pairingChallenge != nil else {
                 throw KagemushaNearbyError.invalidMessage
             }
         case .payment, .acknowledgement:
-            guard envelope.pairingChallenge == nil else {
+            guard pairingChallenge == nil else {
                 throw KagemushaNearbyError.invalidMessage
             }
         }
         return Decoded(
-            messageKind: envelope.kind,
+            messageKind: decodedKind,
             payload: payload,
-            pairingChallenge: envelope.pairingChallenge
+            pairingChallenge: pairingChallenge
         )
     }
 
-    private static func encode(_ envelope: Envelope) throws -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        let data = try encoder.encode(envelope)
-        guard data.count <= maximumEnvelopeBytes else {
+    private static func encode(
+        kind: KagemushaNearbyMessageKind,
+        pairingChallenge: KagemushaNearbyPairingChallenge?,
+        ipmMessage: Data
+    ) throws -> Data {
+        guard ipmMessage.count <= Int(UInt32.max),
+              headerBytes + ipmMessage.count <= maximumEnvelopeBytes,
+              let kindCode = messageKindCode(kind) else {
             throw KagemushaNearbyError.invalidMessage
         }
+        let pairingCode = pairingChallengeCode(pairingChallenge)
+        let length = UInt32(ipmMessage.count)
+        var data = Data(capacity: headerBytes + ipmMessage.count)
+        data.append(magic)
+        data.append(kindCode)
+        data.append(pairingCode)
+        data.append(0)
+        data.append(UInt8((length >> 24) & 0xff))
+        data.append(UInt8((length >> 16) & 0xff))
+        data.append(UInt8((length >> 8) & 0xff))
+        data.append(UInt8(length & 0xff))
+        data.append(ipmMessage)
         return data
+    }
+
+    private static func messageKindCode(
+        _ kind: KagemushaNearbyMessageKind
+    ) -> UInt8? {
+        switch kind {
+        case .receiveRequest: return 1
+        case .payment: return 2
+        case .acknowledgement: return 3
+        case .rejected: return 4
+        }
+    }
+
+    private static func messageKind(code: UInt8) -> KagemushaNearbyMessageKind? {
+        switch code {
+        case 1: return .receiveRequest
+        case 2: return .payment
+        case 3: return .acknowledgement
+        case 4: return .rejected
+        default: return nil
+        }
+    }
+
+    private static func pairingChallengeCode(
+        _ challenge: KagemushaNearbyPairingChallenge?
+    ) -> UInt8 {
+        guard let challenge else { return 0 }
+        switch challenge.symbol {
+        case .stars: return 1
+        case .bird: return 2
+        case .mask: return 3
+        }
+    }
+
+    private static func pairingChallenge(
+        code: UInt8
+    ) -> KagemushaNearbyPairingChallenge? {
+        switch code {
+        case 0: return nil
+        case 1: return .init(symbol: .stars)
+        case 2: return .init(symbol: .bird)
+        case 3: return .init(symbol: .mask)
+        default: return nil
+        }
     }
 
     private static func messageKind(
@@ -262,6 +310,11 @@ public enum KagemushaNearbyTransportPolicy {
 
     public static func peerDisplayName(uuid: UUID = UUID()) -> String {
         "pk-\(uuid.uuidString.prefix(8).lowercased())"
+    }
+
+    static func timeoutNanoseconds(seconds: UInt64) -> UInt64 {
+        let (nanoseconds, overflow) = seconds.multipliedReportingOverflow(by: 1_000_000_000)
+        return overflow ? UInt64.max : nanoseconds
     }
 }
 
@@ -358,11 +411,11 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
         case sender(
             confirmPairing: @Sendable (KagemushaNearbyPairingChallenge) async
                 -> KagemushaNearbyPairingDecision,
-            createPayment: @Sendable (KagemushaRecipientPaymentRequest) async throws
+            createPayment: @Sendable (KagemushaRecipientReceiveOfferV2) async throws
                 -> KagemushaRecursiveSpendPeerPaymentV4
         )
         case receiver(
-            request: KagemushaRecipientPaymentRequest,
+            request: KagemushaRecipientReceiveOfferV2,
             challenge: KagemushaNearbyPairingChallenge,
             acceptPayment: @Sendable (KagemushaRecursiveSpendPeerPaymentV4) async throws
                 -> KagemushaReceiverAcknowledgement
@@ -426,7 +479,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
             KagemushaNearbyPairingChallenge
         ) async -> KagemushaNearbyPairingDecision,
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
+            KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         guard Self.isAvailable else { throw KagemushaNearbyError.unavailable }
@@ -441,7 +494,7 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
     }
 
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         pairingChallenge: KagemushaNearbyPairingChallenge = .random(),
         onEvent: @escaping @Sendable (KagemushaNearbyEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
@@ -568,7 +621,11 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
 
     private func scheduleTimeout() {
         timeoutTask = Task { [weak self, timeoutSeconds] in
-            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+            try? await Task.sleep(
+                nanoseconds: KagemushaNearbyTransportPolicy.timeoutNanoseconds(
+                    seconds: timeoutSeconds
+                )
+            )
             guard !Task.isCancelled else { return }
             self?.finish(.failure(KagemushaNearbyError.timedOut))
         }
@@ -982,14 +1039,14 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
             KagemushaNearbyPairingChallenge
         ) async -> KagemushaNearbyPairingDecision,
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
+            KagemushaRecipientReceiveOfferV2
         ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         _ = onEvent; _ = confirmPairing; _ = createPayment
         throw KagemushaNearbyError.unavailable
     }
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         pairingChallenge: KagemushaNearbyPairingChallenge = .random(),
         onEvent: @escaping @Sendable (KagemushaNearbyEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (

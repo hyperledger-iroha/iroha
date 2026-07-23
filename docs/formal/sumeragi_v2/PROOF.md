@@ -694,11 +694,36 @@ reducer path rather than a second consensus or receipt relation: an
 authenticated current voter serves an
 already canonical exact CommitQC, the Core imports that envelope into ordinary
 certificate delivery, and the reducer performs decision persistence, body
-recovery, store, validation, and application. Nonterminal
-application queues successor startup and does not join; only exact Applied or
-Recovered publication joins. Recovered publication requires absent
-process-visible predecessor ownership plus durable complete-tip authority and
-never writes a fictitious predecessor `Complete`. At terminal `MaxHeight`, a
+recovery, store, validation, and application. Production may schedule the
+first request immediately when startup recovers durable v2 ownership or an
+interrupted tip. It carries that urgency across a height only when an
+authenticated Commit-certificate response yields a discovered CommitQC which
+is admitted to, or coalesced with, serialized reducer ownership; ordinary live
+finality clears it. The corresponding outstanding-request `Some`-to-`None`
+transition proves neither reducer execution, Decision, durability, nor
+historical-Kura provenance. This is a scheduling refinement of the same exact
+Async import path, not an alternate certificate, authentication, or consensus
+relation. Its concrete runner mapping remains part of the `specified_unproved`
+production-refinement seam.
+
+In the abstract indexed model, nonterminal application queues successor
+startup and does not join; only exact
+Applied or Recovered publication joins. Production's earlier internal State
+application maps to that abstract Applied boundary only after canonical lane
+completion. If block sync installs that canonical ownership after adapter
+construction, production rehydrates its exact bounded proposal at rollover so
+the missing lane certificate remains recoverable. Proving that delayed mapping
+remains explicit refinement debt.
+Recovered publication requires absent
+process-visible predecessor ownership plus durable complete-tip authority. For
+a tip whose canonical block owns lane payloads, that authority additionally
+requires every exact ownership's durable lane certificate and application
+receipt; global finality alone cannot activate the successor. An empty
+canonical ownership set has no lane debt for a result-bearing genesis or other
+external-only block. Recovery reopens
+an incomplete tip for exact decided-lane traffic without re-entering global
+reducer input and never writes a fictitious predecessor `Complete`. At terminal
+`MaxHeight`, a
 responsive observer records known application without advancing height or
 creating activation state. Its
 dormant `InitAt` parent receipts remain private to their one-height instances,
@@ -889,16 +914,25 @@ sources fail closed. Current-height global V2 claims bind protocol, Decision
 context/height, and the exact finality artifact. A winning lane claim requires
 the exact durable Kura certificate and application receipt, revalidates
 alternate vote/QC/certificate proof variants, and explicitly supersedes
-structurally valid same-height non-winning lane output. Native AMX claims bind
+structurally valid same-height non-winning lane output. The winning set comes
+from canonical finalized-block ownership, not volatile output. Missing evidence
+keeps the same terminal height active; conflicting evidence fails closed; only
+the complete Kura-first set permits handoff. Rollover rehydrates bounded
+canonical ownership which arrived after adapter construction before it retries
+the exact decided-lane certificate path. Startup enforces this at the live tip
+only because older lifecycle sidecars may be canonically retired. Native
+AMX claims bind
 creation scope, embedded round, and message hash; merge-share claims bind scope
 and share hash. Certified-sidecar request/chunk claims bind scope, target roles,
 transfer identity, and exact request/response hash. Finalized-sidecar pruning
 leaves winning data in the committed merge log and supersedes losing pending
 work before handoff. Manual or otherwise untyped `Exact` output remains owned
 and fails closed. These source contracts do not promote the application,
-reconstruction-refinement, or starvation obligations.
+reconstruction-refinement, or starvation obligations; the added rollover and
+tip-recovery regressions remain executable evidence under
+`specified_unproved`, not a machine-checked completion claim.
 
-The current pre-network release inventory names 509 tests across thirty-eight Rust
+The current pre-network release inventory names 515 tests across thirty-eight Rust
 modules. The preceding 298-name inventory arose from the 264-name inventory by
 adding 37 positive regressions which
 comprise 10 per-target exact-output and historical/current typed-rollover tests,
@@ -927,11 +961,11 @@ non-validator source-cap regression and the alternate-route-before-lane-cap
 regression add two exact names, yielding the 467-test checkpoint without
 adding a module or corridor leg. Three daemon Hold/Release controller
 regressions, one layered daemon ownership regression, and two root
-configuration geometry regressions add six exact names, yielding the current
+configuration geometry regressions add six exact names, yielding the historical
 473-test checkpoint without adding a module or corridor leg. One configuration
 fingerprint, two historical-recovery kernel, and one shared authenticated
-source-credit regression add four exact names, yielding the current 477-test
-geometry without adding a module or corridor leg.
+source-credit regression add four exact names, yielding the historical 477-test
+checkpoint without adding a module or corridor leg.
 They bind each delivery capability to its
 original minting tenure across bounded retired-source tombstone churn, reject
 a second rehydrated capability instead of overwriting the first, and prove actor
@@ -947,10 +981,36 @@ and chunk rejection, alternate-source runtime/orphan ownership, actor-global
 ordinals across tenures, and checked `iroha_config` source/capacity geometry.
 The proposal-origin, multi-carrier, and persistence-failure closure adds 41
 exact regressions while retiring nine superseded selectors,
-yielding the 509-test, 38-module, 61-leg checkpoint. Those regressions additionally bind
-reducer and deferred identities, equivocation evidence, aggregate signatures,
-finality/header geometry, compact offline QCs, and parent height-context
-identity to the signed origin.
+yielding the 509-test, 38-module, 61-leg checkpoint. Those regressions
+additionally bind reducer and deferred identities, equivocation evidence,
+aggregate signatures, finality/header geometry, compact offline QCs, and parent
+height-context identity to the signed origin.
+
+The final successor/recovery closure adds six exact regressions without adding
+a module or corridor leg, yielding the current 515-test, 38-module, 61-leg
+inventory. The canonical module/test TSV inventory SHA-256 is
+`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+The added boundaries preserve the frozen predecessor CommitQC through
+wire-to-core conversion, block rollover until the decided lane session is
+durable, reopen a globally finalized tip whose lane evidence is incomplete,
+and filter CommitQC discovery and losing current-body requests at terminal
+ingress. They also accept canonical view-zero bytes whose first proposal origin
+is later and pin a contention-tolerant restart view-zero deadline. The genesis
+finality regression's whole-item token SHA-256 is
+`bfbd01d093f38fa8c96fb17fe38b6ec1132e6ffbb0d09367a298299394bdce4f`,
+and the restart-deadline regression's is
+`13c1cd988856a8c4ee4d20cfc176c4111352ba7262d07bb417de5a4056cf8b1f`.
+The same four-validator scenario owns sequential missing-height discovery and
+catch-up. A diagnostic rerun exposed one full 20-second discovery delay at
+every missing height. The fresh exact run of
+`sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart`
+against recovery-scoped eager discovery passed 1/1 in 79.82 seconds; all four
+peers shut down gracefully with empty stderr. This focused regression does not
+promote any proof-ledger entry. The successor-boundary regression's whole-item
+token SHA-256 is
+`ee773b00e696822c6d2ba998fb88201bb6e2a06eac749a2c700edec70dbbdf74`;
+its extended authenticated-admission companion is sealed at
+`1cb4736b2e4b499403c870cc3dd5ab8ccd361d51887efad4178ed7d39a9e0225`.
 They are local ownership and reconstruction
 contracts, not remote application acknowledgement, relay second-hop
 completion, or unbounded broadcast admission. The 264-name baseline added 32
@@ -964,14 +1024,15 @@ anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also adds one four-validator exact PrepareQC count-and-power quorum regression.
-The four integration names share a module-filtered leg; the pre-network corridor
+The five integration names share a module-filtered leg; the pre-network corridor
 now has 61 legs, including separate exact data-model status and atomic
-lane-certificate decode contracts, two `iroha_config` geometry modules, two P2P
+lane-certificate decode contracts, two `iroha_config` geometry modules, three P2P
 geometry modules, the daemon genesis module, and source-sealed command-success
 legs. Its finality, offline compact-QC, and height-context proposal-origin
 modules each use a dedicated `iroha_data_model` leg. Its `iroha_p2p` legs use
 the crate's empty default feature set; feature-gated QUIC first-packet geometry
-tests are not claimed by the thirty-eight-module, sixty-one-leg corridor. It includes
+tests are not claimed by the thirty-eight-module, sixty-one-leg corridor. It
+includes
 exact completion ownership, body-owner binding and
 rebind, rejection of future physical completions, durable-recovery retry to the
 latest consumer, byte retirement, three-class production arbitration, the exact
@@ -990,7 +1051,7 @@ request registration can retire the old request; durable reducer
 retransmission then reconstructs the blocked Fetch and lets it acquire both
 owners atomically. The
 preceding mutable-source discovery and direct execution evidence covered the
-earlier 168-name inventory. Fresh 509-name
+earlier 168-name inventory. Fresh 515-name
 discovery/execution and the clean committed, detached, source-sealed serial
 release leg remain pending. An
 earlier exact one-attempt

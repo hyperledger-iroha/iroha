@@ -232,6 +232,19 @@ public enum IrohaPeerQRCodecV1 {
         for message: IrohaPeerWireMessageV1,
         limits: IrohaPeerWireLimitsV1 = .peerV1
     ) throws -> String? {
+        let messageByteCount = IrohaPeerWireMessageV1.headerBytes + message.encodedBody.count
+        let maximumEncodedBytes = try limits.maximumEncodedBytes(for: message.profile)
+        guard messageByteCount > IrohaPeerWireMessageV1.headerBytes,
+              messageByteCount <= IrohaPeerWireMessageV1.headerBytes + maximumEncodedBytes else {
+            throw IrohaPeerQRErrorV1.invalidFrameShape
+        }
+        let frameByteCount = IrohaPeerQRFrameV1.payloadOffset
+            + messageByteCount
+            + IrohaPeerQRFrameV1.checksumBytes
+        guard framedTextByteCount(forEncodedFrameByteCount: frameByteCount)
+                <= maximumStaticTextBytes else {
+            return nil
+        }
         let frame = try IrohaPeerQRFrameV1(
             frameKind: .complete,
             profile: message.profile,
@@ -242,8 +255,7 @@ public enum IrohaPeerQRCodecV1 {
             payload: message.encoded,
             limits: limits
         )
-        let text = encodeFrame(frame)
-        return text.utf8.count <= maximumStaticTextBytes ? text : nil
+        return encodeFrame(frame)
     }
 
     /// Animated sequence: `header,D0,D1,P0,...`, with another identical
@@ -257,16 +269,14 @@ public enum IrohaPeerQRCodecV1 {
         guard dataCount > 0, dataCount <= Int(UInt16.max) else {
             throw IrohaPeerQRErrorV1.messageTooLarge
         }
-        var shards: [Data] = []
-        shards.reserveCapacity(dataCount)
-        for index in 0..<dataCount {
+        func shard(at index: Int) -> Data {
             let start = index * shardBytes
             let end = min(start + shardBytes, message.encodedBody.count)
             var shard = message.encodedBody.subdata(in: start..<end)
             if shard.count < shardBytes {
                 shard.append(Data(repeating: 0, count: shardBytes - shard.count))
             }
-            shards.append(shard)
+            return shard
         }
         let header = try IrohaPeerQRFrameV1(
             frameKind: .header,
@@ -278,15 +288,22 @@ public enum IrohaPeerQRCodecV1 {
             payload: message.header.bytes,
             limits: limits
         )
-        var frames = [header]
+        let parityCount = dataCount.qrCeilingDivisor(2)
+        let nonHeaderFrameCount = dataCount + parityCount
+        let headerEmissionCount = 1 + nonHeaderFrameCount / headerRepeatInterval
+        let headerText = encodeFrame(header)
+        var texts: [String] = []
+        texts.reserveCapacity(nonHeaderFrameCount + headerEmissionCount)
+        texts.append(headerText)
         var nonHeaderCount = 0
         func appendNonHeader(_ frame: IrohaPeerQRFrameV1) {
-            frames.append(frame)
+            texts.append(encodeFrame(frame))
             nonHeaderCount += 1
-            if nonHeaderCount % headerRepeatInterval == 0 { frames.append(header) }
+            if nonHeaderCount % headerRepeatInterval == 0 { texts.append(headerText) }
         }
-        for pairIndex in 0..<dataCount.qrCeilingDivisor(2) {
+        for pairIndex in 0..<parityCount {
             let firstIndex = pairIndex * 2
+            let firstShard = shard(at: firstIndex)
             appendNonHeader(try IrohaPeerQRFrameV1(
                 frameKind: .data,
                 profile: message.profile,
@@ -294,10 +311,13 @@ public enum IrohaPeerQRCodecV1 {
                 streamID: message.streamID,
                 index: firstIndex,
                 total: dataCount,
-                payload: shards[firstIndex],
+                payload: firstShard,
                 limits: limits
             ))
+            let secondShard: Data?
             if firstIndex + 1 < dataCount {
+                let value = shard(at: firstIndex + 1)
+                secondShard = value
                 appendNonHeader(try IrohaPeerQRFrameV1(
                     frameKind: .data,
                     profile: message.profile,
@@ -305,14 +325,16 @@ public enum IrohaPeerQRCodecV1 {
                     streamID: message.streamID,
                     index: firstIndex + 1,
                     total: dataCount,
-                    payload: shards[firstIndex + 1],
+                    payload: value,
                     limits: limits
                 ))
+            } else {
+                secondShard = nil
             }
-            var parity = shards[firstIndex]
-            if firstIndex + 1 < dataCount {
+            var parity = firstShard
+            if let secondShard {
                 for byteIndex in 0..<shardBytes {
-                    parity[byteIndex] ^= shards[firstIndex + 1][byteIndex]
+                    parity[byteIndex] ^= secondShard[byteIndex]
                 }
             }
             appendNonHeader(try IrohaPeerQRFrameV1(
@@ -326,7 +348,14 @@ public enum IrohaPeerQRCodecV1 {
                 limits: limits
             ))
         }
-        return frames.map(encodeFrame)
+        return texts
+    }
+
+    private static func framedTextByteCount(forEncodedFrameByteCount byteCount: Int) -> Int {
+        textPrefix.utf8.count
+            + (byteCount / 2) * 3
+            + (byteCount % 2) * 2
+            + textSuffix.utf8.count
     }
 
     private static func encodeRawText(_ bytes: Data) -> String {
@@ -860,13 +889,19 @@ enum IrohaBase45V1 {
 }
 
 enum IrohaPeerCRC32CV1 {
+    private static let table: [UInt32] = (0..<256).map { value in
+        var crc = UInt32(value)
+        for _ in 0..<8 {
+            crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0x82F6_3B78
+        }
+        return crc
+    }
+
     static func checksum<C: Collection>(_ bytes: C) -> UInt32 where C.Element == UInt8 {
         var crc: UInt32 = 0xFFFF_FFFF
         for byte in bytes {
-            crc ^= UInt32(byte)
-            for _ in 0..<8 {
-                crc = (crc & 1) == 0 ? crc >> 1 : (crc >> 1) ^ 0x82F6_3B78
-            }
+            let tableIndex = Int((crc ^ UInt32(byte)) & 0xFF)
+            crc = (crc >> 8) ^ table[tableIndex]
         }
         return crc ^ 0xFFFF_FFFF
     }

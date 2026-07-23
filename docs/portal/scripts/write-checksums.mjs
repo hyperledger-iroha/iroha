@@ -66,15 +66,15 @@ async function walkForChecksums(root) {
       if (entry.isDirectory()) {
         queue.push(resolved);
       } else if (entry.isFile()) {
+        const relativePath = relative(root, resolved).replace(/\\/g, '/');
         if (
-          entry.name === MANIFEST_NAME ||
-          entry.name.startsWith('.DS_Store')
+          relativePath === MANIFEST_NAME ||
+          entry.name === '.DS_Store'
         ) {
           continue;
         }
         const hash = await sha256File(resolved);
-        const relativePath = relative(root, resolved);
-        files.push({ hash, path: relativePath.replace(/\\/g, '/') });
+        files.push({ hash, path: relativePath });
       }
     }
   }

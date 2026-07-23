@@ -83,7 +83,7 @@ public final class IrohaPeerCanonicalPayload {
     if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return;
     final String schema = switch (kind) {
       case RECEIVE_REQUEST ->
-          "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2";
+          "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2";
       case PAYMENT ->
           "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4";
       case ACKNOWLEDGEMENT ->

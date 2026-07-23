@@ -20,6 +20,21 @@ final class ConnectEventsTests: XCTestCase {
         }
     }
 
+    func testBalanceAssetRejectsMalformedPresentDefinition() {
+        let json: [String: Any] = [
+            "asset_id": encodedUsdAssetID,
+            "asset_definition_id": 7,
+            "quantity": "1",
+        ]
+
+        XCTAssertThrowsError(try ConnectBalanceAsset(json: json)) { error in
+            guard case ConnectEnvelopeError.invalidPayload = error else {
+                XCTFail("Expected invalidPayload, got \(error)")
+                return
+            }
+        }
+    }
+
     func testBalanceAssetRejectsNoncanonicalQuantity() {
         for quantity in ["-1", "+1", "01", "1.0", " 1"] {
             let json: [String: Any] = [

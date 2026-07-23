@@ -1032,6 +1032,7 @@ required_production_liveness_tests=(
   sumeragi::v2::tests::deferred_projection_distinguishes_authenticated_proposal_origins
   sumeragi::v2::tests::vote_body_ownership_uses_the_authenticated_proposal_origin
   sumeragi::v2::tests::locked_subject_is_safe_only_at_its_exact_proposal_origin
+  sumeragi::v2::tests::successor_core_context_preserves_the_parent_certificate_binding
   sumeragi::v2_block_sync::tests::discovery_outputs_only_normal_commit_qc_ingress_and_waits_for_enqueue
   sumeragi::v2_block_sync::tests::catch_up_is_strictly_sequential_across_contexts
   sumeragi::v2_block_sync::tests::historical_body_comes_from_kura_and_only_a_certified_signer_can_serve
@@ -1096,6 +1097,7 @@ required_production_liveness_tests=(
   sumeragi::v2_effects::tests::view_cleanup_second_cancellation_failure_commits_no_fetch_retirement
   sumeragi::v2_effects::tests::discovered_commit_certificate_mints_exact_reducer_admission_only_after_enqueue
   sumeragi::v2_lane_work::tests::direct_decision_quiesces_losing_lane_and_retransmission_work
+  sumeragi::v2_lane_work::tests::decided_lane_ownership_blocks_rollover_until_its_session_is_durable
   sumeragi::v2_lane_work::tests::applied_lane_certificate_retires_alternative_qc_replays_without_weakening_conflicts
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_small_product
   sumeragi::v2_lane_work::tests::native_amx_signing_guard_capacity_preserves_exact_hard_boundary
@@ -1164,6 +1166,7 @@ required_production_liveness_tests=(
   sumeragi::v2_transport::tests::later_commit_qc_authenticates_the_exact_locked_body_origin
   sumeragi::v2_recovery::tests::all_hash_only_snapshot_recovers_exact_authenticated_successor
   sumeragi::v2_recovery::tests::finalized_tip_derives_one_idempotent_successor_context
+  sumeragi::v2_recovery::tests::finality_complete_tip_with_incomplete_lane_completion_reopens_same_height
   sumeragi::v2_recovery::tests::successor_rejects_foreign_same_height_predecessor_and_mismatched_receipt
   sumeragi::v2_runner::tests::same_tag_higher_lock_retires_all_local_proposal_owners
   sumeragi::v2_runner::tests::reserved_lane_output_bypasses_unserviceable_head_without_losing_owner
@@ -1185,6 +1188,7 @@ required_production_liveness_tests=(
   sumeragi::v2_runner::tests::decision_retires_local_work_before_prepared_delivery
   sumeragi::v2_runner::tests::finalized_rollover_closes_ingress_before_successor_replay
   sumeragi::v2_runner::tests::synthesized_durable_rollover_contract_allows_successor_after_dead_target_handoff
+  sumeragi::v2_runner::tests::terminal_ingress_discards_commit_discovery_and_losing_current_body_requests
   sumeragi::v2_runner::tests::successor_activation_is_published_only_after_ingress_is_open
   sumeragi::v2_runner::tests::complete_tip_recovery_uses_the_same_live_successor_boundary
   sumeragi::v2_runner::tests::successor_startup_failure_stays_running_and_fails_closed_without_activation
@@ -1265,10 +1269,12 @@ required_production_liveness_tests=(
   sumeragi::status::v2_liveness_watchdog_tests::rejected_running_successor_failure_projection_still_latches_restart_required
   zk::kagemusha_finality::tests::aggregate_signature_authenticates_proposal_origin
   block::consensus_v2::finality::tests::header_binding_requires_exact_origin_but_allows_later_certification
+  block::consensus_v2::finality::tests::genesis_header_binding_accepts_a_later_first_proposal_origin
   offline::kagemusha_v4_topup_provenance_tests::compact_qc_rejects_foreign_or_future_proposal_origin
   block::consensus_v2::tests::height_context_identity_authenticates_the_parent_proposal_origin
   sumeragi_v2_runner::prepare_qc_split_tests::locked_commit_progress_witness_rejects_inexact_or_empty_ownership
   sumeragi_v2_runner::prepare_qc_split_tests::locked_commit_progress_witness_accepts_each_exact_owner
+  sumeragi_v2_runner::prepare_qc_split_tests::restart_scenario_uses_a_contention_tolerant_view_zero_deadline
   sumeragi_v2_runner::prepare_qc_split_tests::distinct_prepare_qc_view_zero_wait_covers_deadline_without_masking_view_one
   sumeragi_v2_runner::prepare_qc_split_tests::exact_prepare_qc_requires_both_count_and_power_quorum
   peer::run::tests::authenticated_source_credit_precedes_network_and_subscriber_backlogs
@@ -1372,7 +1378,7 @@ required_production_liveness_tests=(
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_must_fit_network_geometry
   parameters::user::duration_clamp_tests::sumeragi_authenticated_non_validator_sources_use_effective_lane_profile_geometry
 )
-readonly expected_production_liveness_test_count=509
+readonly expected_production_liveness_test_count=515
 if (( ${#required_production_liveness_tests[@]} != expected_production_liveness_test_count )); then
   echo "expected exactly ${expected_production_liveness_test_count} production Sumeragi v2 liveness tests, found ${#required_production_liveness_tests[@]}" >&2
   exit 1

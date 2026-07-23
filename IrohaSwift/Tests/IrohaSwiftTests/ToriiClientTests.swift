@@ -2709,7 +2709,7 @@ final class ToriiClientTests: XCTestCase {
 
             await XCTAssertThrowsErrorAsync(
                 try await makeClient().resolveAccountAlias("alice@universal")
-            )
+            ) { _ in }
         }
     }
 
@@ -18846,6 +18846,84 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         waitForExpectations(timeout: 1)
     }
 
+    func testProposeMultisigEncodesValidationFeePolicyMetadataAsCanonicalStrings() throws {
+        let signer = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let request = ToriiMultisigProposeRequest(
+            selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+            signerAccountId: signer,
+            validationFeePolicyVersion: 7,
+            validationFeePolicyHash: "0X" + String(repeating: "AB", count: 32),
+            validationFeeInstructionIndex: 1,
+            validationFeeTransferEntryIndex: 2,
+            instructions: [try ToriiMultisigProposeInstruction(base64: "AQID")],
+            feePayment: .authority(chargeLimits: [], gasLimit: nil)
+        )
+
+        let payload = try XCTUnwrap(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any]
+        )
+        XCTAssertEqual(payload["validation_fee_policy_version"] as? String, "7")
+        XCTAssertEqual(payload["validation_fee_policy_hash"] as? String, String(repeating: "ab", count: 32))
+        XCTAssertEqual(payload["validation_fee_instruction_index"] as? String, "1")
+        XCTAssertEqual(payload["validation_fee_transfer_entry_index"] as? String, "2")
+    }
+
+    func testProposeMultisigRejectsIncompleteValidationFeePolicyMetadata() throws {
+        let signer = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
+        let instruction = try ToriiMultisigProposeInstruction(base64: "AQID")
+        let feePayment = FeePaymentIntent.authority(chargeLimits: [], gasLimit: nil)
+        let hash = String(repeating: "ab", count: 32)
+        let malformedRequests = [
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeePolicyVersion: 7,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeePolicyHash: hash,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeeInstructionIndex: 1,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeePolicyVersion: 7,
+                validationFeePolicyHash: hash,
+                validationFeeTransferEntryIndex: 2,
+                instructions: [instruction],
+                feePayment: feePayment
+            ),
+            ToriiMultisigProposeRequest(
+                selector: ToriiMultisigAccountSelector(multisigAccountId: signer),
+                signerAccountId: signer,
+                validationFeePolicyVersion: 7,
+                validationFeePolicyHash: "not-a-policy-hash",
+                validationFeeInstructionIndex: 0,
+                instructions: [instruction],
+                feePayment: feePayment
+            )
+        ]
+
+        for request in malformedRequests {
+            XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+                guard case ToriiClientError.invalidPayload = error else {
+                    return XCTFail("Expected invalidPayload, got \(error)")
+                }
+            }
+        }
+    }
+
     func testProposeMultisigSendsWholeNoritoDtoBody() {
         let expectation = expectation(description: "propose multisig native body")
         let proposalId = String(repeating: "b", count: 64)
@@ -20887,8 +20965,7 @@ final class ToriiClientIntegrationTests: XCTestCase {
         let envelope = try tcMakePipelineEnvelope(hashHex: scenarioHash, marker: 0x11)
         let status = try await sdk.submitAndWait(envelope: envelope)
         XCTAssertEqual(status.hash, scenarioHash)
-        XCTAssertEqual(PipelineStatusPollOptions.default.successStates, [.applied])
-        XCTAssertTrue(status.status.state.isTerminalSuccess)
+        XCTAssertEqual(status.status.state, .applied)
     }
 
     @available(iOS 15.0, macOS 12.0, *)

@@ -136,6 +136,7 @@ pub mod pipeline;
 pub mod query;
 /// Transaction queue and mempool logic.
 pub mod queue;
+pub(crate) mod receiver_snapshot;
 /// Unified XOR settlement engine.
 pub mod settlement;
 /// Smart contracts and host ABI.

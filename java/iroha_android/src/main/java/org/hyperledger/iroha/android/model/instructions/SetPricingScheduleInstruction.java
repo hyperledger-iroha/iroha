@@ -110,15 +110,15 @@ public final class SetPricingScheduleInstruction implements InstructionTemplate 
                     .setSettlementGraceSecs(
                         parseLong(arguments, "schedule.credit.settlement_grace_secs"))
                     .setLowBalanceAlertBps(
-                        (int) parseLong(arguments, "schedule.credit.low_balance_alert_bps"))
+                        parseInt(arguments, "schedule.credit.low_balance_alert_bps"))
                     .build());
 
     final DiscountSchedule.Builder discountBuilder =
         DiscountSchedule.builder()
             .setLoyaltyMonthsRequired(
-                (int) parseLong(arguments, "schedule.discounts.loyalty_months_required"))
+                parseInt(arguments, "schedule.discounts.loyalty_months_required"))
             .setLoyaltyDiscountBps(
-                (int) parseLong(arguments, "schedule.discounts.loyalty_discount_bps"));
+                parseInt(arguments, "schedule.discounts.loyalty_discount_bps"));
     int discountIndex = 0;
     while (arguments.containsKey("schedule.discounts.commitment_tiers." + discountIndex + ".minimum_commitment_gib_month")) {
       final String base =
@@ -127,7 +127,7 @@ public final class SetPricingScheduleInstruction implements InstructionTemplate 
           CommitmentDiscountTier.builder()
               .setMinimumCommitmentGibMonth(
                   parseLong(arguments, base + "minimum_commitment_gib_month"))
-              .setDiscountBps((int) parseLong(arguments, base + "discount_bps"))
+              .setDiscountBps(parseInt(arguments, base + "discount_bps"))
               .build());
       discountIndex++;
     }
@@ -158,6 +158,15 @@ public final class SetPricingScheduleInstruction implements InstructionTemplate 
 
   private static long parseLong(final Map<String, String> arguments, final String key) {
     return Long.parseLong(require(arguments, key));
+  }
+
+  private static int parseInt(final Map<String, String> arguments, final String key) {
+    final long value = parseLong(arguments, key);
+    if (value < Integer.MIN_VALUE || value > Integer.MAX_VALUE) {
+      throw new IllegalArgumentException(
+          "Instruction argument '" + key + "' is outside the signed 32-bit integer range");
+    }
+    return (int) value;
   }
 
   private static String require(final Map<String, String> arguments, final String key) {

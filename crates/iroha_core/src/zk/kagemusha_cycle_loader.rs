@@ -132,7 +132,7 @@ where
     C: CurveAffineExt,
     Inner<C>: BigPrimeField,
 {
-    /// Index into [`DeferredScalarAudit::sources`].
+    /// Index into the shared deferred point-source namespace.
     pub(super) source_index: usize,
     /// Coefficient derived by constrained native-scalar arithmetic.
     pub(super) coefficient: AssignedValue<Inner<C>>,
@@ -147,25 +147,6 @@ where
 {
     /// Canonically source-ordered complete linear equation.
     pub(super) terms: Vec<DeferredEquationTerm<C>>,
-}
-
-/// Complete assigned output of one native-scalar verifier half.
-///
-/// Nothing in this object is accepted from the peer wire.  It is a snapshot of
-/// cells created while `snark-verifier` executes with
-/// [`DeferredScalarEccChip`].  The reciprocal point circuit must hash the same
-/// source coordinates and coefficients and constrain every equation to the
-/// identity.
-#[derive(Clone, Debug)]
-pub(super) struct DeferredScalarAudit<C>
-where
-    C: CurveAffineExt,
-    Inner<C>: BigPrimeField,
-{
-    /// Transcript and authenticated fixed-key point namespace.
-    pub(super) sources: Vec<DeferredPointSource<C>>,
-    /// PLONK residual, IPA accumulation, and terminal equations in call order.
-    pub(super) equations: Vec<DeferredEquation<C>>,
 }
 
 /// Host witness passed from a native-scalar half to the reciprocal point half.
@@ -183,30 +164,6 @@ where
     pub(super) sources: Vec<C>,
     /// Source-indexed scalar coefficients for every deferred equality.
     pub(super) equations: Vec<Vec<(usize, Inner<C>)>>,
-}
-
-impl<C> DeferredScalarAudit<C>
-where
-    C: CurveAffineExt,
-    Inner<C>: BigPrimeField,
-{
-    /// Materialize the point-half witness from already constrained cells.
-    pub(super) fn witness(&self) -> DeferredEquationWitness<C> {
-        DeferredEquationWitness {
-            sources: self.sources.iter().map(|source| source.point).collect(),
-            equations: self
-                .equations
-                .iter()
-                .map(|equation| {
-                    equation
-                        .terms
-                        .iter()
-                        .map(|term| (term.source_index, *term.coefficient.value()))
-                        .collect()
-                })
-                .collect(),
-        }
-    }
 }
 
 /// Assigned reciprocal-point view of one deferred verifier output.
@@ -307,12 +264,28 @@ where
         }
     }
 
-    /// Snapshot every assigned point source and deferred equation.
-    pub(super) fn audit(&self) -> DeferredScalarAudit<C> {
+    /// Return the current deferred-equation count without cloning the audit.
+    pub(super) fn equation_count(&self) -> usize {
+        self.state.borrow().equations.len()
+    }
+
+    /// Materialize the reciprocal point-half witness directly from the shared
+    /// audit state without first cloning every assigned source and equation.
+    pub(super) fn witness(&self) -> DeferredEquationWitness<C> {
         let state = self.state.borrow();
-        DeferredScalarAudit {
-            sources: state.sources.clone(),
-            equations: state.equations.clone(),
+        DeferredEquationWitness {
+            sources: state.sources.iter().map(|source| source.point).collect(),
+            equations: state
+                .equations
+                .iter()
+                .map(|equation| {
+                    equation
+                        .terms
+                        .iter()
+                        .map(|term| (term.source_index, *term.coefficient.value()))
+                        .collect()
+                })
+                .collect(),
         }
     }
 
@@ -354,8 +327,8 @@ where
             push_constant_bytes(ctx, output, &value.to_le_bytes());
         }
 
-        let audit = self.audit();
-        if gate_tags.len() != audit.equations.len() || selectors.len() != audit.equations.len() {
+        let state = self.state.borrow();
+        if gate_tags.len() != state.equations.len() || selectors.len() != state.equations.len() {
             return Err(Error::InvalidInstances);
         }
         let ctx = ctx.main();
@@ -366,18 +339,18 @@ where
         push_u32(
             ctx,
             &mut output,
-            u32::try_from(audit.sources.len()).expect("fixed source count fits u32"),
+            u32::try_from(state.sources.len()).expect("fixed source count fits u32"),
         );
         push_u32(
             ctx,
             &mut output,
-            u32::try_from(audit.equations.len()).expect("fixed equation count fits u32"),
+            u32::try_from(state.equations.len()).expect("fixed equation count fits u32"),
         );
-        for source in &audit.sources {
+        for source in &state.sources {
             output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.x));
             output.extend(proper_uint_le_bytes(ctx, self.coordinate.range, &source.y));
         }
-        for ((equation, gate_tag), selector) in audit
+        for ((equation, gate_tag), selector) in state
             .equations
             .iter()
             .zip(gate_tags)
@@ -1613,7 +1586,7 @@ mod tests {
         let scalar_selector = scalar_ctx.main().load_witness(Fp::ONE);
         let _selected =
             scalar_chip.select_point(&mut scalar_ctx, &when_true, &when_false, scalar_selector);
-        let witness = scalar_chip.audit().witness();
+        let witness = scalar_chip.witness();
         assert_eq!(witness.equations.len(), 1);
         let scalar_preimage = scalar_chip
             .assigned_equation_bytes_v4(&mut scalar_ctx, &gate_tags, &[scalar_selector])
@@ -1763,7 +1736,7 @@ mod tests {
                 }
             );
 
-            let witness = chip.audit().witness();
+            let witness = chip.witness();
             assert_eq!(witness.equations.len(), 1);
             for equation in &witness.equations {
                 let residual = equation.iter().fold(

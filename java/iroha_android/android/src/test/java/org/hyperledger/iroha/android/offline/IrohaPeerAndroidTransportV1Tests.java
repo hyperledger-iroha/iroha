@@ -47,6 +47,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
     final IrohaPeerWireMessageV1 payment = message(IrohaPeerPayloadKind.PAYMENT, 0x32, 360);
     final IrohaPeerWireMessageV1 acknowledgement =
         message(IrohaPeerPayloadKind.ACKNOWLEDGEMENT, 0x33, 140);
+    // Deliberately tighter caller policy; this is not the canonical 24,660-byte ceiling.
     final IrohaPeerNfcLimitsV1 limits = new IrohaPeerNfcLimitsV1(84 + 12_288, 240, 240);
     final IrohaPeerNfcProfilePolicyV1 policy =
         IrohaPeerNfcV1.profilePolicy(IrohaPeerPayloadProfile.OFFLINE_NOTE);
@@ -102,6 +103,7 @@ public final class IrohaPeerAndroidTransportV1Tests {
     final byte[] session = repeat(16, 0x41);
     final IrohaPeerWireMessageV1 request = message(IrohaPeerPayloadKind.RECEIVE_REQUEST, 0x51, 20);
     final IrohaPeerWireMessageV1 payment = message(IrohaPeerPayloadKind.PAYMENT, 0x52, 20);
+    // Deliberately tighter caller policy; this is not the canonical 24,660-byte ceiling.
     final IrohaPeerNfcLimitsV1 limits = new IrohaPeerNfcLimitsV1(84 + 12_288, 240, 240);
     final IrohaPeerNfcProfilePolicyV1 policy = IrohaPeerNfcV1.profilePolicy(
         IrohaPeerPayloadProfile.OFFLINE_NOTE);

@@ -1017,7 +1017,6 @@ fn prepare_bundle_metadata(
         step_eq.proving_key_size_bytes,
         step_ep.proving_key_size_bytes,
     ];
-
     let metadata =
         BundleMetadata {
             chain_id,

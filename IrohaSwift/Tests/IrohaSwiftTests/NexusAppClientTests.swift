@@ -32,7 +32,7 @@ final class NexusAppClientTests: XCTestCase {
         )
 
         XCTAssertEqual(approved.accountID, Self.accountID)
-        XCTAssertEqual(receipt.finalStatus, "Committed")
+        XCTAssertEqual(receipt.finalStatus, "Applied")
         XCTAssertEqual(receipt.transactionHashHex, torii.submittedHash)
         XCTAssertEqual(receipt.transactionHashHex, receipt.signedTransaction.hashHex)
         XCTAssertEqual(receipt.signedTransaction.payload, connect.lastSignable?.payloadBytes)
@@ -333,9 +333,9 @@ final class NexusAppClientTests: XCTestCase {
                 input: NexusTransferInput(sourceAssetID: "\(Self.assetDefinitionID)#\(Self.destinationAccountID)",
                                           quantity: "12.34",
                                           destinationAccountID: Self.destinationAccountID,
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                           authority: Self.destinationAccountID,
-                                          signingPublicKey: Self.publicKey,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          signingPublicKey: Self.publicKey)
             )
         }
 
@@ -420,6 +420,16 @@ final class NexusAppClientTests: XCTestCase {
                                                                 signature: signature)
         }
         XCTAssertEqual(statusError.code, "status_wait_failed")
+
+        let committedStatusClient = NexusAppClient(
+            config: NexusAppConfig(chainId: "test-chain"),
+            toriiSubmitter: FakeToriiSubmitter(status: "Committed")
+        )
+        let committedStatusError = await expectNexusErrorAsync {
+            _ = try await committedStatusClient.finalizeAndSubmit(signable: draft.signable,
+                                                                  signature: signature)
+        }
+        XCTAssertEqual(committedStatusError.code, "status_wait_non_applied")
     }
 
     func testSwiftTransferCodecRejectsNoncanonicalQuantitiesBeforeEncoding() throws {
@@ -456,11 +466,11 @@ final class NexusAppClientTests: XCTestCase {
             sourceAssetID: "\(assetDefinitionID)#\(accountID)",
             quantity: "12.34",
             destinationAccountID: destinationAccountID,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
             creationTimeMs: 1_700_000_000_000,
             ttlMs: 30_000,
             nonce: 7,
-            metadata: ["purpose": "nexus-app-fixture"],
-            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            metadata: ["purpose": "nexus-app-fixture"]
         )
     }
 
@@ -622,13 +632,16 @@ final class NexusAppClientTests: XCTestCase {
         private let responseHash: String?
         private let submitError: Error?
         private let statusError: Error?
+        private let status: String
 
         init(responseHash: String? = nil,
              submitError: Error? = nil,
-             statusError: Error? = nil) {
+             statusError: Error? = nil,
+             status: String = "Applied") {
             self.responseHash = responseHash
             self.submitError = submitError
             self.statusError = statusError
+            self.status = status
         }
 
         func submitNexusTransaction(_ envelope: SignedTransactionEnvelope) async throws -> ToriiSubmitTransactionResponse? {
@@ -653,7 +666,7 @@ final class NexusAppClientTests: XCTestCase {
                 throw statusError
             }
             XCTAssertEqual(hashHex, submittedHash)
-            return "Committed"
+            return status
         }
     }
 }

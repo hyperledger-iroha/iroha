@@ -47,6 +47,11 @@ portal, Try it, binding, and DNS health without parsing the evidence bundle.
 
 Example config with required knobs and multiple bindings:
 
+Set `samplePath` to the upstream Torii route without `/proxy`; the probe prepends
+that segment exactly once when issuing the request:
+
+> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`
+
 ```json
 {
   "portal": {
@@ -62,7 +67,7 @@ Example config with required knobs and multiple bindings:
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
+    "samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

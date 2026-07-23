@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.address
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 
 private const val I105_WARNING =
     "i105 addresses use the canonical I105 alphabet: Base58 plus the 47 half-width katakana from the Iroha poem. " +
@@ -352,6 +353,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
             if (end > canonical.size) {
                 throw AccountAddressException(AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length")
             }
+            validateControllerPublicKey(curveId, canonical.copyOfRange(cursor, end))
             if (end != canonical.size) {
                 throw AccountAddressException(
                     AccountAddressErrorCode.UNEXPECTED_TRAILING_BYTES,
@@ -410,6 +412,7 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
                         AccountAddressErrorCode.INVALID_LENGTH, "invalid canonical length",
                     )
                 }
+                validateControllerPublicKey(curveId, canonical.copyOfRange(cursor, cursor + keyLen))
                 cursor += keyLen
                 totalWeight += weight
             }
@@ -440,6 +443,16 @@ private fun parseCanonical(canonical: ByteArray, ignoreCurveSupport: Boolean = f
         else -> throw AccountAddressException(
             AccountAddressErrorCode.UNKNOWN_CONTROLLER_TAG,
             "unknown controller tag: $controllerTag",
+        )
+    }
+}
+
+@Throws(AccountAddressException::class)
+private fun validateControllerPublicKey(curveId: Int, publicKey: ByteArray) {
+    if (curveId == 0x01 && !Ed25519PublicKeyAdmission.isValid(publicKey)) {
+        throw AccountAddressException(
+            AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+            "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup",
         )
     }
 }

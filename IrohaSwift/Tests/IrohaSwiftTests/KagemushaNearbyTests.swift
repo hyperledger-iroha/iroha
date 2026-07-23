@@ -44,8 +44,20 @@ final class KagemushaNearbyTests: XCTestCase {
         ))
     }
 
+    func testTimeoutNanosecondsSaturatesOnOverflow() {
+        XCTAssertEqual(
+            KagemushaNearbyTransportPolicy.timeoutNanoseconds(seconds: 1),
+            1_000_000_000
+        )
+        XCTAssertEqual(
+            KagemushaNearbyTransportPolicy.timeoutNanoseconds(seconds: UInt64.max),
+            UInt64.max
+        )
+    }
+
     func testNearbyEnvelopeRoundTripsEveryTypedMessage() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try offer.project().request
         let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
         let acknowledgement = try KagemushaPeerTransportTestFixtures.acknowledgement(
             request: request,
@@ -53,14 +65,15 @@ final class KagemushaNearbyTests: XCTestCase {
         )
         let challenge = KagemushaNearbyPairingChallenge(symbol: .bird)
 
-        let decodedRequest = try KagemushaNearbyEnvelopeCodec.decode(
-            KagemushaNearbyEnvelopeCodec.encode(
-                .receiveRequest(request),
-                pairingChallenge: challenge
-            )
+        let encodedRequest = try KagemushaNearbyEnvelopeCodec.encode(
+            .receiveRequest(offer),
+            pairingChallenge: challenge
         )
+        XCTAssertEqual(encodedRequest.prefix(5), Data("PKNB1".utf8))
+        XCTAssertEqual(encodedRequest.count, 12 + 84 + 14_005)
+        let decodedRequest = try KagemushaNearbyEnvelopeCodec.decode(encodedRequest)
         XCTAssertEqual(decodedRequest.messageKind, .receiveRequest)
-        XCTAssertEqual(decodedRequest.payload, .receiveRequest(request))
+        XCTAssertEqual(decodedRequest.payload, .receiveRequest(offer))
         XCTAssertEqual(decodedRequest.pairingChallenge, challenge)
 
         let encodedPayment = try KagemushaNearbyEnvelopeCodec.encode(.payment(payment))
@@ -82,12 +95,14 @@ final class KagemushaNearbyTests: XCTestCase {
     }
 
     func testRequestRequiresPairingAndOtherMessagesForbidIt() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let payment = try KagemushaPeerTransportTestFixtures.payment(request: request)
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let payment = try KagemushaPeerTransportTestFixtures.payment(
+            request: KagemushaPeerTransportTestFixtures.paymentRequest()
+        )
         let challenge = KagemushaNearbyPairingChallenge(symbol: .stars)
 
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.encode(
-            .receiveRequest(request)
+            .receiveRequest(offer)
         ))
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.encode(
             .payment(payment),
@@ -102,78 +117,52 @@ final class KagemushaNearbyTests: XCTestCase {
         XCTAssertNil(decoded.payload)
         XCTAssertNil(decoded.pairingChallenge)
         XCTAssertEqual(
-            try JSONSerialization.jsonObject(with: data) as? [String: String],
-            [
-                "contentType": "text/plain",
-                "kind": "rejected",
-                "payload": "cmVqZWN0ZWQ",
-            ]
+            data,
+            Data([0x50, 0x4b, 0x4e, 0x42, 0x31, 0x04, 0x00, 0x00,
+                  0x00, 0x00, 0x00, 0x00])
         )
     }
 
-    func testEnvelopeRejectsUnknownDuplicateAndNonCanonicalJSON() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+    func testBinaryEnvelopeRejectsHeaderAndLengthSubstitution() throws {
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let canonical = try KagemushaNearbyEnvelopeCodec.encode(
-            .receiveRequest(request),
+            .receiveRequest(offer),
             pairingChallenge: .init(symbol: .mask)
         )
-        var object = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: canonical) as? [String: Any]
-        )
-        object["unknown"] = true
-        XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-            try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-        ))
-
-        let string = try XCTUnwrap(String(data: canonical, encoding: .utf8))
-        let duplicate = string.replacingOccurrences(
-            of: "{",
-            with: "{\"kind\":\"payment\",",
-            options: [],
-            range: string.startIndex..<string.index(after: string.startIndex)
-        )
-        XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(Data(duplicate.utf8)))
-
-        let pretty = try JSONSerialization.data(
-            withJSONObject: try JSONSerialization.jsonObject(with: canonical),
-            options: [.prettyPrinted, .sortedKeys]
-        )
-        XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(pretty))
-    }
-
-    func testEnvelopeRejectsPaddedBase64WrongContentTypeAndKindSubstitution() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
-        let canonical = try KagemushaNearbyEnvelopeCodec.encode(
-            .receiveRequest(request),
-            pairingChallenge: .init(symbol: .stars)
-        )
-        let original = try XCTUnwrap(
-            try JSONSerialization.jsonObject(with: canonical) as? [String: Any]
-        )
-        for mutation in ["padding", "content", "kind", "missing_pairing"] {
-            var object = original
+        for mutation in [
+            "magic", "kind", "pairing", "reserved", "length", "ipm", "trailing",
+        ] {
+            var bytes = canonical
             switch mutation {
-            case "padding":
-                object["payload"] = (object["payload"] as! String) + "="
-            case "content":
-                object["contentType"] = KagemushaPeerPayloadKind.payment.contentType
+            case "magic":
+                bytes[0] ^= 0xff
             case "kind":
-                object["kind"] = "payment"
+                bytes[5] = 2
+            case "pairing":
+                bytes[6] = 4
+            case "reserved":
+                bytes[7] = 1
+            case "length":
+                bytes[11] &-= 1
+            case "ipm":
+                bytes[12] ^= 0xff
             default:
-                object.removeValue(forKey: "pairingChallenge")
+                bytes.append(0)
             }
-            XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-                try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
-            ), mutation)
+            XCTAssertThrowsError(
+                try KagemushaNearbyEnvelopeCodec.decode(bytes),
+                mutation
+            )
         }
     }
 
-    func testEnvelopeSizeLimitAndMalformedUTF8FailBeforeModelUse() {
+    func testEnvelopeSizeLimitAndTruncatedHeaderFailBeforeModelUse() {
+        XCTAssertEqual(KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes, 32_704)
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
             Data(repeating: 0x20, count: KagemushaNearbyEnvelopeCodec.maximumEnvelopeBytes + 1)
         ))
         XCTAssertThrowsError(try KagemushaNearbyEnvelopeCodec.decode(
-            Data([0x7B, 0xFF, 0x7D])
+            Data("PKNB1".utf8)
         ))
     }
 

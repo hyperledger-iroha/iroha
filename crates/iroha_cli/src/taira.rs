@@ -359,7 +359,7 @@ fn run_write_canary(
     );
     if onboarding_plan.status != 200 {
         failures.push(format!(
-            "account onboarding planning failed with HTTP {}; apply and faucet funding were not attempted",
+            "account onboarding planning failed with HTTP {}; onboarding apply was not attempted; faucet funding was not attempted",
             onboarding_plan.status
         ));
         let mut extra = Map::new();

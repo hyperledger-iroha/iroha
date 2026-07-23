@@ -4783,14 +4783,28 @@ mod tests {
         )
         .expect("enqueue message");
         assert!(matches!(
-            runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(1)),
+            runtime.step(start + Duration::from_secs(1)),
             Ok(RuntimeStep::Advanced(_))
         ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("message dispatch publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
 
         assert!(matches!(
-            runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2)),
+            runtime.step(start + Duration::from_secs(2)),
             Ok(RuntimeStep::Advanced(_))
         ));
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("retransmit dispatch publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
         assert_eq!(runtime.driver.retransmits, vec![initial]);
 
         enqueue_fake(
@@ -4800,9 +4814,36 @@ mod tests {
             FakeCommand::record(2),
         )
         .expect("enqueue second message");
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(9));
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10));
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(20));
+        runtime
+            .step(start + Duration::from_secs(9))
+            .expect("second message dispatch succeeds");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("second message dispatch publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
+        runtime
+            .step(start + Duration::from_secs(10))
+            .expect("absolute timeout dispatch succeeds");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("timeout dispatch publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
+        runtime
+            .step(start + Duration::from_secs(20))
+            .expect("post-timeout scheduling succeeds");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("post-timeout scheduling publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
         assert_eq!(runtime.driver.timeouts, vec![initial]);
     }
 
@@ -8336,12 +8377,6 @@ mod tests {
         assert_eq!(
             runtime
                 .driver
-                .deferred_quorum_certificate_owner_tag(&exact_certificate),
-            Some(owner_tag)
-        );
-        assert_eq!(
-            runtime
-                .driver
                 .deferred_decided_local_proposal_counts(
                     owner_tag,
                     manifest.round,
@@ -8981,12 +9016,39 @@ mod tests {
         )
         .unwrap();
 
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(2));
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(10));
+        runtime
+            .step(start + Duration::from_secs(2))
+            .expect("periodic retransmit dispatch succeeds");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("periodic retransmit publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
+        runtime
+            .step(start + Duration::from_secs(10))
+            .expect("absolute timeout dispatch succeeds");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("absolute timeout publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
         assert_eq!(runtime.driver.timeouts, vec![initial]);
         assert!(runtime.driver.delivered.is_empty());
 
-        let _ = runtime.step_and_take_scheduler_ownership_for_test(start + Duration::from_secs(12));
+        runtime
+            .step(start + Duration::from_secs(12))
+            .expect("admitted work dispatch succeeds after the timeout");
+        assert_eq!(
+            runtime
+                .take_last_scheduler_ownership()
+                .expect("admitted work dispatch publishes scheduler ownership")
+                .validate_exact(),
+            Ok(())
+        );
         assert_eq!(runtime.driver.delivered, vec![(initial, 7)]);
     }
 

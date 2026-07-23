@@ -197,7 +197,7 @@ interface IrohaClient {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
     ): CompletableFuture<ClientResponse> = AliasPlanApply.signAndSubmit(
         this,
         request,
@@ -219,7 +219,7 @@ interface IrohaClient {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
     ): CompletableFuture<ClientResponse> = AliasPlanApply.signAndSubmit(
         this,
         request,
@@ -241,7 +241,7 @@ interface IrohaClient {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
     ): CompletableFuture<ClientResponse> = AliasLifecyclePlanApply.signAndSubmit(
         this,
         request,
@@ -263,7 +263,7 @@ interface IrohaClient {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
     ): CompletableFuture<ClientResponse> = AliasLifecyclePlanApply.signAndSubmit(
         this,
         request,

@@ -37,7 +37,7 @@ object KagemushaPeerTransportContract {
     const val PAYMENT_TEXT_PREFIX = "PKK2P."
     const val ACKNOWLEDGEMENT_TEXT_PREFIX = "PKK2A."
     const val QR_STREAM_TEXT_PREFIX = "PKKQ1."
-    const val NFC_APPLICATION_IDENTIFIER_HEX = "F0504B45504B524E464301"
+    const val NFC_APPLICATION_IDENTIFIER_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX
     const val NEARBY_SERVICE_NAME = "pk-kagemusha"
     const val NEARBY_BONJOUR_SERVICE = "_pk-kagemusha._tcp"
     const val RECEIVE_REQUEST_CONTENT_TYPE = "text/vnd.pk.kagemusha-v2.receive-request"
@@ -55,10 +55,10 @@ sealed class KagemushaPeerPayload {
     abstract fun archive(): ByteArray
 
     class ReceiveRequest internal constructor(
-        val request: KagemushaRecursiveSpendProver.RecipientPaymentRequest,
+        val offer: KagemushaRecursiveSpendProver.RecipientReceiveOfferV2,
     ) : KagemushaPeerPayload() {
         override val kind = KagemushaPeerPayloadKind.RECEIVE_REQUEST
-        override fun archive(): ByteArray = request.noritoEncoded()
+        override fun archive(): ByteArray = offer.noritoEncoded()
     }
 
     class Payment internal constructor(
@@ -85,7 +85,7 @@ sealed class KagemushaPeerPayload {
             return try {
                 when (kind) {
                     KagemushaPeerPayloadKind.RECEIVE_REQUEST -> ReceiveRequest(
-                        KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(archive),
+                        KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(archive),
                     )
                     KagemushaPeerPayloadKind.PAYMENT -> Payment(
                         KagemushaRecursiveSpendProver.decodePeerPayment(archive),

@@ -6,23 +6,23 @@ use std::{
 use ff::Field;
 use halo2_axiom as halo2_proofs;
 use halo2_proofs::{
+    SerdeFormat,
     circuit::{Layouter, SimpleFloorPlanner, Value},
     plonk::{
-        create_proof, keygen_pk, keygen_vk, verify_proof, Advice, Circuit, Column,
-        ConstraintSystem, Error, Fixed, Instance, ProvingKey,
+        Advice, Circuit, Column, ConstraintSystem, Error, Fixed, Instance, ProvingKey,
+        create_proof, keygen_pk, keygen_vk, verify_proof,
     },
     poly::{
+        Rotation,
         kzg::{
             commitment::{KZGCommitmentScheme, ParamsKZG},
             multiopen::{ProverGWC, VerifierGWC},
             strategy::SingleStrategy,
         },
-        Rotation,
     },
     transcript::{
         Blake2bRead, Blake2bWrite, Challenge255, TranscriptReadBuffer, TranscriptWriterBuffer,
     },
-    SerdeFormat,
 };
 use halo2curves::bn256::{Bn256, Fr, G1Affine};
 use rand_core::OsRng;
@@ -174,18 +174,20 @@ fn main() {
 
     let strategy = SingleStrategy::new(&params);
     let mut transcript = Blake2bRead::<_, _, Challenge255<_>>::init(&proof[..]);
-    assert!(verify_proof::<
-        KZGCommitmentScheme<Bn256>,
-        VerifierGWC<'_, Bn256>,
-        Challenge255<G1Affine>,
-        Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
-        SingleStrategy<'_, Bn256>,
-    >(
-        &params,
-        pk.get_vk(),
-        strategy,
-        &[instances],
-        &mut transcript
-    )
-    .is_ok());
+    assert!(
+        verify_proof::<
+            KZGCommitmentScheme<Bn256>,
+            VerifierGWC<'_, Bn256>,
+            Challenge255<G1Affine>,
+            Blake2bRead<&[u8], G1Affine, Challenge255<G1Affine>>,
+            SingleStrategy<'_, Bn256>,
+        >(
+            &params,
+            pk.get_vk(),
+            strategy,
+            &[instances],
+            &mut transcript
+        )
+        .is_ok()
+    );
 }

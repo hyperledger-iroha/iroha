@@ -96,8 +96,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                          target: .account(targetAccount),
                                          key: "profile",
                                          value: value,
-                                         ttlMs: nil,
-                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                         ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 1, count: 32))
 
         XCTAssertThrowsError(
@@ -122,8 +122,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                          target: .account(targetAccount),
                                          key: "profile",
                                          value: value,
-                                         ttlMs: nil,
-                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                         ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: Data(repeating: 1, count: 32))
 
         XCTAssertThrowsError(
@@ -145,8 +145,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                             members: ["bob"],
                                             candidatesCount: 1,
                                             derivedBy: .vrf,
-                                            ttlMs: nil,
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                            ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodePersistCouncil(request: request,
@@ -166,8 +166,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                             authority: authority,
                                             target: .asset(malformed),
                                             key: "profile",
-                                            ttlMs: nil,
-                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                            feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                            ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeRemoveMetadata(request: request,
@@ -213,6 +213,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
                     assetDefinitionId: assetDefinitionId,
                     quantity: quantity,
                     destination: authority,
+                    feePaymentJSON: try FeePaymentIntent.authority(
+                        chargeLimits: [],
+                        gasLimit: nil
+                    ).canonicalJSONData(),
                     privateKey: keypair.privateKeyBytes
                 )
             ) { error in
@@ -227,6 +231,10 @@ final class TransactionEncoderValidationTests: XCTestCase {
                     assetDefinitionId: assetDefinitionId,
                     quantity: quantity,
                     destination: authority,
+                    feePaymentJSON: try FeePaymentIntent.authority(
+                        chargeLimits: [],
+                        gasLimit: nil
+                    ).canonicalJSONData(),
                     privateKey: keypair.privateKeyBytes
                 )
             ) { error in
@@ -254,8 +262,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                          target: .rwa("lot-001"),
                                          key: "serial",
                                          value: value,
-                                         ttlMs: nil,
-                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                         feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                         ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeSetMetadata(request: request,
@@ -287,8 +295,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                           electionId: "election-1",
                                           proofB64: "AAAA",
                                           publicInputs: publicInputs,
-                                          ttlMs: nil,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
@@ -315,8 +323,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                           electionId: "election-1",
                                           proofB64: "AAAA",
                                           publicInputs: publicInputs,
-                                          ttlMs: nil,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
@@ -343,8 +351,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                           electionId: "election-1",
                                           proofB64: "AAAA",
                                           publicInputs: publicInputs,
-                                          ttlMs: nil,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
@@ -372,8 +380,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                           electionId: "election-1",
                                           proofB64: "AAAA",
                                           publicInputs: publicInputs,
-                                          ttlMs: nil,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: nil)
 
         do {
             _ = try SwiftTransactionEncoder.encodeCastZkBallot(request: request,
@@ -400,8 +408,8 @@ final class TransactionEncoderValidationTests: XCTestCase {
                                           electionId: "election-1",
                                           proofB64: "AAAA",
                                           publicInputs: publicInputs,
-                                          ttlMs: nil,
-                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),)
+                                          feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                          ttlMs: nil)
 
         XCTAssertThrowsError(
             try SwiftTransactionEncoder.encodeCastZkBallot(request: request,

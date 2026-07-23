@@ -233,14 +233,27 @@ extension FeePaymentIntent: Codable {
     }
 
     public init(from decoder: Decoder) throws {
+        let rawContainer = try decoder.container(keyedBy: FeePaymentDynamicCodingKey.self)
+        try requireExactStringKeys(
+            rawContainer,
+            expected: ["payer", "value"],
+            at: decoder.codingPath
+        )
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        try requireExactKeys(container, expected: Set(CodingKeys.allCases), at: decoder.codingPath)
         let payer = try container.decode(String.self, forKey: .payer)
-        let value = try container.nestedContainer(keyedBy: ValueKeys.self, forKey: .value)
+        let valueDecoder = try container.superDecoder(forKey: .value)
+        let value = try valueDecoder.container(keyedBy: ValueKeys.self)
+        let rawValue = try valueDecoder.container(keyedBy: FeePaymentDynamicCodingKey.self)
         let limits = try value.decode([FeeChargeLimit].self, forKey: .chargeLimits)
         let gasLimit = try value.decodeIfPresent(UInt64.self, forKey: .gasLimit)
         switch payer {
         case "authority":
+            try requireExactStringKeys(
+                rawValue,
+                expected: ["charge_limits", "gas_limit"],
+                required: ["charge_limits"],
+                at: decoder.codingPath + [CodingKeys.value]
+            )
             try requireExactKeys(
                 value,
                 expected: [.chargeLimits, .gasLimit],
@@ -250,6 +263,12 @@ extension FeePaymentIntent: Codable {
             try FeePaymentIntent.validate(chargeLimits: limits, gasLimit: gasLimit)
             self = .authority(chargeLimits: limits, gasLimit: gasLimit)
         case "sponsor":
+            try requireExactStringKeys(
+                rawValue,
+                expected: ["program_id", "program_revision", "charge_limits", "gas_limit"],
+                required: ["program_id", "program_revision", "charge_limits"],
+                at: decoder.codingPath + [CodingKeys.value]
+            )
             try requireExactKeys(
                 value,
                 expected: Set(ValueKeys.allCases),
@@ -292,6 +311,21 @@ extension FeePaymentIntent: Codable {
             try value.encode(chargeLimits, forKey: .chargeLimits)
             try value.encodeIfPresent(gasLimit, forKey: .gasLimit)
         }
+    }
+}
+
+private struct FeePaymentDynamicCodingKey: CodingKey, Hashable {
+    let stringValue: String
+    let intValue: Int?
+
+    init?(stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
     }
 }
 
@@ -808,6 +842,29 @@ private func requireExactKeys<Key: CodingKey & Hashable>(
         throw DecodingError.dataCorrupted(.init(
             codingPath: codingPath,
             debugDescription: "Missing required fields: \(missing.map(\.stringValue).sorted().joined(separator: ", "))"
+        ))
+    }
+}
+
+private func requireExactStringKeys(
+    _ container: KeyedDecodingContainer<FeePaymentDynamicCodingKey>,
+    expected: Set<String>,
+    required: Set<String>? = nil,
+    at codingPath: [CodingKey]
+) throws {
+    let actual = Set(container.allKeys.map(\.stringValue))
+    guard actual.isSubset(of: expected) else {
+        let unknown = actual.subtracting(expected).sorted().joined(separator: ", ")
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: codingPath,
+            debugDescription: "Unknown fields: \(unknown)"
+        ))
+    }
+    let missing = (required ?? expected).subtracting(actual)
+    guard missing.isEmpty else {
+        throw DecodingError.dataCorrupted(.init(
+            codingPath: codingPath,
+            debugDescription: "Missing required fields: \(missing.sorted().joined(separator: ", "))"
         ))
     }
 }

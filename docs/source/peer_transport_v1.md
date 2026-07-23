@@ -42,7 +42,7 @@ acknowledgements require zero. The Kagemusha adapter then delegates deeper
 semantic decoding to the existing typed decoder and never rebuilds Norito
 bytes. Full ABI21
 Kagemusha QR/NFC/native archives may be up to 32 MiB and continue to use their
-existing typed rails; IPM1 profile `2` is an explicit 12,288-byte bounded
+existing typed rails; IPM1 profile `2` is an explicit 24,576-byte bounded
 small-handoff, not a
 replacement for those rails. `peer_nfc_v1.json` is an all-retail profile-1
 fixture; NFC does not permit a mixed-profile phase policy.
@@ -56,12 +56,13 @@ negotiated, reinterpreted, or selected as fallback for Retail V1:
 - Kotlin retains `KagemushaQrStreamCodec`, `KagemushaNfcProtocol`, and
   `KagemushaNearbyEnvelopeCodec`; Android Java retains `KagemushaQrStream` and
   the corresponding NFC/Nearby Kagemusha facades; and
-- its `PKK2*`/`PKKQ1` text, F050 NFC AID, and Kagemusha Bonjour/Multipeer rails
-  remain distinct from IPM1 profile `1` and the bounded profile `2` handoff.
+- its `PKK2*`/`PKKQ1` text and Kagemusha Bonjour/Multipeer identifiers remain
+  distinct from IPM1 profile `1` and the bounded profile `2` handoff. NFC uses
+  the sole canonical AID `F0504B45504B524E464301` on every rail.
 
-Kagemusha Nearby's JSON/text envelope has its own smaller bound; the 32 MiB
-ceiling applies to its QR, NFC, and native archive paths, not that Nearby
-envelope.
+Kagemusha Nearby's authenticated binary `PKNB1` envelope has its own smaller
+bound; the 32 MiB ceiling applies to its QR, NFC, and native archive paths, not
+that Nearby envelope.
 
 ## IPM1 message
 
@@ -101,8 +102,8 @@ reduces `ceil(length / 256)`; otherwise it emits encoding `0`. A decoder accepts
 encoding `1` only as a complete stream with the canonical `78 9c` header, no
 dictionary or trailing bytes, a valid Adler-32, and exactly the declared
 decompressed length. This decision is shared by QR, NFC, and Nearby. Encoded
-bodies are profile-bounded: 24,576 bytes for Offline Note and 12,288 bytes for
-the bounded Kagemusha handoff.
+bodies are bounded to 24,576 bytes for both Offline Note and the bounded
+Kagemusha handoff.
 Hashes and declared lengths are verified before a message is exposed.
 
 ## IQR1 text and IRQR frames
@@ -216,7 +217,7 @@ permanently stalled.
 
 ## NFC V1 and durability
 
-The sole AID is `F049524F48415045455201`. Proprietary class `0x80` uses
+The sole AID is `F0504B45504B524E464301`. Proprietary class `0x80` uses
 instructions GET_INFO `10`, READ_REQUEST `11`, BEGIN_PAYMENT `20`, WRITE `21`,
 COMMIT `22`, READ_ACK `23`, CONFIRM_ACK `24`, and GET_STATUS `25`. INF1 and
 NST1 responses are fixed at 98 and 174 bytes. APDU offsets are unsigned 32-bit
@@ -276,8 +277,8 @@ local limits from `IsoDep.maxTransceiveLength` and extended-APDU support. A
 extended-capable iOS↔iOS and Android↔Android paths may negotiate up to 4,096.
 Cross-platform peers automatically use the smaller safe value.
 The 24,660-byte NFC message value is a hard constructor ceiling, as are the
-32-KiB canonical, 24,576-byte Offline Note encoded, and 12,288-byte bounded
-Kagemusha encoded wire limits. Custom policies can tighten but not expand them.
+32-KiB canonical and 24,576-byte encoded-body limits for both Offline Note and
+bounded Kagemusha handoffs. Custom policies can tighten but not expand them.
 
 All changes in this contract are client/SDK-local. They require no backend or
 Torii endpoint change.
@@ -340,7 +341,7 @@ following exact Info.plist selector list:
 ```xml
 <key>com.apple.developer.nfc.readersession.iso7816.select-identifiers</key>
 <array>
-    <string>F049524F48415045455201</string>
+    <string>F0504B45504B524E464301</string>
 </array>
 ```
 
@@ -352,7 +353,7 @@ and eligible device, and an Apple-provisioned profile containing:
 <true/>
 <key>com.apple.developer.nfc.hce.iso7816.select-identifier-prefixes</key>
 <array>
-    <string>F049524F48415045455201</string>
+    <string>F0504B45504B524E464301</string>
 </array>
 ```
 
@@ -392,7 +393,7 @@ concrete `IrohaPeerAsyncHostApduServiceV1` subclass:
 
 `BIND_NFC_SERVICE` protects the service declaration; applications do not ask
 the user to grant it. The SDK AID resource requires device unlock and contains
-only `F049524F48415045455201`.
+only `F0504B45504B524E464301`.
 
 ## Fixtures and repeatable tests
 

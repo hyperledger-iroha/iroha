@@ -25,14 +25,29 @@ USAGE
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --config)
+            [[ $# -ge 2 ]] || {
+                echo "$1 requires a value" >&2
+                usage >&2
+                exit 2
+            }
             CONFIG_PATH="$2"
             shift 2
             ;;
         --artifacts|--artifacts-dir)
+            [[ $# -ge 2 ]] || {
+                echo "$1 requires a value" >&2
+                usage >&2
+                exit 2
+            }
             ARTIFACTS_DIR="$2"
             shift 2
             ;;
         --telemetry-profile|--profile)
+            [[ $# -ge 2 ]] || {
+                echo "$1 requires a value" >&2
+                usage >&2
+                exit 2
+            }
             PROFILE="$2"
             shift 2
             ;;
@@ -137,8 +152,11 @@ if [[ ! -f "${STATE_FILE}" ]]; then
     exit 1
 fi
 
-IFS=$'\n' read -r TORII_URL METRICS_URL STDOUT_LOG <<OUTPUT
-$(python3 - <<'PY'
+{
+    IFS= read -r TORII_URL
+    IFS= read -r METRICS_URL
+    IFS= read -r STDOUT_LOG
+} < <(python3 - "${STATE_FILE}" <<'PY'
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as fh:
     data = json.load(fh)
@@ -146,8 +164,7 @@ print(data.get('torii_url', ''))
 print(data.get('metrics_url', ''))
 print(data.get('stdout_log', '') or '')
 PY
-"${STATE_FILE}")
-OUTPUT
+)
 
 if [[ -n "${STDOUT_LOG}" && -f "${STDOUT_LOG}" ]]; then
     cp "${STDOUT_LOG}" "${TORII_LOG}"
@@ -169,7 +186,7 @@ else
     echo "[ios-demo] warning: metrics collection skipped (curl missing or metrics URL unavailable)" >&2
 fi
 
-python3 - <<'PY'
+python3 - "${STATE_FILE}" "${JWT_FILE}" <<'PY'
 import json, sys
 from pathlib import Path
 state_path, out_path = sys.argv[1:3]
@@ -186,7 +203,6 @@ for entry in data.get('accounts', []):
     accounts.append(record)
 Path(out_path).write_text(json.dumps({'accounts': accounts}, indent=2) + '\n', encoding='utf-8')
 PY
-"${STATE_FILE}" "${JWT_FILE}"
 
 echo "[ios-demo] Torii URL: ${TORII_URL}"
 [[ -s "${METRICS_FILE}" ]] && echo "[ios-demo] Metrics: ${METRICS_FILE}" || echo "[ios-demo] Metrics: unavailable"

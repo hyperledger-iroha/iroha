@@ -11,17 +11,8 @@ import {
   IVM_ARTIFACT_MAX_BYTES,
   IVM_PROGRAM_HEADER_LENGTH,
 } from "./ivmArtifact.js";
-import {
-  ToriiClient,
-  extractPipelineStatusKind,
-  getTrustedValidationFeeVerificationContext,
-} from "./toriiClient.js";
+import { ToriiClient } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
-import {
-  VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS,
-  validationFeeQuantity,
-  verifySignedValidationFeePolicy,
-} from "./validationFeePolicy.js";
 import { NumericV1, NumericV1Error } from "./numericV1.js";
 import {
   buildBurnAssetInstruction,
@@ -1046,6 +1037,136 @@ export function buildApplySccpRouteGovernanceTransaction({
 }
 
 /**
+ * Build, but do not sign, the exact proved-IVM payload submitted to
+ * `/v1/fees/quote`.
+ *
+ * @param {{
+ *   chainId: string,
+ *   authority: string,
+ *   proved: object | string,
+ *   attachment: object | string,
+ *   feePayment: object,
+ *   metadata?: object | string | null,
+ *   creationTimeMs?: number,
+ *   ttlMs?: number,
+ *   nonce?: number
+ * }} input
+ * @returns {{payload: object, payloadJson: string, payloadBytes: Buffer, payloadHash: Buffer, attachment: object, attachmentJson: string}}
+ */
+export function buildIvmProvedTransactionPayload(input) {
+  const native = resolveNativeBinding();
+  if (
+    !native ||
+    typeof native.buildIvmProvedTransactionPayload !== "function"
+  ) {
+    throw new Error(
+      "native binding 'build_ivm_proved_transaction_payload' is unavailable",
+    );
+  }
+
+  const {
+    chainId,
+    authority,
+    proved,
+    attachment,
+    feePayment,
+    metadata = null,
+    creationTimeMs = null,
+    ttlMs = null,
+    nonce = null,
+  } = input;
+  const canonicalAuthority = normalizeAuthority(authority);
+  const provedPayload = normalizeJsonObjectPayload(proved, "proved");
+  const attachmentPayload = normalizeJsonObjectPayload(
+    attachment,
+    "attachment",
+  );
+  const result = native.buildIvmProvedTransactionPayload(
+    chainId,
+    canonicalAuthority,
+    provedPayload,
+    attachmentPayload,
+    feePaymentIntentToNoritoJson(feePayment),
+    normalizeMetadataPayload(metadata, "transaction metadata"),
+    creationTimeMs,
+    ttlMs,
+    nonce,
+  );
+  const payloadJson = result?.payload_json ?? result?.payloadJson ?? null;
+  const payloadBytes = result?.payload_bytes ?? result?.payloadBytes ?? null;
+  const payloadHash = result?.payload_hash ?? result?.payloadHash ?? null;
+  if (typeof payloadJson !== "string" || !payloadBytes || !payloadHash) {
+    throw new Error(
+      "native binding 'build_ivm_proved_transaction_payload' returned missing fields",
+    );
+  }
+  return {
+    payload: JSON.parse(payloadJson),
+    payloadJson,
+    payloadBytes: Buffer.from(payloadBytes),
+    payloadHash: Buffer.from(payloadHash),
+    attachment: JSON.parse(attachmentPayload),
+    attachmentJson: attachmentPayload,
+  };
+}
+
+/**
+ * Apply a quote to an exact proved-IVM draft, reattach its proof, and sign it.
+ *
+ * @param {{
+ *   payload: object | {payload?: object, payloadJson?: string, attachment?: object | string},
+ *   attachment?: object | string,
+ *   quotedFeePayment: object | string,
+ *   privateKey: ArrayBufferView | ArrayBuffer | Buffer,
+ *   privateKeyAlgorithm?: string
+ * }} input
+ * @returns {{signedTransaction: Buffer, hash: Buffer}}
+ */
+export function signQuotedIvmProvedTransactionPayload(input) {
+  const native = resolveNativeBinding();
+  if (
+    !native ||
+    typeof native.signQuotedIvmProvedTransactionPayload !== "function"
+  ) {
+    throw new Error(
+      "native binding 'sign_quoted_ivm_proved_transaction_payload' is unavailable",
+    );
+  }
+  const draft = input?.payload;
+  const payloadJson =
+    typeof draft?.payloadJson === "string"
+      ? draft.payloadJson
+      : JSON.stringify(draft?.payload ?? draft);
+  const attachment = input?.attachment ?? draft?.attachment;
+  const quoted = input?.quotedFeePayment;
+  const quotedFeePaymentJson =
+    typeof quoted === "string"
+      ? quoted
+      : quoted && typeof quoted === "object" && "payer" in quoted && "value" in quoted
+        ? JSON.stringify(quoted)
+        : feePaymentIntentToNoritoJson(quoted);
+  const result = native.signQuotedIvmProvedTransactionPayload(
+    payloadJson,
+    normalizeJsonObjectPayload(attachment, "attachment"),
+    quotedFeePaymentJson,
+    toBuffer(input?.privateKey),
+    input?.privateKeyAlgorithm ?? null,
+  );
+  const signed =
+    result?.signed_transaction ?? result?.signedTransaction ?? null;
+  const hashBytes = result?.hash ?? result?.hashBytes ?? null;
+  if (!signed || !hashBytes) {
+    throw new Error(
+      "native binding 'sign_quoted_ivm_proved_transaction_payload' returned missing fields",
+    );
+  }
+  return {
+    signedTransaction: Buffer.from(signed),
+    hash: Buffer.from(hashBytes),
+  };
+}
+
+/**
  * Build and sign a transaction whose executable is `Executable::IvmProved`.
  * @param {{
  *   chainId: string,
@@ -1134,25 +1255,6 @@ const IVM_PROVED_CONTRACT_METADATA_KEYS = new Set([
   "validation_fee_policy_hash",
   "validation_fee_instruction_index",
   "validation_fee_transfer_entry_index",
-]);
-
-const INLINE_VALIDATION_FEE_CONTEXT_KEYS = new Set([
-  "verificationContext",
-  "verification_context",
-  "networkId",
-  "network_id",
-  "genesisHash",
-  "genesis_hash",
-  "currentHeight",
-  "current_height",
-  "governanceKeyset",
-  "governance_keyset",
-  "governanceKeysets",
-  "governance_keysets",
-  "policyRegistry",
-  "policy_registry",
-  "requireActive",
-  "require_active",
 ]);
 
 function readExclusiveInputAlias(record, aliases, context) {
@@ -1558,130 +1660,6 @@ function normalizeRequiredOverlayTransfer(requiredTransfer) {
   });
 }
 
-function normalizeSafeU64Number(value, context, { positive = false } = {}) {
-  let parsed;
-  if (typeof value === "bigint") {
-    parsed = value;
-  } else if (typeof value === "number" && Number.isSafeInteger(value)) {
-    parsed = BigInt(value);
-  } else if (typeof value === "string" && /^\d+$/u.test(value)) {
-    parsed = BigInt(value);
-  } else {
-    throw new TypeError(`${context} must be an unsigned safe integer`);
-  }
-  if (
-    parsed < (positive ? 1n : 0n) ||
-    parsed > BigInt(Number.MAX_SAFE_INTEGER)
-  ) {
-    throw new RangeError(`${context} must be an unsigned safe integer`);
-  }
-  return Number(parsed);
-}
-
-function prepareValidationFeePolicyIntent(
-  value,
-  authority,
-  chainId,
-  trustedVerificationContext,
-) {
-  const intent = normalizePlainObject(value, "validationFeePolicy");
-  for (const key of INLINE_VALIDATION_FEE_CONTEXT_KEYS) {
-    if (
-      Object.prototype.hasOwnProperty.call(intent, key) &&
-      intent[key] !== undefined
-    ) {
-      throw new Error(
-        `validationFeePolicy.${key} cannot override the ToriiClient trusted validation-fee verification context`,
-      );
-    }
-  }
-  if (trustedVerificationContext === null) {
-    throw new Error(
-      "validation-fee submission requires ToriiClient.options.validationFeeVerificationContext",
-    );
-  }
-  const signedPolicy = readExclusiveInputAlias(
-    intent,
-    ["signedPolicy", "signed_policy"],
-    "validationFeePolicy.signedPolicy",
-  );
-  const verified = verifySignedValidationFeePolicy(
-    signedPolicy,
-    trustedVerificationContext,
-  );
-  const networkId = normalizeNonEmptyString(verified.policy.network_id, "policy.network_id");
-  const normalizedChainId = normalizeNonEmptyString(chainId, "chainId");
-  if (typeof chainId !== "string" || chainId !== normalizedChainId) {
-    throw new TypeError("chainId must be a non-empty trimmed string");
-  }
-  if (normalizedChainId !== networkId) {
-    throw new Error(
-      `chainId ${normalizedChainId} does not match verified validation-fee policy network ${networkId}`,
-    );
-  }
-
-  const qualifyingTransferCountValue = readExclusiveInputAlias(
-    intent,
-    ["qualifyingTransferCount", "qualifying_transfer_count"],
-    "validationFeePolicy.qualifyingTransferCount",
-  );
-  const assertedQualifyingTransferCount =
-    qualifyingTransferCountValue === undefined ||
-    qualifyingTransferCountValue === null
-      ? null
-      : normalizeSafeU64Number(
-          qualifyingTransferCountValue,
-          "validationFeePolicy.qualifyingTransferCount",
-          { positive: true },
-        );
-  const instructionIndex = normalizeSafeU64Number(
-    readExclusiveInputAlias(
-      intent,
-      ["feeInstructionIndex", "fee_instruction_index"],
-      "validationFeePolicy.feeInstructionIndex",
-    ),
-    "validationFeePolicy.feeInstructionIndex",
-  );
-  const transferEntryValue = readExclusiveInputAlias(
-    intent,
-    ["feeTransferEntryIndex", "fee_transfer_entry_index"],
-    "validationFeePolicy.feeTransferEntryIndex",
-  );
-  const transferEntryIndex =
-    transferEntryValue === undefined || transferEntryValue === null
-      ? null
-      : normalizeSafeU64Number(
-          transferEntryValue,
-          "validationFeePolicy.feeTransferEntryIndex",
-        );
-  if (verified.policyVersion > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new RangeError(
-      "verified validation-fee policy version cannot be represented safely in transaction metadata",
-    );
-  }
-
-  return {
-    verified,
-    assertedQualifyingTransferCount,
-    instructionIndex,
-    transferEntryIndex,
-    authority,
-    dsAssetId: verified.policy.ds_asset_id,
-    treasuryAccountId: verified.policy.treasury_account_id,
-    treasuryPayoutExempt: verified.policy.exemption_classes.includes(
-      VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS,
-    ),
-    metadata: {
-      validation_fee_policy_version: Number(verified.policyVersion),
-      validation_fee_policy_hash: verified.policyHashHex,
-      validation_fee_instruction_index: instructionIndex,
-      ...(transferEntryIndex === null
-        ? {}
-        : { validation_fee_transfer_entry_index: transferEntryIndex }),
-    },
-  };
-}
-
 function directAssetTransfer(instruction) {
   const instructionVariant = readExactInstructionVariant(
     instruction,
@@ -2009,124 +1987,6 @@ function validationFeeScaledUnits(value, scale, context) {
   return quantity.mantissa * 10n ** BigInt(scale - quantity.scale);
 }
 
-function assertValidationFeeOverlay(proved, binding, context) {
-  const overlay = proved?.overlay;
-  if (!Array.isArray(overlay)) {
-    throw new TypeError(`${context}.overlay must be an array`);
-  }
-  const contexts = collectOverlayTransferContexts(
-    overlay,
-    binding.authority,
-    context,
-  );
-  const allTransfers = contexts.flatMap((entry) => entry.transfers);
-  for (const transfer of allTransfers) {
-    if (transfer.assetDefinitionId !== binding.dsAssetId) continue;
-    const transferCoordinate = `${transfer.contextIndex}:${transfer.instructionIndex}${
-      transfer.transferEntryIndex === null
-        ? ""
-        : `:${transfer.transferEntryIndex}`
-    }`;
-    validationFeeScaledUnits(
-      transfer.quantity,
-      binding.verified.policy.ds_scale,
-      `${context} DS transfer ${transferCoordinate}`,
-    );
-  }
-  const coordinateMatches = allTransfers.filter((transfer) =>
-    sameFeeCoordinate(transfer, binding),
-  );
-  if (coordinateMatches.length === 0) {
-    throw new Error(
-      `${context} does not contain the validation-fee transfer at overlay coordinate ${binding.instructionIndex}${
-        binding.transferEntryIndex === null ? "" : `:${binding.transferEntryIndex}`
-      }`,
-    );
-  }
-  if (coordinateMatches.length > 1) {
-    throw new Error(
-      `${context} validation-fee coordinate ${binding.instructionIndex}${
-        binding.transferEntryIndex === null ? "" : `:${binding.transferEntryIndex}`
-      } is ambiguous across execution contexts`,
-    );
-  }
-  const coordinate = coordinateMatches[0];
-  if (coordinate.contextIndex !== 0) {
-    throw new Error(
-      `${context} validation-fee coordinate resolves to an unsupported nested multisig execution context`,
-    );
-  }
-
-  for (const nestedContext of contexts.slice(1)) {
-    if (
-      nestedContext.transfers.some(
-        (transfer) => transfer.assetDefinitionId === binding.dsAssetId,
-      )
-    ) {
-      throw new Error(
-        `${context} contains an unsupported nested multisig DS transfer context`,
-      );
-    }
-  }
-
-  if (coordinate.sourceAccountId !== binding.authority) {
-    throw new Error(`${context} validation-fee transfer has the wrong source`);
-  }
-  if (coordinate.assetDefinitionId !== binding.dsAssetId) {
-    throw new Error(`${context} validation-fee transfer has the wrong asset`);
-  }
-  if (coordinate.destinationAccountId !== binding.treasuryAccountId) {
-    throw new Error(`${context} validation-fee transfer has the wrong beneficiary`);
-  }
-
-  const qualifyingTransferCount = contexts[0].transfers.filter((transfer) => {
-    if (transfer === coordinate) return false;
-    if (transfer.assetDefinitionId !== binding.dsAssetId) return false;
-    return !(
-      binding.treasuryPayoutExempt &&
-      transfer.sourceAccountId === binding.treasuryAccountId
-    );
-  }).length;
-  if (qualifyingTransferCount === 0) {
-    throw new Error(`${context} contains no qualifying DS transfer`);
-  }
-  if (
-    binding.assertedQualifyingTransferCount !== null &&
-    qualifyingTransferCount !== binding.assertedQualifyingTransferCount
-  ) {
-    throw new Error(
-      `${context} contains ${qualifyingTransferCount} qualifying DS transfers but validationFeePolicy declares ${binding.assertedQualifyingTransferCount}`,
-    );
-  }
-
-  const quantity = validationFeeQuantity(
-    binding.verified.policy,
-    qualifyingTransferCount,
-  );
-  const expectedScaledUnits = validationFeeScaledUnits(
-    quantity,
-    binding.verified.policy.ds_scale,
-    `${context} expected validation fee`,
-  );
-  const observedScaledUnits = validationFeeScaledUnits(
-    coordinate.quantity,
-    binding.verified.policy.ds_scale,
-    `${context} validation-fee transfer amount`,
-  );
-  if (observedScaledUnits !== expectedScaledUnits) {
-    throw new Error(
-      `${context} validation-fee coordinate must contain the exact Quantity ${quantity}`,
-    );
-  }
-
-  const requiredTransfer = buildTransferAssetInstruction({
-    sourceAssetHoldingId: `${binding.dsAssetId}#${binding.authority}`,
-    quantity,
-    destinationAccountId: binding.treasuryAccountId,
-  });
-  return { requiredTransfer, qualifyingTransferCount, quantity };
-}
-
 /**
  * Resolve and simulate a deployed contract entrypoint, derive its authoritative
  * ZK IVM overlay, have the node prove that same overlay, sign the exact proved
@@ -2135,9 +1995,9 @@ function assertValidationFeeOverlay(proved, binding, context) {
  * `requiredOverlayTransfer` is an assertion, not an appended instruction: the
  * deployed router/pool call must emit that exact transfer itself. This keeps the
  * transfer inside both the node-generated proof commitment and the user-signed
- * transaction payload. Use `submitValidationFeeIvmProvedContractCall` for a
- * fee-bearing call: its signed policy and active registry are verified locally
- * and exclusively determine the fee transfer and reserved policy metadata.
+ * transaction payload. Pre-release signed/keyset validation-fee inputs are
+ * rejected; only the ledger-native Parliament registry may authorize those
+ * reserved policy fields.
  *
  * @param {ToriiClient} client
  * @param {object} input
@@ -2150,6 +2010,11 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   }
   const record = normalizePlainObject(input, "input");
   const opts = normalizePlainObject(options, "options");
+  if (Object.prototype.hasOwnProperty.call(opts, "transactionStatusScope")) {
+    throw new TypeError(
+      "options.transactionStatusScope is unsupported; finality waits always use global scope",
+    );
+  }
   const { signal } = ToriiClient._normalizeOptionsWithSignal(
     opts.signal === undefined ? {} : { signal: opts.signal },
     "submitIvmProvedContractCall",
@@ -2178,7 +2043,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
   const hasTransactionPollOptions =
     opts.transactionIntervalMs !== undefined ||
     opts.transactionTimeoutMs !== undefined ||
-    opts.transactionStatusScope !== undefined ||
     opts.waitForCommit === true;
   const transactionPollOptions = hasTransactionPollOptions
     ? ToriiClient._normalizeTransactionStatusPollOptions(
@@ -2189,11 +2053,7 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
           ...(opts.transactionTimeoutMs === undefined
             ? {}
             : { timeoutMs: opts.transactionTimeoutMs }),
-          ...(opts.transactionStatusScope === undefined
-            ? {}
-            : { scope: opts.transactionStatusScope }),
           ...(signal === undefined ? {} : { signal }),
-          successStatuses: ["Committed", "Applied"],
         },
         "submitIvmProvedContractCall transaction status options",
       )
@@ -2365,15 +2225,11 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     ["validationFeePolicy", "validation_fee_policy"],
     "input.validationFeePolicy",
   );
-  const validationFeeBinding =
-    validationFeeIntent === undefined || validationFeeIntent === null
-      ? null
-      : prepareValidationFeePolicyIntent(
-          validationFeeIntent,
-          authority,
-          chainId,
-          getTrustedValidationFeeVerificationContext(client),
-        );
+  if (validationFeeIntent !== undefined && validationFeeIntent !== null) {
+    throw new TypeError(
+      "input.validationFeePolicy is retired; validation-fee authority comes only from a locally verified Parliament registry proof",
+    );
+  }
   const simulationRequest = {
     authority,
     ...(contractAddress === null ? {} : { contractAddress }),
@@ -2453,7 +2309,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     ...metadataInput,
     contract_address: simulation.contract_address,
     contract_entrypoint: simulation.entrypoint,
-    ...(validationFeeBinding === null ? {} : validationFeeBinding.metadata),
   };
   if (contractAlias !== null) {
     metadata.contract_alias = contractAlias;
@@ -2474,35 +2329,11 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     deployedBytecode,
     "node-derived proved payload",
   );
-  const validationResult =
-    validationFeeBinding === null
-      ? null
-      : assertValidationFeeOverlay(
-          derived.proved,
-          validationFeeBinding,
-          "node-derived proved payload",
-        );
-  const requiredTransfer =
-    validationResult === null
-      ? assertRequiredOverlayTransfer(
-          derived.proved,
-          callerRequiredTransfer,
-          "node-derived proved payload",
-        )
-      : validationResult.requiredTransfer;
-  if (
-    validationResult !== null &&
-    callerRequiredTransfer !== null
-  ) {
-    if (
-      canonicalJsonValue(callerRequiredTransfer) !==
-      canonicalJsonValue(requiredTransfer)
-    ) {
-      throw new Error(
-        "requiredOverlayTransfer conflicts with the verified validation-fee policy",
-      );
-    }
-  }
+  const requiredTransfer = assertRequiredOverlayTransfer(
+    derived.proved,
+    callerRequiredTransfer,
+    "node-derived proved payload",
+  );
 
   const proofJob = await client.proveIvmAndWait(
     proofRequest,
@@ -2527,32 +2358,14 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     "proved payload",
   );
   assertIvmProofAttachmentBinding(proofJob.attachment, vkRef);
-  if (validationFeeBinding === null) {
-    assertRequiredOverlayTransfer(
-      proofJob.proved,
-      callerRequiredTransfer,
-      "proved payload",
-    );
-  } else {
-    const provedValidationResult = assertValidationFeeOverlay(
-      proofJob.proved,
-      validationFeeBinding,
-      "proved payload",
-    );
-    if (
-      canonicalJsonValue(provedValidationResult.requiredTransfer) !==
-        canonicalJsonValue(requiredTransfer) ||
-      provedValidationResult.qualifyingTransferCount !==
-        validationResult.qualifyingTransferCount
-    ) {
-      throw new Error(
-        "proved payload validation-fee binding differs from the derived payload",
-      );
-    }
-  }
+  assertRequiredOverlayTransfer(
+    proofJob.proved,
+    callerRequiredTransfer,
+    "proved payload",
+  );
 
   throwIfSubmissionAborted(signal);
-  const built = buildIvmProvedTransaction({
+  const feeQuoteDraft = buildIvmProvedTransactionPayload({
     chainId,
     authority,
     proved: proofJob.proved,
@@ -2562,6 +2375,21 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     creationTimeMs,
     ttlMs,
     nonce,
+  });
+  const feeQuotePayloadJson = feeQuoteDraft.payloadJson;
+  const feeQuoteAttachmentJson = feeQuoteDraft.attachmentJson;
+  const feeQuote = await client.quoteFees(feeQuoteDraft, {
+    canonicalAuth: {
+      accountId: authority,
+      privateKey,
+    },
+    ...(signal === undefined ? {} : { signal }),
+  });
+  throwIfSubmissionAborted(signal);
+  const built = signQuotedIvmProvedTransactionPayload({
+    payload: { payloadJson: feeQuotePayloadJson },
+    attachment: feeQuoteAttachmentJson,
+    quotedFeePayment: feeQuote.intent,
     privateKey,
     privateKeyAlgorithm,
   });
@@ -2575,13 +2403,9 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     ? await client.waitForTransactionStatusTyped(hashHex, {
         intervalMs: transactionPollOptions.intervalMs,
         timeoutMs: transactionPollOptions.timeoutMs,
-        ...(transactionPollOptions.scope === undefined
-          ? {}
-          : { scope: transactionPollOptions.scope }),
         ...(transactionPollOptions.signal === undefined
           ? {}
           : { signal: transactionPollOptions.signal }),
-        successStatuses: ["Committed", "Applied"],
       })
     : null;
 
@@ -2595,43 +2419,10 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
     proved: proofJob.proved,
     attachment: proofJob.attachment,
     proofJobId: proofJob.job_id,
+    feeQuoteDraft,
+    feeQuote,
     requiredOverlayTransfer: requiredTransfer,
-    validationFeePolicy:
-      validationFeeBinding === null
-        ? null
-        : {
-            policyVersion: Number(validationFeeBinding.verified.policyVersion),
-            policyHash: validationFeeBinding.verified.policyHashHex,
-            qualifyingTransferCount: validationResult.qualifyingTransferCount,
-            feeInstructionIndex: validationFeeBinding.instructionIndex,
-            feeTransferEntryIndex: validationFeeBinding.transferEntryIndex,
-            feeQuantity: validationResult.quantity,
-          },
   };
-}
-
-/**
- * Strict validation-fee submission path. Unlike the generic helper, this
- * requires a signed active policy and will not submit a proof-bound call until
- * the real Norito overlay has passed independent fee verification.
- */
-export function submitValidationFeeIvmProvedContractCall(
-  client,
-  input,
-  options = {},
-) {
-  const record = normalizePlainObject(input, "input");
-  const validationFeeIntent = readExclusiveInputAlias(
-    record,
-    ["validationFeePolicy", "validation_fee_policy"],
-    "input.validationFeePolicy",
-  );
-  if (validationFeeIntent === undefined || validationFeeIntent === null) {
-    throw new Error(
-      "submitValidationFeeIvmProvedContractCall requires validationFeePolicy",
-    );
-  }
-  return submitIvmProvedContractCall(client, record, options);
 }
 
 export function buildTimeTriggerAction(options) {
@@ -5340,7 +5131,7 @@ export function buildRemoveSmartContractBytesTransaction({
 }
 
 /**
- * Submit a signed transaction and optionally wait for a terminal status.
+ * Submit a signed transaction and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} [options]
@@ -5354,6 +5145,11 @@ export async function submitSignedTransaction(
   if (!(client instanceof ToriiClient)) {
     throw new TypeError("client must be an instance of ToriiClient");
   }
+  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
+    throw new TypeError(
+      "options.scope is unsupported; finality waits always use global scope",
+    );
+  }
   let txBuffer = toBuffer(signedTransaction);
   if (options.privateKey) {
     txBuffer = resignSignedTransaction(txBuffer, options.privateKey);
@@ -5365,38 +5161,15 @@ export async function submitSignedTransaction(
     return { hash: hashHex, submission };
   }
 
-  const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const deadline = Date.now() + timeoutMs;
-
-  let status;
-  while (Date.now() <= deadline) {
-    const statusOptions = {
-      allowShortHash: true,
-    };
-    if (options.scope !== undefined && options.scope !== null) {
-      statusOptions.scope = options.scope;
-    }
-    status = await client.getTransactionStatus(hashHex, statusOptions);
-    if (isTerminalStatus(status)) {
-      return { hash: hashHex, submission, status };
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await delay(pollIntervalMs);
-  }
-
-  const error = new Error("timed out waiting for transaction status");
-  error.hash = hashHex;
-  error.submission = submission;
-  error.status = status;
-  throw error;
+  const status = await waitForAuthoritativeApplied(client, hashHex, options);
+  return { hash: hashHex, submission, status };
 }
 
 /**
- * Submit a raw transaction entrypoint payload and optionally wait for a terminal status.
+ * Submit a raw transaction entrypoint payload and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
- * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, scope?: "local" | "auto" | "global" }} options
+ * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} options
  * @returns {Promise<{hash: string, submission: any, status?: any}>}
  */
 export async function submitTransactionEntrypoint(
@@ -5412,6 +5185,11 @@ export async function submitTransactionEntrypoint(
       "options.hashHex is required for entrypoint submission",
     );
   }
+  if (Object.prototype.hasOwnProperty.call(options, "scope")) {
+    throw new TypeError(
+      "options.scope is unsupported; finality waits always use global scope",
+    );
+  }
   const hashHex = String(options.hashHex ?? "").trim();
   if (!/^[0-9a-fA-F]{64}$/.test(hashHex)) {
     throw new TypeError("options.hashHex must be a 32-byte hex string");
@@ -5423,72 +5201,16 @@ export async function submitTransactionEntrypoint(
     return { hash: hashHex.toLowerCase(), submission };
   }
 
-  const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const deadline = Date.now() + timeoutMs;
-
-  let status;
-  while (Date.now() <= deadline) {
-    const statusOptions = {
-      allowShortHash: true,
-    };
-    if (options.scope !== undefined && options.scope !== null) {
-      statusOptions.scope = options.scope;
-    }
-    status = await client.getTransactionStatus(hashHex, statusOptions);
-    if (isTerminalStatus(status)) {
-      return { hash: hashHex.toLowerCase(), submission, status };
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await delay(pollIntervalMs);
-  }
-
-  throw new Error("timed out waiting for transaction status");
+  const status = await waitForAuthoritativeApplied(client, hashHex, options);
+  return { hash: hashHex.toLowerCase(), submission, status };
 }
 
-function isTerminalStatus(status) {
-  if (!status || typeof status !== "object") {
-    return false;
-  }
-  const pipelineKind = extractPipelineStatusKind(status);
-  if (pipelineKind !== null) {
-    return isExactTerminalStatusKind(pipelineKind);
-  }
-  const labels = [];
-  const collect = (value) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    if (typeof value.status === "string") {
-      labels.push(value.status);
-    } else if (value.status && typeof value.status === "object") {
-      collect(value.status);
-    }
-    if (typeof value.kind === "string") {
-      labels.push(value.kind);
-    }
-    if (typeof value.type === "string") {
-      labels.push(value.type);
-    }
+async function waitForAuthoritativeApplied(client, hashHex, options) {
+  const pollOptions = {
+    intervalMs: options.pollIntervalMs ?? 500,
+    timeoutMs: options.timeoutMs ?? 30_000,
   };
-  collect(status);
-  if (labels.length === 0) {
-    return false;
-  }
-  return labels.some(isExactTerminalStatusKind);
-}
-
-function isExactTerminalStatusKind(label) {
-  switch (label.toLowerCase()) {
-    case "committed":
-    case "applied":
-    case "rejected":
-    case "expired":
-    case "failed":
-      return true;
-    default:
-      return false;
-  }
+  return client.waitForTransactionStatusTyped(hashHex, pollOptions);
 }
 
 function toBuffer(value, context = "signedTransaction") {
@@ -5502,10 +5224,4 @@ function toBuffer(value, context = "signedTransaction") {
     return Buffer.from(new Uint8Array(value));
   }
   throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
-}
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

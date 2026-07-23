@@ -12,12 +12,9 @@ enum StrictJSONNumber {
             guard doubleValue.isFinite else { return nil }
             let rounded = doubleValue.rounded(.towardZero)
             guard rounded == doubleValue else { return nil }
-            guard rounded >= 0, rounded <= Double(UInt64.max) else { return nil }
-            return UInt64(rounded)
+            return UInt64(exactly: rounded)
         }
-        let signed = number.int64Value
-        guard signed >= 0 else { return nil }
-        return UInt64(signed)
+        return UInt64(number.stringValue)
     }
 
     static func int(from value: Any?) -> Int? {
@@ -31,17 +28,24 @@ enum StrictJSONNumber {
             guard doubleValue.isFinite else { return nil }
             let rounded = doubleValue.rounded(.towardZero)
             guard rounded == doubleValue else { return nil }
-            guard rounded >= Double(Int.min), rounded <= Double(Int.max) else { return nil }
-            return Int(rounded)
+            return Int(exactly: rounded)
         }
-        let signed = number.int64Value
-        guard signed >= Int64(Int.min), signed <= Int64(Int.max) else { return nil }
-        return Int(signed)
+        return Int(number.stringValue)
     }
 
     static func uint16(from value: Any?) -> UInt16? {
         guard let parsed = uint64(from: value), parsed <= UInt64(UInt16.max) else { return nil }
         return UInt16(parsed)
+    }
+
+    static func saturatingNanoseconds(from seconds: TimeInterval) -> UInt64 {
+        guard !seconds.isNaN, seconds > 0 else { return 0 }
+        guard seconds.isFinite else { return UInt64.max }
+        let nanoseconds = seconds * 1_000_000_000
+        guard nanoseconds.isFinite, nanoseconds < Double(UInt64.max) else {
+            return UInt64.max
+        }
+        return UInt64(exactly: nanoseconds.rounded(.towardZero)) ?? UInt64.max
     }
 
     private static func trimmedString(from value: Any?) -> String? {

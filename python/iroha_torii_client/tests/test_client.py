@@ -3379,6 +3379,40 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         server.stop()
 
 
+def test_mock_server_allows_sumeragi_fixture_override() -> None:
+    server = ToriiMockServer().start()
+    try:
+        base_url = server.base_url.rstrip("/")
+        fixtures = {
+            "status": {"protocol_version": 3, "height": 42},
+            "leader": {"leader_index": 2},
+            "telemetry": {"availability": {"total_votes_ingested": 7}},
+        }
+        response = requests.post(
+            f"{base_url}/__mock__/sumeragi/config",
+            json=fixtures,
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        for endpoint, expected in fixtures.items():
+            response = requests.get(f"{base_url}/v1/sumeragi/{endpoint}", timeout=5.0)
+            response.raise_for_status()
+            assert response.json() == expected
+
+        response = requests.post(
+            f"{base_url}/__mock__/sumeragi/config",
+            json={"status": {"height": 99}, "leader": []},
+            timeout=5.0,
+        )
+        assert response.status_code == 400
+        response = requests.get(f"{base_url}/v1/sumeragi/status", timeout=5.0)
+        response.raise_for_status()
+        assert response.json() == fixtures["status"]
+    finally:
+        server.stop()
+
+
 def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     payload = _sumeragi_v2_status_payload()
     payload["lane_settlement_commitments"] = [_lane_settlement_payload()]

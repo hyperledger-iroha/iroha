@@ -2,6 +2,10 @@ use std::cell::RefCell;
 
 use getset::CopyGetters;
 
+#[cfg(feature = "halo2-axiom")]
+use crate::halo2_proofs::circuit::Cell;
+#[cfg(not(feature = "halo2-axiom"))]
+use crate::utils::halo2::raw_assign_advice;
 use crate::{
     gates::{
         circuit::CircuitBuilderStage,
@@ -73,7 +77,10 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
     /// Creates a new [SinglePhaseCoreManager] with `use_unknown` flag set.
     /// * `use_unknown`: If true, during key generation witness [Value]s are replaced with Value::unknown() for safety.
     pub fn unknown(self, use_unknown: bool) -> Self {
-        Self { use_unknown, ..self }
+        Self {
+            use_unknown,
+            ..self
+        }
     }
 
     /// Mutates `self` to use the given copy manager everywhere, including in all threads.
@@ -141,7 +148,10 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
 
     /// Returns total advice cells
     pub fn total_advice(&self) -> usize {
-        self.threads.iter().map(|ctx| ctx.advice.len()).sum::<usize>()
+        self.threads
+            .iter()
+            .map(|ctx| ctx.advice.len())
+            .sum::<usize>()
     }
 }
 
@@ -153,7 +163,13 @@ impl<F: ScalarField> VirtualRegionManager<F> for SinglePhaseCoreManager<F> {
         if self.witness_gen_only {
             let binding = self.break_points.borrow();
             let break_points = binding.as_ref().expect("break points not set");
-            assign_witnesses(&self.threads, config, region, break_points);
+            assign_witnesses(
+                &self.threads,
+                config,
+                region,
+                break_points,
+                &self.copy_manager,
+            );
         } else {
             let mut copy_manager = self.copy_manager.lock().unwrap();
             let break_points = assign_with_constraints::<F, 4>(
@@ -212,7 +228,11 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
 
         for (i, (advice, &q)) in ctx.advice.iter().zip(ctx.selector.iter()).enumerate() {
             let column = basic_gate.value;
-            let value = if use_unknown { Value::unknown() } else { Value::known(advice) };
+            let value = if use_unknown {
+                Value::unknown()
+            } else {
+                Value::known(advice)
+            };
             #[cfg(feature = "halo2-axiom")]
             let cell = region.assign_advice(column, row_offset, value).cell();
             #[cfg(not(feature = "halo2-axiom"))]
@@ -254,8 +274,9 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
                 #[cfg(feature = "halo2-axiom")]
                 let ncell = region.assign_advice(column, row_offset, value);
                 #[cfg(not(feature = "halo2-axiom"))]
-                let ncell =
-                    region.assign_advice(|| "", column, row_offset, || value.map(|v| *v)).unwrap();
+                let ncell = region
+                    .assign_advice(|| "", column, row_offset, || value.map(|v| *v))
+                    .unwrap();
                 raw_constrain_equal(region, ncell.cell(), cell);
             }
 
@@ -285,6 +306,7 @@ pub fn assign_witnesses<F: ScalarField>(
     basic_gates: &[BasicGateConfig<F>],
     region: &mut Region<F>,
     break_points: &ThreadBreakPoints,
+    copy_manager: &SharedCopyConstraintManager<F>,
 ) {
     if basic_gates.is_empty() {
         assert_eq!(
@@ -301,16 +323,37 @@ pub fn assign_witnesses<F: ScalarField>(
     let mut gate_index = 0;
     let mut column = basic_gates[gate_index].value;
     let mut row_offset = 0;
+    let mut copy_manager = copy_manager.lock().unwrap();
 
     for ctx in threads {
         // Assign advice values to the advice columns in each [Context]
-        for advice in &ctx.advice {
-            raw_assign_advice_discarding_value(
-                region,
-                column,
-                row_offset,
-                Value::known(advice),
-            );
+        for (offset, advice) in ctx.advice.iter().enumerate() {
+            #[cfg(feature = "halo2-axiom")]
+            let cell = {
+                // The Axiom backend exposes physical coordinates directly, so
+                // avoid retaining an AssignedCell value solely to recover them.
+                let cell = Cell {
+                    row_offset,
+                    column: column.into(),
+                };
+                raw_assign_advice_discarding_value(
+                    region,
+                    column,
+                    row_offset,
+                    Value::known(advice),
+                );
+                cell
+            };
+            #[cfg(not(feature = "halo2-axiom"))]
+            let cell = raw_assign_advice(region, column, row_offset, Value::known(advice)).cell();
+
+            let virtual_cell = ContextCell::new(ctx.type_id, ctx.context_id, offset);
+            if let Some(old_cell) = copy_manager.assigned_advices.insert(virtual_cell, cell) {
+                assert!(
+                    old_cell.row_offset == cell.row_offset && old_cell.column == cell.column,
+                    "Trying to overwrite virtual witness cell with a different raw cell"
+                );
+            }
 
             if break_point == Some(row_offset) {
                 break_point = break_points.next();
@@ -328,5 +371,168 @@ pub fn assign_witnesses<F: ScalarField>(
 
             row_offset += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod physical_mapping_tests {
+    use std::{collections::BTreeSet, sync::Arc};
+
+    use super::*;
+    use crate::{
+        gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams},
+        halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
+        QuantumCell,
+    };
+
+    const K: u32 = 6;
+    const WITNESS_COUNT: usize = 96;
+
+    fn params() -> BaseCircuitParams {
+        BaseCircuitParams {
+            k: K as usize,
+            num_advice_per_phase: vec![2],
+            num_fixed: 0,
+            num_lookup_advice_per_phase: vec![0],
+            lookup_bits: None,
+            num_instance_columns: 0,
+        }
+    }
+
+    fn witness_values() -> impl Iterator<Item = Fr> {
+        (0..WITNESS_COUNT).map(|index| Fr::from(index as u64 + 1))
+    }
+
+    fn pinned_break_points() -> ThreadBreakPoints {
+        let mut shape = BaseCircuitBuilder::<Fr>::new(false).use_params(params());
+        shape.main(0).assign_witnesses(witness_values());
+        MockProver::run(K, &shape, vec![])
+            .expect("shape synthesis")
+            .assert_satisfied();
+        let break_points = shape.break_points();
+        assert_eq!(break_points.len(), 1);
+        assert!(
+            !break_points[0].is_empty(),
+            "fixture must cross an advice-column breakpoint"
+        );
+        break_points[0].clone()
+    }
+
+    #[test]
+    fn witness_only_context_retains_identity_without_collecting_constraints() {
+        let copy_manager = SharedCopyConstraintManager::<Fr>::default();
+        let mut ctx = Context::new(true, 0, "halo2-base:test:witness-identity", 7, copy_manager);
+
+        let assigned = ctx.assign_witnesses([Fr::from(3), Fr::from(5)]);
+        assert_eq!(
+            assigned[0].cell,
+            Some(ContextCell::new("halo2-base:test:witness-identity", 7, 0))
+        );
+        assert_eq!(
+            assigned[1].cell,
+            Some(ContextCell::new("halo2-base:test:witness-identity", 7, 1))
+        );
+        assert_eq!(ctx.get(0).cell, assigned[0].cell);
+        assert_eq!(ctx.get(-1).cell, assigned[1].cell);
+        assert_eq!(ctx.last().and_then(|value| value.cell), assigned[1].cell);
+
+        ctx.constrain_equal(&assigned[0], &assigned[1]);
+        ctx.assign_cell(QuantumCell::Existing(assigned[0]));
+        ctx.load_constant(Fr::from(9));
+
+        let copy_manager = ctx.copy_manager.lock().expect("copy manager");
+        assert!(
+            copy_manager.advice_equalities.is_empty(),
+            "witness generation must not accumulate advice equalities"
+        );
+        assert!(
+            copy_manager.constant_equalities.is_empty(),
+            "witness generation must not accumulate constant equalities"
+        );
+    }
+
+    #[test]
+    fn witness_assignment_maps_every_virtual_cell_stably_across_breakpoints() {
+        let break_points = pinned_break_points();
+        let mut circuit = BaseCircuitBuilder::<Fr>::prover(params(), vec![break_points.clone()]);
+        let virtual_cells = circuit
+            .main(0)
+            .assign_witnesses(witness_values())
+            .into_iter()
+            .map(|value| value.cell.expect("witness identity"))
+            .collect::<Vec<_>>();
+
+        MockProver::run(K, &circuit, vec![])
+            .expect("first witness synthesis")
+            .assert_satisfied();
+        let copy_manager = circuit.core().copy_manager.clone();
+        let first = {
+            let manager = copy_manager.lock().expect("copy manager");
+            assert_eq!(manager.assigned_advices.len(), WITNESS_COUNT);
+            let columns = virtual_cells
+                .iter()
+                .map(|cell| {
+                    manager
+                        .assigned_advices
+                        .get(cell)
+                        .expect("every virtual witness must be mapped")
+                        .column
+                        .index()
+                })
+                .collect::<BTreeSet<_>>();
+            assert_eq!(
+                columns.len(),
+                2,
+                "fixture must exercise both physical advice columns"
+            );
+            virtual_cells
+                .iter()
+                .map(|cell| {
+                    let physical = manager.assigned_advices[cell];
+                    (physical.column.index(), physical.row_offset)
+                })
+                .collect::<Vec<_>>()
+        };
+
+        // A second synthesis is permitted to reinsert the same coordinates.
+        MockProver::run(K, &circuit, vec![])
+            .expect("repeated witness synthesis")
+            .assert_satisfied();
+        let second = {
+            let manager = copy_manager.lock().expect("copy manager");
+            virtual_cells
+                .iter()
+                .map(|cell| {
+                    let physical = manager.assigned_advices[cell];
+                    (physical.column.index(), physical.row_offset)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(second, first);
+
+        // Deep clones own a fresh synthesis-local map and repopulate it from
+        // their own layouter invocation.
+        let cloned = circuit.deep_clone().unknown(true);
+        let cloned_copy_manager = cloned.core().copy_manager.clone();
+        assert!(!Arc::ptr_eq(&copy_manager, &cloned_copy_manager));
+        assert!(
+            cloned_copy_manager
+                .lock()
+                .expect("cloned copy manager")
+                .assigned_advices
+                .is_empty(),
+            "deep clone must not inherit stale physical coordinates"
+        );
+        MockProver::run(K, &cloned, vec![])
+            .expect("deep-cloned witness synthesis")
+            .assert_satisfied();
+        assert_eq!(
+            cloned_copy_manager
+                .lock()
+                .expect("cloned copy manager")
+                .assigned_advices
+                .len(),
+            WITNESS_COUNT
+        );
     }
 }

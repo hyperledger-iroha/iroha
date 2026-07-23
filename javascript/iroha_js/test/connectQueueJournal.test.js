@@ -284,10 +284,12 @@ test("connect journal rejects empty binary session ids", () => {
 });
 
 test("connect journal rejects non-byte session ids", () => {
-  assert.throws(
-    () => new ConnectQueueJournal([256]),
-    (error) => error?.name === "ConnectJournalError",
-  );
+  for (const sessionId of [[256], ["1"], [true], [null]]) {
+    assert.throws(
+      () => new ConnectQueueJournal(sessionId),
+      (error) => error?.name === "ConnectJournalError",
+    );
+  }
 });
 
 test("connect journal accepts array-like session ids", async () => {
@@ -303,6 +305,44 @@ test("connect journal rejects fractional retention", () => {
         retentionMs: 1.5,
       }),
     (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
+  );
+});
+
+test("connect journal rejects coercible numeric configuration", () => {
+  for (const retentionMs of ["1000", true]) {
+    assert.throws(
+      () => new ConnectQueueJournal("AQIDBA", { retentionMs }),
+      (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
+    );
+  }
+});
+
+test("connect journal append rejects non-positive TTL overrides", async () => {
+  const journal = new ConnectQueueJournal("AQIDBA", { storage: "memory" });
+  await assert.rejects(
+    journal.append(
+      ConnectDirection.APP_TO_WALLET,
+      1,
+      new Uint8Array([0x10]),
+      { ttlMs: -1, receivedAtMs: 10 },
+    ),
+    (error) => error?.name === "ConnectJournalError" && /retentionMs/.test(error.message),
+  );
+});
+
+test("connect journal rejects coercible clock values and unsafe pop counts", async () => {
+  const journal = new ConnectQueueJournal("AQIDBA", { storage: "memory" });
+  await assert.rejects(
+    journal.records(ConnectDirection.APP_TO_WALLET, { nowMs: "10" }),
+    (error) => error?.name === "ConnectJournalError" && /nowMs/.test(error.message),
+  );
+  await assert.rejects(
+    journal.popOldest(
+      ConnectDirection.APP_TO_WALLET,
+      Number.MAX_SAFE_INTEGER + 1,
+      { nowMs: 10 },
+    ),
+    (error) => error?.name === "ConnectJournalError" && /pop count/.test(error.message),
   );
 });
 

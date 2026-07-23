@@ -17,7 +17,7 @@ packed-struct = []
 schema-structural = []
 # Enable real halo2/ipa proving and verification for confidential-transfer-v2 and unshield.
 # OFF by default; flip on only when all production gates have passed.
-privacy-production-enabled = []
+privacy-production-enabled = ["iroha_data_model/kagemusha-production-enabled"]
 # Non-shipping physical-device evidence harness. Candidate symbols, state, and
 # JNI exports are absent unless this feature is selected explicitly; enabling
 # it does not change the production Kagemusha capability gate.
@@ -25,7 +25,11 @@ kagemusha-candidate-evidence-lab = ["iroha_core/kagemusha-candidate-evidence-lab
 
 [dependencies]
 norito = { path = "../norito", version = "2.0.0-rc.2.0", default-features = false, features = ["std", "derive", "json", "json-std-io", "columnar", "strict-safe"] }
-iroha_core = { workspace = true, features = ["zk-halo2-ipa"] }
+# Keep the bridge feature closure explicit so it does not silently inherit a
+# daemon consensus mode. Core currently requires BLS and unconditionally uses
+# its JSON/FAST-DSL surfaces; the production bridge additionally needs the
+# complete Halo2/IPA circuit-parameter path.
+iroha_core = { path = "../iroha_core", default-features = false, features = ["json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 iroha_zkp_halo2 = { workspace = true }
 iroha_torii_shared = { workspace = true }
 fastpq_prover = { workspace = true }
@@ -52,7 +56,7 @@ zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "s
 tempfile = { workspace = true }
 
 [dev-dependencies]
-iroha_core = { workspace = true, features = ["iroha-core-tests", "zk-halo2-ipa"] }
+iroha_core = { path = "../iroha_core", default-features = false, features = ["iroha-core-tests", "json", "bls", "fast_dsl", "zk-halo2", "zk-halo2-ipa", "circuit-params"] }
 sorafs_chunker = { workspace = true }
 
 [build-dependencies]

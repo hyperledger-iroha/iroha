@@ -28,6 +28,10 @@ public final class ClientConfigManifestLoaderTests {
       tests.rejectsFractionalTimeoutMs();
       tests.rejectsFractionalRetryAttempts();
       tests.rejectsOutOfRangeRetryAttempts();
+      tests.rejectsNonStringScalarFields();
+      tests.rejectsMalformedPresentNumericAndBooleanFields();
+      tests.rejectsOutOfDomainNumericValuesInsteadOfUsingDefaults();
+      tests.preservesIntegerAndBooleanStringCompatibility();
       System.out.println("[IrohaAndroid] ClientConfigManifestLoaderTests passed.");
     } finally {
       tests.cleanup();
@@ -186,6 +190,132 @@ public final class ClientConfigManifestLoaderTests {
           ex.getMessage() == null || ex.getMessage().contains("out of range"),
           "error should mention out-of-range value");
     }
+  }
+
+  private void rejectsNonStringScalarFields() throws Exception {
+    final String[] malformed = {
+      manifest("{\"base_uri\":123}", "{\"enabled\":false}", ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"sorafs_gateway_uri\":false}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"sorafs_gateway_uri\":\"\"}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"default_headers\":{\"X-Test\":7}}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"default_headers\":{\"X-Test\":null}}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"pending_queue\":{\"kind\":true}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false,\"exporter_name\":[]}",
+          "")
+    };
+
+    for (int i = 0; i < malformed.length; i++) {
+      assertRejected("non_string_" + i + ".json", malformed[i]);
+    }
+  }
+
+  private void rejectsMalformedPresentNumericAndBooleanFields() throws Exception {
+    final String[] malformed = {
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"timeout_ms\":true}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"timeout_ms\":\"\"}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"max_attempts\":false}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"base_delay_ms\":{}}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"retry_on_network_error\":1}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"retry_status_codes\":[null]}")
+    };
+
+    for (int i = 0; i < malformed.length; i++) {
+      assertRejected("malformed_scalar_" + i + ".json", malformed[i]);
+    }
+  }
+
+  private void rejectsOutOfDomainNumericValuesInsteadOfUsingDefaults() throws Exception {
+    final String[] malformed = {
+      manifest(
+          "{\"base_uri\":\"https://torii.example\",\"timeout_ms\":-1}",
+          "{\"enabled\":false}",
+          ""),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"max_attempts\":0}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"base_delay_ms\":-1}"),
+      manifest(
+          "{\"base_uri\":\"https://torii.example\"}",
+          "{\"enabled\":false}",
+          ",\"retry\":{\"max_delay_ms\":-1}")
+    };
+
+    for (int i = 0; i < malformed.length; i++) {
+      assertRejected("negative_scalar_" + i + ".json", malformed[i]);
+    }
+  }
+
+  private void preservesIntegerAndBooleanStringCompatibility() throws Exception {
+    final String json =
+        manifest(
+            "{\"base_uri\":\"https://torii.example\",\"timeout_ms\":\"7000\"}",
+            "{\"enabled\":false}",
+            ",\"retry\":{\"max_attempts\":\"3\",\"base_delay_ms\":\"250\","
+                + "\"retry_on_network_error\":\"no\"}");
+    final Path path = tempDir.resolve("string_compatibility.json");
+    Files.writeString(path, json, StandardCharsets.UTF_8);
+
+    final ClientConfig config = ClientConfigManifestLoader.load(path).clientConfig();
+
+    assertEquals(Duration.ofMillis(7_000), config.requestTimeout(), "timeout mismatch");
+    assertTrue(config.retryPolicy().allowsRetry(2), "retry should allow attempt 2");
+    assertFalse(config.retryPolicy().allowsRetry(3), "retry should stop after max attempts");
+    assertFalse(config.retryPolicy().shouldRetryError(1), "network retry should be disabled");
+  }
+
+  private void assertRejected(final String fileName, final String json) throws Exception {
+    final Path manifest = tempDir.resolve(fileName);
+    Files.writeString(manifest, json, StandardCharsets.UTF_8);
+    try {
+      ClientConfigManifestLoader.load(manifest);
+      throw new AssertionError("expected malformed manifest to be rejected: " + fileName);
+    } catch (final IllegalStateException expected) {
+      // Expected.
+    }
+  }
+
+  private static String manifest(
+      final String torii, final String telemetry, final String extra) {
+    return "{\"torii\":" + torii + ",\"telemetry\":" + telemetry + extra + "}";
   }
 
   private static String baseManifestJson(final String baseUri, final boolean includeTelemetry) {

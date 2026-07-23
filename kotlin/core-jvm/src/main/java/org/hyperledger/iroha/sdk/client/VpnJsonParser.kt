@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.numeric.NumericV1Codec
 
 import java.nio.charset.StandardCharsets
@@ -106,7 +107,8 @@ object VpnJsonParser {
             flowLabelBits = exactInt(root["flow_label_bits"], "vpn quote response.flow_label_bits", 24),
             paddingBudgetMs = boundedInt(root["padding_budget_ms"], "vpn quote response.padding_budget_ms", 1, 65_535),
             relayTlsSpkiSha256Hex = optionalHex32(root["relay_tls_spki_sha256_hex"], "relayTlsSpkiSha256Hex"),
-            meteringPublicKeyHex = hex32(root["metering_public_key_hex"], "meteringPublicKeyHex"),
+            meteringPublicKeyHex =
+                ed25519PublicKeyHex(root["metering_public_key_hex"], "meteringPublicKeyHex"),
             openLeaseInstruction = optionalTxInstruction(root["open_lease_instruction"], "vpn quote response.open_lease_instruction"),
             txInstructions = txInstructionList(root["tx_instructions"], "vpn quote response.tx_instructions", 1, 1),
         )
@@ -339,6 +341,19 @@ object VpnJsonParser {
     }
 
     private fun hex32(value: Any?, field: String): String = canonicalHex(value, field, 64)
+
+    private fun ed25519PublicKeyHex(value: Any?, field: String): String {
+        val canonical = hex32(value, field)
+        val publicKey = ByteArray(Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH) { index ->
+            val offset = index * 2
+            ((Character.digit(canonical[offset], 16) shl 4) or
+                Character.digit(canonical[offset + 1], 16)).toByte()
+        }
+        check(Ed25519PublicKeyAdmission.isValid(publicKey)) {
+            "$field must encode a canonical prime-order Ed25519 public key"
+        }
+        return canonical
+    }
 
     private fun hex16(value: Any?, field: String): String = canonicalHex(value, field, 32)
 

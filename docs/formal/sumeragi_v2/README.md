@@ -45,6 +45,9 @@ certificate round.
   `AsyncSpecAt` instances. Exact application receipts join successors one node
   at a time through an ordered activation pipeline. The node joins only when an
   Applied or exact durable-tip Recovered path publishes a full-context token.
+  In the production refinement, an internal State application maps to that
+  Applied boundary only after the canonical lane-ownership completion gate;
+  proving this delayed mapping remains explicit proof debt.
   Validators absent from an old roster use the production-shaped authenticated
   historical CommitQC/body service and explicit decision, body-recovery, store,
   validation, and application stages. Terminal observers record known
@@ -647,10 +650,26 @@ responsive validator to advance into a successor context. Exact recovery opens
 one per-instance scheduler target and imports only an authenticated canonical
 CommitQC into the ordinary reducer. It then follows the same decision,
 body-fetch, store, validation, and application transitions as live consensus;
-it cannot create finality or skip a consumer boundary. Nonterminal
-application queues the ordinary activation pipeline without joining, while
-terminal application uses `RecordKnownApplication` and creates no successor
-work. Dormant non-genesis instances
+it cannot create finality or skip a consumer boundary. Production may make the
+first discovery attempt immediately when startup recovers durable v2 ownership
+or an interrupted applied tip, and may carry that urgency only when an
+authenticated Commit-certificate response yields a discovered CommitQC which
+is admitted to, or coalesced with, serialized reducer ownership. The
+outstanding-request `Some`-to-`None` transition proves only that ownership
+handoff, not reducer execution, Decision, durability, or historical-Kura
+provenance. Ordinary live finality clears the hint. This alters scheduling
+only: the request, authentication, frozen context, exact CommitQC admission,
+and serialized reducer path are unchanged, and ordinary heights do not acquire
+permanent discovery fanout. The concrete scheduling mapping remains part of
+the `specified_unproved` production refinement. Nonterminal application
+queues the ordinary activation pipeline without joining in the abstract
+indexed model, while terminal application uses `RecordKnownApplication` and
+creates no successor work. Production's earlier internal State application
+maps to that abstract boundary only after canonical lane completion; this
+includes bounded rehydration of exact canonical ownership which block sync may
+install after adapter construction. This delayed mapping remains part of the
+unproved production refinement. Dormant
+non-genesis instances
 retain their exact `InitAt` parent receipt internally, but only current-context
 receipts enter the global ChainEpoch projection, so the indexed genesis is
 non-vacuous. The first-release model does not restore a
@@ -773,7 +792,7 @@ liveness. Stage-2, Stage-3, and Stage-6 remain scratch-only and have no canonica
 ledger IDs, so the checker does not encode fictitious aggregate-rank edges.
 Release mode additionally requires fresh source-bound evidence.
 
-Before network startup, the executable wrapper inventories 509 named tests
+Before network startup, the executable wrapper inventories 515 named tests
 across 38 Rust modules. The preceding 298-name inventory was produced from the
 264-name inventory by adding
 37 positive regressions: 10 bind per-target exact-output scheduling and typed
@@ -804,11 +823,11 @@ non-validator source-cap regression and the alternate-route-before-lane-cap
 regression add two more exact names, yielding the 467-test checkpoint
 without adding a module or corridor leg. Three daemon Hold/Release controller
 regressions, one layered daemon ownership regression, and two root
-configuration geometry regressions add six exact names, yielding the current
+configuration geometry regressions add six exact names, yielding the historical
 473-test checkpoint without adding a module or corridor leg. One configuration
 fingerprint, two historical-recovery kernel, and one shared authenticated
-source-credit regression add four more exact names, yielding the current
-477-test geometry without adding a module or corridor leg.
+source-credit regression add four more exact names, yielding the historical
+477-test checkpoint without adding a module or corridor leg.
 They bind each delivery capability to its original minting tenure even after
 bounded retired-source tombstone churn, reject a second route at rehydration
 instead of silently overwriting the first capability, and prove actor
@@ -829,6 +848,32 @@ The proposal-origin, multi-carrier, and persistence-failure closure then adds
 identities, equivocation evidence, aggregate signatures, finality/header
 geometry, compact offline QCs, and parent height-context identity to the
 authenticated origin.
+
+The final successor/recovery closure adds six exact regressions without adding
+a module or corridor leg, yielding the current 515-test, 38-module, 61-leg
+inventory. The canonical module/test TSV inventory SHA-256 is
+`b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
+The six boundaries preserve the predecessor CommitQC through wire-to-core
+conversion, block rollover until the decided lane session is durable, reopen a
+globally finalized tip whose lane evidence is incomplete, filter terminal
+CommitQC discovery and losing current-body requests, accept canonical view-zero
+bytes whose first proposal origin is later, and pin a contention-tolerant
+restart view-zero deadline. The genesis finality regression's whole-item token
+SHA-256 is
+`bfbd01d093f38fa8c96fb17fe38b6ec1132e6ffbb0d09367a298299394bdce4f`,
+and the restart-deadline regression's is
+`13c1cd988856a8c4ee4d20cfc176c4111352ba7262d07bb417de5a4056cf8b1f`.
+That four-validator scenario also owns sequential missing-height discovery and
+catch-up. A diagnostic run observed the full 20-second delay at each missing
+height. The fresh exact run of
+`sumeragi_v2_runner::authoritative_v2_finalizes_through_validator_restart`
+against recovery-scoped eager discovery passed 1/1 in 79.82 seconds; all four
+peers shut down gracefully with empty stderr. This is focused regression
+evidence only and does not promote the formal ledger. The successor-boundary
+regression's whole-item token SHA-256 is
+`ee773b00e696822c6d2ba998fb88201bb6e2a06eac749a2c700edec70dbbdf74`;
+its extended authenticated-admission companion is sealed at
+`1cb4736b2e4b499403c870cc3dd5ab8ccd361d51887efad4178ed7d39a9e0225`.
 These tests deliberately do not claim remote application acknowledgement,
 relay second-hop completion, or unbounded
 broadcast admission. The 264-name baseline added 32 regressions for atomic lane
@@ -843,7 +888,7 @@ anonymous owners (`4N+2H+2` total), including a roster-origin completion relayed
 through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
-regression. The four integration names execute under one module-filtered leg;
+regression. The five integration names execute under one module-filtered leg;
 the complete pre-network corridor now spans 61 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
@@ -928,7 +973,7 @@ walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
 binds original HEAD/tree/`Cargo.lock`, all 61 pre-network legs and the exact
-509-test inventory, the pinned harness lock and resolved toolchain, the formal
+515-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable
 pointer; after success the external bootstrap independently validates it and
@@ -1041,7 +1086,17 @@ applicable. Current-height global V2 messages validate their protocol and bind
 to the exact receipt/finality artifact. Winning lane messages require an exact,
 independently readable durable Kura certificate and application receipt;
 alternate vote/QC/certificate proof variants are revalidated, and structurally
-valid same-height non-winning lane messages are explicitly superseded. Native
+valid same-height non-winning lane messages are explicitly superseded. The
+winning set is reconstructed from canonical finalized-block ownership rather
+than volatile output. Missing certificate or receipt evidence keeps the exact
+terminal height active; conflicting evidence fails closed; successor handoff
+requires the complete Kura-first set. A canonical empty ownership set is
+complete even when a result-bearing genesis or external-only block contains
+external entries; those entries are not lane durability obligations. Startup
+audits that boundary at the tip only and reopens an incomplete tip for exact
+decided-lane traffic without re-entering global reducer input. Historical
+lifecycle sidecars may already be
+retired and are not re-audited. Native
 AMX claims pin scope, embedded round, and message hash; merge-share claims pin
 scope and share hash. Certified sidecar request/chunk claims pin scope, target
 roles, transfer identity, and exact request/response hash. Finalized-sidecar
@@ -1049,7 +1104,8 @@ pruning leaves winning data in the committed merge log and supersedes losing
 pending work before handoff. Manual, wrong-identity, substituted, or otherwise
 untyped `Exact` output remains owned and fails closed. This is production
 source fidelity, not a proof of the QC-to-application pipeline or end-to-end
-catch-up.
+catch-up. These executable contracts remain `specified_unproved`; they do not
+promote the production refinement or starvation obligations.
 
 The gate next runs the separately source-sealed effect-capacity ownership
 matrix: 6 compact models, 28 exact configurations, and one standalone runner.

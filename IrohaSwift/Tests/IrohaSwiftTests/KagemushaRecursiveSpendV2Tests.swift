@@ -612,6 +612,78 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
         XCTAssertThrowsError(try KagemushaRecursiveSpend.ensureProofBackendAvailableV4())
     }
 
+    func testNativeLinkageProbeDoesNotCachePrePromotionUnavailability() throws {
+        var promoted = false
+        var probeCount = 0
+        let probe = {
+            probeCount += 1
+            return promoted
+        }
+
+        XCTAssertFalse(KagemushaRecursiveSpend.productionAvailability(
+            hasRequiredNativeSymbols: true,
+            probe: probe
+        ))
+        promoted = true
+        XCTAssertTrue(KagemushaRecursiveSpend.productionAvailability(
+            hasRequiredNativeSymbols: true,
+            probe: probe
+        ))
+        XCTAssertEqual(probeCount, 2, "artifact readiness must be probed again after promotion")
+
+        XCTAssertFalse(KagemushaRecursiveSpend.productionAvailability(
+            hasRequiredNativeSymbols: false,
+            probe: { XCTFail("an absent ABI must not be invoked"); return true }
+        ))
+
+        #if canImport(Darwin)
+        guard KagemushaRecursiveSpend.hasRequiredNativeSymbols else {
+            throw XCTSkip("ABI-21 bridge is not linked in this source-only test host")
+        }
+        // Portable offer projection is protocol parsing, not proof-backend
+        // readiness. It must remain callable while the production gate is
+        // deliberately closed before artifact promotion.
+        let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        XCTAssertFalse(try offer.project().request.archive.isEmpty)
+        #endif
+    }
+
+    func testProductionCompilationProbeBreaksArtifactBootstrapCycleWithoutOpeningMoneyGate() {
+        var installed = false
+        var probeCount = 0
+        let productionProbe = {
+            probeCount += 1
+            return (
+                proofBackendAvailable: installed,
+                missingGates: installed ? [] : ["authenticated-v4-artifact-installation"]
+            )
+        }
+        XCTAssertTrue(KagemushaRecursiveSpend.productionCompilationAvailability(
+            hasRequiredNativeSymbols: true,
+            probe: productionProbe
+        ))
+        installed = true
+        XCTAssertTrue(KagemushaRecursiveSpend.productionCompilationAvailability(
+            hasRequiredNativeSymbols: true,
+            probe: productionProbe
+        ))
+        XCTAssertEqual(probeCount, 2, "production compilation must be probed without caching")
+
+        XCTAssertFalse(KagemushaRecursiveSpend.productionCompilationAvailability(
+            hasRequiredNativeSymbols: true,
+            probe: {
+                (
+                    proofBackendAvailable: false,
+                    missingGates: ["authenticated-production-promotion"]
+                )
+            }
+        ))
+        XCTAssertFalse(KagemushaRecursiveSpend.productionCompilationAvailability(
+            hasRequiredNativeSymbols: false,
+            probe: { XCTFail("an absent ABI must not be invoked"); return (true, []) }
+        ))
+    }
+
     func testNativeCapabilitiesV4RequireExactABI21EightRoleContract() throws {
         let gates = [
             "authenticated-v4-artifact-installation",
@@ -1001,7 +1073,7 @@ final class KagemushaRecursiveSpendTests: XCTestCase {
     }
 
     func testRecipientRequestRejectsMissingOrExcessHeaderPadding() throws {
-        let request = try KagemushaPeerTransportTestFixtures.receiveRequest()
+        let request = try KagemushaPeerTransportTestFixtures.paymentRequest()
         XCTAssertEqual(
             try XCTUnwrap(noritoDecodeFrame(request.archive)).paddingLength,
             8

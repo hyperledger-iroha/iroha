@@ -529,6 +529,21 @@ test("createConnectSessionPreview is deterministic with fixed nonce and keypair"
   );
 });
 
+test("createConnectSessionPreview rejects coercible non-byte array entries", () => {
+  const appKeyPair = {
+    publicKey: new Uint8Array(32).fill(0x22),
+    privateKey: new Uint8Array(32).fill(0x33),
+  };
+  for (const entry of ["1", true, null]) {
+    const nonce = new Array(16).fill(0x11);
+    nonce[0] = entry;
+    assert.throws(
+      () => createConnectSessionPreview({ chainId: "alpha-net", nonce, appKeyPair }),
+      (error) => error instanceof TypeError && /nonce\[0\] must be a byte/.test(error.message),
+    );
+  }
+});
+
 test("buildConnectWebSocketUrl switches schemes for secure and insecure Torii urls", () => {
   assert.equal(
     buildConnectWebSocketUrl("https://taira.sora.org", "sid123", "app"),

@@ -90,8 +90,8 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
             amount: "42",
             noteCommitment: Data(repeating: 0xAB, count: 32),
             payload: payload,
-            ttlMs: fixtureTtlMs,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            ttlMs: fixtureTtlMs,
         )
         return try SwiftTransactionEncoder.encodeShield(
             request: request,
@@ -113,8 +113,8 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
             inputs: [Data(repeating: 0x55, count: 32)],
             proof: proof,
             rootHint: nil,
-            ttlMs: fixtureTtlMs,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            ttlMs: fixtureTtlMs,
         )
         return try SwiftTransactionEncoder.encodeUnshield(
             request: request,
@@ -135,8 +135,8 @@ final class ConfidentialWalletFixturesTests: XCTestCase {
             outputs: [Data(repeating: 0x22, count: 32), Data(repeating: 0x33, count: 32)],
             proof: proof,
             rootHint: Data(repeating: 0x44, count: 32),
-            ttlMs: fixtureTtlMs,
             feePayment: .authority(chargeLimits: [], gasLimit: nil),
+            ttlMs: fixtureTtlMs,
         )
         return try SwiftTransactionEncoder.encodeZkTransfer(
             request: request,

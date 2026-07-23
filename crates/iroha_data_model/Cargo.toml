@@ -30,6 +30,11 @@ test-fixtures = []
 gost = ["iroha_crypto/gost"]
 bls = ["iroha_crypto/bls"]
 sm = ["iroha_crypto/sm"]
+# Compile the ABI-21 Kagemusha recursive backend as production-promoted.
+# This is deliberately non-default and is selected by the shipping bridge's
+# `privacy-production-enabled` feature; runtime readiness still requires an
+# authenticated eight-artifact release installation.
+kagemusha-production-enabled = []
 # Enable API for HTTP requests. Should be activated for HTTP clients
 http = []
 # Replace structures and methods with FFI equivalents to facilitate dynamic linkage (mainly used in smartcontracts)

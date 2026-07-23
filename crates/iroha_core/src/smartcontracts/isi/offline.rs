@@ -7,7 +7,7 @@ pub use kagemusha_terminal_registry_v4::KagemushaReleaseCatalogV4;
 use super::prelude::*;
 use crate::smartcontracts::isi::asset::isi::assert_numeric_spec_with;
 use std::{
-    collections::{BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet},
     io::Cursor,
     sync::LazyLock,
 };
@@ -33,6 +33,9 @@ use iroha_data_model::{
     offline::{
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MAX_BYTES_V1,
         KAGEMUSHA_IOS_APP_ATTEST_ASSERTION_AUTH_DATA_MIN_BYTES_V1,
+        KagemushaActiveReceiverActiveEntryV1, KagemushaActiveReceiverAmbiguousEntryV1,
+        KagemushaActiveReceiverEntryV1, KagemushaActiveReceiverKeyV1,
+        KagemushaActiveReceiverSnapshotV1, KagemushaActiveReceiverValueV1,
         KagemushaOnlineHardwareAssertionV1, KagemushaRecipientPaymentRequestV2,
         KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBranchPathV2,
         KagemushaRecursiveSpendTopUpAnchorRefV2, KagemushaRecursiveSpendTopUpAnchorV4,
@@ -1227,7 +1230,12 @@ pub mod isi {
     const KAGEMUSHA_ATTESTATION_CHALLENGE_REPLAY_DOMAIN: &str = "kagemusha-attestation-challenge";
     const KAGEMUSHA_ATTESTATION_REPORT_REPLAY_DOMAIN: &str = "kagemusha-attestation-report";
     const KAGEMUSHA_ATTESTATION_EVIDENCE_REPLAY_DOMAIN: &str = "kagemusha-attestation-evidence";
-    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_v1_";
+    // This namespace was introduced together with native-only contract-state
+    // protection.  Registrations in the legacy `v1` namespace are deliberately
+    // not eligible for receiver snapshots because older generic IVM programs
+    // could forge that namespace.  Devices must re-register once after the
+    // upgrade so an active-receiver proof can rely on native admission.
+    const KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX: &str = "kagemusha_online_registration_v2_";
     const KAGEMUSHA_V4_OPERATION_DOMAIN: &str = "kagemusha-v4-operation";
     const KAGEMUSHA_V4_NONCE_DOMAIN: &str = "kagemusha-v4-authorization-nonce";
     const KAGEMUSHA_V4_PAYLOAD_DOMAIN: &str = "kagemusha-v4-payload";
@@ -3165,6 +3173,290 @@ pub mod isi {
                 format!("the governed device-attestation policy cannot be hashed: {error}")
             })?;
         Ok((policy, policy_hash))
+    }
+
+    /// Derive the canonical end-of-block active-receiver snapshot.
+    ///
+    /// Only records in the post-upgrade native-protected `v2` namespace are
+    /// eligible. Legacy records require one fresh native registration. A
+    /// corrupt protected record or policy produces a deterministic unavailable
+    /// snapshot; multiple current registrations for the same account/device/
+    /// asset tuple produce an explicit ambiguous leaf which cannot be routed.
+    pub fn derive_kagemusha_active_receiver_snapshot_v1(
+        world: &impl WorldReadOnly,
+        evaluated_height: u64,
+        evaluated_at_ms: u64,
+    ) -> Result<KagemushaActiveReceiverSnapshotV1, String> {
+        if evaluated_height == 0 {
+            return Err("active-receiver evaluation must bind a committed block".to_owned());
+        }
+        let (policy, current_policy_hash) =
+            match current_offline_device_attestation_policy_from_world(world, evaluated_at_ms) {
+                Ok(value) => value,
+                Err(error) => {
+                    return KagemushaActiveReceiverSnapshotV1::unavailable(
+                        evaluated_height,
+                        evaluated_at_ms,
+                        error.as_bytes(),
+                    );
+                }
+            };
+        let current_policy_hash_value = Hash::prehashed(current_policy_hash);
+        let mut candidates =
+            BTreeMap::<KagemushaActiveReceiverKeyV1, Vec<KagemushaActiveReceiverValueV1>>::new();
+
+        for (state_key, archive) in world.smart_contract_state().iter() {
+            let state_key = state_key.to_string();
+            let Some(key_hash_hex) =
+                state_key.strip_prefix(KAGEMUSHA_ONLINE_REGISTRATION_STATE_PREFIX)
+            else {
+                continue;
+            };
+            let fail_closed = |reason: String| {
+                KagemushaActiveReceiverSnapshotV1::unavailable(
+                    evaluated_height,
+                    evaluated_at_ms,
+                    reason.as_bytes(),
+                )
+            };
+            if key_hash_hex.len() != 64
+                || !key_hash_hex
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            {
+                return fail_closed(format!(
+                    "protected Kagemusha registration key `{state_key}` is non-canonical"
+                ));
+            }
+            let state: KagemushaOnlineRegistrationStateV3 = match norito::decode_from_bytes(archive)
+            {
+                Ok(state) => state,
+                Err(error) => {
+                    return fail_closed(format!(
+                        "protected Kagemusha registration `{state_key}` is corrupt: {error}"
+                    ));
+                }
+            };
+            if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
+                return fail_closed(format!(
+                    "protected Kagemusha registration `{state_key}` is non-canonical"
+                ));
+            }
+            let registration_hash = canonical_registration_hash(&state.registration)
+                .map(|hash| exact_hash_bytes(&hash))
+                .map_err(|error| error.to_string())?;
+            if state.version != 3
+                || hex::encode(registration_hash) != key_hash_hex
+                || state.admission_height == 0
+                || state.admission_height > evaluated_height
+                || state
+                    .admission_transaction_hash
+                    .as_ref()
+                    .iter()
+                    .all(|byte| *byte == 0)
+            {
+                return fail_closed(format!(
+                    "protected Kagemusha registration `{state_key}` has invalid native provenance"
+                ));
+            }
+            if state.admission_policy_hash != current_policy_hash
+                || state.registration.expires_at_ms <= evaluated_at_ms
+            {
+                continue;
+            }
+
+            let registration = &state.registration;
+            validate_offline_attestation_platform_profile(registration).map_err(|error| {
+                format!("protected registration `{state_key}` profile is invalid: {error}")
+            })?;
+            validate_offline_attestation_optional_metadata(registration).map_err(|error| {
+                format!("protected registration `{state_key}` metadata is invalid: {error}")
+            })?;
+            match registration.platform.as_str() {
+                OFFLINE_ATTESTATION_PLATFORM_ANDROID_KEYMINT => {
+                    let (package_name, signing_digest) = android_attestation_metadata(registration)
+                        .map_err(|error| {
+                            format!(
+                                "protected Android registration `{state_key}` is invalid: {error}"
+                            )
+                        })?;
+                    ensure_android_app_allowed_by_policy(&policy, &package_name, &signing_digest)
+                        .map_err(|error| {
+                            format!(
+                                "protected Android registration `{state_key}` is no longer governed: {error}"
+                            )
+                        })?;
+                }
+                OFFLINE_ATTESTATION_PLATFORM_IOS_APP_ATTEST => {
+                    let (team_id, bundle_id, environment) = ios_attestation_metadata(registration)
+                        .map_err(|error| {
+                            format!("protected iOS registration `{state_key}` is invalid: {error}")
+                        })?;
+                    ensure_ios_app_allowed_by_policy(&policy, &team_id, &bundle_id, &environment)
+                        .map_err(|error| {
+                            format!(
+                                "protected iOS registration `{state_key}` is no longer governed: {error}"
+                            )
+                        })?;
+                }
+                _ => {
+                    return fail_closed(format!(
+                        "protected registration `{state_key}` uses an unsupported platform"
+                    ));
+                }
+            }
+
+            let Some(asset_definition_id) = registration.asset_definition_id.clone() else {
+                continue;
+            };
+            let account_exists = world.accounts().get(&registration.account_id).is_some();
+            let asset_definition_exists = world
+                .asset_definitions()
+                .get(&asset_definition_id)
+                .is_some();
+            if !account_exists || !asset_definition_exists {
+                continue;
+            }
+            let key = KagemushaActiveReceiverKeyV1 {
+                account_id: registration.account_id.clone(),
+                device_id: registration.device_id.clone(),
+                asset_definition_id,
+            };
+            candidates
+                .entry(key)
+                .or_default()
+                .push(KagemushaActiveReceiverValueV1 {
+                    registration_hash: Hash::prehashed(registration_hash),
+                    registration_state_hash: Hash::new(archive),
+                    admission_policy_hash: Hash::prehashed(state.admission_policy_hash),
+                    current_policy_hash: current_policy_hash_value,
+                    admission_height: state.admission_height,
+                    admission_transaction_hash: Hash::prehashed(
+                        *state.admission_transaction_hash.as_ref(),
+                    ),
+                    public_key: registration.public_key.clone(),
+                    expires_at_ms: registration.expires_at_ms,
+                    account_exists,
+                    asset_definition_exists,
+                });
+        }
+
+        let mut entries = Vec::with_capacity(candidates.len());
+        for (key, mut values) in candidates {
+            values.sort_by_key(|value| value.registration_state_hash);
+            if values.len() == 1 {
+                entries.push(KagemushaActiveReceiverEntryV1::Active(
+                    KagemushaActiveReceiverActiveEntryV1 {
+                        key,
+                        value: values.pop().expect("one active receiver value exists"),
+                    },
+                ));
+            } else {
+                let candidate_count = u32::try_from(values.len()).map_err(|_| {
+                    "ambiguous active-receiver candidate count does not fit u32".to_owned()
+                })?;
+                let hashes = values
+                    .iter()
+                    .map(|value| value.registration_state_hash)
+                    .collect::<Vec<_>>();
+                let hashes_archive =
+                    norito::to_bytes(&hashes).map_err(|error| error.to_string())?;
+                entries.push(KagemushaActiveReceiverEntryV1::Ambiguous(
+                    KagemushaActiveReceiverAmbiguousEntryV1 {
+                        key,
+                        candidate_count,
+                        candidates_digest: Hash::new(hashes_archive),
+                    },
+                ));
+            }
+        }
+        KagemushaActiveReceiverSnapshotV1::available(
+            evaluated_height,
+            evaluated_at_ms,
+            current_policy_hash_value,
+            entries,
+        )
+    }
+
+    /// Load the exact protected registration named by one active snapshot leaf.
+    ///
+    /// This lookup is deliberately request-independent so Torii can publish a
+    /// reusable receiver proof before the receiver creates a payment request.
+    /// Every field is cross-checked against the freshly derived leaf; the
+    /// returned registration is public payload, not a second source of trust.
+    pub fn resolve_kagemusha_active_receiver_registration_v1(
+        world: &impl WorldReadOnly,
+        active: &KagemushaActiveReceiverActiveEntryV1,
+        evaluated_height: u64,
+        evaluated_at_ms: u64,
+    ) -> Result<KagemushaRecipientRegistrationResolutionV1, String> {
+        if evaluated_height == 0 {
+            return Err("receiver-lineage evaluation must bind a committed block".to_owned());
+        }
+        let value = &active.value;
+        let registration_hash = *value.registration_hash.as_ref();
+        let state_key = kagemusha_online_registration_state_key(&registration_hash)
+            .map_err(|error| format!("active registration key is invalid: {error}"))?;
+        let archive = world
+            .smart_contract_state()
+            .get(&state_key)
+            .ok_or_else(|| {
+                "active registration archive is absent from protected state".to_owned()
+            })?;
+        if Hash::new(archive) != value.registration_state_hash {
+            return Err(
+                "active registration archive hash differs from the snapshot leaf".to_owned(),
+            );
+        }
+        let state: KagemushaOnlineRegistrationStateV3 = norito::decode_from_bytes(archive)
+            .map_err(|error| format!("active registration archive is corrupt: {error}"))?;
+        if norito::to_bytes(&state).map_err(|error| error.to_string())? != *archive {
+            return Err("active registration archive is non-canonical".to_owned());
+        }
+        let canonical_hash = canonical_registration_hash(&state.registration)
+            .map(|hash| exact_hash_bytes(&hash))
+            .map_err(|error| format!("active registration cannot be hashed: {error}"))?;
+        let (_policy, current_policy_hash) =
+            current_offline_device_attestation_policy_from_world(world, evaluated_at_ms)?;
+        let registration = &state.registration;
+        let account_exists = world.accounts().get(&active.key.account_id).is_some();
+        let asset_definition_exists = world
+            .asset_definitions()
+            .get(&active.key.asset_definition_id)
+            .is_some();
+        if state.version != 3
+            || canonical_hash != registration_hash
+            || state.admission_height == 0
+            || state.admission_height > evaluated_height
+            || state.admission_height != value.admission_height
+            || Hash::prehashed(*state.admission_transaction_hash.as_ref())
+                != value.admission_transaction_hash
+            || Hash::prehashed(state.admission_policy_hash) != value.admission_policy_hash
+            || Hash::prehashed(current_policy_hash) != value.current_policy_hash
+            || state.admission_policy_hash != current_policy_hash
+            || registration.account_id != active.key.account_id
+            || registration.device_id != active.key.device_id
+            || registration.asset_definition_id.as_ref() != Some(&active.key.asset_definition_id)
+            || registration.public_key != value.public_key
+            || registration.expires_at_ms != value.expires_at_ms
+            || registration.expires_at_ms <= evaluated_at_ms
+            || !account_exists
+            || !asset_definition_exists
+            || !value.account_exists
+            || !value.asset_definition_exists
+        {
+            return Err(
+                "protected registration state disagrees with the active-receiver snapshot leaf"
+                    .to_owned(),
+            );
+        }
+        Ok(KagemushaRecipientRegistrationResolutionV1 {
+            registration: registration.clone(),
+            registration_hash,
+            admission_policy_hash: state.admission_policy_hash,
+            admission_height: state.admission_height,
+            admission_transaction_hash: state.admission_transaction_hash,
+        })
     }
 
     /// Resolve the unique active on-chain registration for one signed receiver request.
@@ -7578,7 +7870,7 @@ pub mod isi {
         use iroha_data_model::{
             Registrable,
             account::Account,
-            asset::AssetDefinitionId,
+            asset::{AssetDefinition, AssetDefinitionId},
             block::BlockHeader,
             domain::DomainId,
             offline::{
@@ -8055,6 +8347,72 @@ pub mod isi {
                 norito::to_bytes(&state).expect("canonical online registration state"),
             );
             state_key
+        }
+
+        #[test]
+        fn active_receiver_snapshot_routes_one_native_registration_and_rejects_ambiguity() {
+            let state = offline_test_state();
+            let mut block = state.block(offline_test_header());
+            let mut state_transaction = block.transaction();
+            let asset = offline_test_asset(&ALICE_ID).definition().clone();
+            state_transaction.world.asset_definitions.insert(
+                asset.clone(),
+                AssetDefinition::numeric(asset.clone()).build(&ALICE_ID),
+            );
+            let assertion_key = online_assertion_signing_key(0x61);
+            let registration = android_online_registration(
+                &ALICE_ID,
+                &asset,
+                &assertion_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            install_android_online_registration(&mut state_transaction, registration.clone());
+
+            let snapshot = derive_kagemusha_active_receiver_snapshot_v1(
+                &state_transaction.world,
+                1,
+                POLICY_TEST_TIME_MS,
+            )
+            .expect("derive governed receiver snapshot");
+            let key = KagemushaActiveReceiverKeyV1 {
+                account_id: ALICE_ID.clone(),
+                device_id: registration.device_id.clone(),
+                asset_definition_id: asset.clone(),
+            };
+            let (entry, membership) = snapshot
+                .active_membership(&key)
+                .expect("one native registration is routable");
+            assert!(membership.verify(&entry, &snapshot.commitment));
+            let KagemushaActiveReceiverEntryV1::Active(active) = entry else {
+                panic!("one native registration must produce an active entry")
+            };
+            let resolved = resolve_kagemusha_active_receiver_registration_v1(
+                &state_transaction.world,
+                &active,
+                1,
+                POLICY_TEST_TIME_MS,
+            )
+            .expect("active leaf resolves to exact native state");
+            assert_eq!(resolved.registration, registration);
+
+            let second_assertion_key = online_assertion_signing_key(0x62);
+            let conflicting = android_online_registration(
+                &ALICE_ID,
+                &asset,
+                &second_assertion_key,
+                POLICY_TEST_TIME_MS + 60_000,
+            );
+            install_android_online_registration(&mut state_transaction, conflicting);
+            let ambiguous = derive_kagemusha_active_receiver_snapshot_v1(
+                &state_transaction.world,
+                1,
+                POLICY_TEST_TIME_MS,
+            )
+            .expect("derive ambiguous governed receiver snapshot");
+            assert!(
+                ambiguous.active_membership(&key).is_err(),
+                "multiple native registrations for one tuple must fail closed"
+            );
         }
 
         #[test]

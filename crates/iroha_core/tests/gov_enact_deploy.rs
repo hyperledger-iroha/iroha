@@ -272,6 +272,8 @@ fn enact_rejects_unregistered_bytecode_without_creating_an_active_stub() {
             status: iroha_core::state::GovernanceProposalStatus::Approved,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
 
@@ -366,6 +368,8 @@ fn enact_rejects_on_conflicting_existing_manifest() {
             status: iroha_core::state::GovernanceProposalStatus::Approved,
             pipeline: iroha_core::state::GovernancePipeline::seeded(1, None, &stx.gov),
             parliament_snapshot: None,
+            finalization_evidence: None,
+            enacted_at_height: None,
         },
     );
 

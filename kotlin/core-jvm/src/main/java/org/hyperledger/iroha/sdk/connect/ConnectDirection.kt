@@ -24,7 +24,7 @@ enum class ConnectDirection(
         @JvmStatic
         fun fromTag(tag: Int): ConnectDirection {
             for (direction in entries) {
-                if (direction.tag == tag.toByte()) return direction
+                if (direction.tag.toInt() == tag) return direction
             }
             throw IllegalArgumentException("unknown Connect direction tag: $tag")
         }

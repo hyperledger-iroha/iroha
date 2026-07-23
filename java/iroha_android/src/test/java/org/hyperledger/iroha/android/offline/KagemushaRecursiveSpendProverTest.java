@@ -6,6 +6,9 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Modifier;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -111,6 +114,12 @@ public final class KagemushaRecursiveSpendProverTest {
         () -> {}, () -> 21, () -> false);
     assert !KagemushaRecursiveSpendProver.detectExactNativeAvailability(
         () -> { throw new UnsatisfiedLinkError("missing"); }, () -> 21, () -> true);
+    assert KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
+        () -> { throw new IllegalArgumentException("production artifact validation"); });
+    assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
+        () -> { throw new IllegalStateException("default build"); });
+    assert !KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation(
+        () -> { throw new UnsatisfiedLinkError("missing"); });
   }
 
   private static void appAttestNativeProjectionRejectsCorruptAuxiliaryFields() {
@@ -189,7 +198,10 @@ public final class KagemushaRecursiveSpendProverTest {
     assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4 == 32 * 1024 * 1024;
     assert KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES
         == KagemushaPeerTransport.MAXIMUM_ARCHIVE_BYTES_V4;
-    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 9_211;
+    assert KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES == 24_576;
+    assert KagemushaRecursiveSpendProver.MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2 == 24_576;
+    assert KagemushaRecursiveSpendProver.MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1 == 2_048;
+    assert KagemushaRecursiveSpendProver.PROMOTED_FINALITY_CHECKPOINT_BYTES_V2 == 40;
     assert KagemushaRecursiveSpendProver.MAX_TORII_TOP_UP_REQUEST_BYTES_V4 == 512 * 1024;
     assert KagemushaRecursiveSpendProver.MAX_TORII_REDEEM_REQUEST_BYTES_V4
         == 48 * 1024 * 1024;
@@ -1109,6 +1121,21 @@ public final class KagemushaRecursiveSpendProverTest {
     requestArchive[requestArchive.length - 1] ^= 1;
     assert request.noritoEncoded()[request.noritoEncoded().length - 1] == 0x51;
 
+    final byte[] offerBytes = portableOfferFixture("offline_recipient_receive_offer_v2.hex");
+    final KagemushaRecursiveSpendProver.RecipientReceiveOfferV2 offer =
+        KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(offerBytes);
+    final KagemushaRecursiveSpendProver.RecipientReceiveOfferProjectionV2 offerProjection =
+        KagemushaRecursiveSpendProver.projectRecipientReceiveOfferV2(offer);
+    assert Arrays.equals(
+        portableOfferFixture("offline_recipient_payment_request_v2.hex"),
+        offerProjection.request().noritoEncoded());
+    assert Arrays.equals(
+        portableOfferFixture("offline_recipient_registration_lineage_v2.hex"),
+        offerProjection.lineage().noritoEncoded());
+    assert Arrays.equals(
+        portableOfferFixture("offline_recipient_checkpoint_envelope.hex"),
+        offerProjection.publisherCheckpointEnvelope());
+
     assert KagemushaRecursiveSpendProver.decodePeerPayment(
             archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"))
         .noritoEncoded().length > NoritoHeader.HEADER_LENGTH;
@@ -1176,13 +1203,15 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void peerTransportGoldenVectorsAreExact() {
+    final byte[] offerArchive = portableOfferFixture(
+        "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
         KagemushaPeerTransport.Payload.decode(
-            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
+            offerArchive,
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
     final String text = KagemushaPeerTransport.encode(request);
-    assert text.equals(
-        "PKK2R.TlJUMAAAE2-AZVN4JnUypxEZ9G5vCgABAAAAAAAAAN6BMN0_Z661AgAAAAAAAAAAUQ");
+    assert text.startsWith("PKK2R.");
+    assert Arrays.equals(offerArchive, KagemushaPeerTransport.decode(text).archive());
     assert KagemushaPeerTransport.decode(text).kind()
         == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
     assert KagemushaPeerTransport.decodeUserPresented(" \n" + text + "\t",
@@ -1195,44 +1224,74 @@ public final class KagemushaRecursiveSpendProverTest {
   }
 
   private static void qrNfcAndNearbyGoldenVectorsAreExact() {
+    final byte[] offerArchive = portableOfferFixture(
+        "offline_recipient_receive_offer_v2.hex");
     final KagemushaPeerTransport.Payload request =
         KagemushaPeerTransport.Payload.decode(
-            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
+            offerArchive,
             KagemushaPeerTransport.Kind.RECEIVE_REQUEST);
     final List<String> frames = KagemushaQrStream.encode(
         request, KagemushaQrStream.Options.STANDARD);
-    assert frames.equals(Arrays.asList(
-        "PKKQ1.S1EBAJ9UjpnKuy-JNddeTUuZxs8AAAABAC4BAQQAAQAAAQABAAAAMZ9UjpnKuy-JNddeTUuZxs_S31egUt70_UP06en4wRpstXHZdQ",
-        "PKKQ1.S1EBAZ9UjpnKuy-JNddeTUuZxs8AAAABADFOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRW8j1XA",
-        "PKKQ1.S1EBAp9UjpnKuy-JNddeTUuZxs8AAAABAQBOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA010SmQ"));
+    assert frames.size() > 3;
+    assert frames.stream().allMatch(value -> value.startsWith("PKKQ1."));
     final KagemushaQrStream.Decoder decoder = new KagemushaQrStream.Decoder();
-    assert !decoder.ingest(frames.get(0)).isComplete();
-    final KagemushaQrStream.DecodeResult recovered = decoder.ingest(frames.get(2));
+    KagemushaQrStream.DecodeResult recovered = null;
+    for (final String frame : frames) recovered = decoder.ingest(frame);
+    assert recovered != null;
     assert recovered.isComplete();
-    assert recovered.recoveredDataFrames() == 1;
+    assert Arrays.equals(offerArchive, recovered.payload().archive());
 
     final byte[] rawArchive = request.archive();
     final List<byte[]> apdus = KagemushaNfcProtocol.writePayloadApdus(
         KagemushaNfcProtocol.PayloadKind.RECEIVE_REQUEST, rawArchive, 220);
-    assert hex(apdus.get(0)).equals(
-        "80200400260401000000319f548e99cabb2f8935d75e4d4b99c6cfd2df57a052def4fd43f4e9e9f8c11a6c");
-    assert hex(apdus.get(1)).equals(
-        "8021040035000000004e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051");
-    assert hex(apdus.get(2)).equals("8022040000");
+    assert apdus.size() > 3;
+    assert hex(apdus.get(apdus.size() - 1)).equals("8022040000");
     assert KagemushaNfcProtocol.AID_HEX.equals("F0504B45504B524E464301");
+    assert KagemushaNfcProtocol.AID_HEX.equals(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);
+    assert KagemushaPeerTransport.NFC_APPLICATION_IDENTIFIER_HEX
+        .equals(IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX);
     assert KagemushaNfcProtocol.SAFE_CHUNK_BYTES == 220;
     assert KagemushaNfcProtocol.RAW_TRANSPORT_VERSION == 4;
     assert KagemushaNfcProtocol.parseCommand(apdus.get(0)).type()
         == KagemushaNfcProtocol.Type.WRITE_META;
 
     final byte[] nearby = KagemushaNearby.encode(request, KagemushaNearby.PairingSymbol.STARS);
-    assert new String(nearby, StandardCharsets.UTF_8).equals(
-        "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUFFMi1BWlZONEpuVXlweEVaOUc1dkNnQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFnQUFBQUFBQUFBQVVR\"}");
+    assert nearby.length
+        == offerArchive.length + IrohaPeerWireMessageV1.HEADER_LENGTH + KagemushaNearby.HEADER_LENGTH;
+    assert hex(Arrays.copyOfRange(nearby, 0, 8)).equals("504b4e4231010100");
+    assert readU32Be(Arrays.copyOfRange(nearby, 8, 12)) == nearby.length - 12;
     assert KagemushaNearby.decode(nearby).payload().kind()
         == KagemushaPeerTransport.Kind.RECEIVE_REQUEST;
+    assert Arrays.equals(offerArchive, KagemushaNearby.decode(nearby).payload().archive());
+    assert hex(KagemushaNearby.encodeRejection()).equals("504b4e423104000000000000");
+    assert KagemushaNearby.decode(KagemushaNearby.encodeRejection()).messageKind()
+        == KagemushaNearby.MessageKind.REJECTED;
     assert !KagemushaNearby.IS_AVAILABLE;
     Arrays.fill(rawArchive, (byte) 0);
     Arrays.fill(nearby, (byte) 0);
+  }
+
+  private static byte[] portableOfferFixture(final String name) {
+    Path current = Paths.get(System.getProperty("user.dir")).toAbsolutePath();
+    while (current != null) {
+      final Path candidate = current.resolve("crates/connect_norito_bridge/tests/fixtures")
+          .resolve(name);
+      if (Files.isRegularFile(candidate)) {
+        try {
+          final String hex = new String(Files.readAllBytes(candidate), StandardCharsets.US_ASCII)
+              .replaceAll("\\s+", "");
+          final byte[] bytes = new byte[hex.length() / 2];
+          for (int index = 0; index < bytes.length; index++) {
+            bytes[index] = (byte) Integer.parseInt(hex.substring(index * 2, index * 2 + 2), 16);
+          }
+          return bytes;
+        } catch (final java.io.IOException failure) {
+          throw new AssertionError("unable to load portable Kagemusha fixture", failure);
+        }
+      }
+      current = current.getParent();
+    }
+    throw new AssertionError("portable Kagemusha fixture is missing: " + name);
   }
 
   private static void nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
@@ -1307,6 +1366,14 @@ public final class KagemushaRecursiveSpendProverTest {
     return out.toString();
   }
 
+  private static int readU32Be(final byte[] bytes) {
+    assert bytes.length == 4;
+    return ((bytes[0] & 0xff) << 24)
+        | ((bytes[1] & 0xff) << 16)
+        | ((bytes[2] & 0xff) << 8)
+        | (bytes[3] & 0xff);
+  }
+
   private static void toriiLifecycleRoutesAndHeadersAreExact() {
     final AtomicReference<TransportRequest> captured = new AtomicReference<>();
     final KagemushaRecursiveSpendProver.ToriiClient client =
@@ -1314,7 +1381,8 @@ public final class KagemushaRecursiveSpendProverTest {
             URI.create("https://torii.example/api/"),
             request -> {
               captured.set(request);
-              final boolean command = "POST".equals(request.method());
+              final boolean lineage = request.uri().getPath().endsWith("/receiver-lineage");
+              final boolean command = "POST".equals(request.method()) && !lineage;
               return CompletableFuture.completedFuture(
                   TransportResponse.builder()
                       .setStatusCode(command ? 202 : 200)
@@ -1323,6 +1391,8 @@ public final class KagemushaRecursiveSpendProverTest {
                           archive(
                               command
                                   ? "OfflineOperationReference"
+                                  : lineage
+                                      ? "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
                                   : request.uri().getPath().contains("/operations/")
                                       ? "OfflineOperationStatus"
                                       : "OfflineReadiness"))
@@ -1333,6 +1403,15 @@ public final class KagemushaRecursiveSpendProverTest {
     assert captured.get().uri().toString()
         .equals("https://torii.example/api/v1/offline/readiness?asset_definition_id=pkr%23sbp");
     assert captured.get().headers().get("Accept").equals(Arrays.asList("application/x-norito"));
+
+    final KagemushaRecursiveSpendProver.RecipientLineageQueryV2 query = construct(
+        KagemushaRecursiveSpendProver.RecipientLineageQueryV2.class,
+        new Class<?>[] {byte[].class},
+        archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"));
+    client.getRecipientRegistrationLineage(query).join();
+    assert captured.get().uri().getPath().equals("/api/v1/offline/receiver-lineage");
+    assert captured.get().headers().get("Content-Type")
+        .equals(Arrays.asList("application/x-norito"));
 
     final String operationId = repeat("11", 32);
     client
@@ -1378,6 +1457,8 @@ public final class KagemushaRecursiveSpendProverTest {
             "buildRedeemV4",
             "buildRedeemRequestV4",
             "buildVerifyRequestV4",
+            "createRecipientLineageQueryV2",
+            "createRecipientReceiveOfferV2",
             "decodeAppendRequestV4",
             "decodeBundleV4",
             "decodeInitRequestV4",
@@ -1386,9 +1467,12 @@ public final class KagemushaRecursiveSpendProverTest {
             "decodeNoteOpening",
             "decodeOutputMembershipFrontierV4",
             "decodePeerPayment",
+            "decodeReadiness",
             "decodeRedeemRequestV4",
             "decodeReceiverAcknowledgement",
             "decodeRecipientPaymentRequest",
+            "decodeRecipientReceiveOfferV2",
+            "decodeRecipientRegistrationLineageV2",
             "decodeRedeemBuildResultV4",
             "decodeRedeemSubmissionRequest",
             "decodeSplitResultV4",
@@ -1407,10 +1491,12 @@ public final class KagemushaRecursiveSpendProverTest {
             "initSpendV4",
             "installedArtifactManifestSha256V4",
             "isArtifactStreamingAvailable",
+            "isProductionProofBackendCompiled",
             "isProofBackendAvailable",
             "newToriiClient",
             "prepareAcknowledgement",
             "prepareNoteOpening",
+            "preparePeerSplitChangeV4",
             "prepareRedemptionChangeV4",
             "prepareRecipientPaymentRequest",
             "prepareRequestAuthorization",
@@ -1419,6 +1505,7 @@ public final class KagemushaRecursiveSpendProverTest {
             "projectOperationStatus",
             "projectPeerPayment",
             "projectRecipientPaymentRequest",
+            "projectRecipientReceiveOfferV2",
             "projectRedeemBuildResultV4",
             "projectReadiness",
             "projectSplitResultV4",
@@ -1432,6 +1519,8 @@ public final class KagemushaRecursiveSpendProverTest {
             "signRecipientPaymentRequest",
             "verifyAcknowledgement",
             "verifyRecipientPaymentRequest",
+            "verifyRecipientReceiveOfferV2",
+            "verifyRecipientRegistrationLineageV2",
             "verifySpendV4",
             "validateTopUpProvenanceV4"))) : methods;
     final Set<String> declaredNames = new TreeSet<>();

@@ -4,6 +4,8 @@ import java.util.Optional
 
 /** Helpers for parsing Torii pipeline status payloads. */
 internal object PipelineStatusExtractor {
+    private val STATUS_KINDS =
+        setOf("Queued", "Approved", "Committed", "Applied", "Rejected", "Expired")
     private val REJECTION_REASON_KEYS =
         arrayOf("rejection_reason", "rejectionReason", "reason", "reject_code", "rejectCode")
 
@@ -21,6 +23,37 @@ internal object PipelineStatusExtractor {
             return coerceStatus(content["status"])
         }
         return Optional.empty()
+    }
+
+    @JvmStatic
+    fun requireAuthoritativeStatus(payload: Map<String, Any>?, expectedHash: String): String {
+        checkNotNull(payload) { "Pipeline status response must not be empty" }
+        check(payload["hash"] == expectedHash) {
+            "Pipeline status hash does not match the requested transaction hash"
+        }
+        check(payload["scope"] == "global") { "Pipeline status must use global scope" }
+        check(payload["summary"] is String) { "Pipeline status summary is missing or malformed" }
+        val status = payload["status"] as? Map<*, *>
+            ?: error("Pipeline status kind is missing or unsupported")
+        val kind = status["kind"] as? String
+            ?: error("Pipeline status kind is missing or unsupported")
+        check(kind in STATUS_KINDS) { "Pipeline status kind is missing or unsupported" }
+        val resolvedFrom = payload["resolved_from"] as? String
+            ?: error("Pipeline status resolution source is missing")
+        when (kind) {
+            "Applied" -> {
+                check(resolvedFrom == "state" && hasPositiveBlockHeight(status["block_height"])) {
+                    "Applied pipeline status must be state-resolved with a positive block height"
+                }
+            }
+            "Rejected", "Expired" -> check(resolvedFrom == "state") {
+                "Terminal pipeline failure must be resolved from state"
+            }
+            else -> check(resolvedFrom in setOf("queue", "cache", "state")) {
+                "Pipeline status has an unsupported resolution source"
+            }
+        }
+        return kind
     }
 
     @JvmStatic
@@ -92,5 +125,11 @@ internal object PipelineStatusExtractor {
             }
         }
         return Optional.empty()
+    }
+
+    private fun hasPositiveBlockHeight(value: Any?): Boolean {
+        val number = value as? Number ?: return false
+        val double = number.toDouble()
+        return double.isFinite() && double > 0.0 && double == kotlin.math.floor(double)
     }
 }

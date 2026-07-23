@@ -3,7 +3,42 @@ import Foundation
 @testable import IrohaSwift
 
 enum KagemushaPeerTransportTestFixtures {
+    static func receiveOfferArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_receive_offer_v2.hex")
+    }
+
+    static func recipientRequestArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_payment_request_v2.hex")
+    }
+
+    static func recipientRegistrationLineageArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_registration_lineage_v2.hex")
+    }
+
+    static func publisherCheckpointEnvelope() throws -> Data {
+        try rustFixtureData("offline_recipient_checkpoint_envelope.hex")
+    }
+
     static func receiveRequest(seed: UInt8 = 0x41) throws
+        -> KagemushaRecipientReceiveOfferV2
+    {
+        let exact = try receiveOfferArchive()
+        if seed == 0x41 {
+            return try KagemushaRecipientReceiveOfferV2(noritoArchive: exact)
+        }
+        let request = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+            rustFixtureData("offline_recipient_payment_request_v2.hex")
+        )
+        return try KagemushaRecipientReceiveOfferV2(
+            request: request,
+            lineageArchive: rustFixtureData(
+                "offline_recipient_registration_lineage_v2.hex"
+            ),
+            publisherCheckpointEnvelope: Data(repeating: seed, count: 2_048)
+        )
+    }
+
+    static func paymentRequest(seed: UInt8 = 0x41) throws
         -> KagemushaRecipientPaymentRequest
     {
         let signingKey = try P256.Signing.PrivateKey(
@@ -178,6 +213,24 @@ enum KagemushaPeerTransportTestFixtures {
 
     static func fixed32(_ byte: UInt8) -> Data {
         Data(repeating: byte == 0 ? 1 : byte, count: 32)
+    }
+
+    private static func rustFixtureData(_ name: String) throws -> Data {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<3 { root.deleteLastPathComponent() }
+        let url = root
+            .appendingPathComponent("crates/connect_norito_bridge/tests/fixtures")
+            .appendingPathComponent(name)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let compact = text.unicodeScalars.filter {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        }.map(String.init).joined()
+        guard let bytes = Data(hexString: compact) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transportFixture.\(name)"
+            )
+        }
+        return bytes
     }
 
     private static func membershipWitness(

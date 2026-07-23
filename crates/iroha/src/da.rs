@@ -1157,8 +1157,15 @@ fn parse_sampling_plan(value: &Value) -> Result<DaSamplingPlan> {
         .get("sample_window")
         .and_then(Value::as_u64)
         .ok_or_else(|| eyre!("sampling_plan.sample_window missing or invalid"))?;
-    let sample_seed = match object.get("sample_seed").and_then(Value::as_str) {
-        Some(seed_hex) => Some(parse_sample_seed("sampling_plan.sample_seed", seed_hex)?),
+    let sample_seed = match object.get("sample_seed") {
+        Some(Value::String(seed_hex)) => {
+            Some(parse_sample_seed("sampling_plan.sample_seed", seed_hex)?)
+        }
+        Some(_) => {
+            return Err(eyre!(
+                "sampling_plan.sample_seed must be a hex string when present"
+            ));
+        }
         None => None,
     };
     let samples_array = object
@@ -1179,7 +1186,12 @@ fn parse_sampling_plan(value: &Value) -> Result<DaSamplingPlan> {
             .get("role")
             .and_then(Value::as_str)
             .ok_or_else(|| eyre!("sampling_plan.samples[{idx}].role missing"))?;
-        let group = sample_obj.get("group").and_then(Value::as_u64).unwrap_or(0);
+        let group = match sample_obj.get("group") {
+            Some(value) => value.as_u64().ok_or_else(|| {
+                eyre!("sampling_plan.samples[{idx}].group must be an unsigned integer")
+            })?,
+            None => 0,
+        };
 
         samples.push(DaSampledChunk {
             index: u32::try_from(index)
@@ -1271,6 +1283,26 @@ mod tests {
     fn checked_seed_keypair(seed: u8) -> KeyPair {
         KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
             .expect("fixture seed derives DA Ed25519 keypair")
+    }
+
+    fn sampling_plan_json(sample_seed: Option<Value>, group: Option<Value>) -> Value {
+        let mut sample = Map::from_iter([
+            ("index".into(), Value::from(1)),
+            ("role".into(), Value::from("data")),
+        ]);
+        if let Some(group) = group {
+            sample.insert("group".into(), group);
+        }
+
+        let mut plan = Map::from_iter([
+            ("assignment_hash".into(), Value::from("aa".repeat(32))),
+            ("sample_window".into(), Value::from(4)),
+            ("samples".into(), Value::Array(vec![Value::Object(sample)])),
+        ]);
+        if let Some(sample_seed) = sample_seed {
+            plan.insert("sample_seed".into(), sample_seed);
+        }
+        Value::Object(plan)
     }
 
     #[test]
@@ -1525,6 +1557,34 @@ mod tests {
         assert_eq!(plan.samples[0].index, 1);
         assert_eq!(plan.samples[0].role, ChunkRole::Data);
         assert_eq!(plan.samples[0].group, 0);
+    }
+
+    #[test]
+    fn sampling_plan_defaults_only_absent_optional_fields() {
+        let plan = parse_sampling_plan(&sampling_plan_json(None, None))
+            .expect("absent optional sampling fields should use defaults");
+
+        assert_eq!(plan.sample_seed, None);
+        assert_eq!(plan.samples[0].group, 0);
+    }
+
+    #[test]
+    fn sampling_plan_rejects_non_string_sample_seed() {
+        let err = parse_sampling_plan(&sampling_plan_json(Some(Value::from(7)), None))
+            .expect_err("present non-string sample seed must be rejected");
+
+        assert!(err.to_string().contains("sample_seed must be a hex string"));
+    }
+
+    #[test]
+    fn sampling_plan_rejects_non_integer_group() {
+        let err = parse_sampling_plan(&sampling_plan_json(None, Some(Value::from("9"))))
+            .expect_err("present non-integer group must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("group must be an unsigned integer")
+        );
     }
 
     #[test]

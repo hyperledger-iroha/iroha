@@ -5,6 +5,8 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 class UaidJsonParserQuantityTest {
+    private val uaid = "uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11"
+
     @Test
     fun `portfolio readback requires canonical quantity strings`() {
         assertEquals("1.25", UaidJsonParser.parsePortfolio(portfolio("\"1.25\"")).firstQuantity())
@@ -18,13 +20,55 @@ class UaidJsonParserQuantityTest {
         }
     }
 
+    @Test
+    fun `uaid response parser rejects negative rust unsigned fields`() {
+        assertFailsWith<IllegalStateException> {
+            UaidJsonParser.parsePortfolio(
+                """{"uaid":"$uaid","totals":{"accounts":-1},"dataspaces":[]}"""
+                    .toByteArray(),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            UaidJsonParser.parseBindings(
+                """{"uaid":"$uaid","dataspaces":[{"dataspace_id":-1,"accounts":[]}]}"""
+                    .toByteArray(),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            UaidJsonParser.parseManifests(
+                """{"uaid":"$uaid","total":-1,"manifests":[]}""".toByteArray(),
+            )
+        }
+    }
+
+    @Test
+    fun `uaid response parser rejects malformed present string fields`() {
+        assertFailsWith<IllegalStateException> {
+            UaidJsonParser.parsePortfolio(
+                """
+                    {
+                      "uaid":"$uaid",
+                      "dataspaces":[{"dataspace_id":7,"dataspace_alias":9,"accounts":[]}]
+                    }
+                """.trimIndent().toByteArray(),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            UaidJsonParser.parseBindings(
+                """
+                    {"uaid":"$uaid","dataspaces":[{"dataspace_id":7,"accounts":[null]}]}
+                """.trimIndent().toByteArray(),
+            )
+        }
+    }
+
     private fun UaidPortfolioResponse.firstQuantity(): String =
         dataspaces.single().accounts.single().assets.single().quantity
 
     private fun portfolio(quantityJson: String): ByteArray =
         """
         {
-          "uaid":"uaid:0f4d86b20839a8ddbe8a1a3d21cf1c502d49f3f79f0fa1cd88d5f24c56c0ab11",
+          "uaid":"$uaid",
           "dataspaces":[{
             "dataspace_id":7,
             "accounts":[{

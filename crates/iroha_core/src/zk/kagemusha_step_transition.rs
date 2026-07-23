@@ -23,7 +23,7 @@ use iroha_data_model::offline::{
 };
 use norito::codec::{Decode, Encode};
 
-use super::kagemusha_recursion_adapter::KagemushaSha256Chip;
+use super::kagemusha_sha256_v4::KagemushaSha256JobsV4;
 use super::kagemusha_v2::{
     I_APPEND_PROFILE as O_APPEND_PROFILE, I_ARTIFACT_MANIFEST_SHA256 as O_ARTIFACT_MANIFEST_SHA256,
     I_ASSET_ID_DIGEST as O_ASSET_ID_DIGEST, I_ASSET_SCALE as O_ASSET_SCALE,
@@ -1189,10 +1189,22 @@ impl KagemushaStepOperationVectorV4 {
 /// Assigned canonical operation values reconstructed from the exact public limbs.
 #[derive(Clone, Debug)]
 pub struct AssignedKagemushaStepOperationV4<F: BigPrimeField> {
-    /// The original public cells; no limb is re-assigned by this module.
-    pub limbs: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4],
-    /// Canonically reconstructed native values in existing V2 row order.
-    pub fields: [AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4],
+    /// The original public cells; no limb is re-assigned by this module. The
+    /// exact array is boxed because carrying 1,080 `AssignedValue`s by value
+    /// makes nested circuit-construction frames exceed mobile thread stacks.
+    pub limbs: Box<[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_LIMBS_V4]>,
+    /// Canonically reconstructed native values in existing V2 row order. This
+    /// array is boxed for the same bounded-stack guarantee as `limbs`.
+    pub fields: Box<[AssignedValue<F>; KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4]>,
+}
+
+fn boxed_assigned_values_exact<F: BigPrimeField, const N: usize>(
+    values: Vec<AssignedValue<F>>,
+) -> Box<[AssignedValue<F>; N]> {
+    let actual_len = values.len();
+    values.into_boxed_slice().try_into().unwrap_or_else(|_| {
+        panic!("assigned-value length mismatch: expected {N}, got {actual_len}")
+    })
 }
 
 fn assert_equal<F: BigPrimeField>(
@@ -1322,14 +1334,18 @@ pub fn assign_kagemusha_step_operation_v4<F: BigPrimeField>(
     for limb in operation_limbs {
         range.range_check(ctx, *limb, 32);
     }
-    let fields = std::array::from_fn(|field| {
-        let limbs = &operation_limbs[field_limb_range(field)];
-        enforce_fp_canonical_limbs(ctx, range, limbs);
-        reconstruct_u32_limbs(ctx, range, limbs)
-    });
-    constrain_typed_operation_fields(ctx, range, &fields);
+    let fields = boxed_assigned_values_exact(
+        (0..KAGEMUSHA_STEP_OPERATION_FIELD_ELEMENTS_V4)
+            .map(|field| {
+                let limbs = &operation_limbs[field_limb_range(field)];
+                enforce_fp_canonical_limbs(ctx, range, limbs);
+                reconstruct_u32_limbs(ctx, range, limbs)
+            })
+            .collect(),
+    );
+    constrain_typed_operation_fields(ctx, range, fields.as_ref());
     AssignedKagemushaStepOperationV4 {
-        limbs: *operation_limbs,
+        limbs: boxed_assigned_values_exact(operation_limbs.to_vec()),
         fields,
     }
 }
@@ -1692,10 +1708,11 @@ fn operation_path_from_state<F: BigPrimeField>(
 fn extend_claim<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
+    sha_jobs: &mut KagemushaSha256JobsV4<F>,
     claim: &[AssignedValue<F>],
     branch: AssignedValue<F>,
     tag: &[AssignedValue<F>; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_TRANSITION_TAG_LIMBS_V2],
-) -> Vec<AssignedValue<F>> {
+) -> Result<Vec<AssignedValue<F>>, String> {
     debug_assert_eq!(
         claim.len(),
         KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_LIMBS_V2
@@ -1745,13 +1762,13 @@ fn extend_claim<F: BigPrimeField>(
                 + KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_CLAIM_HISTORY_ACCUMULATOR_LIMBS_V5],
     ));
     history_preimage.extend(native_bytes(ctx, range, tag));
-    let history_words = KagemushaSha256Chip::digest(ctx, range, &history_preimage);
+    let history_words = sha_jobs.digest(ctx, range, &history_preimage)?;
     extended.extend(
         history_words
             .into_iter()
             .map(|word| byte_swap_u32(ctx, range, word)),
     );
-    extended
+    Ok(extended)
 }
 
 fn assert_nonzero_if<F: BigPrimeField>(
@@ -1810,6 +1827,7 @@ fn bind_digest_to_state_if<F: BigPrimeField>(
 pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
     ctx: &mut Context<F>,
     range: &RangeChip<F>,
+    sha_jobs: &mut KagemushaSha256JobsV4<F>,
     parent_count: AssignedValue<F>,
     parent_states: [&[AssignedValue<F>]; 2],
     result_state: &[AssignedValue<F>],
@@ -2501,7 +2519,7 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
         .map(|byte| ctx.load_constant(F::from(u64::from(byte))))
         .collect::<Vec<_>>();
     tag_preimage.extend(split_digest_bytes);
-    let expected_tag_words = KagemushaSha256Chip::digest(ctx, range, &tag_preimage);
+    let expected_tag_words = sha_jobs.digest(ctx, range, &tag_preimage)?;
     for index in 0..tag.len() {
         let expected = byte_swap_u32(ctx, range, expected_tag_words[index]);
         assert_equal_if(ctx, range, extends, tag[index], expected);
@@ -2545,7 +2563,7 @@ pub fn constrain_two_input_step_transition_v4<F: BigPrimeField>(
             let present = gate.mul(ctx, parent_present[slot], local_present[claim_slot]);
             let absent = gate.not(ctx, present);
             assert_slice_zero_if(ctx, range, absent, claim);
-            extended_claims.push(extend_claim(ctx, range, claim, branch, &tag));
+            extended_claims.push(extend_claim(ctx, range, sha_jobs, claim, branch, &tag)?);
             extended_presence.push(present);
         }
         let first = S_BRANCH_CLAIMS;
@@ -2968,9 +2986,11 @@ mod tests {
         let result_cells =
             ctx.assign_witnesses(result.iter().copied().map(|limb| F::from(u64::from(limb))));
         let parent_count = ctx.load_witness(F::from(u64::from(parent_count)));
+        let mut sha_jobs = KagemushaSha256JobsV4::default();
         let bindings = constrain_two_input_step_transition_v4(
             ctx,
             &range,
+            &mut sha_jobs,
             parent_count,
             [parent_cells[0].as_slice(), parent_cells[1].as_slice()],
             &result_cells,
@@ -3035,7 +3055,9 @@ mod tests {
             .try_into()
             .expect("fixed transition tag");
         let branch = ctx.load_witness(Fp::from(u64::from(branch)));
-        let extended = extend_claim(ctx, &range, &claim, branch, &tag);
+        let mut sha_jobs = KagemushaSha256JobsV4::default();
+        let extended = extend_claim(ctx, &range, &mut sha_jobs, &claim, branch, &tag)
+            .expect("fixed claim extension");
         let expected = ctx.assign_witnesses(
             expected
                 .iter()
@@ -3098,6 +3120,14 @@ mod tests {
                 .expect("rolling-history substitution prover")
                 .verify()
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn assigned_operation_keeps_large_exact_arrays_off_stack() {
+        assert_eq!(
+            std::mem::size_of::<AssignedKagemushaStepOperationV4<Fp>>(),
+            2 * std::mem::size_of::<usize>()
         );
     }
 

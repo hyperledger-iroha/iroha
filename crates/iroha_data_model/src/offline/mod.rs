@@ -3,6 +3,10 @@
 //! The module exposes one lifecycle: exact online top-up, recursive
 //! offline split/spend, and exact online redemption.
 
+mod receiver_snapshot;
+
+pub use receiver_snapshot::*;
+
 use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, SignatureOf};
 use iroha_data_model_derive::model;
 use iroha_primitives::numeric::{Numeric, Quantity};
@@ -362,10 +366,20 @@ pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4: u32 = 16;
 pub const KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4: u32 = 16;
 /// Minimum unusable-row reservation required by the Halo2 base circuit.
 pub const KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4: u32 = 9;
-/// Maximum supported challenge-phase vector length.
+/// Exact supported challenge-phase vector length.
+///
+/// The compact V5 Kagemusha profile has no challenge-dependent witness work. Admitting empty
+/// second/third advice phases makes Halo2 re-synthesise the phase-zero circuit
+/// and retains otherwise unused domain-sized polynomials during proving.
+/// Circuit parameters therefore authenticate the one phase that is actually
+/// constrained instead of reserving speculative future phases.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_PHASES_V4: usize = 1;
 /// Maximum configured columns of any one class in a phase.
 pub const KAGEMUSHA_STEP_CIRCUIT_MAX_COLUMNS_V4: u32 = 256;
+/// Reviewed first-release advice-column profile for compact degree-16 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4: [u32; 1] = [8];
+/// Reviewed first-release lookup-column profile for compact degree-16 generation.
+pub const KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4: [u32; 1] = [1];
 /// Domain separator for canonical V4 circuit-parameter identities.
 pub const KAGEMUSHA_STEP_CIRCUIT_PARAMS_SHA256_DOMAIN_V4: &[u8] =
     b"iroha:kagemusha:step-circuit-params:compact-v5";
@@ -487,12 +501,14 @@ pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4: &str = "topup-finality-r
 pub const KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2: u64 = 2 * 1024 * 1024;
 /// Production-promotion gate for the ABI-21/V4 paired recursive backend.
 ///
-/// This remains false for candidate code and may become true only in the final
-/// signed promotion commit backed by authenticated review, benchmark, and
-/// physical-device evidence. Runtime readiness additionally requires an
-/// installed, authenticated V4 release with the exact verifier and prover
-/// inventory; this gate never substitutes for release authentication.
-pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool = false;
+/// This is false in default and candidate builds. It becomes true only when
+/// the non-default `kagemusha-production-enabled` Cargo feature is selected by
+/// an explicitly promoted bridge build. Runtime readiness additionally
+/// requires an installed, authenticated V4 release with the exact verifier and
+/// prover inventory; this compile-time gate never substitutes for release
+/// authentication.
+pub const KAGEMUSHA_RECURSIVE_SPEND_PROOF_BACKEND_AVAILABLE: bool =
+    cfg!(feature = "kagemusha-production-enabled");
 /// Canonical verifier-record namespace for Kagemusha proof admission.
 pub const KAGEMUSHA_VERIFIER_NAMESPACE: &str = "offline_kagemusha";
 /// Transparent backend used by the independent confidential transfer circuits.
@@ -968,7 +984,7 @@ mod model {
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
-        /// Absolute Unix expiry in milliseconds.
+        /// Exclusive Unix expiry in milliseconds.
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
@@ -1010,7 +1026,7 @@ mod model {
         pub request_id: [u8; 32],
         /// Request creation time in Unix milliseconds.
         pub issued_at_ms: u64,
-        /// Absolute Unix expiry in milliseconds.
+        /// Exclusive Unix expiry in milliseconds.
         pub expires_at_ms: u64,
         /// Requested recipient output descriptor.
         pub recipient_output: KagemushaSpendableNoteDescriptorV2,
@@ -4078,7 +4094,7 @@ impl KagemushaRecipientPaymentRequestV2 {
         &self.receiver_public_key
     }
 
-    /// Absolute request expiry in Unix milliseconds.
+    /// Exclusive request expiry in Unix milliseconds.
     #[must_use]
     pub const fn expires_at_ms(&self) -> u64 {
         self.expires_at_ms
@@ -4146,10 +4162,10 @@ impl KagemushaRecipientPaymentRequestV2 {
         Ok(())
     }
 
-    /// Verify request authentication and lifetime at the sender's current time.
+    /// Verify request authentication and its `[issued_at_ms, expires_at_ms)` lifetime.
     pub fn validate_at(&self, now_ms: u64) -> Result<(), KagemushaValidationError> {
         self.validate_public_binding()?;
-        if now_ms < self.issued_at_ms || now_ms > self.expires_at_ms {
+        if now_ms < self.issued_at_ms || now_ms >= self.expires_at_ms {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "recipient_request.expires_at_ms",
             });
@@ -4662,6 +4678,29 @@ impl KagemushaStepCircuitParamsV4 {
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
                 field: "pasta_cycle.v4.circuit_params",
+            });
+        }
+        Ok(layout)
+    }
+
+    /// Validate the reviewed first-release profile used for full key generation.
+    ///
+    /// Artifact decoding and generation both admit only the compact V5 shape.
+    /// This dedicated boundary makes the reviewed generation profile explicit
+    /// before any expensive key-generation allocation begins.
+    pub fn validate_release_generation_profile(
+        &self,
+    ) -> Result<KagemushaPastaPublicLayoutV4, KagemushaValidationError> {
+        let layout = self.validate()?;
+        if self.k != KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4
+            || self.num_advice_per_phase != KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4
+            || self.num_lookup_advice_per_phase != KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4
+            || self.num_fixed != 1
+            || self.lookup_bits != self.k - 1
+            || self.minimum_unusable_rows != KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4
+        {
+            return Err(KagemushaValidationError::InvalidRecursiveSpendProof {
+                field: "pasta_cycle.v4.circuit_params.release_generation_profile",
             });
         }
         Ok(layout)
@@ -6876,6 +6915,41 @@ mod kagemusha_v4_artifact_contract_tests {
     }
 
     #[test]
+    fn v4_release_generation_profile_is_exact_compact_geometry() {
+        let reviewed = circuit_params();
+        reviewed
+            .validate_release_generation_profile()
+            .expect("reviewed compact degree-16 generation profile");
+
+        let mut uncalibrated = reviewed.clone();
+        uncalibrated.num_advice_per_phase = vec![1];
+        uncalibrated.num_lookup_advice_per_phase = vec![1];
+        assert!(uncalibrated.validate().is_err());
+        assert!(
+            uncalibrated.validate_release_generation_profile().is_err(),
+            "uncalibrated geometry must not authorize release generation"
+        );
+
+        let mut phantom_phase = reviewed.clone();
+        phantom_phase.num_advice_per_phase.push(1);
+        phantom_phase.num_lookup_advice_per_phase.push(0);
+        assert!(
+            phantom_phase.validate().is_err(),
+            "Kagemusha must reject an unconstrained speculative advice phase"
+        );
+
+        let mut unreviewed_degree = reviewed;
+        unreviewed_degree.k = KAGEMUSHA_STEP_CIRCUIT_MAXIMUM_K_V4 + 1;
+        unreviewed_degree.lookup_bits = unreviewed_degree.k - 1;
+        assert!(unreviewed_degree.validate().is_err());
+        assert!(
+            unreviewed_degree
+                .validate_release_generation_profile()
+                .is_err()
+        );
+    }
+
+    #[test]
     fn v4_public_input_schema_tracks_the_authenticated_dynamic_layout() {
         assert_eq!(
             KAGEMUSHA_RECURSIVE_SPEND_STEP_OPERATION_FIELD_ELEMENTS_V4,
@@ -7727,6 +7801,170 @@ mod device_authority_p256_tests {
         authorization
     }
 
+    fn recipient_payment_request(
+        receiver_key: &SigningKey,
+        issued_at_ms: u64,
+        expires_at_ms: u64,
+    ) -> KagemushaRecipientPaymentRequestV2 {
+        let chain_id: ChainId = "kagemusha-request-boundary".parse().expect("test chain id");
+        let asset = asset("cash");
+        let amount = KagemushaScaledAmountV2::new(500, 2).expect("test amount");
+        let receiver_public_key = device_public_key(receiver_key);
+        let payload = KagemushaRecipientPaymentRequestSigningPayloadV2 {
+            chain_id: chain_id.clone(),
+            asset: asset.clone(),
+            amount,
+            recipient: account(51),
+            recipient_key_reference: kagemusha_receiver_key_reference_v2(&receiver_public_key)
+                .expect("receiver key reference"),
+            receiver_device_id: "receiver-device-51".to_owned(),
+            receiver_public_key,
+            request_id: [0x51; 32],
+            issued_at_ms,
+            expires_at_ms,
+            recipient_output: KagemushaSpendableNoteDescriptorV2 {
+                chain_id,
+                asset,
+                note_commitment: [0x52; 32],
+                spend_nullifier: [0x53; 32],
+                amount,
+            },
+            sender_output_prover_material: vec![0x54],
+        };
+        let signature = sign(
+            receiver_key,
+            &payload.signing_bytes().expect("request signing bytes"),
+        );
+        KagemushaRecipientPaymentRequestV2::from_signed_payload(payload, signature)
+            .expect("signed recipient request")
+    }
+
+    fn recipient_payment_bundle(
+        request: &KagemushaRecipientPaymentRequestV2,
+    ) -> KagemushaRecursiveSpendBundleV4 {
+        let anchor = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: [0x55; 32],
+            anchor_digest: [0x56; 32],
+        };
+        let lineage_root =
+            kagemusha_recursive_spend_lineage_root_v2(anchor.anchor_digest).expect("lineage root");
+        let artifact_binding = KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "acknowledgement-expiry-test".to_owned(),
+            manifest_sha256: [0x57; 32],
+        };
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            artifact_binding.manifest_sha256,
+        );
+        let recipient_request_digest = request.digest().expect("request digest");
+        let operation_id = [0x58; 32];
+        let statement = KagemushaRecursiveSpendPublicStatementV4 {
+            chain_id: request.chain_id().clone(),
+            asset: request.asset().clone(),
+            asset_scale: request.amount().scale,
+            final_root: [0x59; 32],
+            next_zero_leaf_index: 1,
+            topup_anchor_refs: vec![anchor],
+            proof_step_count: 2,
+            peer_hop_count: 1,
+            current_note: request.recipient_output().clone(),
+            branch_claims: vec![
+                KagemushaRecursiveSpendBranchClaimV2::root(lineage_root)
+                    .expect("root branch claim"),
+            ],
+            transition: Some(KagemushaRecursiveSpendTransitionV4::PeerSplit(
+                KagemushaRecursiveSpendPeerSplitTransitionV4 {
+                    binding_digest: [0x5a; 32],
+                    branch: KagemushaRecursiveSpendBranchV2::Recipient,
+                    recipient_request_digest,
+                    operation_id,
+                    parent_max_proof_step_count: 1,
+                    parent_max_peer_hop_count: 0,
+                },
+            )),
+            artifact_binding: artifact_binding.clone(),
+            verifier_key_id: verifier_key_id.clone(),
+        };
+        let public_statement_digest = statement.digest().expect("statement digest");
+        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let proof_envelope = KagemushaPastaCycleProofEnvelopeV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
+            step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+            step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
+            artifact_generation: artifact_binding.generation,
+            manifest_sha256: artifact_binding.manifest_sha256,
+            step_eq_parameter_generation: "ack-expiry-eq-params".to_owned(),
+            step_ep_parameter_generation: "ack-expiry-ep-params".to_owned(),
+            step_eq_circuit_params_sha256: [0x5b; 32],
+            step_ep_circuit_params_sha256: [0x5c; 32],
+            step_eq_verifier_key_sha256: [0x5d; 32],
+            step_ep_verifier_key_sha256: [0x5e; 32],
+            state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+                .expect("state boundary"),
+            proof: ProofBox::new(
+                KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.into(),
+                vec![0x5f],
+            ),
+        };
+        let mut operation_limbs = [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
+        operation_limbs[0] = 1;
+        let bundle = KagemushaRecursiveSpendBundleV4 {
+            statement,
+            operation: KagemushaRecursiveSpendOperationVectorV4 {
+                limbs: operation_limbs,
+            },
+            recursive_proof: KagemushaRecursiveSpendProofV4 {
+                verifier_key_id,
+                public_statement_digest,
+                proof_envelope,
+            },
+        };
+        bundle
+            .validate_public_binding()
+            .expect("recipient bundle binding");
+        bundle
+    }
+
+    fn receiver_acknowledgement(
+        receiver_key: &SigningKey,
+        request: &KagemushaRecipientPaymentRequestV2,
+        bundle: &KagemushaRecursiveSpendBundleV4,
+        accepted_at_ms: u64,
+    ) -> KagemushaReceiverAcknowledgementV2 {
+        let KagemushaRecursiveSpendTransitionV4::PeerSplit(transition) = bundle
+            .statement
+            .transition
+            .as_ref()
+            .expect("peer-split transition")
+        else {
+            panic!("recipient bundle must carry a peer-split transition")
+        };
+        let payload = KagemushaReceiverAcknowledgementPayloadV2 {
+            operation_id: transition.operation_id,
+            recipient_request_digest: request.digest().expect("request digest"),
+            payment_bundle_digest: bundle.digest().expect("bundle digest"),
+            recipient_commitment: request.recipient_output().note_commitment,
+            accepted_at_ms,
+            receiver_device_id: request.receiver_device_id().to_owned(),
+            receiver_key_reference: kagemusha_receiver_key_reference_v2(
+                request.receiver_public_key(),
+            )
+            .expect("receiver key reference"),
+            receiver_public_key: *request.receiver_public_key(),
+        };
+        let signature = sign(
+            receiver_key,
+            &payload
+                .signing_bytes()
+                .expect("acknowledgement signing bytes"),
+        );
+        KagemushaReceiverAcknowledgementV2 { payload, signature }
+    }
+
     #[test]
     fn device_public_key_accepts_only_canonical_uncompressed_p256() {
         let key = signing_key(7);
@@ -7836,6 +8074,42 @@ mod device_authority_p256_tests {
             signature
                 .verify(&device_public_key(&wrong_key), message)
                 .is_err()
+        );
+    }
+
+    #[test]
+    fn recipient_payment_request_expiry_is_exclusive() {
+        let issued_at_ms = 1_800_000_000_000;
+        let expires_at_ms = issued_at_ms + 30_000;
+        let request = recipient_payment_request(&signing_key(11), issued_at_ms, expires_at_ms);
+
+        request
+            .validate_at(issued_at_ms)
+            .expect("request is valid at issuance");
+        request
+            .validate_at(expires_at_ms - 1)
+            .expect("request is valid immediately before expiry");
+        assert!(request.validate_at(issued_at_ms - 1).is_err());
+        assert!(request.validate_at(expires_at_ms).is_err());
+        assert!(request.validate_at(expires_at_ms + 1).is_err());
+    }
+
+    #[test]
+    fn receiver_acknowledgement_expiry_is_exclusive() {
+        let issued_at_ms = 1_800_000_000_000;
+        let expires_at_ms = issued_at_ms + 30_000;
+        let receiver_key = signing_key(12);
+        let request = recipient_payment_request(&receiver_key, issued_at_ms, expires_at_ms);
+        let bundle = recipient_payment_bundle(&request);
+
+        receiver_acknowledgement(&receiver_key, &request, &bundle, expires_at_ms - 1)
+            .validate_for_payment_v4(&request, &bundle)
+            .expect("acknowledgement is valid immediately before expiry");
+        assert!(
+            receiver_acknowledgement(&receiver_key, &request, &bundle, expires_at_ms)
+                .validate_for_payment_v4(&request, &bundle)
+                .is_err(),
+            "acknowledgement at the exclusive expiry must fail closed",
         );
     }
 
@@ -8044,7 +8318,7 @@ impl KagemushaReceiverAcknowledgementV2 {
             || self.payload.receiver_key_reference != recipient_request.recipient_key_reference
             || self.payload.receiver_device_id != recipient_request.receiver_device_id
             || self.payload.receiver_public_key != recipient_request.receiver_public_key
-            || self.payload.accepted_at_ms > recipient_request.expires_at_ms
+            || self.payload.accepted_at_ms >= recipient_request.expires_at_ms
             || self.payload.accepted_at_ms < recipient_request.issued_at_ms
         {
             return Err(KagemushaValidationError::InvalidRecursiveSpendProof {

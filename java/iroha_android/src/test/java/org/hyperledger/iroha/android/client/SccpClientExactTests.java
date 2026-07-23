@@ -25,6 +25,7 @@ import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.sccp.SccpLaneIdV1;
 import org.hyperledger.iroha.android.sccp.SccpNetworkV1;
 import org.hyperledger.iroha.android.sccp.SccpV1;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.norito.CRC64;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.hyperledger.iroha.norito.SchemaHash;
@@ -185,7 +186,7 @@ public final class SccpClientExactTests {
 
   private static void submitAuthorityRequiresExactTairaDiscriminant() throws Exception {
     final AccountAddress address =
-        AccountAddress.fromAccount(fill(32, 0x41), "ed25519");
+        AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x41), "ed25519");
     final String tairaAuthority =
         address.toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     final String artifact = canonicalArtifact();
@@ -1996,7 +1997,7 @@ public final class SccpClientExactTests {
 
   private static String canonicalAuthority(final int keyByte) {
     try {
-      return AccountAddress.fromAccount(fill(32, keyByte), "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(keyByte), "ed25519")
           .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new ExceptionInInitializerError(ex);

@@ -4,6 +4,7 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.junit.Test;
 
 /** Tests typed visibility-aware alias read DTOs. */
@@ -119,9 +120,7 @@ public final class AccountAliasReadModelsTests {
   }
 
   private static String account() throws Exception {
-    final byte[] key = new byte[32];
-    Arrays.fill(key, (byte) 0x22);
-    return AccountAddress.fromAccount(key, "ed25519")
+    return AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x22), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 

@@ -12,7 +12,7 @@ import java.util.Objects;
 public final class KagemushaNfcProtocol {
   public static final byte[] AID =
       new byte[] {(byte) 0xF0, 0x50, 0x4B, 0x45, 0x50, 0x4B, 0x52, 0x4E, 0x46, 0x43, 0x01};
-  public static final String AID_HEX = "F0504B45504B524E464301";
+  public static final String AID_HEX = IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
   public static final int RAW_TRANSPORT_VERSION = 4;
   public static final int SAFE_CHUNK_BYTES = 220;
   public static final int MAX_EXTENDED_READ_CHUNK_BYTES = 1024;

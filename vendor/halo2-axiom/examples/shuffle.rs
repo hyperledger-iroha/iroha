@@ -3,7 +3,7 @@ use halo2_axiom as halo2_proofs;
 use halo2_proofs::{
     arithmetic::Field,
     circuit::{Layouter, SimpleFloorPlanner, Value},
-    dev::{metadata, FailureLocation, MockProver},
+    dev::{FailureLocation, MockProver, metadata},
     plonk::*,
     poly::{
         commitment::ParamsProver,

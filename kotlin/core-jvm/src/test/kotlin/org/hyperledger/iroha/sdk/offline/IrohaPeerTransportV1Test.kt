@@ -26,15 +26,15 @@ import kotlin.test.assertTrue
 class IrohaPeerTransportV1Test {
     @Test
     fun `wire and QR custom limits cannot exceed V1 hard ceilings`() {
-        IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 12_288)
+        IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_576)
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 12_288)
+            IrohaPeerWireLimitsV1(32 * 1_024 + 1, 24_576, 24_576)
         }
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 12_288)
+            IrohaPeerWireLimitsV1(32 * 1_024, 24_577, 24_576)
         }
         assertFailsWith<IllegalArgumentException> {
-            IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 12_289)
+            IrohaPeerWireLimitsV1(32 * 1_024, 24_576, 24_577)
         }
 
         IrohaPeerQRScanLimitsV1(3, 12, 3_072, 30_000, 180_000)
@@ -216,16 +216,7 @@ class IrohaPeerTransportV1Test {
     @Test
     fun `Kagemusha adapter wraps verified bounded wire message`() {
         assertEquals(0x0102, IrohaPeerKagemushaAdapterV1.NATIVE_ARCHIVE_SCHEMA_VERSION)
-        val body = byteArrayOf(0x51)
-        val archive = NoritoHeader(
-            SchemaHash.hash16(
-                "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
-            ),
-            body.size,
-            CRC64.compute(body),
-            NoritoHeader.COMPACT_LEN,
-            NoritoHeader.COMPRESSION_NONE,
-        ).encode() + ByteArray(8) + body
+        val archive = portableOfferFixture()
         val typed = KagemushaPeerPayload.decode(
             archive,
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
@@ -238,6 +229,8 @@ class IrohaPeerTransportV1Test {
         assertEquals(0x0102, wrapped.canonicalPayload.schemaVersion)
         assertContentEquals(archive, wrapped.canonicalPayload.bytes)
         assertContentEquals(archive, IrohaPeerKagemushaAdapterV1.decode(wrapped).archive())
+        assertEquals(14_005, archive.size)
+        assertEquals(14_089, wrapped.encode().size)
 
         val tooSmall = IrohaPeerWireLimitsV1(
             maximumCanonicalBytes = 32 * 1024,
@@ -690,7 +683,7 @@ class IrohaPeerTransportV1Test {
     fun `first release profile schemas and retail twenty four KiB body bound are enforced`() {
         assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES)
         assertEquals(24_576, IrohaPeerWireLimitsV1.PEER_V1.maximumOfflineNoteEncodedBytes)
-        assertEquals(12_288, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES)
+        assertEquals(24_576, IrohaPeerWireMessageV1.MAXIMUM_KAGEMUSHA_ENCODED_BYTES)
 
         val boundary = IrohaPeerWireMessageV1(IrohaPeerCanonicalPayload(
             IrohaPeerPayloadProfile.OFFLINE_NOTE,
@@ -1100,6 +1093,21 @@ class IrohaPeerTransportV1Test {
             val candidate = current.resolve("fixtures/offline/kagemusha_peer_transport_v2.json")
             if (Files.isRegularFile(candidate)) return candidate
             current = current.parent ?: error("kagemusha_peer_transport_v2.json was not found")
+        }
+    }
+
+    private fun portableOfferFixture(): ByteArray {
+        var current = Paths.get("").toAbsolutePath()
+        while (true) {
+            val candidate = current.resolve(
+                "crates/connect_norito_bridge/tests/fixtures/offline_recipient_receive_offer_v2.hex",
+            )
+            if (Files.isRegularFile(candidate)) {
+                val hex = Files.readAllBytes(candidate).toString(Charsets.US_ASCII)
+                    .filterNot(Char::isWhitespace)
+                return hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+            }
+            current = current.parent ?: error("portable recipient receive offer fixture was not found")
         }
     }
 

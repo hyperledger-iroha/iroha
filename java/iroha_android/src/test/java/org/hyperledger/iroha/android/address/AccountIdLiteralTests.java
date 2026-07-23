@@ -1,6 +1,6 @@
 package org.hyperledger.iroha.android.address;
 
-import java.util.Arrays;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.junit.Test;
 
 public final class AccountIdLiteralTests {
@@ -56,8 +56,7 @@ public final class AccountIdLiteralTests {
 
   @Test
   public void rejectsMalformedAndHexLiterals() throws Exception {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) 0x44);
+    final byte[] publicKey = TestEd25519Keys.publicKey(0x44);
     final AccountAddress address = AccountAddress.fromAccount(publicKey, "ed25519");
     try {
       AccountIdLiteral.requireCanonicalI105Address("malformed-i105", "accountId");
@@ -86,9 +85,7 @@ public final class AccountIdLiteralTests {
   }
 
   private static String sampleI105(final int fill) throws Exception {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) fill);
-    return AccountAddress.fromAccount(publicKey, "ed25519")
+    return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 }

@@ -27,7 +27,6 @@ if "${PYTHON_BIN}" - <<'PY' >/dev/null 2>&1; then
 import importlib.util
 raise SystemExit(0 if importlib.util.find_spec("papermill") else 1)
 PY
-then
   "${PYTHON_BIN}" -m papermill \
     "${NOTEBOOK}" \
     "${OUTPUT_NOTEBOOK}" \

@@ -1184,6 +1184,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         let executableField = try field(&payloadReader, "executable")
         let ttlField = try field(&payloadReader, "ttl")
         let nonceField = try field(&payloadReader, "nonce")
+        let feePaymentField = try field(&payloadReader, "fee payment")
         let metadataField = try field(&payloadReader, "metadata")
         try finish(payloadReader, "transaction payload")
 
@@ -1194,6 +1195,7 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         }
         try validateOption(ttlField, valueLength: 8, field: "ttl")
         try validateOption(nonceField, valueLength: 4, field: "nonce")
+        try validateFeePayment(feePaymentField)
         try validateMetadata(metadataField)
         let validated = try TransactionInputValidator.validate(
             chainId: chainId,
@@ -1331,6 +1333,159 @@ private enum KagemushaDeviceAttestationSignedTransactionInspector {
         default:
             throw invalid(name)
         }
+    }
+
+    private static func validateFeePayment(_ data: Data) throws {
+        var intent = CanonicalNoritoReader(data: data)
+        let tag = try intent.readUInt32LE()
+        let body = try field(&intent, "fee payment value")
+        try finish(intent, "fee payment")
+
+        var value = CanonicalNoritoReader(data: body)
+        switch tag {
+        case 0:
+            try validateFeeChargeLimits(field(&value, "fee payment charge limits"))
+            try validateFeeGasLimit(field(&value, "fee payment gas limit"))
+        case 1:
+            try validateFeeSponsorProgram(field(&value, "fee sponsor program"))
+            let revision = try field(&value, "fee sponsor program revision")
+            guard revision.count == 8 else { throw invalid("fee sponsor program revision") }
+            var revisionReader = CanonicalNoritoReader(data: revision)
+            guard try revisionReader.readUInt64LE() > 0 else {
+                throw invalid("fee sponsor program revision")
+            }
+            try finish(revisionReader, "fee sponsor program revision")
+            try validateFeeChargeLimits(field(&value, "fee payment charge limits"))
+            try validateFeeGasLimit(field(&value, "fee payment gas limit"))
+        default:
+            throw invalid("fee payment payer")
+        }
+        try finish(value, "fee payment value")
+    }
+
+    private static func validateFeeChargeLimits(_ data: Data) throws {
+        var limits = CanonicalNoritoReader(data: data)
+        let count = try limits.readUInt64LE()
+        guard count <= UInt64(FeeChargeKind.allCases.count) else {
+            throw invalid("fee payment charge limit count")
+        }
+        var previousKind: UInt32?
+        for _ in 0..<count {
+            var limit = CanonicalNoritoReader(
+                data: try field(&limits, "fee payment charge limit")
+            )
+            let kindField = try field(&limit, "fee payment charge kind")
+            guard kindField.count == 4 else { throw invalid("fee payment charge kind") }
+            var kind = CanonicalNoritoReader(data: kindField)
+            let rawKind = try kind.readUInt32LE()
+            guard FeeChargeKind(rawValue: rawKind) != nil,
+                  previousKind.map({ $0 < rawKind }) ?? true else {
+                throw invalid("fee payment charge kind")
+            }
+            previousKind = rawKind
+            try finish(kind, "fee payment charge kind")
+            try validateFeeAssetDefinition(
+                field(&limit, "fee payment asset definition")
+            )
+            try validateFeePositiveQuantity(
+                field(&limit, "fee payment maximum amount")
+            )
+            try finish(limit, "fee payment charge limit")
+        }
+        try finish(limits, "fee payment charge limits")
+    }
+
+    private static func validateFeeAssetDefinition(_ data: Data) throws {
+        var asset = CanonicalNoritoReader(data: data)
+        var bytes = Data()
+        bytes.reserveCapacity(16)
+        for _ in 0..<16 {
+            let byte = try field(&asset, "fee payment asset definition byte")
+            guard byte.count == 1, let value = byte.first else {
+                throw invalid("fee payment asset definition")
+            }
+            bytes.append(value)
+        }
+        guard AssetDefinitionAddress.encode(uuidBytes: bytes) != nil else {
+            throw invalid("fee payment asset definition")
+        }
+        try finish(asset, "fee payment asset definition")
+    }
+
+    private static func validateFeePositiveQuantity(_ data: Data) throws {
+        var quantity = CanonicalNoritoReader(data: data)
+        var mantissa = CanonicalNoritoReader(
+            data: try field(&quantity, "fee payment maximum mantissa")
+        )
+        let byteCount = try mantissa.readUInt32LE()
+        guard byteCount > 0, byteCount <= UInt32(CanonicalNorito.maxBigIntBytes) else {
+            throw invalid("fee payment maximum mantissa")
+        }
+        let bytes = try mantissa.readBytes(Int(byteCount))
+        guard bytes.contains(where: { $0 != 0 }),
+              let mostSignificant = bytes.last,
+              mostSignificant & 0x80 == 0,
+              bytes.count == 1 || mostSignificant != 0
+                  || (bytes[bytes.count - 2] & 0x80) != 0 else {
+            throw invalid("fee payment maximum mantissa")
+        }
+        try finish(mantissa, "fee payment maximum mantissa")
+
+        let scaleField = try field(&quantity, "fee payment maximum scale")
+        guard scaleField.count == 4 else { throw invalid("fee payment maximum scale") }
+        var scale = CanonicalNoritoReader(data: scaleField)
+        guard try scale.readUInt32LE() <= CanonicalNorito.maxNumericScale else {
+            throw invalid("fee payment maximum scale")
+        }
+        try finish(scale, "fee payment maximum scale")
+        try finish(quantity, "fee payment maximum amount")
+    }
+
+    private static func validateFeeGasLimit(_ data: Data) throws {
+        var gas = CanonicalNoritoReader(data: data)
+        switch try gas.readUInt8() {
+        case 0:
+            break
+        case 1:
+            let value = try field(&gas, "fee payment gas limit")
+            guard value.count == 8 else { throw invalid("fee payment gas limit") }
+            var valueReader = CanonicalNoritoReader(data: value)
+            guard try valueReader.readUInt64LE() > 0 else {
+                throw invalid("fee payment gas limit")
+            }
+            try finish(valueReader, "fee payment gas limit")
+        default:
+            throw invalid("fee payment gas limit")
+        }
+        try finish(gas, "fee payment gas limit")
+    }
+
+    private static func validateFeeSponsorProgram(_ data: Data) throws {
+        var program = CanonicalNoritoReader(data: data)
+        try validateFeeSponsorController(field(&program, "fee sponsor account"))
+        let name = try canonicalString(
+            field(&program, "fee sponsor program name"),
+            field: "fee sponsor program name"
+        )
+        guard !name.isEmpty,
+              name == name.precomposedStringWithCanonicalMapping,
+              name.unicodeScalars.allSatisfy({ scalar in
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
+              }) else {
+            throw invalid("fee sponsor program name")
+        }
+        try finish(program, "fee sponsor program")
+    }
+
+    private static func validateFeeSponsorController(_ data: Data) throws {
+        var controller = CanonicalNoritoReader(data: data)
+        let tag = try controller.readUInt32LE()
+        let body = try field(&controller, "fee sponsor account controller")
+        guard tag == 0 || tag == 1, !body.isEmpty else {
+            throw invalid("fee sponsor account controller")
+        }
+        try finish(controller, "fee sponsor account controller")
     }
 
     private static func validateMetadata(_ data: Data) throws {

@@ -54,7 +54,10 @@ if [[ -n "${ARCHIVE_PATH}" ]]; then
     --archive "${ARCHIVE_PATH_ABS}" \
     --out-dir "${EXTRACT_DIR}" \
     --meta-out "${META_FILE}"
-  mapfile -t archive_info < <(python3 - "${META_FILE}" <<'PY'
+  archive_info=()
+  while IFS= read -r archive_line; do
+    archive_info+=("${archive_line}")
+  done < <(python3 - "${META_FILE}" <<'PY'
 import json
 import sys
 

@@ -13,6 +13,7 @@ import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.client.transport.StreamingTransportExecutor
 import org.hyperledger.iroha.sdk.client.transport.TransportStreamResponse
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
@@ -24,8 +25,8 @@ private const val MANIFEST_ID_HEX =
     "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 private const val PROVIDER_ID_HEX =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-private const val GATEWAY_PUBLIC_KEY_HEX =
-    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+private val GATEWAY_PUBLIC_KEY_HEX = TestEd25519Keys.publicKeyHex(0x2B)
+private val ED25519_IDENTITY_KEY_HEX = "01" + "00".repeat(31)
 private const val MANIFEST_CID_HEX =
     "cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 private const val CHUNKER_HANDLE = "sorafs.sf1@1.0.0"
@@ -75,6 +76,19 @@ class SorafsGatewayCanonicalInputTest {
                 "alpha",
                 PROVIDER_ID_HEX,
                 value,
+                "https://provider.example/",
+                STREAM_TOKEN_BASE64,
+            )
+        }
+    }
+
+    @Test
+    fun providerRejectsSmallOrderGatewayPublicKey() {
+        assertThrows(IllegalArgumentException::class.java) {
+            GatewayProvider(
+                "alpha",
+                PROVIDER_ID_HEX,
+                ED25519_IDENTITY_KEY_HEX,
                 "https://provider.example/",
                 STREAM_TOKEN_BASE64,
             )
@@ -421,6 +435,61 @@ class SorafsGatewayCanonicalInputTest {
 
         assertEquals(MANIFEST_ID_HEX, summary.manifestIdHex)
         assertEquals(CHUNKER_HANDLE, summary.chunkerHandle)
+        assertEquals(0, summary.chunkCount)
+        assertEquals(0, summary.contentLength)
+        assertEquals(0, summary.assembledBytes)
+    }
+
+    @Test
+    fun summaryRejectsNegativeUnsignedCounters() {
+        val rootFields = listOf(
+            "chunk_count",
+            "content_length",
+            "assembled_bytes",
+            "anonymity_soranet_selected",
+            "anonymity_pq_selected",
+            "anonymity_classical_selected",
+        )
+        for (field in rootFields) {
+            assertThrows(SorafsStorageException::class.java) {
+                GatewayFetchSummary.fromJsonBytes(
+                    summaryJson(MANIFEST_ID_HEX, CHUNKER_HANDLE, mapOf(field to -1))
+                        .toByteArray(Charsets.UTF_8),
+                )
+            }
+        }
+
+        for (field in listOf("successes", "failures")) {
+            val report = linkedMapOf<String, Any>(
+                "provider" to "alpha",
+                "successes" to 0,
+                "failures" to 0,
+                "disabled" to false,
+            ).apply { this[field] = -1 }
+            assertThrows(SorafsStorageException::class.java) {
+                GatewayFetchSummary.fromJsonBytes(
+                    summaryJson(
+                        MANIFEST_ID_HEX,
+                        CHUNKER_HANDLE,
+                        mapOf("provider_reports" to listOf(report)),
+                    ).toByteArray(Charsets.UTF_8),
+                )
+            }
+        }
+
+        assertThrows(SorafsStorageException::class.java) {
+            GatewayFetchSummary.fromJsonBytes(
+                summaryJson(
+                    MANIFEST_ID_HEX,
+                    CHUNKER_HANDLE,
+                    mapOf(
+                        "chunk_receipts" to listOf(
+                            mapOf("chunk_index" to 0, "provider" to "alpha", "attempts" to -1),
+                        ),
+                    ),
+                ).toByteArray(Charsets.UTF_8),
+            )
+        }
     }
 
     companion object {
@@ -622,7 +691,11 @@ private fun sampleRequest(): GatewayFetchRequest = GatewayFetchRequest(
     providers = listOf(sampleProvider()),
 )
 
-private fun summaryJson(manifestIdHex: String, chunkerHandle: String): String = JsonWriter.encode(
+private fun summaryJson(
+    manifestIdHex: String,
+    chunkerHandle: String,
+    overrides: Map<String, Any?> = emptyMap(),
+): String = JsonWriter.encode(
     linkedMapOf<String, Any?>(
         "manifest_id_hex" to manifestIdHex,
         "chunker_handle" to chunkerHandle,
@@ -646,5 +719,5 @@ private fun summaryJson(manifestIdHex: String, chunkerHandle: String): String = 
         "anonymity_brownout" to false,
         "anonymity_brownout_effective" to false,
         "anonymity_uses_classical" to false,
-    ),
+    ).apply { putAll(overrides) },
 )

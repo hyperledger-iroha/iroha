@@ -31,6 +31,222 @@ public struct IrohaPeerNfcReaderRetryPolicyV1: Equatable, Sendable {
     }
 }
 
+/// Classifies the two selection responses an HCE peer can emit while its
+/// CardSession is still arming. Retrying is deliberately limited to SELECT:
+/// the same status words from value-moving commands remain terminal protocol
+/// failures, while the reader's contact-attempt gate bounds startup retries.
+enum IrohaPeerNfcStartupResponseRetryPolicyV1 {
+    static func shouldRetry(
+        _ response: IrohaPeerNfcAPDUResponseV1,
+        for command: IrohaPeerNfcCommandV1
+    ) -> Bool {
+        guard case .selectApplication = command else { return false }
+        switch response.statusWord {
+        case .notFound, .conditionsNotSatisfied:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+/// The platform-independent deadline used by the Core NFC adapters. The
+/// operation may finish after the caller has timed out; its late value is
+/// discarded (and optionally cleaned up) instead of being installed into a
+/// later NFC operation.
+enum IrohaPeerNfcOperationDeadlineErrorV1: Error, Equatable, Sendable {
+    case timedOut
+}
+
+private final class IrohaPeerNfcDeadlineRaceV1<Value: Sendable>:
+    @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Value, Error>?
+    private var pendingResult: Result<Value, Error>?
+    private var timeoutTask: Task<Void, Never>?
+    private var resolved = false
+
+    func install(_ continuation: CheckedContinuation<Value, Error>) {
+        lock.lock()
+        if let pendingResult {
+            lock.unlock()
+            continuation.resume(with: pendingResult)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    func installTimeoutTask(_ task: Task<Void, Never>) {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            task.cancel()
+            return
+        }
+        timeoutTask = task
+        lock.unlock()
+    }
+
+    @discardableResult
+    func resolve(
+        _ result: Result<Value, Error>,
+        cancelTimeout: Bool,
+        beforeResumeIfWon: (() -> Void)? = nil
+    ) -> Bool {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return false
+        }
+        resolved = true
+        let timeoutToCancel = cancelTimeout ? timeoutTask : nil
+        timeoutTask = nil
+        let continuationToResume = continuation
+        self.continuation = nil
+        if continuationToResume == nil {
+            pendingResult = result
+        }
+        lock.unlock()
+        timeoutToCancel?.cancel()
+        beforeResumeIfWon?()
+        continuationToResume?.resume(with: result)
+        return true
+    }
+}
+
+/// Races an asynchronous platform call against a fixed deadline without
+/// structurally waiting for a platform callback that ignores cancellation.
+func irohaPeerNfcWithDeadlineV1<Value: Sendable>(
+    timeoutNanoseconds: UInt64,
+    operation: @escaping @Sendable () async throws -> Value,
+    onTimeout: @escaping @Sendable () -> Void = {},
+    onCancel: @escaping @Sendable () -> Void = {},
+    onDiscardedSuccess: @escaping @Sendable (Value) -> Void = { _ in }
+) async throws -> Value {
+    precondition(timeoutNanoseconds > 0)
+    let race = IrohaPeerNfcDeadlineRaceV1<Value>()
+    return try await withTaskCancellationHandler {
+        try Task.checkCancellation()
+        return try await withCheckedThrowingContinuation { continuation in
+            race.install(continuation)
+            let timeoutTask = Task.detached {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                } catch {
+                    return
+                }
+                race.resolve(
+                    .failure(IrohaPeerNfcOperationDeadlineErrorV1.timedOut),
+                    cancelTimeout: false,
+                    beforeResumeIfWon: onTimeout
+                )
+            }
+            race.installTimeoutTask(timeoutTask)
+            Task.detached {
+                let result: Result<Value, Error>
+                do {
+                    result = .success(try await operation())
+                } catch {
+                    result = .failure(error)
+                }
+                guard race.resolve(result, cancelTimeout: true) else {
+                    if case .success(let value) = result {
+                        onDiscardedSuccess(value)
+                    }
+                    return
+                }
+            }
+        }
+    } onCancel: {
+        race.resolve(
+            .failure(CancellationError()),
+            cancelTimeout: true,
+            beforeResumeIfWon: onCancel
+        )
+    }
+}
+
+/// Cancellation token for a multi-await platform operation. A deadline closes
+/// the token before resuming its caller, so a late callback cannot issue a
+/// retry or install state after the timeout has won.
+final class IrohaPeerNfcAsyncOperationGateV1: @unchecked Sendable {
+    private let lock = NSLock()
+    private var active = true
+
+    func validate() throws {
+        lock.lock()
+        let isActive = active
+        lock.unlock()
+        guard isActive else { throw CancellationError() }
+    }
+
+    func invalidate() {
+        lock.lock()
+        active = false
+        lock.unlock()
+    }
+}
+
+/// A monotonic, non-extending timeout budget used across assertion acquisition,
+/// CardSession construction, and initial emulation startup.
+struct IrohaPeerNfcDeadlineBudgetV1: Sendable {
+    private let deadlineNanoseconds: UInt64
+
+    init(timeoutMilliseconds: UInt64, nowNanoseconds: UInt64) {
+        let duration = timeoutMilliseconds.multipliedReportingOverflow(by: 1_000_000)
+        precondition(!duration.overflow && duration.partialValue > 0)
+        let deadline = nowNanoseconds.addingReportingOverflow(duration.partialValue)
+        deadlineNanoseconds = deadline.overflow ? UInt64.max : deadline.partialValue
+    }
+
+    func remainingNanoseconds(nowNanoseconds: UInt64) -> UInt64 {
+        guard nowNanoseconds < deadlineNanoseconds else { return 0 }
+        return deadlineNanoseconds - nowNanoseconds
+    }
+}
+
+/// One-shot startup signal shared by CardSession creation and its event loop.
+/// A stop, startup failure, and successful emulation race through one result.
+final class IrohaPeerNfcAsyncSignalV1: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var pendingResult: Result<Void, Error>?
+    private var resolved = false
+
+    func wait() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.lock()
+            if let pendingResult {
+                lock.unlock()
+                continuation.resume(with: pendingResult)
+            } else {
+                self.continuation = continuation
+                lock.unlock()
+            }
+        }
+    }
+
+    @discardableResult
+    func resolve(_ result: Result<Void, Error>) -> Bool {
+        lock.lock()
+        guard !resolved else {
+            lock.unlock()
+            return false
+        }
+        resolved = true
+        pendingResult = result
+        if let continuation {
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(with: result)
+        } else {
+            lock.unlock()
+        }
+        return true
+    }
+}
+
 /// Stable progress stages for a first-release IPM1 NFC exchange.
 public enum IrohaPeerNfcProgressStageV1: String, CaseIterable, Sendable {
     case phase1SessionActive = "phase1_session_active"
@@ -218,6 +434,21 @@ final class IrohaPeerNfcRetryGateV1: @unchecked Sendable {
         guard attempts < policy.maximumContactAttempts else { return false }
         attempts += 1
         return true
+    }
+
+    enum InvalidDetectionDisposition: Equatable, Sendable {
+        case retry
+        case exhausted
+    }
+
+    /// Invalid and multi-tag detections spend the same physical-contact budget
+    /// as a valid ISO 7816 detection. This prevents an endless restart loop.
+    func recordInvalidDetection() -> InvalidDetectionDisposition {
+        lock.lock()
+        defer { lock.unlock() }
+        guard attempts < policy.maximumContactAttempts else { return .exhausted }
+        attempts += 1
+        return attempts < policy.maximumContactAttempts ? .retry : .exhausted
     }
 
     /// Claims the operation's connect slot before consuming a retry. Callers

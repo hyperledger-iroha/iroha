@@ -207,7 +207,7 @@ _CORRIDOR_SUMMARY_FIELDS = (
     "log",
     "command",
 )
-_PRODUCTION_TEST_COUNT = 509
+_PRODUCTION_TEST_COUNT = 515
 _PRODUCTION_MODULES = (
     (
         "production-kura-progress-durability",
@@ -244,15 +244,15 @@ _PRODUCTION_MODULES = (
         "sumeragi::evidence::tests",
         1,
     ),
-    ("production-v2-adapter", "sumeragi::v2::tests", 42),
+    ("production-v2-adapter", "sumeragi::v2::tests", 43),
     ("production-v2-block-sync", "sumeragi::v2_block_sync::tests", 3),
     ("production-v2-apply", "sumeragi::v2_apply::tests", 1),
     ("production-v2-effects", "sumeragi::v2_effects::tests", 59),
-    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 29),
+    ("production-v2-lane-work", "sumeragi::v2_lane_work::tests", 30),
     ("production-v2-runtime", "sumeragi::v2_runtime::tests", 37),
     ("production-v2-transport", "sumeragi::v2_transport::tests", 1),
-    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 3),
-    ("production-v2-runner", "sumeragi::v2_runner::tests", 26),
+    ("production-v2-recovery", "sumeragi::v2_recovery::tests", 4),
+    ("production-v2-runner", "sumeragi::v2_runner::tests", 27),
     ("production-v2-worker", "sumeragi::v2_worker::tests", 53),
     (
         "production-v2-watchdog",
@@ -267,7 +267,7 @@ _PRODUCTION_MODULES = (
     (
         "production-data-model-v2-finality",
         "block::consensus_v2::finality::tests",
-        1,
+        2,
     ),
     (
         "production-data-model-offline-compact-qc",
@@ -282,7 +282,7 @@ _PRODUCTION_MODULES = (
     (
         "production-v2-integration-runner",
         "sumeragi_v2_runner",
-        4,
+        5,
     ),
     (
         "production-p2p-peer-reliable-flush",

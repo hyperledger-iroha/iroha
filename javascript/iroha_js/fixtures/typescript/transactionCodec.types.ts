@@ -57,8 +57,17 @@ const validated: Readonly<ValidatedBrowserTransactionSignable> =
   validateBrowserTransferSignable(signable);
 const waitOptions: NexusWaitFinalizeOptions = {
   wait: true,
-  successStatuses: new Set(["Committed"]),
   signal: new AbortController().signal,
+};
+const removedWaitScope: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error finality waits are global-only.
+  scope: "global",
+};
+const invalidSuccessOverride: NexusWaitFinalizeOptions = {
+  wait: true,
+  // @ts-expect-error the success state is immutable and exact Applied.
+  successStatuses: new Set(["Committed"]),
 };
 const noWaitOptions: NexusNoWaitFinalizeOptions = { wait: false };
 const finalizeOptions: readonly NexusFinalizeOptions[] = [
@@ -81,5 +90,6 @@ void stronglyTypedBatchPayload;
 void codecPayload;
 void validated;
 void finalizeOptions;
+void removedWaitScope;
 void submittedErrorContext;
 void invalidNoWaitOptions;

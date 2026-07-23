@@ -85,8 +85,10 @@ pub mod isi {
             },
         },
         governance::types::{
-            AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ParliamentBody,
-            ProposalKind, RuntimeUpgradeProposal, SccpRouteGovernanceProposal,
+            AbiVersion, AtWindow, ContractAbiHash, ContractCodeHash, DeployContractProposal,
+            GovernanceFinalizationEvidence, ParliamentBody, ProposalKind, RuntimeUpgradeProposal,
+            SccpRouteGovernanceProposal, ValidationFeePayoutLifecycleProposal,
+            ValidationFeePolicyProposal,
         },
         isi::{
             bridge, consensus_keys, endorsement,
@@ -124,6 +126,12 @@ pub mod isi {
             soracloud_fhe_full_bootstrap_execution_proof_public_inputs_schema_hash_v1,
             soracloud_fhe_full_bootstrap_material_proof_public_inputs_schema_hash_v1,
             soracloud_fhe_input_admission_public_inputs_schema_hash_v1,
+        },
+        validation_fee::{
+            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+            ValidationFeeGovernanceWindowV1, ValidationFeeParliamentAuthorizationV1,
+            ValidationFeePayoutLifecycleReferenceV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         },
         zk::{
             BackendTag, OpenVerifyEnvelope as ZkOpenVerifyEnvelope,
@@ -2515,6 +2523,30 @@ pub mod isi {
                 "no eligible citizens available for proposal-time parliament sortition".into(),
             ));
         }
+        // Bodies are independently sampled, so readiness is determined by the
+        // largest required member roster—not the sum of all seven bodies. Cross-
+        // body service is allowed and JIT snapshots do not consume persisted
+        // `max_seats_per_epoch` counters.
+        let largest_body = [
+            state_transaction.gov.rules_committee_size,
+            state_transaction.gov.agenda_council_size,
+            state_transaction.gov.interest_panel_size,
+            state_transaction.gov.review_panel_size,
+            state_transaction.gov.policy_jury_size,
+            state_transaction.gov.oversight_committee_size,
+            state_transaction.gov.fma_committee_size,
+        ]
+        .into_iter()
+        .max()
+        .unwrap_or(0);
+        if candidates.len() < largest_body {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "proposal-time parliament sortition requires at least {largest_body} eligible citizens"
+                )
+                .into(),
+            ));
+        }
         let bodies = draw::derive_parliament_bodies_from_bonded_citizens(
             &state_transaction.gov,
             &state_transaction.chain_id,
@@ -3442,6 +3474,8 @@ pub mod isi {
                 status: crate::state::GovernanceProposalStatus::Proposed,
                 pipeline,
                 parliament_snapshot,
+                finalization_evidence: None,
+                enacted_at_height: None,
             };
             state_transaction.world.governance_proposals.insert(id, rec);
 
@@ -3670,6 +3704,8 @@ pub mod isi {
                     status: crate::state::GovernanceProposalStatus::Proposed,
                     pipeline,
                     parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
                 },
             );
 
@@ -3813,6 +3849,8 @@ pub mod isi {
                     status: crate::state::GovernanceProposalStatus::Proposed,
                     pipeline,
                     parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
                 },
             );
 
@@ -3825,6 +3863,536 @@ pub mod isi {
                     },
                 ),
             ));
+            Ok(())
+        }
+    }
+
+    fn validation_fee_policy_registry(
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<ValidationFeePolicyRegistryV1>, Error> {
+        let Some(custom) = state_transaction
+            .world
+            .parameters()
+            .custom()
+            .get(&ValidationFeePolicyRegistryV1::parameter_id())
+        else {
+            return Ok(None);
+        };
+        let registry =
+            ValidationFeePolicyRegistryV1::from_custom_parameter(custom).ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee policy registry is malformed".into(),
+                )
+            })?;
+        registry.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("validation-fee policy registry is invalid: {error}").into(),
+            )
+        })?;
+        Ok(Some(registry))
+    }
+
+    fn validate_validation_fee_policy_proposal(
+        policy: &ValidationFeePolicyV1,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<ValidationFeePolicyRegistryV1>, Error> {
+        if let Some(reason) = policy.policy_invariant_error() {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!("invalid validation-fee policy: {reason}").into(),
+                ),
+            ));
+        }
+        if policy.charging_mode
+            == iroha_data_model::validation_fee::ValidationFeeChargingMode::PerQualifyingTransferInstruction
+            && policy.treasury_payout_binding.is_none()
+        {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "enabled validation-fee policy requires the exact first-release payout binding"
+                        .into(),
+                ),
+            ));
+        }
+        if policy.chain_id != state_transaction.chain_id {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "validation-fee policy targets a different chain".into(),
+                ),
+            ));
+        }
+        let Some(genesis_hash) = state_transaction
+            .block_hashes()
+            .first()
+            .map(|hash| *hash.as_ref())
+        else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee policy cannot be genesis-bound before genesis is committed".into(),
+            ));
+        };
+        if policy.genesis_hash != genesis_hash {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "validation-fee policy genesis hash mismatch".into(),
+                ),
+            ));
+        }
+        if policy.ds_asset_id == state_transaction.gov.voting_asset_id {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "validation-fee asset must differ from the governance voting asset".into(),
+                ),
+            ));
+        }
+        let asset_definition = state_transaction
+            .world
+            .asset_definition(&policy.ds_asset_id)
+            .map_err(Error::from)?;
+        if asset_definition.spec().scale() != Some(u32::from(policy.ds_scale)) {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "validation-fee asset numeric scale differs from policy".into(),
+                ),
+            ));
+        }
+        state_transaction
+            .world
+            .account(&policy.treasury_account_id)
+            .map_err(Error::from)?;
+
+        if let Some(binding) = policy.treasury_payout_binding.as_ref() {
+            if binding.treasury_account_id != policy.treasury_account_id
+                || binding.sbd_asset_id != policy.ds_asset_id
+                || binding.contract_address.subject_id() != policy.treasury_account_id
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee treasury payout binding differs from policy".into(),
+                    ),
+                ));
+            }
+        }
+
+        let registry = validation_fee_policy_registry(state_transaction)?;
+        match registry
+            .as_ref()
+            .and_then(ValidationFeePolicyRegistryV1::head)
+        {
+            None => {
+                if policy.policy_version != 1 || policy.previous_policy_hash.is_some() {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "initial validation-fee policy must be version 1 without a predecessor"
+                                .into(),
+                        ),
+                    ));
+                }
+            }
+            Some(head) => {
+                let expected_version =
+                    head.policy.policy_version.checked_add(1).ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "validation-fee policy version overflow".into(),
+                        )
+                    })?;
+                if policy.policy_version != expected_version
+                    || policy.previous_policy_hash != Some(head.policy_hash)
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee policy predecessor is stale or non-contiguous".into(),
+                        ),
+                    ));
+                }
+                if policy.effective_from_height < head.policy.effective_from_height {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee policy effective height cannot move backwards".into(),
+                        ),
+                    ));
+                }
+            }
+        }
+        Ok(registry)
+    }
+
+    impl Execute for gov::ProposeValidationFeePolicy {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if resolve_governance_approval_mode(state_transaction)
+                != GovernanceApprovalMode::ParliamentSortitionJit
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee policy proposals require Parliament JIT sortition".into(),
+                ));
+            }
+            let required_bond = &state_transaction.gov.citizenship_bond_amount;
+            let bonded_citizen = state_transaction
+                .world
+                .citizens
+                .get(authority)
+                .is_some_and(|record| &record.amount >= required_bond);
+            if !bonded_citizen {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a currently bonded citizen may propose a validation-fee policy".into(),
+                ));
+            }
+            let _ = validate_validation_fee_policy_proposal(&self.policy, state_transaction)?;
+            match (
+                self.policy.treasury_payout_binding.as_ref(),
+                self.payout_lifecycle_proposal_id,
+            ) {
+                (Some(_), Some(id)) if id != [0; 32] => {}
+                (None, None) => {}
+                (Some(_), _) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee payout policy must identify a non-zero payout lifecycle proposal"
+                                .into(),
+                        ),
+                    ));
+                }
+                (None, Some(_)) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee policy without a payout binding cannot identify a payout lifecycle"
+                                .into(),
+                        ),
+                    ));
+                }
+            }
+
+            let payload = ValidationFeePolicyProposal {
+                policy: self.policy.clone(),
+                payout_lifecycle_proposal_id: self.payout_lifecycle_proposal_id,
+            };
+            // Resolve the selector against protected governance state at proposal
+            // time as well as enactment time. The proposal carries no caller-made
+            // authorization evidence.
+            let _ = enacted_validation_fee_payout_lifecycle(&payload, state_transaction)?;
+            let kind = ProposalKind::ValidationFeePolicy(payload.clone());
+            let id = kind.fingerprint();
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                None | Some(gov::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                Some(gov::VotingMode::Zk) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee governance supports plain referendum voting only"
+                                .into(),
+                        ),
+                    ));
+                }
+            };
+            let now = state_transaction._curr_block.height().get();
+            let minimum_start = now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(window) = self.referendum_window {
+                if window.upper < window.lower || window.lower < minimum_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee referendum window is invalid or starts too early"
+                                .into(),
+                        ),
+                    ));
+                }
+                (window.lower, window.upper)
+            } else {
+                let end = minimum_start
+                    .saturating_add(state_transaction.gov.window_span.max(1).saturating_sub(1));
+                (minimum_start, end)
+            };
+            if self.policy.effective_from_height < start {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee policy cannot become effective before its referendum window"
+                            .into(),
+                    ),
+                ));
+            }
+            if self
+                .policy
+                .expires_after_height
+                .is_some_and(|expiry| end >= expiry)
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee referendum must close before policy expiry".into(),
+                    ),
+                ));
+            }
+
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.as_validation_fee_policy() != Some(&payload) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                let referendum = state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&rid)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "existing validation-fee proposal has no referendum".into(),
+                        )
+                    })?;
+                if referendum.h_start != start
+                    || referendum.h_end != end
+                    || referendum.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "existing referendum parameters mismatch".into(),
+                    ));
+                }
+                return Ok(());
+            }
+
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: start,
+                h_end: end,
+                status: crate::state::GovernanceReferendumStatus::Proposed,
+                mode: desired_mode,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(rid, referendum);
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                now,
+                Some(&referendum),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot =
+                Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
+            state_transaction.world.governance_proposals.insert(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height: now,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
+                },
+            );
+            state_transaction
+                .world
+                .emit_events(Some(GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                )));
+            Ok(())
+        }
+    }
+
+    impl Execute for gov::ProposeValidationFeePayoutLifecycle {
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            if resolve_governance_approval_mode(state_transaction)
+                != GovernanceApprovalMode::ParliamentSortitionJit
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle proposals require Parliament JIT sortition"
+                        .into(),
+                ));
+            }
+            let required_bond = &state_transaction.gov.citizenship_bond_amount;
+            let bonded_citizen = state_transaction
+                .world
+                .citizens
+                .get(authority)
+                .is_some_and(|record| &record.amount >= required_bond);
+            if !bonded_citizen {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "only a currently bonded citizen may propose a validation-fee payout lifecycle"
+                        .into(),
+                ));
+            }
+            if let Some(reason) = self.payout_binding.invariant_error() {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        format!("invalid validation-fee payout lifecycle: {reason}").into(),
+                    ),
+                ));
+            }
+            let derived_lifecycle_seal = self.payout_binding.lifecycle_seal().map_err(|_| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "failed to derive validation-fee payout lifecycle seal".into(),
+                ))
+            })?;
+            if derived_lifecycle_seal == [0; 32] {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee payout lifecycle binding derived an invalid zero seal"
+                            .into(),
+                    ),
+                ));
+            }
+            let sbd_definition = state_transaction
+                .world
+                .asset_definition(&self.payout_binding.sbd_asset_id)
+                .map_err(Error::from)?;
+            if sbd_definition.spec().scale()
+                != Some(u32::from(
+                    iroha_data_model::validation_fee::VALIDATION_FEE_DS_SCALE,
+                ))
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee payout lifecycle SBD asset scale must be 2".into(),
+                    ),
+                ));
+            }
+            let xor_definition = state_transaction
+                .world
+                .asset_definition(&self.payout_binding.xor_asset_id)
+                .map_err(Error::from)?;
+            if xor_definition
+                .spec()
+                .check(self.payout_binding.min_xor_out.as_numeric())
+                .is_err()
+                || xor_definition
+                    .spec()
+                    .check(self.payout_binding.max_xor_out.as_numeric())
+                    .is_err()
+            {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "validation-fee payout lifecycle XOR bounds violate the asset specification"
+                            .into(),
+                    ),
+                ));
+            }
+            for account_id in core::iter::once(&self.payout_binding.treasury_account_id)
+                .chain(core::iter::once(&self.payout_binding.pool_vault_account_id))
+                .chain(
+                    self.payout_binding
+                        .recipients
+                        .iter()
+                        .map(|recipient| &recipient.account_id),
+                )
+            {
+                state_transaction
+                    .world
+                    .account(account_id)
+                    .map_err(Error::from)?;
+            }
+
+            let payload = ValidationFeePayoutLifecycleProposal {
+                payout_binding: self.payout_binding.clone(),
+            };
+            let kind = ProposalKind::ValidationFeePayoutLifecycle(payload.clone());
+            let id = kind.fingerprint();
+            let rid = hex::encode(id);
+            let desired_mode = match self.mode {
+                None | Some(gov::VotingMode::Plain) => {
+                    crate::state::GovernanceReferendumMode::Plain
+                }
+                Some(gov::VotingMode::Zk) => {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee governance supports plain referendum voting only"
+                                .into(),
+                        ),
+                    ));
+                }
+            };
+            let now = state_transaction._curr_block.height().get();
+            let minimum_start = now.saturating_add(state_transaction.gov.min_enactment_delay);
+            let (start, end) = if let Some(window) = self.referendum_window {
+                if window.upper < window.lower || window.lower < minimum_start {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "validation-fee payout lifecycle referendum window is invalid or starts too early"
+                                .into(),
+                        ),
+                    ));
+                }
+                (window.lower, window.upper)
+            } else {
+                let end = minimum_start
+                    .saturating_add(state_transaction.gov.window_span.max(1).saturating_sub(1));
+                (minimum_start, end)
+            };
+
+            if let Some(existing) = state_transaction.world.governance_proposals.get(&id) {
+                if existing.as_validation_fee_payout_lifecycle() != Some(&payload) {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "governance proposal id collision".into(),
+                    ));
+                }
+                let referendum = state_transaction
+                    .world
+                    .governance_referenda
+                    .get(&rid)
+                    .ok_or_else(|| {
+                        InstructionExecutionError::InvariantViolation(
+                            "existing validation-fee payout lifecycle has no referendum".into(),
+                        )
+                    })?;
+                if referendum.h_start != start
+                    || referendum.h_end != end
+                    || referendum.mode != desired_mode
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "existing referendum parameters mismatch".into(),
+                    ));
+                }
+                return Ok(());
+            }
+
+            let referendum = crate::state::GovernanceReferendumRecord {
+                h_start: start,
+                h_end: end,
+                status: crate::state::GovernanceReferendumStatus::Proposed,
+                mode: desired_mode,
+            };
+            state_transaction
+                .world
+                .governance_referenda
+                .insert(rid, referendum);
+            let pipeline = crate::state::GovernancePipeline::seeded(
+                now,
+                Some(&referendum),
+                &state_transaction.gov,
+            );
+            let parliament_snapshot =
+                Some(derive_jit_parliament_snapshot(id, now, state_transaction)?);
+            state_transaction.world.governance_proposals.insert(
+                id,
+                crate::state::GovernanceProposalRecord {
+                    proposer: authority.clone(),
+                    kind,
+                    created_height: now,
+                    status: crate::state::GovernanceProposalStatus::Proposed,
+                    pipeline,
+                    parliament_snapshot,
+                    finalization_evidence: None,
+                    enacted_at_height: None,
+                },
+            );
+            state_transaction
+                .world
+                .emit_events(Some(GovernanceEvent::ProposalSubmitted(
+                    iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
+                        id,
+                        proposer: authority.clone(),
+                        contract_address: None,
+                    },
+                )));
             Ok(())
         }
     }
@@ -5223,9 +5791,12 @@ pub mod isi {
             );
         };
 
-        let already_enacted =
-            matches!(prop.status, crate::state::GovernanceProposalStatus::Enacted);
-        if !already_enacted
+        let already_terminal = matches!(
+            prop.status,
+            crate::state::GovernanceProposalStatus::Enacted
+                | crate::state::GovernanceProposalStatus::Superseded
+        );
+        if !already_terminal
             && !matches!(
                 prop.status,
                 crate::state::GovernanceProposalStatus::Approved
@@ -5235,8 +5806,64 @@ pub mod isi {
                 "proposal must be approved before enactment".into(),
             ));
         }
+        if !already_terminal
+            && !prop
+                .finalization_evidence
+                .is_some_and(|evidence| evidence.approved)
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "proposal has no approved finalization evidence".into(),
+            ));
+        }
 
-        Ok((prop, already_enacted))
+        Ok((prop, already_terminal))
+    }
+
+    fn validate_referendum_enactment_binding(
+        instruction: &gov::EnactReferendum,
+        proposal: &crate::state::GovernanceProposalRecord,
+        state_transaction: &StateTransaction<'_, '_>,
+        pid_hex: &str,
+    ) -> Result<(), Error> {
+        let expected_preimage_hash = proposal.kind.fingerprint();
+        if instruction.preimage_hash != expected_preimage_hash {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "enactment preimage_hash does not match the stored governance proposal".into(),
+                ),
+            ));
+        }
+
+        let Some(referendum) = state_transaction
+            .world
+            .governance_referenda
+            .get(pid_hex)
+            .copied()
+        else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance referendum is missing for enactment".into(),
+            ));
+        };
+        let expected_window = AtWindow {
+            lower: referendum.h_start,
+            upper: referendum.h_end,
+        };
+        if instruction.at_window != expected_window {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "enactment at_window does not match the stored referendum window".into(),
+                ),
+            ));
+        }
+
+        let current_height = state_transaction._curr_block.height().get();
+        if current_height < expected_window.lower || current_height > expected_window.upper {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "governance enactment is outside the approved referendum window".into(),
+            ));
+        }
+
+        Ok(())
     }
 
     fn parse_hex32(input: &str, what: &str) -> Result<[u8; 32], Error> {
@@ -5347,11 +5974,304 @@ pub mod isi {
             .cloned()
         {
             rec.status = crate::state::GovernanceProposalStatus::Enacted;
+            rec.enacted_at_height = Some(state_transaction._curr_block.height().get());
             state_transaction
                 .world
                 .governance_proposals
                 .insert(pid, rec);
         }
+    }
+
+    fn mark_proposal_superseded(state_transaction: &mut StateTransaction<'_, '_>, pid: [u8; 32]) {
+        if let Some(mut record) = state_transaction
+            .world
+            .governance_proposals
+            .get(&pid)
+            .cloned()
+        {
+            record.status = crate::state::GovernanceProposalStatus::Superseded;
+            state_transaction
+                .world
+                .governance_proposals
+                .insert(pid, record);
+        }
+    }
+
+    fn validation_fee_parliament_authorization(
+        proposal_id: [u8; 32],
+        proposal: &crate::state::GovernanceProposalRecord,
+        enacted_at_height: u64,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<ValidationFeeParliamentAuthorizationV1, Error> {
+        let proposal_fingerprint = proposal.kind.fingerprint();
+        if proposal_id != proposal_fingerprint {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal id differs from its exact typed fingerprint".into(),
+            ));
+        }
+        let evidence = proposal.finalization_evidence.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal has no finalization evidence".into(),
+            )
+        })?;
+        if evidence.proposal_id != proposal_id
+            || evidence.referendum_id != proposal_id
+            || !evidence.approved
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal finalization evidence is not an exact approval".into(),
+            ));
+        }
+        let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal has no parliament snapshot".into(),
+            )
+        })?;
+        if compute_parliament_roster_root(&snapshot.bodies)? != snapshot.roster_root {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal parliament roster commitment mismatch".into(),
+            ));
+        }
+        let referendum_id = hex::encode(proposal_id);
+        let referendum = state_transaction
+            .world
+            .governance_referenda
+            .get(&referendum_id)
+            .copied()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee proposal has no retained referendum".into(),
+                )
+            })?;
+        let approvals = state_transaction
+            .world
+            .governance_stage_approvals
+            .get(&referendum_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee proposal has no parliament approval record".into(),
+                )
+            })?;
+        if !parliament_approval_gate_met(&proposal.kind, &approvals, snapshot.selection_epoch)
+            || required_parliament_bodies(&proposal.kind)
+                .iter()
+                .copied()
+                .any(|body| approvals.rejection_quorum_met(body, snapshot.selection_epoch))
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee proposal does not retain seven-body Parliament approval".into(),
+            ));
+        }
+
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint,
+            proposal_time_roster_root: snapshot.roster_root,
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: referendum.h_start,
+                upper: referendum.h_end,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: evidence.referendum_id,
+                finalized_at_height: evidence.finalized_at_height,
+                mode: match evidence.mode {
+                    gov::VotingMode::Zk => ValidationFeeGovernanceVotingModeV1::Zk,
+                    gov::VotingMode::Plain => ValidationFeeGovernanceVotingModeV1::Plain,
+                },
+                approve: evidence.approve,
+                reject: evidence.reject,
+                abstain: evidence.abstain,
+                min_turnout: evidence.min_turnout,
+                approval_threshold_numerator: evidence.approval_threshold_numerator,
+                approval_threshold_denominator: evidence.approval_threshold_denominator,
+                approved: evidence.approved,
+            },
+            enacted_at_height,
+        };
+        if let Some(reason) = authorization.invariant_error() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("invalid validation-fee Parliament authorization: {reason}").into(),
+            ));
+        }
+        Ok(authorization)
+    }
+
+    fn enacted_validation_fee_payout_lifecycle(
+        payload: &ValidationFeePolicyProposal,
+        state_transaction: &StateTransaction<'_, '_>,
+    ) -> Result<Option<ValidationFeePayoutLifecycleReferenceV1>, Error> {
+        let Some(payout_binding) = payload.policy.treasury_payout_binding.as_ref() else {
+            if payload.payout_lifecycle_proposal_id.is_some() {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "validation-fee policy without a payout binding references a lifecycle".into(),
+                ));
+            }
+            return Ok(None);
+        };
+        let lifecycle_id = payload.payout_lifecycle_proposal_id.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee payout policy has no lifecycle proposal id".into(),
+            )
+        })?;
+        let lifecycle = state_transaction
+            .world
+            .governance_proposals
+            .get(&lifecycle_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle proposal not found".into(),
+                )
+            })?;
+        if lifecycle.status != crate::state::GovernanceProposalStatus::Enacted {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle must be enacted before policy enactment".into(),
+            ));
+        }
+        let lifecycle_enacted_at_height = lifecycle.enacted_at_height.ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle has no enactment height".into(),
+            )
+        })?;
+        let lifecycle_payload =
+            lifecycle
+                .as_validation_fee_payout_lifecycle()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "referenced proposal is not a validation-fee payout lifecycle".into(),
+                    )
+                })?;
+        if &lifecycle_payload.payout_binding != payout_binding {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "validation-fee payout lifecycle does not authorize the exact policy binding"
+                    .into(),
+            ));
+        }
+        let derived_lifecycle_seal =
+            lifecycle_payload
+                .payout_binding
+                .lifecycle_seal()
+                .map_err(|_| {
+                    InstructionExecutionError::InvariantViolation(
+                        "failed to derive validation-fee payout lifecycle seal".into(),
+                    )
+                })?;
+        if derived_lifecycle_seal == [0; 32] {
+            return Err(InstructionExecutionError::InvariantViolation(
+                "enacted validation-fee payout lifecycle derives an invalid zero seal".into(),
+            ));
+        }
+        let parliament_authorization = validation_fee_parliament_authorization(
+            lifecycle_id,
+            &lifecycle,
+            lifecycle_enacted_at_height,
+            state_transaction,
+        )?;
+        Ok(Some(ValidationFeePayoutLifecycleReferenceV1 {
+            lifecycle_seal: derived_lifecycle_seal,
+            parliament_authorization,
+        }))
+    }
+
+    fn enact_validation_fee_policy(
+        proposal_id: [u8; 32],
+        proposal: &crate::state::GovernanceProposalRecord,
+        payload: &ValidationFeePolicyProposal,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<bool, Error> {
+        let mut registry = validation_fee_policy_registry(state_transaction)?.unwrap_or(
+            ValidationFeePolicyRegistryV1 {
+                registered_policies: Vec::new(),
+            },
+        );
+        let predecessor_is_current = match registry.head() {
+            None => {
+                payload.policy.policy_version == 1 && payload.policy.previous_policy_hash.is_none()
+            }
+            Some(head) => {
+                head.policy
+                    .policy_version
+                    .checked_add(1)
+                    .is_some_and(|version| version == payload.policy.policy_version)
+                    && payload.policy.previous_policy_hash == Some(head.policy_hash)
+            }
+        };
+        if !predecessor_is_current {
+            mark_proposal_superseded(state_transaction, proposal_id);
+            return Ok(false);
+        }
+
+        let _ = validate_validation_fee_policy_proposal(&payload.policy, state_transaction)?;
+        let enacted_at_height = state_transaction._curr_block.height().get();
+        ensure_validation_fee_policy_activation_delay(
+            payload.policy.effective_from_height,
+            enacted_at_height,
+        )?;
+        let parliament_authorization = validation_fee_parliament_authorization(
+            proposal_id,
+            proposal,
+            enacted_at_height,
+            state_transaction,
+        )?;
+        let payout_lifecycle = enacted_validation_fee_payout_lifecycle(payload, state_transaction)?;
+        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(
+            payload.policy.clone(),
+            parliament_authorization,
+            payout_lifecycle,
+        )
+        .map_err(|_| {
+            InstructionExecutionError::InvariantViolation(
+                "failed to hash enacted validation-fee policy".into(),
+            )
+        })?;
+        registry.registered_policies.push(entry);
+        registry.validate().map_err(|error| {
+            InstructionExecutionError::InvariantViolation(
+                format!("enacted validation-fee registry is invalid: {error}").into(),
+            )
+        })?;
+
+        let next = registry.into_custom_parameter();
+        let previous = {
+            let parameters = state_transaction.world.parameters.get_mut();
+            let previous = parameters.custom().get(next.id()).cloned();
+            parameters.set_parameter(Parameter::Custom(next.clone()));
+            previous
+        };
+        state_transaction
+            .world
+            .emit_events(Some(ConfigurationEvent::Changed(ParameterChanged {
+                old_value: Parameter::Custom(previous.unwrap_or_else(|| next.clone())),
+                new_value: Parameter::Custom(next),
+            })));
+        Ok(true)
+    }
+
+    fn ensure_validation_fee_policy_activation_delay(
+        effective_from_height: u64,
+        enacted_at_height: u64,
+    ) -> Result<u64, Error> {
+        let minimum_effective_height = enacted_at_height
+            .checked_add(
+                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS,
+            )
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee activation delay overflows the block-height domain".into(),
+                )
+            })?;
+        if effective_from_height < minimum_effective_height {
+            return Err(InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    format!(
+                        "validation-fee policy effective height must be at least {minimum_effective_height}"
+                    )
+                    .into(),
+                ),
+            ));
+        }
+        Ok(minimum_effective_height)
     }
 
     fn ensure_contract_subject_binding(
@@ -5696,19 +6616,14 @@ pub mod isi {
     impl Execute for gov::EnactReferendum {
         fn execute(
             self,
-            authority: &AccountId,
+            _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            if !has_permission(&state_transaction.world, authority, "CanEnactGovernance") {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "not permitted: CanEnactGovernance".into(),
-                ));
-            }
-
             let pid = self.referendum_id;
             let pid_hex = hex::encode(pid);
-            let (proposal, already_enacted) = load_proposal(state_transaction, pid, &pid_hex)?;
-            if already_enacted {
+            let (proposal, already_terminal) = load_proposal(state_transaction, pid, &pid_hex)?;
+            validate_referendum_enactment_binding(&self, &proposal, state_transaction, &pid_hex)?;
+            if already_terminal {
                 // Enactment is idempotent. Replaying an already-enacted referendum must not
                 // re-run its payload against newer state (for example, resurrecting a removed
                 // SCCP route or overwriting a subsequent governance update).
@@ -5729,8 +6644,12 @@ pub mod isi {
                     #[cfg(not(feature = "telemetry"))]
                     let _ = manifest_inserted;
 
-                    let instance_bound_new =
-                        bind_contract_instance(authority, state_transaction, &payload, key)?;
+                    let instance_bound_new = bind_contract_instance(
+                        &proposal.proposer,
+                        state_transaction,
+                        &payload,
+                        key,
+                    )?;
                     #[cfg(not(feature = "telemetry"))]
                     let _ = instance_bound_new;
 
@@ -5750,6 +6669,40 @@ pub mod isi {
                 ProposalKind::SccpRouteGovernance(payload) => {
                     apply_sccp_route_governance_action(
                         payload.action.as_ref().clone(),
+                        state_transaction,
+                    )?;
+                }
+                ProposalKind::ValidationFeePolicy(payload) => {
+                    if !enact_validation_fee_policy(pid, &proposal, payload, state_transaction)? {
+                        close_referendum_if_open(state_transaction, &pid_hex);
+                        return Ok(());
+                    }
+                }
+                ProposalKind::ValidationFeePayoutLifecycle(payload) => {
+                    if let Some(reason) = payload.payout_binding.invariant_error() {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            format!("invalid enacted validation-fee payout lifecycle: {reason}")
+                                .into(),
+                        ));
+                    }
+                    let derived_lifecycle_seal =
+                        payload.payout_binding.lifecycle_seal().map_err(|_| {
+                            InstructionExecutionError::InvariantViolation(
+                                "failed to derive enacted validation-fee payout lifecycle seal"
+                                    .into(),
+                            )
+                        })?;
+                    if derived_lifecycle_seal == [0; 32] {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "enacted validation-fee payout lifecycle derives an invalid zero seal"
+                                .into(),
+                        ));
+                    }
+                    let enactment_height = state_transaction._curr_block.height().get();
+                    let _ = validation_fee_parliament_authorization(
+                        pid,
+                        &proposal,
+                        enactment_height,
                         state_transaction,
                     )?;
                 }
@@ -6863,73 +7816,163 @@ pub mod isi {
             _authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            // Compute plain tally from active locks (ignore expired)
             use iroha_data_model::events::data::governance as gev;
-            let mut approve: u128 = 0;
-            let mut reject: u128 = 0;
-            let now_h = state_transaction._curr_block.height().get();
-            if state_transaction
+
+            let expected_referendum_id = hex::encode(self.proposal_id);
+            if self.referendum_id != expected_referendum_id {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "referendum_id does not match proposal_id".into(),
+                    ),
+                ));
+            }
+            let proposal = state_transaction
                 .world
                 .governance_proposals
                 .get(&self.proposal_id)
-                .is_some_and(|proposal| {
-                    matches!(
-                        proposal.status,
-                        crate::state::GovernanceProposalStatus::Approved
-                            | crate::state::GovernanceProposalStatus::Rejected
-                            | crate::state::GovernanceProposalStatus::Enacted
+                .cloned()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "governance proposal not found".into(),
                     )
-                })
-            {
+                })?;
+            if proposal.finalization_evidence.is_some() {
                 close_referendum_if_open(state_transaction, &self.referendum_id);
                 return Ok(());
             }
-            if let Some(locks) = state_transaction
+            if matches!(
+                proposal.status,
+                crate::state::GovernanceProposalStatus::Rejected
+                    | crate::state::GovernanceProposalStatus::Enacted
+                    | crate::state::GovernanceProposalStatus::Superseded
+            ) {
+                close_referendum_if_open(state_transaction, &self.referendum_id);
+                return Ok(());
+            }
+
+            let referendum = state_transaction
                 .world
-                .governance_locks
+                .governance_referenda
                 .get(&self.referendum_id)
-            {
-                let step = state_transaction.gov.conviction_step_blocks.max(1);
-                let max_c = state_transaction.gov.max_conviction;
-                for rec in locks.locks.values() {
-                    if rec.expiry_height < now_h {
-                        continue;
-                    }
-                    let w = plain_ballot_weight(&rec.amount, rec.duration_blocks, step, max_c)?;
-                    match rec.direction {
-                        0 => {
-                            approve = approve
-                                .checked_add(w)
-                                .ok_or_else(|| Error::from(MathError::Overflow))?;
-                        }
-                        1 => {
-                            reject = reject
-                                .checked_add(w)
-                                .ok_or_else(|| Error::from(MathError::Overflow))?;
-                        }
-                        _ => {}
-                    }
-                }
+                .copied()
+                .ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "referendum not found for governance proposal".into(),
+                    )
+                })?;
+            if referendum.status == crate::state::GovernanceReferendumStatus::Proposed {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "all required parliament bodies must approve before finalization".into(),
+                ));
             }
-            // ZK tally: require finalized election and use its tally for approve/reject.
-            if let Some(e) = state_transaction.world.elections.get(&self.referendum_id) {
-                if !e.finalized {
+            let validation_fee_governance = matches!(
+                &proposal.kind,
+                ProposalKind::ValidationFeePolicy(_)
+                    | ProposalKind::ValidationFeePayoutLifecycle(_)
+            );
+            if validation_fee_governance {
+                if referendum.mode != crate::state::GovernanceReferendumMode::Plain {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "election tally not finalized".into(),
+                        "validation-fee governance supports plain referendum voting only".into(),
                     ));
                 }
-                if e.tally.len() < 2 {
+                let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
+                    InstructionExecutionError::InvariantViolation(
+                        "validation-fee proposal is missing its parliament snapshot".into(),
+                    )
+                })?;
+                if compute_parliament_roster_root(&snapshot.bodies)? != snapshot.roster_root {
                     return Err(InstructionExecutionError::InvariantViolation(
-                        "election tally missing options".into(),
+                        "validation-fee parliament snapshot commitment mismatch".into(),
                     ));
                 }
-                approve = u128::from(e.tally[0]);
-                reject = u128::from(e.tally[1]);
+                let approvals = state_transaction
+                    .world
+                    .governance_stage_approvals
+                    .get(&self.referendum_id)
+                    .cloned()
+                    .unwrap_or_default();
+                if !parliament_approval_gate_met(
+                    &proposal.kind,
+                    &approvals,
+                    snapshot.selection_epoch,
+                ) || required_parliament_bodies(&proposal.kind)
+                    .iter()
+                    .copied()
+                    .any(|body| approvals.rejection_quorum_met(body, snapshot.selection_epoch))
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        "all seven parliament bodies must reach quorum before validation-fee finalization"
+                            .into(),
+                    ));
+                }
             }
-            // Note: closing by height is automatic in State::block; no need to change status here.
-            // Decide and emit Approved/Rejected with thresholds
+
+            let mut approve: u128 = 0;
+            let mut reject: u128 = 0;
+            let mut abstain: u128 = 0;
+            let now_h = state_transaction._curr_block.height().get();
+            if now_h < referendum.h_start || now_h > referendum.h_end {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "referendum finalization is outside the exact stored window".into(),
+                ));
+            }
+            match referendum.mode {
+                crate::state::GovernanceReferendumMode::Plain => {
+                    if let Some(locks) = state_transaction
+                        .world
+                        .governance_locks
+                        .get(&self.referendum_id)
+                    {
+                        let step = state_transaction.gov.conviction_step_blocks.max(1);
+                        let max_c = state_transaction.gov.max_conviction;
+                        for rec in locks.locks.values() {
+                            if rec.expiry_height < now_h {
+                                continue;
+                            }
+                            let weight =
+                                plain_ballot_weight(&rec.amount, rec.duration_blocks, step, max_c)?;
+                            let tally = match rec.direction {
+                                0 => &mut approve,
+                                1 => &mut reject,
+                                2 => &mut abstain,
+                                _ => continue,
+                            };
+                            *tally = tally
+                                .checked_add(weight)
+                                .ok_or_else(|| Error::from(MathError::Overflow))?;
+                        }
+                    }
+                }
+                crate::state::GovernanceReferendumMode::Zk => {
+                    let election = state_transaction
+                        .world
+                        .elections
+                        .get(&self.referendum_id)
+                        .ok_or_else(|| {
+                            InstructionExecutionError::InvariantViolation(
+                                "ZK election not found for referendum".into(),
+                            )
+                        })?;
+                    if !election.finalized {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "election tally not finalized".into(),
+                        ));
+                    }
+                    if election.tally.len() < 2 {
+                        return Err(InstructionExecutionError::InvariantViolation(
+                            "election tally missing options".into(),
+                        ));
+                    }
+                    approve = u128::from(election.tally[0]);
+                    reject = u128::from(election.tally[1]);
+                    abstain = election.tally.get(2).copied().map_or(0, u128::from);
+                }
+            }
+
             let turnout = approve
                 .checked_add(reject)
+                .and_then(|value| value.checked_add(abstain))
                 .ok_or_else(|| Error::from(MathError::Overflow))?;
             let num = state_transaction.gov.approval_threshold_q_num;
             let den = state_transaction.gov.approval_threshold_q_den.max(1);
@@ -6943,6 +7986,22 @@ pub mod isi {
                 lhs >= rhs
             } else {
                 false
+            };
+            let evidence = GovernanceFinalizationEvidence {
+                proposal_id: self.proposal_id,
+                referendum_id: self.proposal_id,
+                finalized_at_height: now_h,
+                mode: match referendum.mode {
+                    crate::state::GovernanceReferendumMode::Zk => gov::VotingMode::Zk,
+                    crate::state::GovernanceReferendumMode::Plain => gov::VotingMode::Plain,
+                },
+                approve,
+                reject,
+                abstain,
+                min_turnout: state_transaction.gov.min_turnout,
+                approval_threshold_numerator: num,
+                approval_threshold_denominator: den,
+                approved: decision_approve,
             };
             if decision_approve {
                 state_transaction
@@ -6958,6 +8017,7 @@ pub mod isi {
                     .get_mut(&self.proposal_id)
                 {
                     rec.status = crate::state::GovernanceProposalStatus::Approved;
+                    rec.finalization_evidence = Some(evidence);
                 }
             } else {
                 state_transaction
@@ -6973,8 +8033,10 @@ pub mod isi {
                     .get_mut(&self.proposal_id)
                 {
                     rec.status = crate::state::GovernanceProposalStatus::Rejected;
+                    rec.finalization_evidence = Some(evidence);
                 }
             }
+            close_referendum_if_open(state_transaction, &self.referendum_id);
             Ok(())
         }
     }
@@ -7094,6 +8156,7 @@ pub mod isi {
             crate::state::GovernanceProposalStatus::Approved
                 | crate::state::GovernanceProposalStatus::Rejected
                 | crate::state::GovernanceProposalStatus::Enacted
+                | crate::state::GovernanceProposalStatus::Superseded
         ) {
             return Err(InstructionExecutionError::InvariantViolation(
                 "governance proposal is no longer open for parliament ballots".into(),
@@ -7346,7 +8409,10 @@ pub mod isi {
                 ParliamentBody::PolicyJury,
                 ParliamentBody::OversightCommittee,
             ],
-            ProposalKind::RuntimeUpgrade(_) | ProposalKind::SccpRouteGovernance(_) => &[
+            ProposalKind::RuntimeUpgrade(_)
+            | ProposalKind::SccpRouteGovernance(_)
+            | ProposalKind::ValidationFeePolicy(_)
+            | ProposalKind::ValidationFeePayoutLifecycle(_) => &[
                 ParliamentBody::RulesCommittee,
                 ParliamentBody::AgendaCouncil,
                 ParliamentBody::InterestPanel,
@@ -7383,6 +8449,7 @@ pub mod isi {
                 proposal.status,
                 crate::state::GovernanceProposalStatus::Rejected
                     | crate::state::GovernanceProposalStatus::Enacted
+                    | crate::state::GovernanceProposalStatus::Superseded
             ) {
                 proposal.status = crate::state::GovernanceProposalStatus::Rejected;
                 state_transaction
@@ -17537,6 +18604,7 @@ pub mod isi {
                             )));
                         }
                     }
+                    FeeSponsorRuleSelector::Multisig(_) => {}
                     FeeSponsorRuleSelector::Ivm(_) | FeeSponsorRuleSelector::IvmProved(_) => {}
                 }
             }
@@ -19002,6 +20070,16 @@ pub mod isi {
                             );
                         })*
                         Parameter::Custom(next) => {
+                            if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
+                                next.id(),
+                            ) {
+                                return Err(InstructionExecutionError::InvalidParameter(
+                                    InvalidParameterError::SmartContract(
+                                        "validation-fee governance parameters can only be changed by an enacted SORA Parliament proposal"
+                                            .to_owned(),
+                                    ),
+                                ));
+                            }
                             if next.id()
                                 == &iroha_data_model::parameter::system::consensus_metadata::handshake_meta_id()
                             {
@@ -19271,6 +20349,34 @@ pub mod isi {
         fn checked_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
             KeyPair::try_random_with_algorithm(algorithm)
                 .expect("world ISI fixture key generation for requested algorithm should succeed")
+        }
+
+        #[test]
+        fn validation_fee_activation_delay_enforces_exact_boundary_and_overflow() {
+            let enacted_at_height = 40;
+            let minimum = enacted_at_height
+                + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+            assert!(
+                super::ensure_validation_fee_policy_activation_delay(
+                    minimum.saturating_sub(1),
+                    enacted_at_height,
+                )
+                .is_err()
+            );
+            assert_eq!(
+                super::ensure_validation_fee_policy_activation_delay(minimum, enacted_at_height)
+                    .expect("exact activation boundary"),
+                minimum
+            );
+            assert!(
+                super::ensure_validation_fee_policy_activation_delay(
+                    u64::MAX,
+                    u64::MAX
+                        - iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS
+                        + 1,
+                )
+                .is_err()
+            );
         }
 
         fn fee_sponsor_revision_fixture(
@@ -28644,6 +29750,8 @@ seiyaku GovernanceLifecycle {
                             )]),
                         },
                     }),
+                    finalization_evidence: None,
+                    enacted_at_height: None,
                 },
             );
 

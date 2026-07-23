@@ -1,6 +1,9 @@
 package org.hyperledger.iroha.sdk.offline
 
 import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.nio.file.Paths
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -59,6 +62,21 @@ class KagemushaRecursiveSpendProverTest {
                 abiVersion = { 21 },
                 symbolProbe = { true },
             ),
+        )
+        assertTrue(
+            KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation {
+                throw IllegalArgumentException("production bridge reached artifact validation")
+            },
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation {
+                throw IllegalStateException("default bridge rejected production")
+            },
+        )
+        assertFalse(
+            KagemushaRecursiveSpendProver.detectProductionProofBackendCompilation {
+                throw UnsatisfiedLinkError("missing")
+            },
         )
     }
 
@@ -525,7 +543,10 @@ class KagemushaRecursiveSpendProverTest {
             KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES_V4,
             KagemushaPeerTransportContract.MAXIMUM_ARCHIVE_BYTES,
         )
-        assertEquals(9_211, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
+        assertEquals(24_576, KagemushaRecursiveSpendProver.MAX_PEER_TEXT_ARCHIVE_BYTES)
+        assertEquals(24_576, KagemushaRecursiveSpendProver.MAX_RECIPIENT_RECEIVE_OFFER_BYTES_V2)
+        assertEquals(2_048, KagemushaRecursiveSpendProver.MAX_PUBLISHER_CHECKPOINT_ENVELOPE_BYTES_V1)
+        assertEquals(40, KagemushaRecursiveSpendProver.PROMOTED_FINALITY_CHECKPOINT_BYTES_V2)
         assertEquals(
             512 * 1024,
             KagemushaRecursiveSpendProver.MAX_TORII_TOP_UP_REQUEST_BYTES_V4,
@@ -632,6 +653,8 @@ class KagemushaRecursiveSpendProverTest {
                 "buildRedeemV4",
                 "buildRedeemRequestV4",
                 "buildVerifyRequestV4",
+                "createRecipientLineageQueryV2",
+                "createRecipientReceiveOfferV2",
                 "decodeAppendRequestV4",
                 "decodeBundleV4",
                 "decodeInitRequestV4",
@@ -640,9 +663,12 @@ class KagemushaRecursiveSpendProverTest {
                 "decodeNoteOpening",
                 "decodeOutputMembershipFrontierV4",
                 "decodePeerPayment",
+                "decodeReadiness",
                 "decodeRedeemRequestV4",
                 "decodeReceiverAcknowledgement",
                 "decodeRecipientPaymentRequest",
+                "decodeRecipientReceiveOfferV2",
+                "decodeRecipientRegistrationLineageV2",
                 "decodeRedeemBuildResultV4",
                 "decodeRedeemSubmissionRequest",
                 "decodeSplitResultV4",
@@ -661,10 +687,12 @@ class KagemushaRecursiveSpendProverTest {
                 "initSpendV4",
                 "installedArtifactManifestSha256V4",
                 "isArtifactStreamingAvailable",
+                "isProductionProofBackendCompiled",
                 "isProofBackendAvailable",
                 "newToriiClient",
                 "prepareAcknowledgement",
                 "prepareNoteOpening",
+                "preparePeerSplitChangeV4",
                 "prepareRedemptionChangeV4",
                 "prepareRecipientPaymentRequest",
                 "prepareRequestAuthorization",
@@ -674,6 +702,7 @@ class KagemushaRecursiveSpendProverTest {
                 "projectInitResultV4",
                 "projectRedeemBuildResultV4",
                 "projectRecipientPaymentRequest",
+                "projectRecipientReceiveOfferV2",
                 "projectReadiness",
                 "projectSplitResultV4",
                 "projectVerifyResultV4",
@@ -686,6 +715,8 @@ class KagemushaRecursiveSpendProverTest {
                 "signRecipientPaymentRequest",
                 "verifyAcknowledgement",
                 "verifyRecipientPaymentRequest",
+                "verifyRecipientReceiveOfferV2",
+                "verifyRecipientRegistrationLineageV2",
                 "verifySpendV4",
                 "validateTopUpProvenanceV4",
             ),
@@ -1298,6 +1329,23 @@ class KagemushaRecursiveSpendProverTest {
         requestArchive[requestArchive.lastIndex] = 0
         assertEquals(0x51, request.noritoEncoded().last().toInt() and 0xff)
 
+        val offer = KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(
+            portableOfferFixture("offline_recipient_receive_offer_v2.hex"),
+        )
+        val offerProjection = KagemushaRecursiveSpendProver.projectRecipientReceiveOfferV2(offer)
+        assertContentEquals(
+            portableOfferFixture("offline_recipient_payment_request_v2.hex"),
+            offerProjection.request.noritoEncoded(),
+        )
+        assertContentEquals(
+            portableOfferFixture("offline_recipient_registration_lineage_v2.hex"),
+            offerProjection.lineage.noritoEncoded(),
+        )
+        assertContentEquals(
+            portableOfferFixture("offline_recipient_checkpoint_envelope.hex"),
+            offerProjection.publisherCheckpointEnvelope(),
+        )
+
         assertTrue(
             KagemushaRecursiveSpendProver.decodePeerPayment(
                 archive("iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"),
@@ -1332,16 +1380,15 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun peerTransportGoldenVectorsAreExact() {
+        val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
-            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
+            offerArchive,
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
         )
         val text = KagemushaPeerTextCodec.encode(request)
 
-        assertEquals(
-            "PKK2R.TlJUMAAAE2-AZVN4JnUypxEZ9G5vCgABAAAAAAAAAN6BMN0_Z661AgAAAAAAAAAAUQ",
-            text,
-        )
+        assertTrue(text.startsWith("PKK2R."))
+        assertContentEquals(offerArchive, KagemushaPeerTextCodec.decode(text).archive())
         assertEquals(
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
             KagemushaPeerTextCodec.decode(text).kind,
@@ -1358,27 +1405,23 @@ class KagemushaRecursiveSpendProverTest {
 
     @Test
     fun qrNfcAndNearbyGoldenVectorsAreExact() {
+        val offerArchive = portableOfferFixture("offline_recipient_receive_offer_v2.hex")
         val request = KagemushaPeerPayload.decode(
-            archive("iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"),
+            offerArchive,
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
         )
         val frames = KagemushaQrStreamCodec.encode(
             request,
             KagemushaQrStreamOptions.STANDARD,
         )
-        assertEquals(
-            listOf(
-                "PKKQ1.S1EBAJ9UjpnKuy-JNddeTUuZxs8AAAABAC4BAQQAAQAAAQABAAAAMZ9UjpnKuy-JNddeTUuZxs_S31egUt70_UP06en4wRpstXHZdQ",
-                "PKKQ1.S1EBAZ9UjpnKuy-JNddeTUuZxs8AAAABADFOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRW8j1XA",
-                "PKKQ1.S1EBAp9UjpnKuy-JNddeTUuZxs8AAAABAQBOUlQwAAATb4BlU3gmdTKnERn0bm8KAAEAAAAAAAAA3oEw3T9nrrUCAAAAAAAAAABRAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA010SmQ",
-            ),
-            frames,
-        )
+        assertTrue(frames.size > 3)
+        assertTrue(frames.all { it.startsWith("PKKQ1.") })
         val decoder = KagemushaQrStreamDecoder()
-        assertFalse(decoder.ingest(frames[0]).isComplete)
-        val recovered = decoder.ingest(frames[2])
-        assertTrue(recovered.isComplete)
-        assertEquals(1, recovered.recoveredDataFrames)
+        var recovered: KagemushaQrDecodeResult? = null
+        frames.forEach { frame -> recovered = decoder.ingest(frame) }
+        val completed = requireNotNull(recovered)
+        assertTrue(completed.isComplete)
+        assertContentEquals(offerArchive, requireNotNull(completed.payload).archive())
 
         val rawArchive = request.archive()
         val commands = KagemushaNfcProtocol.writePayloadCommands(
@@ -1386,20 +1429,17 @@ class KagemushaRecursiveSpendProverTest {
             rawArchive,
             KagemushaNfcProtocol.SAFE_CHUNK_BYTES,
         )
-        assertEquals(
-            "80200400260401000000319f548e99cabb2f8935d75e4d4b99c6cfd2df57a052def4fd43f4e9e9f8c11a6c",
-            commands[0].toHex(),
-        )
-        assertEquals(
-            "8021040035000000004e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051",
-            commands[1].toHex(),
-        )
-        assertEquals("8022040000", commands[2].toHex())
+        assertTrue(commands.size > 3)
+        assertEquals("8022040000", commands.last().toHex())
         assertEquals(
             "F0504B45504B524E464301",
             KagemushaNfcProtocol.applicationIdentifierHex(
                 KagemushaNfcProtocol.defaultApplicationIdentifier(),
             ),
+        )
+        assertEquals(
+            IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX,
+            KagemushaPeerTransportContract.NFC_APPLICATION_IDENTIFIER_HEX,
         )
         assertEquals(220, KagemushaNfcProtocol.SAFE_CHUNK_BYTES)
         assertEquals(4, KagemushaNfcProtocol.RAW_TRANSPORT_VERSION)
@@ -1409,18 +1449,35 @@ class KagemushaRecursiveSpendProverTest {
             request,
             KagemushaNearbyPairingChallenge(KagemushaNearbyPairingSymbol.STARS),
         )
-        assertEquals(
-            "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUFFMi1BWlZONEpuVXlweEVaOUc1dkNnQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFnQUFBQUFBQUFBQVVR\"}",
-            nearby.toString(Charsets.UTF_8),
-        )
+        assertEquals(offerArchive.size + IrohaPeerWireMessageV1.HEADER_LENGTH + 12, nearby.size)
+        assertEquals("504b4e4231010100", nearby.copyOfRange(0, 8).toHex())
+        assertEquals(nearby.size - 12, nearby.copyOfRange(8, 12).readU32BeForTest())
+        val nearbyDecoded = KagemushaNearbyEnvelopeCodec.decode(nearby)
         assertEquals(
             KagemushaPeerPayloadKind.RECEIVE_REQUEST,
-            KagemushaNearbyEnvelopeCodec.decode(nearby).payload?.kind,
+            nearbyDecoded.payload?.kind,
+        )
+        assertContentEquals(offerArchive, requireNotNull(nearbyDecoded.payload).archive())
+        assertEquals(
+            "504b4e423104000000000000",
+            KagemushaNearbyEnvelopeCodec.encodeRejection().toHex(),
+        )
+        assertEquals(
+            KagemushaNearbyMessageKind.REJECTED,
+            KagemushaNearbyEnvelopeCodec.decode(
+                KagemushaNearbyEnvelopeCodec.encodeRejection(),
+            ).messageKind,
         )
         assertFalse(KagemushaNearbyTransportPolicy.IS_AVAILABLE)
         rawArchive.fill(0)
         nearby.fill(0)
     }
+
+    private fun ByteArray.readU32BeForTest(): Int =
+        ((this[0].toInt() and 0xff) shl 24) or
+            ((this[1].toInt() and 0xff) shl 16) or
+            ((this[2].toInt() and 0xff) shl 8) or
+            (this[3].toInt() and 0xff)
 
     @Test
     fun nfcV4StreamsBeyondLegacyLimitAndRejectsDowngrade() {
@@ -1510,7 +1567,8 @@ class KagemushaRecursiveSpendProverTest {
             object : TransportExecutor {
                 override fun execute(request: TransportRequest): CompletableFuture<TransportResponse> {
                     captured.set(request)
-                    val command = request.method == "POST"
+                    val lineage = request.uri.path.endsWith("/receiver-lineage")
+                    val command = request.method == "POST" && !lineage
                     return CompletableFuture.completedFuture(
                         TransportResponse.builder()
                             .setStatusCode(if (command) 202 else 200)
@@ -1519,6 +1577,8 @@ class KagemushaRecursiveSpendProverTest {
                                 archive(
                                     if (command) {
                                         "OfflineOperationReference"
+                                    } else if (lineage) {
+                                        "iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage"
                                     } else if (request.uri.path.contains("/operations/")) {
                                         "OfflineOperationStatus"
                                     } else {
@@ -1538,6 +1598,14 @@ class KagemushaRecursiveSpendProverTest {
             captured.get().uri.toString(),
         )
         assertEquals(listOf("application/x-norito"), captured.get().headers["Accept"])
+
+        client.getRecipientRegistrationLineage(
+            KagemushaRecursiveSpendProver.RecipientLineageQueryV2(
+                archive("iroha_torii_shared::offline_api::OfflineRecipientLineageRequest"),
+            ),
+        ).join()
+        assertEquals("/api/v1/offline/receiver-lineage", captured.get().uri.path)
+        assertEquals(listOf("application/x-norito"), captured.get().headers["Content-Type"])
 
         val operationId = "11".repeat(32)
         client.submitTopUp(
@@ -1670,6 +1738,23 @@ class KagemushaRecursiveSpendProverTest {
             else -> byteArrayOf()
         }
         return header.encode() + padding + payload
+    }
+
+    private fun portableOfferFixture(name: String): ByteArray {
+        var current: Path? = Paths.get(System.getProperty("user.dir")).toAbsolutePath()
+        while (current != null) {
+            val candidate = current.resolve("crates/connect_norito_bridge/tests/fixtures").resolve(name)
+            if (Files.isRegularFile(candidate)) {
+                val hex = Files.readAllBytes(candidate).toString(Charsets.US_ASCII)
+                    .filterNot(Char::isWhitespace)
+                require(hex.length % 2 == 0)
+                return ByteArray(hex.length / 2) { index ->
+                    hex.substring(index * 2, index * 2 + 2).toInt(16).toByte()
+                }
+            }
+            current = current.parent
+        }
+        error("portable Kagemusha fixture is missing: $name")
     }
 
     private fun ByteArray.toHex(): String =

@@ -139,6 +139,7 @@ final class KagemushaDeviceAttestationSignedTransactionTests: XCTestCase {
                 chainId: Self.chainId,
                 authority: Self.authority,
                 registration: registration,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 ttlMs: 60_000,
                 nonce: 7,
                 metadata: ["purpose": .string("crash-safe-replay")]

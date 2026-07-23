@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.client
 
 import java.nio.charset.StandardCharsets
+import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 
 /** Minimal JSON parser for RAM-LFE program-policy, execute, and verify payloads. */
 object RamLfeJsonParser {
@@ -16,8 +17,8 @@ object RamLfeJsonParser {
                 RamLfeProgramPolicySummary(
                     requiredExactString(item["program_id"], "ram-lfe program policy list.items[$i].program_id"),
                     requiredExactString(item["owner"], "ram-lfe program policy list.items[$i].owner"),
-                    item["active"] == true,
-                    requiredExactString(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key"),
+                    asBoolean(item["active"], "ram-lfe program policy list.items[$i].active"),
+                    requiredPublicKeyLiteral(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key"),
                     requiredExactLowercaseString(item["backend"], "ram-lfe program policy list.items[$i].backend"),
                     requiredExactLowercaseString(item["verification_mode"], "ram-lfe program policy list.items[$i].verification_mode"),
                     optionalExactString(item["input_encryption"], "ram-lfe program policy list.items[$i].input_encryption"),
@@ -28,12 +29,19 @@ object RamLfeJsonParser {
                             "ram-lfe program policy list.items[$i].input_encryption_public_parameters_decoded"),
                         "ram-lfe program policy list.items[$i].input_encryption_public_parameters_decoded"
                     ),
-                    optionalString(item["note"]),
+                    optionalString(item["note"], "ram-lfe program policy list.items[$i].note"),
                     if (item["proof_verifier"] == null) null
                     else parseProofVerifier(
                         expectObject(item["proof_verifier"], "ram-lfe program policy list.items[$i].proof_verifier"),
                         "ram-lfe program policy list.items[$i].proof_verifier"
-                    )
+                    ),
+                    outputOpeningPublicKey = if (!item.containsKey("output_opening_public_key"))
+                        requiredPublicKeyLiteral(item["resolver_public_key"], "ram-lfe program policy list.items[$i].resolver_public_key")
+                    else
+                        requiredPublicKeyLiteral(
+                            item["output_opening_public_key"],
+                            "ram-lfe program policy list.items[$i].output_opening_public_key",
+                        ),
                 )
             )
         }
@@ -64,7 +72,7 @@ object RamLfeJsonParser {
     fun parseReceiptVerifyResponse(payload: ByteArray): RamLfeReceiptVerifyResponse {
         val root = expectObject(parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response")
         return RamLfeReceiptVerifyResponse(
-            root["valid"] == true,
+            asBoolean(root["valid"], "ram-lfe receipt verify response.valid"),
             requiredExactString(root["program_id"], "ram-lfe receipt verify response.program_id"),
             requiredExactLowercaseString(root["backend"], "ram-lfe receipt verify response.backend"),
             requiredExactLowercaseString(root["verification_mode"], "ram-lfe receipt verify response.verification_mode"),
@@ -73,7 +81,7 @@ object RamLfeJsonParser {
             if (root.containsKey("output_hash_matches"))
                 asOptionalBoolean(root["output_hash_matches"], "ram-lfe receipt verify response.output_hash_matches")
             else null,
-            optionalString(root["error"])
+            optionalString(root["error"], "ram-lfe receipt verify response.error")
         )
     }
 
@@ -98,13 +106,13 @@ object RamLfeJsonParser {
     }
 
     private fun requiredString(value: Any?, path: String): String {
-        val string = optionalString(value)
+        val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
     }
 
     private fun requiredExactString(value: Any?, path: String): String {
-        val string = optionalString(value)
+        val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         check(string.trim() == string) { "$path must not contain surrounding whitespace" }
         return string
@@ -113,6 +121,12 @@ object RamLfeJsonParser {
     private fun requiredExactLowercaseString(value: Any?, path: String): String {
         val string = requiredExactString(value, path)
         check(string.lowercase() == string) { "$path must be an exact lowercase string" }
+        return string
+    }
+
+    private fun requiredPublicKeyLiteral(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(decodePublicKeyLiteral(string) != null) { "$path must be a valid public key literal" }
         return string
     }
 
@@ -126,9 +140,10 @@ object RamLfeJsonParser {
         return canonicalizeExactHex(value, path)
     }
 
-    private fun optionalString(value: Any?): String? {
+    private fun optionalString(value: Any?, path: String): String? {
         if (value == null) return null
-        return if (value is String) value else value.toString()
+        check(value is String) { "$path must be a string" }
+        return value
     }
 
     private fun asLong(value: Any?, path: String): Long {
@@ -139,6 +154,11 @@ object RamLfeJsonParser {
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
         return asLong(value, path)
+    }
+
+    private fun asBoolean(value: Any?, path: String): Boolean {
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
     }
 
     private fun asOptionalBoolean(value: Any?, path: String): Boolean? {

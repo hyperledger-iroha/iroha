@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CHECK_SCRIPT="$SCRIPT_DIR/check_mobile_sdk_artifacts.sh"
+PACKAGE_SCRIPT="$SCRIPT_DIR/package_mobile_sdk_artifacts.sh"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
@@ -65,7 +66,9 @@ test_build_source_seal() {
   esac
 }
 
-test_build_source_seal
+if [[ "${MOBILE_SDK_SKIP_SOURCE_SEAL_SELF_TEST:-0}" != "1" ]]; then
+  test_build_source_seal
+fi
 
 make_aar() {
   local archive="$1"
@@ -94,6 +97,92 @@ make_jar() {
   stage="$(mktemp -d "$TMP_DIR/jar.XXXXXX")"
   printf 'fixture\n' >"$stage/fixture.txt"
   (cd "$stage" && zip -qr "$archive" .)
+}
+
+make_android_outputs() {
+  local root="$1"
+  local mode="${2:-default}"
+  local omitted_aar_abi="${3:-}"
+  local aar="$root/kotlin/client-android/build/outputs/aar/client-android-release.aar"
+
+  mkdir -p \
+    "$root/kotlin/core-jvm/build/libs" \
+    "$root/kotlin/client-android/build/outputs/aar"
+  make_jar "$root/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
+  make_aar "$aar" "AndroidManifest.xml" "classes.jar"
+  python3 - "$root" "$aar" "$mode" "$omitted_aar_abi" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+aar = Path(sys.argv[2])
+mode = sys.argv[3]
+omitted_aar_abi = sys.argv[4]
+if mode not in {"default", "production"}:
+    raise SystemExit(f"invalid Android fixture mode: {mode}")
+production = mode == "production"
+abis = ("arm64-v8a", "x86_64")
+library_name = "libconnect_norito_bridge.so"
+libraries = {}
+generated_libraries = {}
+for abi in abis:
+    payload = f"fixture-{mode}-{abi}\n".encode("ascii")
+    raw_payload = f"raw-fixture-{mode}-{abi}\n".encode("ascii")
+    path = root / (
+        "kotlin/client-android/build/generated/jniLibs/"
+        f"{mode}/{abi}/{library_name}"
+    )
+    raw_path = root / (
+        "kotlin/client-android/build/native/cargo-ndk/"
+        f"{mode}/{abi}/{library_name}"
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(payload)
+    raw_path.write_bytes(raw_payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    raw_digest = hashlib.sha256(raw_payload).hexdigest()
+    generated_libraries[abi] = path
+    libraries[abi] = {
+        "aar_path": f"jni/{abi}/{library_name}",
+        "bytes": len(payload),
+        "raw_bytes": len(raw_payload),
+        "raw_sha256": raw_digest,
+        "sha256": digest,
+    }
+
+manifest = {
+    "schema": "iroha.android-native-build-provenance.v1",
+    "native_bridge_abi_version": 21,
+    "build_profile": "release",
+    "cargo_locked": True,
+    "privacy_production_enabled": production,
+    "cargo_features": ["privacy-production-enabled"] if production else [],
+    "source_commit": "0" * 40,
+    "source_tree_dirty": False,
+    "source_fingerprint_sha256": "c" * 64,
+    "cargo_lock_sha256": "a" * 64,
+    "android_ndk_revision": "28.0.12674087",
+    "strip_tool_sha256": "b" * 64,
+    "libraries": libraries,
+}
+manifest_bytes = (json.dumps(manifest, indent=2, sort_keys=False) + "\n").encode("utf-8")
+manifest_path = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/"
+    f"{mode}/iroha/native-build-provenance-v1.json"
+)
+manifest_path.parent.mkdir(parents=True, exist_ok=True)
+manifest_path.write_bytes(manifest_bytes)
+
+with zipfile.ZipFile(aar, "a", compression=zipfile.ZIP_DEFLATED) as archive:
+    archive.writestr("assets/iroha/native-build-provenance-v1.json", manifest_bytes)
+    for abi, path in generated_libraries.items():
+        if abi != omitted_aar_abi:
+            archive.write(path, f"jni/{abi}/{library_name}")
+PY
 }
 
 make_gradle_file() {
@@ -306,6 +395,7 @@ PLIST
   "version": "1.0.0",
   "native_bridge_abi_version": 21,
   "privacy_production_enabled": false,
+  "cargo_features": [],
   "source_commit": "0000000000000000000000000000000000000000",
   "source_tree_dirty": false,
   "source_fingerprint_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
@@ -320,6 +410,8 @@ PLIST
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
@@ -352,6 +444,12 @@ PLIST
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -360,6 +458,7 @@ PLIST
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
@@ -381,6 +480,11 @@ SETTINGS
   make_gradle_file "$root/kotlin/core-jvm/build.gradle.kts" "core-jvm"
   make_gradle_file "$root/kotlin/client-android/build.gradle.kts" "client-android"
   printf '<manifest />\n' >"$root/kotlin/client-android/src/main/AndroidManifest.xml"
+
+  local keymint_source="$root/java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java"
+  mkdir -p "$(dirname "$keymint_source")"
+  cp "$SCRIPT_DIR/../java/iroha_android/android/src/main/java/org/hyperledger/iroha/android/offline/KagemushaAndroidKeyMint.java" \
+    "$keymint_source"
 }
 
 append_candidate_lab_source() {
@@ -591,6 +695,8 @@ for namespace in (
 ):
     for method in shell_array("KAGEMUSHA_JNI_METHODS"):
         print(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
+for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
+    print(symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
     print("connect_norito_kagemusha_recursive_spend_init_v3")
 PY
@@ -1021,7 +1127,9 @@ run_expect_fail "$wrong_bridge_abi" "exact first-release NoritoBridge ABI 21"
 
 enabled_privacy="$TMP_DIR/enabled-privacy"
 make_fixture "$enabled_privacy"
-sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
   "$enabled_privacy/dist/NoritoBridge.artifacts.json"
 rm -f "$enabled_privacy/dist/NoritoBridge.artifacts.json.bak"
 touch "$enabled_privacy/dist/NoritoBridge.xcframework/.privacy-production-enabled"
@@ -1029,7 +1137,9 @@ run_expect_pass "$enabled_privacy"
 
 enabled_without_marker="$TMP_DIR/enabled-without-marker"
 make_fixture "$enabled_without_marker"
-sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
   "$enabled_without_marker/dist/NoritoBridge.artifacts.json"
 rm -f "$enabled_without_marker/dist/NoritoBridge.artifacts.json.bak"
 run_expect_fail "$enabled_without_marker" "missing privacy-production-enabled XCFramework marker"
@@ -1038,6 +1148,62 @@ default_with_marker="$TMP_DIR/default-with-marker"
 make_fixture "$default_with_marker"
 touch "$default_with_marker/dist/NoritoBridge.xcframework/.privacy-production-enabled"
 run_expect_fail "$default_with_marker" "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
+
+missing_production_cargo_features="$TMP_DIR/missing-production-cargo-features"
+make_fixture "$missing_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e '/"cargo_features": \[\],/d' \
+  "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$missing_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$missing_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$missing_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+empty_production_cargo_features="$TMP_DIR/empty-production-cargo-features"
+make_fixture "$empty_production_cargo_features"
+sed -i.bak 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$empty_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$empty_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$empty_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+extra_production_cargo_features="$TMP_DIR/extra-production-cargo-features"
+make_fixture "$extra_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled", "unexpected-feature"]/' \
+  "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$extra_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$extra_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$extra_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+wrong_production_cargo_features="$TMP_DIR/wrong-production-cargo-features"
+make_fixture "$wrong_production_cargo_features"
+sed -i.bak \
+  -e 's/"privacy_production_enabled": false/"privacy_production_enabled": true/' \
+  -e 's/"cargo_features": \[\]/"cargo_features": ["wrong-feature"]/' \
+  "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json"
+rm -f "$wrong_production_cargo_features/dist/NoritoBridge.artifacts.json.bak"
+touch "$wrong_production_cargo_features/dist/NoritoBridge.xcframework/.privacy-production-enabled"
+run_expect_fail \
+  "$wrong_production_cargo_features" \
+  'cargo_features must be exactly ["privacy-production-enabled"]'
+
+default_with_production_cargo_feature="$TMP_DIR/default-with-production-cargo-feature"
+make_fixture "$default_with_production_cargo_feature"
+sed -i.bak \
+  's/"cargo_features": \[\]/"cargo_features": ["privacy-production-enabled"]/' \
+  "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json"
+rm -f "$default_with_production_cargo_feature/dist/NoritoBridge.artifacts.json.bak"
+run_expect_fail \
+  "$default_with_production_cargo_feature" \
+  "default NoritoBridge artifact cargo_features must be exactly []"
 
 invalid_privacy_state="$TMP_DIR/invalid-privacy-state"
 make_fixture "$invalid_privacy_state"
@@ -1088,6 +1254,7 @@ cat >"$missing_hash/dist/NoritoBridge.artifacts.json" <<'JSON'
 {
   "version": "1.0.0",
   "privacy_production_enabled": false,
+  "cargo_features": [],
   "hashes": {
     "ios-arm64": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "macos-arm64": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
@@ -1183,51 +1350,316 @@ make_aar \
   "classes.jar" \
   "jni/arm64-v8a/libconnect_norito_bridge.so" \
   "jni/x86_64/libconnect_norito_bridge.so"
-run_expect_fail "$missing_client_native_source" "missing client-android arm64-v8a native bridge library" --require-built-android
+run_expect_fail \
+  "$missing_client_native_source" \
+  "assets/iroha/native-build-provenance-v1.json" \
+  --require-built-android
 
 missing_client_native_aar_entry="$TMP_DIR/missing-client-native-aar-entry"
 make_fixture "$missing_client_native_aar_entry"
-mkdir -p \
-  "$missing_client_native_aar_entry/kotlin/core-jvm/build/libs" \
-  "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar" \
-  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
-  "$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64"
-make_jar "$missing_client_native_aar_entry/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
-printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
-printf 'so\n' >"$missing_client_native_aar_entry/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
-make_aar \
-  "$missing_client_native_aar_entry/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar" \
-  "jni/arm64-v8a/libconnect_norito_bridge.so"
-run_expect_fail "$missing_client_native_aar_entry" "client-android release aar missing ZIP entry jni/x86_64/libconnect_norito_bridge.so" --require-built-android
+make_android_outputs "$missing_client_native_aar_entry" default x86_64
+run_expect_fail \
+  "$missing_client_native_aar_entry" \
+  "release aar native bridge inventory is not exact" \
+  --require-built-android
 
 with_android_outputs="$TMP_DIR/with-android-outputs"
 make_fixture "$with_android_outputs"
-mkdir -p \
-  "$with_android_outputs/kotlin/core-jvm/build/libs" \
-  "$with_android_outputs/kotlin/client-android/build/outputs/aar" \
-  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a" \
-  "$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64"
-make_jar "$with_android_outputs/kotlin/core-jvm/build/libs/core-jvm-0.1-SNAPSHOT.jar"
-printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
-printf 'fixture\n' >"$with_android_outputs/kotlin/client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so"
-make_aar \
-  "$with_android_outputs/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
-  "AndroidManifest.xml" \
-  "classes.jar" \
-  "jni/arm64-v8a/libconnect_norito_bridge.so" \
-  "jni/x86_64/libconnect_norito_bridge.so"
+make_android_outputs "$with_android_outputs"
 run_expect_pass "$with_android_outputs" --require-built-android
+
+packaged_android_outputs="$TMP_DIR/packaged-android-outputs"
+cp -R "$with_android_outputs" "$packaged_android_outputs"
+mkdir -p "$packaged_android_outputs/scripts"
+cp "$CHECK_SCRIPT" "$packaged_android_outputs/scripts/check_mobile_sdk_artifacts.sh"
+cp "$PACKAGE_SCRIPT" "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh"
+MOBILE_SDK_SKIP_BINARY_INSPECTION=1 \
+  bash "$packaged_android_outputs/scripts/package_mobile_sdk_artifacts.sh" \
+  --root "$packaged_android_outputs" \
+  --android \
+  --version 1.0.0 >/dev/null
+python3 - "$packaged_android_outputs" <<'PY'
+import io
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+archive_path = root / "dist/mobile-sdk/iroha-mobile-sdk-android-1.0.0.zip"
+prefix = "iroha-mobile-sdk-android-1.0.0/"
+with zipfile.ZipFile(archive_path) as archive:
+    names = set(archive.namelist())
+    expected = {
+        prefix + "native/arm64-v8a/libconnect_norito_bridge.so",
+        prefix + "native/x86_64/libconnect_norito_bridge.so",
+        prefix + "native/native-build-provenance-v1.json",
+        prefix + "client-android/client-android-release.aar",
+    }
+    if not expected.issubset(names):
+        raise SystemExit(f"packaged Android native inventory is incomplete: {expected - names}")
+    aar_bytes = archive.read(prefix + "client-android/client-android-release.aar")
+    with zipfile.ZipFile(io.BytesIO(aar_bytes)) as aar:
+        for abi in ("arm64-v8a", "x86_64"):
+            if archive.read(prefix + f"native/{abi}/libconnect_norito_bridge.so") != aar.read(
+                f"jni/{abi}/libconnect_norito_bridge.so"
+            ):
+                raise SystemExit(f"packaged {abi} convenience library differs from AAR")
+        if archive.read(prefix + "native/native-build-provenance-v1.json") != aar.read(
+            "assets/iroha/native-build-provenance-v1.json"
+        ):
+            raise SystemExit("packaged native provenance differs from AAR")
+PY
 
 candidate_marker_android="$TMP_DIR/candidate-marker-android"
 cp -R "$with_android_outputs" "$candidate_marker_android"
 printf '%s\n' 'KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2' \
-  >>"$candidate_marker_android/kotlin/client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so"
+  >>"$candidate_marker_android/kotlin/client-android/build/generated/jniLibs/default/arm64-v8a/libconnect_norito_bridge.so"
 run_expect_fail \
   "$candidate_marker_android" \
-  "contains a non-shipping Kagemusha candidate-lab marker or symbol" \
+  "native bridge byte count differs from provenance" \
   --require-built-android
+
+tampered_android_raw="$TMP_DIR/tampered-android-raw"
+cp -R "$with_android_outputs" "$tampered_android_raw"
+python3 - "$tampered_android_raw" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1]) / (
+    "kotlin/client-android/build/native/cargo-ndk/default/"
+    "arm64-v8a/libconnect_norito_bridge.so"
+)
+payload = bytearray(path.read_bytes())
+payload[0] ^= 1
+path.write_bytes(payload)
+PY
+run_expect_fail \
+  "$tampered_android_raw" \
+  "raw cargo-ndk native bridge differs from provenance" \
+  --android-only --require-built-android
+
+extra_android_raw_library="$TMP_DIR/extra-android-raw-library"
+cp -R "$with_android_outputs" "$extra_android_raw_library"
+printf 'unrelated cdylib\n' > \
+  "$extra_android_raw_library/kotlin/client-android/build/native/cargo-ndk/default/arm64-v8a/libivm_artifact_admission.so"
+run_expect_fail \
+  "$extra_android_raw_library" \
+  "raw cargo-ndk native bridge inventory is not exact" \
+  --android-only --require-built-android
+
+extra_android_generated_library="$TMP_DIR/extra-android-generated-library"
+cp -R "$with_android_outputs" "$extra_android_generated_library"
+printf 'unrelated cdylib\n' > \
+  "$extra_android_generated_library/kotlin/client-android/build/generated/jniLibs/default/x86_64/libivm_artifact_admission.so"
+run_expect_fail \
+  "$extra_android_generated_library" \
+  "generated native bridge inventory is not exact" \
+  --android-only --require-built-android
+
+extra_android_aar_library="$TMP_DIR/extra-android-aar-library"
+cp -R "$with_android_outputs" "$extra_android_aar_library"
+extra_android_aar_stage="$TMP_DIR/extra-android-aar-stage"
+mkdir -p "$extra_android_aar_stage/jni/arm64-v8a"
+printf 'unrelated cdylib\n' > \
+  "$extra_android_aar_stage/jni/arm64-v8a/libivm_artifact_admission.so"
+(
+  cd "$extra_android_aar_stage"
+  zip -q \
+    "$extra_android_aar_library/kotlin/client-android/build/outputs/aar/client-android-release.aar" \
+    jni/arm64-v8a/libivm_artifact_admission.so
+)
+run_expect_fail \
+  "$extra_android_aar_library" \
+  "release aar native bridge inventory is not exact" \
+  --android-only --require-built-android
+
+production_android_outputs="$TMP_DIR/production-android-outputs"
+make_fixture "$production_android_outputs"
+make_android_outputs "$production_android_outputs" production
+run_expect_pass "$production_android_outputs" --android-only --require-built-android
+
+tampered_android_provenance="$TMP_DIR/tampered-android-provenance"
+cp -R "$with_android_outputs" "$tampered_android_provenance"
+python3 - "$tampered_android_provenance" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1]) / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+path.write_text(path.read_text(encoding="utf-8") + " ", encoding="utf-8")
+PY
+run_expect_fail \
+  "$tampered_android_provenance" \
+  "generated native provenance differs from release aar" \
+  --android-only --require-built-android
+
+duplicate_android_provenance="$TMP_DIR/duplicate-android-provenance"
+cp -R "$with_android_outputs" "$duplicate_android_provenance"
+python3 - "$duplicate_android_provenance" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+manifest = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+payload = manifest.read_bytes().replace(
+    b"{\n",
+    b'{\n  "schema": "duplicate",\n',
+    1,
+)
+manifest.write_bytes(payload)
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = payload
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, child in entries.items():
+        output.writestr(name, child)
+PY
+run_expect_fail \
+  "$duplicate_android_provenance" \
+  "native provenance is invalid strict JSON: duplicate JSON member: schema" \
+  --android-only --require-built-android
+
+missing_android_source_fingerprint="$TMP_DIR/missing-android-source-fingerprint"
+cp -R "$with_android_outputs" "$missing_android_source_fingerprint"
+python3 - "$missing_android_source_fingerprint" <<'PY'
+import json
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+manifest = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+payload = json.loads(manifest.read_text(encoding="utf-8"))
+payload.pop("source_fingerprint_sha256")
+manifest_bytes = (json.dumps(payload, indent=2) + "\n").encode("utf-8")
+manifest.write_bytes(manifest_bytes)
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = manifest_bytes
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, child in entries.items():
+        output.writestr(name, child)
+PY
+run_expect_fail \
+  "$missing_android_source_fingerprint" \
+  "native provenance field inventory is not exact" \
+  --android-only --require-built-android
+
+invalid_android_source_fingerprint="$TMP_DIR/invalid-android-source-fingerprint"
+cp -R "$with_android_outputs" "$invalid_android_source_fingerprint"
+python3 - "$invalid_android_source_fingerprint" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+manifest = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+payload = manifest.read_bytes().replace(
+    b'"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"',
+    b'"NOT-A-DIGEST"',
+)
+manifest.write_bytes(payload)
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = payload
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, child in entries.items():
+        output.writestr(name, child)
+PY
+run_expect_fail \
+  "$invalid_android_source_fingerprint" \
+  "source_fingerprint_sha256 is not canonical SHA-256" \
+  --android-only --require-built-android
+
+dirty_android_provenance="$TMP_DIR/dirty-android-provenance"
+cp -R "$with_android_outputs" "$dirty_android_provenance"
+python3 - "$dirty_android_provenance" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+manifest = root / (
+    "kotlin/client-android/build/generated/nativeProvenance/default/"
+    "iroha/native-build-provenance-v1.json"
+)
+payload = manifest.read_bytes().replace(
+    b'"source_tree_dirty": false',
+    b'"source_tree_dirty": true',
+    1,
+)
+manifest.write_bytes(payload)
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = payload
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, child in entries.items():
+        output.writestr(name, child)
+PY
+run_expect_fail \
+  "$dirty_android_provenance" \
+  "release artifact must be built from a clean source tree" \
+  --android-only --require-built-android
+MOBILE_SDK_ALLOW_DIRTY_SOURCE=1 run_expect_pass \
+  "$dirty_android_provenance" \
+  --android-only --require-built-android
+
+symlink_android_native="$TMP_DIR/symlink-android-native"
+cp -R "$with_android_outputs" "$symlink_android_native"
+rm -f \
+  "$symlink_android_native/kotlin/client-android/build/generated/jniLibs/default/arm64-v8a/libconnect_norito_bridge.so"
+ln -s \
+  "../../x86_64/libconnect_norito_bridge.so" \
+  "$symlink_android_native/kotlin/client-android/build/generated/jniLibs/default/arm64-v8a/libconnect_norito_bridge.so"
+run_expect_fail \
+  "$symlink_android_native" \
+  "generated native bridge contains a non-regular entry" \
+  --android-only --require-built-android
+
+invalid_android_production_features="$TMP_DIR/invalid-android-production-features"
+cp -R "$production_android_outputs" "$invalid_android_production_features"
+python3 - "$invalid_android_production_features" <<'PY'
+from pathlib import Path
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+aar = root / "kotlin/client-android/build/outputs/aar/client-android-release.aar"
+entry = "assets/iroha/native-build-provenance-v1.json"
+with zipfile.ZipFile(aar) as source:
+    entries = {info.filename: source.read(info) for info in source.infolist()}
+entries[entry] = entries[entry].replace(
+    b'[\n    "privacy-production-enabled"\n  ]',
+    b"[]",
+)
+with zipfile.ZipFile(aar, "w", compression=zipfile.ZIP_DEFLATED) as output:
+    for name, payload in entries.items():
+        output.writestr(name, payload)
+PY
+run_expect_fail \
+  "$invalid_android_production_features" \
+  "native provenance cargo_features must be exactly" \
+  --android-only --require-built-android
 
 candidate_marker_archive="$TMP_DIR/candidate-marker-archive"
 cp -R "$with_android_outputs" "$candidate_marker_archive"

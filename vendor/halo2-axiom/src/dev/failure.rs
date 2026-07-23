@@ -3,12 +3,11 @@ use std::fmt::{self, Debug};
 
 use group::ff::Field;
 
-use super::metadata::{DebugColumn, DebugVirtualCell};
 use super::MockProver;
+use super::metadata::{DebugColumn, DebugVirtualCell};
 use super::{
-    metadata,
+    Region, metadata,
     util::{self, AnyQuery},
-    Region,
 };
 use crate::dev::metadata::Constraint;
 use crate::{
@@ -214,7 +213,12 @@ impl fmt::Display for VerifyFailure {
                 write!(
                     f,
                     "{} uses {} at offset {}, which requires cell in column {:?} at offset {} with annotation {:?} to be assigned.",
-                    region, gate, gate_offset, column, offset, region.get_column_annotation((*column).into())
+                    region,
+                    gate,
+                    gate_offset,
+                    column,
+                    offset,
+                    region.get_column_annotation((*column).into())
                 )
             }
             Self::InstanceCellNotAssigned {

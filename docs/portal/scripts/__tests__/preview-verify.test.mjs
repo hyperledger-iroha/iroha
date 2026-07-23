@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
-import {mkdtemp, mkdir, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdtemp, mkdir, readFile, rm, symlink, writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -12,6 +12,10 @@ const execFileAsync = promisify(execFile);
 const repoRoot = fileURLToPath(new URL('../../../../', import.meta.url));
 const scriptPath = join(repoRoot, 'docs/portal/scripts/preview_verify.sh');
 const writeChecksumsPath = join(repoRoot, 'docs/portal/scripts/write-checksums.mjs');
+
+function runPreview(args, options) {
+  return execFileAsync('bash', [scriptPath, ...args], options);
+}
 
 async function createBuildFixture() {
   const tmp = await mkdtemp(join(tmpdir(), 'preview-verify-'));
@@ -58,8 +62,7 @@ test('preview verification succeeds with descriptor + archive', async () => {
     const descriptorPath = join(tmp, 'preview-descriptor.json');
     await writeFile(descriptorPath, JSON.stringify(descriptor, null, 2), 'utf8');
 
-    const {stderr} = await execFileAsync(
-      scriptPath,
+    const {stderr} = await runPreview(
       ['--build-dir', buildDir, '--descriptor', descriptorPath, '--archive', archivePath],
       {cwd: repoRoot},
     );
@@ -79,7 +82,7 @@ test('preview verification fails when descriptor hash mismatches', async () => {
     await writeFile(descriptorPath, JSON.stringify(descriptor, null, 2), 'utf8');
 
     await assert.rejects(
-      execFileAsync(scriptPath, ['--build-dir', buildDir, '--descriptor', descriptorPath], {
+      runPreview(['--build-dir', buildDir, '--descriptor', descriptorPath], {
         cwd: repoRoot,
       }),
       (error) =>
@@ -87,6 +90,111 @@ test('preview verification fails when descriptor hash mismatches', async () => {
         error.stderr.includes('descriptor manifest digest mismatch'),
       'expected manifest digest mismatch failure',
     );
+  } finally {
+    await rm(tmp, {recursive: true, force: true});
+  }
+});
+
+test('preview verification rejects files absent from the checksum manifest', async () => {
+  const {tmp, buildDir} = await createBuildFixture();
+  try {
+    await writeFile(
+      join(buildDir, 'static', 'injected.js'),
+      'console.log("not manifested");\n',
+      'utf8',
+    );
+
+    await assert.rejects(
+      runPreview(['--build-dir', buildDir], {cwd: repoRoot}),
+      (error) =>
+        typeof error.stderr === 'string' &&
+        error.stderr.includes(
+          'build contains file absent from checksum manifest: static/injected.js',
+        ),
+      'expected unmanifested file rejection',
+    );
+  } finally {
+    await rm(tmp, {recursive: true, force: true});
+  }
+});
+
+test('preview verification does not exempt nested checksum-manifest names', async () => {
+  const {tmp, buildDir} = await createBuildFixture();
+  try {
+    await writeFile(
+      join(buildDir, 'static', 'checksums.sha256'),
+      'not the root manifest\n',
+      'utf8',
+    );
+
+    await assert.rejects(
+      runPreview(['--build-dir', buildDir], {cwd: repoRoot}),
+      (error) =>
+        typeof error.stderr === 'string' &&
+        error.stderr.includes(
+          'build contains file absent from checksum manifest: static/checksums.sha256',
+        ),
+      'expected nested manifest-name rejection',
+    );
+  } finally {
+    await rm(tmp, {recursive: true, force: true});
+  }
+});
+
+test('preview verification rejects symbolic links in the build tree', async () => {
+  const {tmp, buildDir} = await createBuildFixture();
+  try {
+    await symlink('main.js', join(buildDir, 'static', 'main-link.js'));
+
+    await assert.rejects(
+      runPreview(['--build-dir', buildDir], {cwd: repoRoot}),
+      (error) =>
+        typeof error.stderr === 'string' &&
+        error.stderr.includes('build contains non-regular entry: static/main-link.js'),
+      'expected symbolic-link rejection',
+    );
+  } finally {
+    await rm(tmp, {recursive: true, force: true});
+  }
+});
+
+test('preview verification does not exempt DS Store lookalikes', async () => {
+  const {tmp, buildDir} = await createBuildFixture();
+  try {
+    await writeFile(join(buildDir, '.DS_Store-payload'), 'not macOS metadata\n', 'utf8');
+
+    await assert.rejects(
+      runPreview(['--build-dir', buildDir], {cwd: repoRoot}),
+      (error) =>
+        typeof error.stderr === 'string' &&
+        error.stderr.includes(
+          'build contains file absent from checksum manifest: .DS_Store-payload',
+        ),
+      'expected DS Store lookalike rejection',
+    );
+  } finally {
+    await rm(tmp, {recursive: true, force: true});
+  }
+});
+
+test('checksum writer excludes only the root manifest and exact DS Store metadata', async () => {
+  const {tmp, buildDir} = await createBuildFixture();
+  try {
+    await writeFile(join(buildDir, 'static', 'checksums.sha256'), 'nested payload\n', 'utf8');
+    await writeFile(join(buildDir, '.DS_Store-payload'), 'ordinary payload\n', 'utf8');
+    await writeFile(join(buildDir, '.DS_Store'), 'macOS metadata\n', 'utf8');
+    await execFileAsync('node', [writeChecksumsPath], {
+      cwd: tmp,
+      env: {...process.env, DOCS_RELEASE_SOURCE: 'test'},
+    });
+
+    const manifest = await readFile(join(buildDir, 'checksums.sha256'), 'utf8');
+    assert.match(manifest, /  static\/checksums\.sha256$/m);
+    assert.match(manifest, /  \.DS_Store-payload$/m);
+    assert.doesNotMatch(manifest, /  \.DS_Store$/m);
+
+    const {stderr} = await runPreview(['--build-dir', buildDir], {cwd: repoRoot});
+    assert.match(stderr, /preview verification complete/);
   } finally {
     await rm(tmp, {recursive: true, force: true});
   }

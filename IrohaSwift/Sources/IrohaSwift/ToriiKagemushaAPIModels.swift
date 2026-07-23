@@ -37,6 +37,243 @@ public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
     }
 }
 
+/// App-owned durable checkpoint supplied to native receiver-lineage
+/// verification. `contextID` is the exact marked Iroha HeightContextId.
+public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
+    public let height: UInt64
+    public let contextID: Data
+
+    public init(height: UInt64, contextID: Data) throws {
+        guard (1...UInt64(Int64.max)).contains(height),
+              contextID.count == 32,
+              contextID.contains(where: { $0 != 0 }),
+              contextID.last.map({ ($0 & 1) == 1 }) == true else {
+            throw KagemushaRecursiveSpendError.invalidField("finalityCheckpoint")
+        }
+        self.height = height
+        self.contextID = Data(contextID)
+    }
+
+    init(promotedCheckpointBytes: Data) throws {
+        guard promotedCheckpointBytes.count == 40 else {
+            throw KagemushaRecursiveSpendError.invalidArchive("promotedCheckpoint")
+        }
+        let height = promotedCheckpointBytes.prefix(8).reduce(UInt64(0)) {
+            ($0 << 8) | UInt64($1)
+        }
+        try self.init(height: height, contextID: Data(promotedCheckpointBytes.suffix(32)))
+    }
+}
+
+/// Canonical reusable Torii query for one receiver registration tuple.
+public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
+    public static let maximumArchiveBytes = 32 * 1_024
+    public let noritoArchive: Data
+    public let trustedCheckpointHeight: UInt64
+
+    public init(
+        chainID: String,
+        recipient: String,
+        receiverDeviceID: String,
+        assetDefinitionID: String,
+        trustedCheckpointHeight: UInt64
+    ) throws {
+        try KagemushaRecursiveSpend.requirePortableText(
+            chainID,
+            field: "lineageQuery.chainID",
+            maximum: 256
+        )
+        _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
+        try KagemushaRecursiveSpend.requirePortableText(
+            receiverDeviceID,
+            field: "lineageQuery.receiverDeviceID"
+        )
+        guard AssetDefinitionAddress.decode(assetDefinitionID) != nil,
+              (1...UInt64(Int64.max)).contains(trustedCheckpointHeight),
+              let archive = try NoritoNativeBridge.shared
+                .kagemushaRecipientLineageQueryCreateV2(
+                    chainID: Data(chainID.utf8),
+                    recipient: Data(recipient.utf8),
+                    receiverDeviceID: Data(receiverDeviceID.utf8),
+                    assetDefinitionID: Data(assetDefinitionID.utf8),
+                    trustedCheckpointHeight: trustedCheckpointHeight
+                ) else {
+            if AssetDefinitionAddress.decode(assetDefinitionID) == nil
+                || !(1...UInt64(Int64.max)).contains(trustedCheckpointHeight) {
+                throw KagemushaRecursiveSpendError.invalidField("lineageQuery")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageQuery")
+        }
+        self.noritoArchive = archive
+        self.trustedCheckpointHeight = trustedCheckpointHeight
+    }
+}
+
+public struct KagemushaVerifiedRecipientRegistrationLineageV2: Equatable, Sendable {
+    public let lineage: KagemushaRecipientRegistrationLineage
+    public let promotedCheckpoint: KagemushaFinalityCheckpointV2
+}
+
+public extension KagemushaRecipientRegistrationLineage {
+    static func verifyV2(
+        request: KagemushaRecipientPaymentRequest,
+        lineageArchive: Data,
+        verifiedAtMilliseconds: UInt64,
+        trustedCheckpoint: KagemushaFinalityCheckpointV2
+    ) throws -> KagemushaVerifiedRecipientRegistrationLineageV2 {
+        guard (1...UInt64(Int64.max)).contains(verifiedAtMilliseconds),
+              !lineageArchive.isEmpty,
+              lineageArchive.count <= Self.maximumArchiveBytes,
+              let result = try NoritoNativeBridge.shared
+                .kagemushaRecipientRegistrationLineageVerifyV2(
+                    requestArchive: request.archive,
+                    lineageArchive: lineageArchive,
+                    verifiedAtMilliseconds: verifiedAtMilliseconds,
+                    trustedCheckpointHeight: trustedCheckpoint.height,
+                    trustedCheckpointContextID: trustedCheckpoint.contextID
+                ) else {
+            if verifiedAtMilliseconds == 0 || lineageArchive.isEmpty
+                || lineageArchive.count > Self.maximumArchiveBytes {
+                throw KagemushaRecursiveSpendError.invalidField("receiverLineage")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard result.lineage == lineageArchive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("receiverLineage.canonical")
+        }
+        return KagemushaVerifiedRecipientRegistrationLineageV2(
+            lineage: try KagemushaRecipientRegistrationLineage(
+                verifiedArchive: result.lineage
+            ),
+            promotedCheckpoint: try KagemushaFinalityCheckpointV2(
+                promotedCheckpointBytes: result.promotedCheckpoint
+            )
+        )
+    }
+}
+
+public struct KagemushaProjectedRecipientReceiveOfferV2: Equatable, Sendable {
+    public let request: KagemushaRecipientPaymentRequest
+    public let lineageArchive: Data
+    public let publisherCheckpointEnvelope: Data
+}
+
+public struct KagemushaVerifiedRecipientReceiveOfferV2: Equatable, Sendable {
+    public let request: KagemushaRecipientPaymentRequest
+    public let lineage: KagemushaRecipientRegistrationLineage
+    public let publisherCheckpointEnvelope: Data
+    public let promotedCheckpoint: KagemushaFinalityCheckpointV2
+}
+
+/// Canonical portable receive offer carried as the Kagemusha IPM1
+/// RECEIVE_REQUEST body. Native projection is the only decoder, so Swift never
+/// guesses the Rust `Archived<T>` alignment or header padding.
+public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
+    public static let maximumArchiveBytes = 24_576
+    public static let maximumPublisherEnvelopeBytes = 2_048
+    public let noritoArchive: Data
+
+    public init(
+        request: KagemushaRecipientPaymentRequest,
+        lineageArchive: Data,
+        publisherCheckpointEnvelope: Data
+    ) throws {
+        guard !lineageArchive.isEmpty,
+              lineageArchive.count <= KagemushaRecipientRegistrationLineage.maximumArchiveBytes,
+              (1...Self.maximumPublisherEnvelopeBytes)
+                .contains(publisherCheckpointEnvelope.count),
+              let archive = try NoritoNativeBridge.shared
+                .kagemushaRecipientReceiveOfferCreateV2(
+                    requestArchive: request.archive,
+                    lineageArchive: lineageArchive,
+                    publisherCheckpointEnvelope: publisherCheckpointEnvelope
+                ) else {
+            if lineageArchive.isEmpty
+                || lineageArchive.count > KagemushaRecipientRegistrationLineage.maximumArchiveBytes
+                || !(1...Self.maximumPublisherEnvelopeBytes)
+                    .contains(publisherCheckpointEnvelope.count) {
+                throw KagemushaRecursiveSpendError.invalidField("recipientReceiveOffer")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        try self.init(validatingNativeArchive: archive)
+    }
+
+    public init(noritoArchive: Data) throws {
+        try self.init(validatingNativeArchive: noritoArchive)
+    }
+
+    public func project() throws -> KagemushaProjectedRecipientReceiveOfferV2 {
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecipientReceiveOfferProjectV2(offerArchive: noritoArchive) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        return KagemushaProjectedRecipientReceiveOfferV2(
+            request: try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(result.request),
+            lineageArchive: result.lineage,
+            publisherCheckpointEnvelope: result.publisherEnvelope
+        )
+    }
+
+    /// Verify the exact offer after app policy authenticated the projected
+    /// publisher envelope and selected the corresponding durable checkpoint.
+    public func verify(
+        atMilliseconds: UInt64,
+        trustedCheckpoint: KagemushaFinalityCheckpointV2,
+        authenticatedPublisherCheckpointEnvelope: Data
+    ) throws -> KagemushaVerifiedRecipientReceiveOfferV2 {
+        guard (1...UInt64(Int64.max)).contains(atMilliseconds),
+              (1...Self.maximumPublisherEnvelopeBytes)
+                .contains(authenticatedPublisherCheckpointEnvelope.count) else {
+            throw KagemushaRecursiveSpendError.invalidField("recipientReceiveOffer.verify")
+        }
+        let projected = try project()
+        guard projected.publisherCheckpointEnvelope
+                == authenticatedPublisherCheckpointEnvelope else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "recipientReceiveOffer.publisherEnvelope"
+            )
+        }
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecipientReceiveOfferVerifyV2(
+                offerArchive: noritoArchive,
+                verifiedAtMilliseconds: atMilliseconds,
+                trustedCheckpointHeight: trustedCheckpoint.height,
+                trustedCheckpointContextID: trustedCheckpoint.contextID
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard result.request == projected.request.archive,
+              result.lineage == projected.lineageArchive,
+              result.publisherEnvelope == authenticatedPublisherCheckpointEnvelope else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "recipientReceiveOffer.nativeProjection"
+            )
+        }
+        return KagemushaVerifiedRecipientReceiveOfferV2(
+            request: projected.request,
+            lineage: try KagemushaRecipientRegistrationLineage(
+                verifiedArchive: result.lineage
+            ),
+            publisherCheckpointEnvelope: result.publisherEnvelope,
+            promotedCheckpoint: try KagemushaFinalityCheckpointV2(
+                promotedCheckpointBytes: result.promotedCheckpoint
+            )
+        )
+    }
+
+    private init(validatingNativeArchive archive: Data) throws {
+        guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("recipientReceiveOffer")
+        }
+        self.noritoArchive = Data(archive)
+        _ = try project()
+    }
+}
+
 public enum KagemushaOperationKind: String, Codable, Equatable, Sendable {
     case topUp = "top_up"
     case redeem

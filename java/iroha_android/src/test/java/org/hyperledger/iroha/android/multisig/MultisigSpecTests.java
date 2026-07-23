@@ -1,7 +1,7 @@
 package org.hyperledger.iroha.android.multisig;
 
-import java.util.Arrays;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 public final class MultisigSpecTests {
 
@@ -67,9 +67,7 @@ public final class MultisigSpecTests {
 
   private static String sampleI105(final int fill) {
     try {
-      final byte[] publicKey = new byte[32];
-      Arrays.fill(publicKey, (byte) fill);
-      return AccountAddress.fromAccount(publicKey, "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
           .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final Exception ex) {
       throw new IllegalStateException("failed to build canonical account fixture", ex);

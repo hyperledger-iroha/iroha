@@ -64,7 +64,8 @@ public final class OkHttpTelemetryIntegrationTests {
                 GatewayProvider.builder()
                     .setName("alpha")
                     .setProviderIdHex("01".repeat(32))
-                    .setGatewayPublicKeyHex("02".repeat(32))
+                    .setGatewayPublicKeyHex(
+                        "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
                     .setBaseUrl("https://provider.example")
                     .setStreamTokenBase64("c3RyZWFtLXRva2Vu")
                     .build())

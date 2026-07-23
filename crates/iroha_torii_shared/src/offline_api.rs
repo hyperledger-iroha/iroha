@@ -4,35 +4,90 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 
 use iroha_crypto::Hash;
 use iroha_data_model::{
-    isi::offline::RegisterOfflineDeviceAttestation, transaction::signed::TransactionEntrypoint,
+    ChainId,
+    account::AccountId,
+    asset::AssetDefinitionId,
+    block::consensus_v2::{HeightContextId, finality::V2FinalityArtifact},
+    bridge::{BridgeFinalityProof, BridgeFinalityVerifier},
+    offline::{
+        KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2, KagemushaActiveReceiverEntryV1,
+        KagemushaActiveReceiverMembershipProofV1, KagemushaActiveReceiverSnapshotStatusV1,
+        KagemushaActiveReceiverWitnessProofV1, KagemushaRecipientPaymentRequestV2,
+    },
 };
 
 use crate::ErrorEnvelope;
 
 pub use iroha_data_model::offline::{
-    KagemushaRecipientPaymentRequestV2 as OfflineRecipientLineageRequest,
     KagemushaRecursiveSpendRedeemRequestV4 as OfflineRedeemRequest,
     KagemushaRecursiveSpendTopUpRequestV4 as OfflineTopUpRequest,
     OFFLINE_REDEEM_REQUEST_SCHEMA_NAME, OFFLINE_TOP_UP_REQUEST_SCHEMA_NAME,
 };
 
-/// Stable public Norito schema name for the signed receiver-lineage request.
+/// Stable public Norito schema name for the request-independent lineage query.
 pub const OFFLINE_RECIPIENT_LINEAGE_REQUEST_SCHEMA_NAME: &str =
     "iroha.torii.v1.offline.recipient_lineage.request";
 /// Stable public Norito schema name for the proof-bearing receiver-lineage response.
 pub const OFFLINE_RECIPIENT_LINEAGE_RESPONSE_SCHEMA_NAME: &str =
     "iroha.torii.v1.offline.recipient_lineage.response";
-/// Current proof-bearing receiver-lineage response layout.
-pub const OFFLINE_RECIPIENT_LINEAGE_VERSION: u16 = 1;
+/// Current proof-bearing receiver-lineage request/response layout.
+pub const OFFLINE_RECIPIENT_LINEAGE_VERSION: u16 = 2;
+/// Maximum number of consecutive finality proofs, including the trusted checkpoint proof.
+pub const OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS: usize = 64;
+/// Maximum canonical bytes occupied by the bounded finality chain.
+pub const OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES: usize = 3 * 1024 * 1024;
 /// Defensive response bound shared by maintained mobile clients.
 pub const OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
+/// Maximum opaque publisher checkpoint envelope carried by a peer receive offer.
+pub const OFFLINE_RECIPIENT_OFFER_MAX_PUBLISHER_ENVELOPE_BYTES: usize = 2 * 1024;
+/// Maximum canonical offer body accepted by the shared IPM1 Kagemusha profile.
+pub const OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES: usize = 24_576;
+/// Fixed Iroha peer-wire v1 header wrapped around a canonical offer body.
+pub const OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES: usize = 84;
+/// Maximum uncompressed peer-wire message containing one canonical offer.
+pub const OFFLINE_RECIPIENT_OFFER_MAX_PEER_WIRE_BYTES: usize =
+    OFFLINE_RECIPIENT_OFFER_PEER_WIRE_HEADER_BYTES + OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES;
 
-/// Proof-bearing active registration lineage for one signed recipient request.
+/// Request-independent receiver tuple whose proof can be prefetched while online.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineRecipientLineageSelectorV2 {
+    /// Target chain.
+    pub chain_id: ChainId,
+    /// Recipient account.
+    pub recipient: AccountId,
+    /// Platform device identifier.
+    pub receiver_device_id: String,
+    /// Offline-cash asset definition.
+    pub asset: AssetDefinitionId,
+}
+
+/// Receiver-lineage query guided by an externally trusted mobile checkpoint.
 ///
-/// The committed transaction contains the exact
-/// `RegisterOfflineDeviceAttestation` instruction. Its entrypoint/result Merkle
-/// paths verify against `admission_block_header`, whose hash is finalized by
-/// `admission_finality`. Hash strings are canonical lowercase 32-byte hex.
+/// The height is not itself a trust anchor. Native verification also requires
+/// the checkpoint context id from release-pinned or previously verified local
+/// state and rejects a response whose first proof does not match both values.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineRecipientLineageRequest {
+    /// Query layout version.
+    pub version: u16,
+    /// Request-independent receiver tuple.
+    pub selector: OfflineRecipientLineageSelectorV2,
+    /// Height of the externally trusted checkpoint proof which must start the response chain.
+    pub trusted_checkpoint_height: u64,
+}
+
+/// Reusable proof-bearing active registration lineage for one receiver tuple.
+///
+/// Authorization comes exclusively from the end-of-block active-receiver
+/// snapshot synthetic write and its Commit-QC-authenticated ordinary-write
+/// root. Admission transaction metadata inside the active leaf is audit
+/// provenance only; no caller may treat a header result root as authorization.
 #[derive(
     Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
 )]
@@ -40,27 +95,19 @@ pub const OFFLINE_RECIPIENT_LINEAGE_MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
 pub struct OfflineRecipientRegistrationLineage {
     /// Response layout version.
     pub version: u16,
-    /// Canonical digest of the exact signed payment request.
-    pub request_digest: String,
-    /// Iroha hash of the canonical registration archive.
-    pub registration_hash: String,
-    /// Governed policy hash recorded at registration admission.
-    pub admission_policy_hash: String,
-    /// Governed policy hash at `evaluated_block_height`.
-    pub evaluated_policy_hash: String,
-    /// Exact registration archive committed by the admitting transaction.
-    pub registration: iroha_data_model::offline::OfflineDeviceAttestationRegistration,
-    /// Height of the block containing the registration transaction.
-    pub admission_block_height: u64,
-    /// Header whose transaction/result roots authenticate the committed transaction.
-    pub admission_block_header: iroha_data_model::block::BlockHeader,
-    /// Canonical signed transaction hash, in lowercase hex.
-    pub registration_transaction_hash: String,
-    /// Exact committed transaction plus bounded entrypoint and result paths.
-    pub registration_transaction: iroha_data_model::query::CommittedTransaction,
-    /// Independently verifiable historical finality artifact for the admission block.
-    pub admission_finality: iroha_data_model::block::consensus_v2::finality::V2FinalityArtifact,
-    /// Height of the immutable state snapshot used to resolve current policy/lifecycle.
+    /// Request-independent tuple authenticated by this reusable proof.
+    pub selector: OfflineRecipientLineageSelectorV2,
+    /// Unique active entry for the request tuple. Ambiguous entries are never returned.
+    pub active_receiver_entry: KagemushaActiveReceiverEntryV1,
+    /// Balanced-tree membership path from the active entry to the snapshot commitment.
+    pub active_receiver_membership: KagemushaActiveReceiverMembershipProofV1,
+    /// Fixed synthetic write and 256-level path to the evaluated ordinary-write root.
+    pub active_receiver_witness: KagemushaActiveReceiverWitnessProofV1,
+    /// Bounded consecutive chain beginning at the publisher checkpoint used for prefetch.
+    pub finality_chain: Vec<BridgeFinalityProof>,
+    /// Context id of the last verified proof, suitable for durable checkpoint promotion.
+    pub evaluated_context_id: HeightContextId,
+    /// Height of the immutable end-of-block state snapshot.
     pub evaluated_block_height: u64,
     /// Canonical hash of the evaluated committed block.
     pub evaluated_block_hash: String,
@@ -69,147 +116,252 @@ pub struct OfflineRecipientRegistrationLineage {
 impl OfflineRecipientRegistrationLineage {
     /// Verify every portable binding in this proof-bearing response.
     ///
-    /// This is the maintained SDK/native-bridge verification boundary. It
-    /// authenticates the signed request, exact registration tuple and
-    /// lifetime, admitting transaction and both Merkle paths, admission block
-    /// header, and the historical Sumeragi-v2 certificate against its frozen
-    /// roster and proof-of-possession set. The caller supplies its trusted
-    /// current time; the opaque local receiver-key reference is deliberately
-    /// not treated as an on-chain registration field.
+    /// This is the maintained SDK/native-bridge verification boundary. The
+    /// caller supplies an externally trusted checkpoint height/context; the
+    /// response is never allowed to choose its own trust root.
     pub fn verify_against(
         &self,
-        request: &OfflineRecipientLineageRequest,
+        request: &KagemushaRecipientPaymentRequestV2,
         verified_at_ms: u64,
-        expected_evaluated_block_height: u64,
-        expected_evaluated_block_hash: &[u8; 32],
-    ) -> Result<(), String> {
-        const MAX_MERKLE_HEIGHT: usize = 32;
-
+        trusted_checkpoint_height: u64,
+        trusted_checkpoint_context_id: [u8; 32],
+    ) -> Result<HeightContextId, String> {
         if self.version != OFFLINE_RECIPIENT_LINEAGE_VERSION
             || verified_at_ms == 0
-            || expected_evaluated_block_height == 0
-            || expected_evaluated_block_hash.iter().all(|byte| *byte == 0)
+            || trusted_checkpoint_height == 0
+            || self.evaluated_block_height == 0
+            || trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
+            || trusted_checkpoint_context_id[31] & 1 == 0
         {
-            return Err("unsupported receiver-lineage version or verification time".to_owned());
+            return Err(
+                "unsupported receiver-lineage version or non-canonical verification anchor"
+                    .to_owned(),
+            );
         }
         request
             .validate_at(verified_at_ms)
             .map_err(|error| format!("recipient request validation failed: {error}"))?;
-        let request_digest = request
-            .digest()
-            .map_err(|error| format!("recipient request digest failed: {error}"))?;
-        ensure_exact_lower_hex("request_digest", &self.request_digest, &request_digest)?;
+        if self.selector.chain_id != *request.chain_id()
+            || self.selector.recipient != *request.recipient()
+            || self.selector.receiver_device_id != request.receiver_device_id()
+            || self.selector.asset != *request.asset()
+        {
+            return Err("receiver-lineage selector does not match the signed request".to_owned());
+        }
 
-        let registration_archive = norito::to_bytes(&self.registration)
-            .map_err(|error| format!("registration encoding failed: {error}"))?;
-        let registration_hash = Hash::new(registration_archive);
-        ensure_exact_lower_hex(
-            "registration_hash",
-            &self.registration_hash,
-            registration_hash.as_ref(),
-        )?;
-        if &self.registration.account_id != request.recipient()
-            || self.registration.device_id != request.receiver_device_id()
-            || self.registration.asset_definition_id.as_ref() != Some(request.asset())
-            || &self.registration.public_key != request.receiver_public_key()
-        {
-            return Err(
-                "registration does not match recipient account, device, asset, and P-256 key"
-                    .to_owned(),
-            );
-        }
-        if self.registration.expires_at_ms < request.expires_at_ms()
-            || self.registration.expires_at_ms <= verified_at_ms
-        {
-            return Err("registration does not cover the request lifetime".to_owned());
-        }
-        let admission_policy_hash =
-            exact_lower_hex_32("admission_policy_hash", &self.admission_policy_hash)?;
-        let evaluated_policy_hash =
-            exact_lower_hex_32("evaluated_policy_hash", &self.evaluated_policy_hash)?;
-        if admission_policy_hash != evaluated_policy_hash
-            || admission_policy_hash.iter().all(|byte| *byte == 0)
-        {
-            return Err("registration policy was rotated or is invalid".to_owned());
-        }
-        if self.admission_block_height == 0
-            || self.evaluated_block_height < self.admission_block_height
-            || self.admission_block_header.height().get() != self.admission_block_height
-        {
-            return Err("registration admission/evaluation heights are inconsistent".to_owned());
-        }
         let evaluated_block_hash =
             exact_lower_hex_32("evaluated_block_hash", &self.evaluated_block_hash)?;
-        if self.evaluated_block_height != expected_evaluated_block_height
-            || &evaluated_block_hash != expected_evaluated_block_hash
-        {
-            return Err(
-                "receiver lineage does not match the required readiness snapshot".to_owned(),
-            );
+        if evaluated_block_hash.iter().all(|byte| *byte == 0) || evaluated_block_hash[31] & 1 == 0 {
+            return Err("evaluated block hash is not a canonical Iroha hash".to_owned());
         }
 
-        let committed = &self.registration_transaction;
-        if committed.merge_inclusion().is_some()
-            || committed.block_hash() != &self.admission_block_header.hash()
-            || committed.entrypoint_hash() != &committed.entrypoint().hash()
-            || committed.result_hash() != &committed.result().hash()
-            || committed.result().as_ref().is_err()
-            || committed.entrypoint_proof().audit_path().len() > MAX_MERKLE_HEIGHT
-            || committed.result_proof().audit_path().len() > MAX_MERKLE_HEIGHT
-            || committed.entrypoint_proof().leaf_index() != committed.result_proof().leaf_index()
+        if self.finality_chain.is_empty()
+            || self.finality_chain.len() > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
         {
-            return Err("committed registration transaction is internally inconsistent".to_owned());
+            return Err("receiver-lineage finality chain is empty or exceeds 64 proofs".to_owned());
         }
-        let TransactionEntrypoint::External(transaction) = committed.entrypoint() else {
-            return Err("registration provenance is not an external signed transaction".to_owned());
-        };
-        ensure_exact_lower_hex(
-            "registration_transaction_hash",
-            &self.registration_transaction_hash,
-            transaction.hash().as_ref(),
-        )?;
-        let matching_registrations = transaction
-            .instructions()
-            .explicit_instructions()
-            .filter_map(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<RegisterOfflineDeviceAttestation>()
-            })
-            .filter(|instruction| instruction.registration() == &self.registration)
-            .count();
-        if matching_registrations != 1 {
+        let finality_bytes = norito::to_bytes(&self.finality_chain)
+            .map_err(|error| format!("finality chain encoding failed: {error}"))?;
+        if finality_bytes.len() > OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES {
+            return Err("receiver-lineage finality chain exceeds its byte bound".to_owned());
+        }
+        if self.finality_chain.windows(2).any(|pair| {
+            pair[0].finality_artifact.height.checked_add(1)
+                != Some(pair[1].finality_artifact.height)
+        }) {
+            return Err("receiver-lineage finality chain skips or reorders a height".to_owned());
+        }
+        let trusted_context = HeightContextId(iroha_crypto::HashOf::from_untyped_unchecked(
+            Hash::prehashed(trusted_checkpoint_context_id),
+        ));
+        let trusted_index = self
+            .finality_chain
+            .iter()
+            .position(|proof| proof.finality_artifact.height == trusted_checkpoint_height)
+            .ok_or_else(|| {
+                "finality chain does not contain the caller's durable checkpoint height".to_owned()
+            })?;
+        if self.finality_chain[trusted_index]
+            .finality_artifact
+            .context_id()
+            != trusted_context
+        {
             return Err(
-                "admitting transaction must contain exactly one copy of the registration"
+                "finality chain checkpoint does not match the caller's durable context".to_owned(),
+            );
+        }
+        let mut verifier =
+            BridgeFinalityVerifier::with_context(request.chain_id().clone(), trusted_context);
+        for proof in &self.finality_chain[trusted_index..] {
+            verifier
+                .verify(proof)
+                .map_err(|error| format!("receiver-lineage finality chain failed: {error}"))?;
+        }
+        let evaluated = self
+            .finality_chain
+            .last()
+            .expect("non-empty finality chain");
+        let artifact: &V2FinalityArtifact = &evaluated.finality_artifact;
+        if artifact.height != self.evaluated_block_height
+            || artifact.block_hash.as_ref() != &evaluated_block_hash
+            || evaluated.block_header.height().get() != artifact.height
+            || evaluated.block_header.hash() != artifact.block_hash
+            || self.evaluated_context_id != artifact.context_id()
+        {
+            return Err(
+                "finality chain tip does not match the evaluated readiness block".to_owned(),
+            );
+        }
+        let evaluated_at_ms = u64::try_from(evaluated.block_header.creation_time().as_millis())
+            .map_err(|_| "evaluated block creation time does not fit u64".to_owned())?;
+        if evaluated_at_ms > verified_at_ms
+            || verified_at_ms - evaluated_at_ms > KAGEMUSHA_REQUEST_AUTHORIZATION_MAX_TTL_MS_V2
+        {
+            return Err(
+                "receiver-lineage snapshot is from the future or older than five minutes"
                     .to_owned(),
             );
         }
-        let entry_root = self
-            .admission_block_header
-            .merkle_root()
-            .ok_or_else(|| "admission header has no entrypoint Merkle root".to_owned())?;
-        let result_root = self
-            .admission_block_header
-            .result_merkle_root()
-            .ok_or_else(|| "admission header has no result Merkle root".to_owned())?;
-        if !committed.entrypoint_proof().clone().verify(
-            committed.entrypoint_hash(),
-            &entry_root,
-            MAX_MERKLE_HEIGHT,
-        ) || !committed.result_proof().clone().verify(
-            committed.result_hash(),
-            &result_root,
-            MAX_MERKLE_HEIGHT,
-        ) {
-            return Err("registration transaction Merkle proof is invalid".to_owned());
+        artifact
+            .commit_qc
+            .execution_commitment
+            .validate()
+            .map_err(|error| format!("evaluated execution commitment is invalid: {error}"))?;
+        if !self
+            .active_receiver_witness
+            .verify(artifact.commit_qc.execution_commitment.ordinary_writes_root)
+        {
+            return Err("active-receiver synthetic write proof is invalid".to_owned());
         }
-        self.admission_finality
-            .validate_for_header(&self.admission_block_header)
-            .map_err(|error| format!("admission finality/header binding failed: {error}"))?;
-        self.admission_finality
-            .verify()
-            .map_err(|error| format!("admission finality verification failed: {error}"))?;
+        let snapshot = self.active_receiver_witness.commitment()?;
+        if snapshot.evaluated_height != artifact.height
+            || snapshot.evaluated_at_ms != evaluated_at_ms
+        {
+            return Err("active-receiver snapshot height/time differs from finality".to_owned());
+        }
+        let KagemushaActiveReceiverSnapshotStatusV1::Available(policy_hash) = snapshot.status
+        else {
+            return Err("active-receiver snapshot is unavailable".to_owned());
+        };
+        if !self
+            .active_receiver_membership
+            .verify(&self.active_receiver_entry, &snapshot)
+        {
+            return Err("active-receiver membership proof is invalid".to_owned());
+        }
+        let KagemushaActiveReceiverEntryV1::Active(active) = &self.active_receiver_entry else {
+            return Err("ambiguous receiver tuples cannot be routed".to_owned());
+        };
+        let value = &active.value;
+        if active.key.account_id != *request.recipient()
+            || active.key.device_id != request.receiver_device_id()
+            || active.key.asset_definition_id != *request.asset()
+            || value.public_key != *request.receiver_public_key()
+            || value
+                .registration_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || value.admission_policy_hash != policy_hash
+            || value.current_policy_hash != policy_hash
+            || value.admission_height == 0
+            || value.admission_height > artifact.height
+            || value
+                .registration_state_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || value
+                .admission_transaction_hash
+                .as_ref()
+                .iter()
+                .all(|byte| *byte == 0)
+            || !value.account_exists
+            || !value.asset_definition_exists
+        {
+            return Err(
+                "active receiver does not match the exact governed request tuple".to_owned(),
+            );
+        }
+        if value.expires_at_ms < request.expires_at_ms()
+            || value.expires_at_ms <= evaluated_at_ms
+            || value.expires_at_ms <= verified_at_ms
+        {
+            return Err(
+                "active receiver registration does not cover the request lifetime".to_owned(),
+            );
+        }
+        Ok(artifact.context_id())
+    }
+}
+
+/// Canonical portable peer offer verified without a live Torii connection.
+///
+/// `publisher_checkpoint_envelope` is opaque to Iroha consensus/native
+/// verification. Apps may verify it under their separately pinned publisher
+/// key before selecting the trusted checkpoint supplied to `verify_against`.
+#[derive(
+    Debug, Clone, PartialEq, Eq, JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize,
+)]
+#[norito(deny_unknown_fields)]
+pub struct OfflineRecipientReceiveOfferV2 {
+    /// Offer format version.
+    pub version: u16,
+    /// Exact later-created signed payment request.
+    pub request: KagemushaRecipientPaymentRequestV2,
+    /// Reusable receiver lineage prefetched while online.
+    pub lineage: OfflineRecipientRegistrationLineage,
+    /// Optional app-publisher checkpoint update envelope, capped at 2 KiB.
+    pub publisher_checkpoint_envelope: Option<Vec<u8>>,
+}
+
+impl OfflineRecipientReceiveOfferV2 {
+    /// Enforce the transport-only structure before app policy verification.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        if self.version != OFFLINE_RECIPIENT_LINEAGE_VERSION
+            || self.lineage.version != OFFLINE_RECIPIENT_LINEAGE_VERSION
+            || self
+                .publisher_checkpoint_envelope
+                .as_ref()
+                .is_some_and(|bytes| {
+                    bytes.is_empty()
+                        || bytes.len() > OFFLINE_RECIPIENT_OFFER_MAX_PUBLISHER_ENVELOPE_BYTES
+                })
+        {
+            return Err("portable receiver offer version or publisher envelope is invalid".into());
+        }
+        self.request
+            .validate_public_binding()
+            .map_err(|error| format!("portable receiver request is invalid: {error}"))?;
+        let KagemushaActiveReceiverEntryV1::Active(active) = &self.lineage.active_receiver_entry
+        else {
+            return Err("portable receiver offer contains an ambiguous receiver tuple".into());
+        };
+        if self.lineage.selector.chain_id != *self.request.chain_id()
+            || self.lineage.selector.recipient != *self.request.recipient()
+            || self.lineage.selector.receiver_device_id != self.request.receiver_device_id()
+            || self.lineage.selector.asset != *self.request.asset()
+            || active.key.account_id != *self.request.recipient()
+            || active.key.device_id != self.request.receiver_device_id()
+            || active.key.asset_definition_id != *self.request.asset()
+            || active.value.public_key != *self.request.receiver_public_key()
+        {
+            return Err("portable receiver offer request and reusable lineage do not match".into());
+        }
+        let encoded = norito::to_bytes(self)
+            .map_err(|error| format!("portable receiver offer encoding failed: {error}"))?;
+        if encoded.len() > OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES {
+            return Err(format!(
+                "portable receiver offer exceeds the {OFFLINE_RECIPIENT_OFFER_MAX_PEER_BYTES}-byte direct peer limit"
+            ));
+        }
         Ok(())
+    }
+
+    /// Opaque publisher checkpoint bytes for app-owned signature/policy checks.
+    #[must_use]
+    pub fn publisher_checkpoint_envelope(&self) -> Option<&[u8]> {
+        self.publisher_checkpoint_envelope.as_deref()
     }
 }
 
@@ -225,14 +377,6 @@ fn exact_lower_hex_32(field: &str, value: &str) -> Result<[u8; 32], String> {
     hex::decode_to_slice(value, &mut decoded)
         .map_err(|_| format!("{field} must be canonical lowercase 32-byte hex"))?;
     Ok(decoded)
-}
-
-fn ensure_exact_lower_hex(field: &str, value: &str, expected: &[u8]) -> Result<(), String> {
-    let decoded = exact_lower_hex_32(field, value)?;
-    if decoded.as_slice() != expected {
-        return Err(format!("{field} does not match the canonical value"));
-    }
-    Ok(())
 }
 
 /// Finalized anchor returned by an applied offline top-up.

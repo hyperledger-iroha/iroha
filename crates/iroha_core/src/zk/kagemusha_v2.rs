@@ -6,6 +6,8 @@
 //! so initialization, one-parent, and two-parent transitions use identical
 //! keys, layouts, and proof-size limits.
 
+use std::sync::Arc;
+
 use halo2_proofs::halo2curves::pasta::Fp as Scalar;
 use iroha_data_model::offline::{
     KAGEMUSHA_PASTA_PUBLIC_LIVE_SELECTOR_V4, KAGEMUSHA_RECURSIVE_SPEND_MAX_BRANCH_CLAIMS_V2,
@@ -20,8 +22,11 @@ use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
 pub use super::kagemusha_recursion_adapter::{
-    KagemushaGeneratedParityArtifactsV4, KagemushaGeneratedPastaCycleArtifactsV4,
+    KagemushaGeneratedArtifactSpoolV4, KagemushaGeneratedParityArtifactsV4,
+    KagemushaGeneratedParityProfileV4, KagemushaGeneratedPastaCycleArtifactsV4,
     KagemushaGenerationSupervisorPermitV4, claim_kagemusha_generation_supervisor_permit_v4,
+    generate_kagemusha_pasta_cycle_artifacts_streaming_v4,
+    generate_kagemusha_pasta_cycle_artifacts_streaming_with_progress_v4,
     generate_kagemusha_pasta_cycle_artifacts_v4, validate_kagemusha_proof_pair_measurement_v4,
     validate_kagemusha_step_bootstrap_payload_v4,
 };
@@ -1430,8 +1435,63 @@ impl<'a> KagemushaArtifactLoaderBindingV4<'a> {
 /// Lifecycle callers select a semantic operation and provide its confidential
 /// openings, but never receive or construct fold transcripts, accumulator
 /// wires, bootstrap slots, or raw recursion public inputs.
+enum KagemushaPastaCycleOpaqueProverInnerV4 {
+    Eager(super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4),
+    SourceBacked {
+        prover: super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedProverV4,
+        source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
+    },
+}
+
+impl KagemushaPastaCycleOpaqueProverInnerV4 {
+    fn step_eq_compiled_protocol_sha256(&self) -> [u8; 32] {
+        match self {
+            Self::Eager(inner) => inner.step_eq_compiled_protocol_sha256(),
+            Self::SourceBacked { prover, .. } => prover.step_eq_compiled_protocol_sha256(),
+        }
+    }
+
+    fn step_ep_compiled_protocol_sha256(&self) -> [u8; 32] {
+        match self {
+            Self::Eager(inner) => inner.step_ep_compiled_protocol_sha256(),
+            Self::SourceBacked { prover, .. } => prover.step_ep_compiled_protocol_sha256(),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn prove_operation_encoded_v4(
+        &self,
+        public_inputs: super::kagemusha_recursion_adapter::KagemushaPastaCyclePublicInputsV4,
+        proof_step_count: u32,
+        parent_pair_bytes: &[&[u8]],
+        parent_state_openings: &[Vec<u32>],
+        secure: &super::confidential_v2::KagemushaStepSecureWitnessV3,
+        output_membership: &KagemushaOutputMembershipWitnessV4,
+    ) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Eager(inner) => inner.prove_operation_encoded_v4(
+                public_inputs,
+                proof_step_count,
+                parent_pair_bytes,
+                parent_state_openings,
+                secure,
+                output_membership,
+            ),
+            Self::SourceBacked { prover, .. } => prover.prove_operation_encoded_v4(
+                public_inputs,
+                proof_step_count,
+                parent_pair_bytes,
+                parent_state_openings,
+                secure,
+                output_membership,
+            ),
+        }
+    }
+}
+
+/// Opaque Eq/Ep recursive-spend prover backed by one authenticated V4 release.
 pub struct KagemushaPastaCycleOpaqueProverV4 {
-    inner: super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4,
+    inner: KagemushaPastaCycleOpaqueProverInnerV4,
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
     manifest_sha256: [u8; 32],
     candidate_evidence_lab: bool,
@@ -1443,9 +1503,11 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         artifacts: &super::kagemusha_artifact_v4::KagemushaPastaCycleProverArtifactsV4,
     ) -> Result<Self, String> {
         Ok(Self {
-            inner: super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_authenticated_artifacts(
-                artifacts,
-            )?,
+            inner: KagemushaPastaCycleOpaqueProverInnerV4::Eager(
+                super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_authenticated_artifacts(
+                    artifacts,
+                )?,
+            ),
             manifest: artifacts.verifier().manifest().clone(),
             manifest_sha256: artifacts.manifest_sha256(),
             candidate_evidence_lab: artifacts.verifier().is_candidate_evidence_lab(),
@@ -1496,19 +1558,23 @@ impl KagemushaPastaCycleOpaqueProverV4 {
         >,
     {
         let binding = KagemushaArtifactLoaderBindingV4::authenticated_release(release)?;
-        let inner = super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_authenticated_artifact_spool_loader(
-            release,
-            step_eq_proving_key_file,
-            step_ep_proving_key_file,
-            |parity, kind| {
-                if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
-                    return Err("Kagemusha V5 bounded-role loader requested a proving key".to_owned());
-                }
-                let payload = load(parity, kind)?;
-                binding.validate_payload(&payload, parity, kind)?;
-                Ok(payload)
-            },
-        )?;
+        let inner = KagemushaPastaCycleOpaqueProverInnerV4::Eager(
+            super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_authenticated_artifact_spool_loader(
+                release,
+                step_eq_proving_key_file,
+                step_ep_proving_key_file,
+                |parity, kind| {
+                    if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+                        return Err(
+                            "Kagemusha V5 bounded-role loader requested a proving key".to_owned(),
+                        );
+                    }
+                    let payload = load(parity, kind)?;
+                    binding.validate_payload(&payload, parity, kind)?;
+                    Ok(payload)
+                },
+            )?,
+        );
         Ok(Self {
             inner,
             manifest: release.manifest().clone(),
@@ -1523,8 +1589,22 @@ impl KagemushaPastaCycleOpaqueProverV4 {
     pub fn shared_terminal_verifier_v5(
         &self,
     ) -> Result<KagemushaPastaCycleOpaqueVerifierV4, String> {
+        let inner = match &self.inner {
+            KagemushaPastaCycleOpaqueProverInnerV4::Eager(inner) => {
+                KagemushaPastaCycleOpaqueVerifierInnerV4::Eager(
+                    inner.shared_terminal_verifier_v5()?,
+                )
+            }
+            KagemushaPastaCycleOpaqueProverInnerV4::SourceBacked { source, .. } => {
+                KagemushaPastaCycleOpaqueVerifierInnerV4::SourceBacked(
+                    super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedVerifierV4::new(
+                        Arc::clone(source),
+                    )?,
+                )
+            }
+        };
         Ok(KagemushaPastaCycleOpaqueVerifierV4 {
-            inner: self.inner.shared_terminal_verifier_v5()?,
+            inner,
             manifest: self.manifest.clone(),
             manifest_sha256: self.manifest_sha256,
             candidate_evidence_lab: self.candidate_evidence_lab,
@@ -1556,24 +1636,26 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             expected_candidate_sha256,
             expected_manifest_sha256,
         )?;
-        let inner = super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_candidate_artifact_spool_loader(
-            candidate,
-            expected_candidate_sha256,
-            expected_manifest_sha256,
-            step_eq_proving_key_file,
-            step_ep_proving_key_file,
-            |parity, kind| {
-                if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
-                    return Err(
-                        "Kagemusha V5 bounded candidate-role loader requested a proving key"
-                            .to_owned(),
-                    );
-                }
-                let payload = load(parity, kind)?;
-                binding.validate_payload(&payload, parity, kind)?;
-                Ok(payload)
-            },
-        )?;
+        let inner = KagemushaPastaCycleOpaqueProverInnerV4::Eager(
+            super::kagemusha_recursion_adapter::KagemushaPastaCycleProverV4::from_candidate_artifact_spool_loader(
+                candidate,
+                expected_candidate_sha256,
+                expected_manifest_sha256,
+                step_eq_proving_key_file,
+                step_ep_proving_key_file,
+                |parity, kind| {
+                    if kind == KagemushaPastaCycleArtifactKindV4::ProvingKey {
+                        return Err(
+                            "Kagemusha V5 bounded candidate-role loader requested a proving key"
+                                .to_owned(),
+                        );
+                    }
+                    let payload = load(parity, kind)?;
+                    binding.validate_payload(&payload, parity, kind)?;
+                    Ok(payload)
+                },
+            )?,
+        );
         Ok(Self {
             inner,
             manifest: candidate.manifest.clone(),
@@ -1610,6 +1692,24 @@ impl KagemushaPastaCycleOpaqueProverV4 {
             "Kagemusha V5 candidate/in-memory proving-key loaders require authenticated spools"
                 .to_owned(),
         )
+    }
+
+    /// Construct a production prover from a core-qualified pinned source.
+    pub fn from_qualified_artifact_source(
+        source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
+    ) -> Result<Self, String> {
+        let manifest = source.authenticated_release().manifest().clone();
+        let manifest_sha256 = source.authenticated_release().manifest_sha256();
+        let prover =
+            super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedProverV4::new(
+                Arc::clone(&source),
+            )?;
+        Ok(Self {
+            inner: KagemushaPastaCycleOpaqueProverInnerV4::SourceBacked { prover, source },
+            manifest,
+            manifest_sha256,
+            candidate_evidence_lab: false,
+        })
     }
 
     /// Prove the first V4 state directly from the finalized top-up opening and
@@ -1834,10 +1934,60 @@ impl KagemushaPastaCycleOpaqueProverV4 {
     }
 }
 
-/// Opaque ABI-21 terminal-verifier facade. Public verification accepts only a
-/// complete V4 bundle; recursion-specific pair internals remain private.
+/// Opaque ABI-21 terminal-verifier facade. Spend acceptance requires a
+/// complete V4 bundle; the separate unbound-pair method exists only for
+/// authenticated release qualification. Recursion-specific pair internals
+/// remain private.
+enum KagemushaPastaCycleOpaqueVerifierInnerV4 {
+    Eager(super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4),
+    SourceBacked(super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedVerifierV4),
+}
+
+impl KagemushaPastaCycleOpaqueVerifierInnerV4 {
+    fn verify_encoded_pair_qualification(&self, encoded_pair: &[u8]) -> Result<(), String> {
+        match self {
+            Self::Eager(inner) => inner.verify_encoded_pair_qualification(encoded_pair),
+            Self::SourceBacked(inner) => inner.verify_encoded_pair_qualification(encoded_pair),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn verify_encoded_pair_binding(
+        &self,
+        encoded_pair: &[u8],
+        statement: &KagemushaRecursiveSpendPublicStatementV4,
+        expected_operation: &KagemushaStepOperationVectorV4,
+        statement_digest: [u32; 8],
+        state: &[u32],
+        proof_step_count: u32,
+        manifest_sha256: [u32; 8],
+    ) -> Result<(), String> {
+        match self {
+            Self::Eager(inner) => inner.verify_encoded_pair_binding(
+                encoded_pair,
+                statement,
+                expected_operation,
+                statement_digest,
+                state,
+                proof_step_count,
+                manifest_sha256,
+            ),
+            Self::SourceBacked(inner) => inner.verify_encoded_pair_binding(
+                encoded_pair,
+                statement,
+                expected_operation,
+                statement_digest,
+                state,
+                proof_step_count,
+                manifest_sha256,
+            ),
+        }
+    }
+}
+
+/// Opaque Eq/Ep recursive-spend verifier backed by one authenticated V4 release.
 pub struct KagemushaPastaCycleOpaqueVerifierV4 {
-    inner: super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4,
+    inner: KagemushaPastaCycleOpaqueVerifierInnerV4,
     manifest: KagemushaRecursiveSpendArtifactManifestV4,
     manifest_sha256: [u8; 32],
     candidate_evidence_lab: bool,
@@ -1870,9 +2020,11 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     pub fn from_authenticated_artifacts(
         artifacts: &super::kagemusha_artifact_v4::KagemushaPastaCycleVerifierArtifactsV4,
     ) -> Result<Self, String> {
-        let inner = super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4::from_authenticated_artifacts(
-            artifacts,
-        )?;
+        let inner = KagemushaPastaCycleOpaqueVerifierInnerV4::Eager(
+            super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4::from_authenticated_artifacts(
+                artifacts,
+            )?,
+        );
         Ok(Self {
             inner,
             manifest: artifacts.manifest().clone(),
@@ -1944,19 +2096,39 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
             String,
         >,
     {
-        let inner = super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(
-            binding.manifest(),
-            |parity, kind| {
-                let payload = load(parity, kind)?;
-                binding.validate_payload(&payload, parity, kind)?;
-                Ok(payload)
-            },
-        )?;
+        let inner = KagemushaPastaCycleOpaqueVerifierInnerV4::Eager(
+            super::kagemusha_recursion_adapter::KagemushaPastaCycleTerminalVerifierV4::from_validated_artifact_loader(
+                binding.manifest(),
+                |parity, kind| {
+                    let payload = load(parity, kind)?;
+                    binding.validate_payload(&payload, parity, kind)?;
+                    Ok(payload)
+                },
+            )?,
+        );
         Ok(Self {
             inner,
             manifest: binding.manifest().clone(),
             manifest_sha256: binding.manifest_sha256(),
             candidate_evidence_lab: binding.is_candidate_evidence_lab(),
+        })
+    }
+
+    /// Construct a production verifier from a core-qualified pinned source.
+    pub fn from_qualified_artifact_source(
+        source: Arc<super::kagemusha_artifact_source_v4::KagemushaQualifiedArtifactSourceV4>,
+    ) -> Result<Self, String> {
+        let manifest = source.authenticated_release().manifest().clone();
+        let manifest_sha256 = source.authenticated_release().manifest_sha256();
+        Ok(Self {
+            inner: KagemushaPastaCycleOpaqueVerifierInnerV4::SourceBacked(
+                super::kagemusha_recursion_adapter::KagemushaPastaCycleSourceBackedVerifierV4::new(
+                    source,
+                )?,
+            ),
+            manifest,
+            manifest_sha256,
+            candidate_evidence_lab: false,
         })
     }
 
@@ -1976,6 +2148,20 @@ impl KagemushaPastaCycleOpaqueVerifierV4 {
     ) -> Result<(), String> {
         ensure_bundle_operation_v4(bundle, expected_operation)?;
         self.verify_bundle_binding_v4(bundle, expected_operation)
+    }
+
+    /// Terminally verify the generator's opaque live-pair calibration vector.
+    ///
+    /// This is a release-qualification boundary, not a spend-acceptance API:
+    /// the calibration pair has no lifecycle statement to authorize. It exists
+    /// so an installer or release gate can prove that the exact authenticated
+    /// Eq/Ep verifier artifacts execute both backend-native verification
+    /// branches before declaring the release usable. Normal offline-cash
+    /// verification must continue to call [`Self::verify_bundle_v4`] or
+    /// [`Self::verify_bundle_operation_v4`], which additionally bind the
+    /// canonical public statement and semantic operation.
+    pub fn verify_release_qualification_pair_v4(&self, encoded_pair: &[u8]) -> Result<(), String> {
+        self.inner.verify_encoded_pair_qualification(encoded_pair)
     }
 
     fn verify_bundle_binding_v4(

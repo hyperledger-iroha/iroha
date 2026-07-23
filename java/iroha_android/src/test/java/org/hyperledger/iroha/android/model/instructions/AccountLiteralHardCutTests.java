@@ -9,6 +9,7 @@ import org.hyperledger.iroha.android.connect.ConnectCrypto;
 import org.hyperledger.iroha.android.connect.ConnectProtocolException;
 import org.hyperledger.iroha.android.multisig.MultisigSpec;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.junit.Test;
 
 /** Regression tests for strict encoded-only account/asset literal handling. */
@@ -150,9 +151,7 @@ public final class AccountLiteralHardCutTests {
   }
 
   private static String sampleI105(final int fill) throws Exception {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) fill);
-    return AccountAddress.fromAccount(publicKey, "ed25519")
+    return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 }

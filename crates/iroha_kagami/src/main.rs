@@ -105,7 +105,7 @@ enum Command {
     /// Commands related to genesis
     #[clap(subcommand)]
     Genesis(genesis::Args),
-    /// Verify and promote authenticated Kagemusha V3 or V4 artifact releases
+    /// Verify and promote authenticated Kagemusha ABI-21/V4 artifact releases
     Kagemusha(kagemusha::Args),
     /// Verify a genesis manifest against a preset profile
     Verify(verify::Args),
@@ -223,7 +223,7 @@ mod tests {
     fn kagemusha_v4_commands_are_distinct_and_require_complete_evidence() {
         assert!(
             parse("kagami kagemusha verify-release-v4 --bundle-dir ./release-v4").is_err(),
-            "ABI-20 verification must hash-check both independent evidence files"
+            "ABI-21 verification must hash-check both independent evidence files"
         );
         assert!(
             parse(
@@ -264,7 +264,7 @@ mod tests {
                  --cryptographic-review ./review.evidence"
             )
             .is_err(),
-            "ABI-20 verification must receive the canonical policy explicitly"
+            "ABI-21 verification must receive the canonical policy explicitly"
         );
         assert!(
             parse(

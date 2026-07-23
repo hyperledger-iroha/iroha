@@ -79,7 +79,7 @@ for label, relative in paths.items():
 
 # The check is dormant on branches that have no ABI21 SDK work. As soon as a
 # V4 lifecycle method or carrier is introduced, the entire boundary must land
-# atomically instead of relying on symbol presence or a legacy fallback.
+# atomically instead of relying on symbol presence or an ABI20 fallback.
 v4_markers = (
     "nativeInitSpendV4",
     "KagemushaRecursiveSpendInitLocalRequestV4",
@@ -455,7 +455,7 @@ if texts["swift_v4"].count(
     )
 if "kagemushaRecursiveSpendV2Unavailable" in texts["swift_v4"]:
     errors.append(
-        f"{paths['swift_v4']}: V4 lifecycle must not catch the V2/V3 unavailable error"
+        f"{paths['swift_v4']}: V4 lifecycle must not catch the ABI20 unavailable error"
     )
 for needle in (
     "case kagemushaRecursiveSpendV4Unavailable",
@@ -497,7 +497,7 @@ for label in ("rust", "kotlin", "java"):
     for forbidden in ("nativeWrapInitRequestV4", "nativeWrapAppendRequestV4",
                       "nativeWrapVerifyRequestV4", "nativeWrapRedeemRequestV4"):
         if forbidden in texts[label]:
-            errors.append(f"{paths[label]}: forbidden V2/V3-to-V4 wrapper {forbidden!r}")
+            errors.append(f"{paths[label]}: forbidden ABI20-to-ABI21 wrapper {forbidden!r}")
 
 for label in ("swift", "swift_v4", "swift_v4_codecs", "swift_native"):
     for forbidden in (
@@ -526,7 +526,7 @@ if re.search(
     texts["swift"],
 ):
     errors.append(
-        f"{paths['swift']}: frozen Swift lifecycle must not invoke an ABI21 V4 symbol"
+        f"{paths['swift']}: frozen Swift lifecycle must not invoke an ABI21 symbol"
     )
 
 for label in ("kotlin", "java"):
@@ -845,6 +845,8 @@ base_bridge_symbols = (
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
 )
 c_symbols = (
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
@@ -879,6 +881,12 @@ c_symbols = (
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
     "connect_norito_kagemusha_request_authorization_create_v2",
     "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
@@ -887,6 +895,7 @@ c_symbols = (
     "connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_create_v2",
     "connect_norito_kagemusha_receiver_acknowledgement_verify_v2",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
     "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
     "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
@@ -929,7 +938,7 @@ def parse_manifest_symbol_inventory(label: str) -> tuple[str, ...]:
 actual_kagemusha_symbols = parse_shell_symbol_array("mobile_check", "KAGEMUSHA_C_SYMBOLS")
 if actual_kagemusha_symbols != c_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 43-symbol Kagemusha C inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 50-symbol Kagemusha C inventory mismatch "
         f"(found {len(actual_kagemusha_symbols)})"
     )
 
@@ -941,7 +950,7 @@ for value in parse_shell_symbol_array("mobile_check", "REQUIRED_BRIDGE_SYMBOLS")
         actual_required_bridge_symbols.append(value)
 if tuple(actual_required_bridge_symbols) != required_bridge_symbols:
     errors.append(
-        f"{paths['mobile_check']}: exact ordered 52-symbol required bridge inventory mismatch "
+        f"{paths['mobile_check']}: exact ordered 61-symbol required bridge inventory mismatch "
         f"(found {len(actual_required_bridge_symbols)})"
     )
 
@@ -949,34 +958,33 @@ for label in ("xcframework_build", "mobile_check_test"):
     actual_manifest_symbols = parse_manifest_symbol_inventory(label)
     if actual_manifest_symbols != required_bridge_symbols:
         errors.append(
-            f"{paths[label]}: exact ordered 52-symbol required bridge inventory mismatch "
+            f"{paths[label]}: exact ordered 61-symbol required bridge inventory mismatch "
             f"(found {len(actual_manifest_symbols)})"
         )
 
 require_regex(
     "rust",
-    r"read_kagemusha_pasta_cycle_artifact_v4\s*\([\s\S]{0,220}?&self\.authenticated_release",
-    "authenticated-release V4 artifact reads",
+    r"impl\s+iroha_core::zk::kagemusha_artifact_source_v4::"
+    r"KagemushaAuthenticatedArtifactSourceV4[\s\S]{0,800}?"
+    r"fn\s+with_framed_artifact[\s\S]{0,800}?self\.with_selected_file",
+    "authenticated-release V4 pinned artifact source",
 )
 require_regex(
     "rust",
-    r"from_authenticated_artifact_spool_loader\s*\(\s*&self\.authenticated_release,"
-    r"[\s\S]{0,500}?step_eq_proving_key_file,"
-    r"[\s\S]{0,200}?step_ep_proving_key_file,"
-    r"[\s\S]{0,600}?kind\s*==\s*KagemushaPastaCycleArtifactKindV4::ProvingKey",
-    "authenticated-release V4 prover construction with distinct PK spools",
+    r"qualify_kagemusha_authenticated_artifact_source_v4\s*\(\s*qualification_source\s*\)",
+    "complete authenticated-release V4 source qualification",
 )
 require_regex(
     "rust",
-    r"KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifact_loader\s*\("
-    r"[\s\S]{0,300}?&self\.authenticated_release,"
-    r"[\s\S]{0,500}?self\.authenticated_payload\(parity, kind\)",
-    "authenticated-release bounded-role V4 verifier construction",
+    r"KagemushaPastaCycleOpaqueVerifierV4::from_qualified_artifact_source\s*\("
+    r"[\s\S]{0,120}?Arc::clone\(&self\.qualified_source\)",
+    "qualified source-backed V4 verifier construction",
 )
 require_regex(
     "rust",
-    r"fn\s+authenticated_proving_key_spool\s*\([\s\S]{0,1800}?\.try_clone\(\)",
-    "pinned authenticated proving-key spools",
+    r"KagemushaPastaCycleOpaqueProverV4::from_qualified_artifact_source\s*\("
+    r"[\s\S]{0,120}?Arc::clone\(&self\.qualified_source\)",
+    "qualified source-backed V4 prover construction",
 )
 if "KagemushaPastaCycleProverArtifactsV4::new" in texts["rust"]:
     errors.append(f"{paths['rust']}: in-memory all-role V4 prover construction is forbidden")
@@ -1134,7 +1142,7 @@ if mode == "--self-test":
             '    "connect_norito_encode_transfer_signed_transaction",\n'
             '    "connect_norito_free",',
         ),
-        "exact ordered 52-symbol required bridge inventory mismatch",
+        "exact ordered 61-symbol required bridge inventory mismatch",
     )
 
     def inject_v3_alias(fixture: Path) -> None:

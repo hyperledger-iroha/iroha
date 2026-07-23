@@ -10,7 +10,8 @@ public final class KagemushaPeerTransport {
   public static final String PAYMENT_TEXT_PREFIX = "PKK2P.";
   public static final String ACKNOWLEDGEMENT_TEXT_PREFIX = "PKK2A.";
   public static final String QR_STREAM_TEXT_PREFIX = "PKKQ1.";
-  public static final String NFC_APPLICATION_IDENTIFIER_HEX = "F0504B45504B524E464301";
+  public static final String NFC_APPLICATION_IDENTIFIER_HEX =
+      IrohaPeerNfcV1.APPLICATION_IDENTIFIER_HEX;
   public static final String NEARBY_SERVICE_NAME = "pk-kagemusha";
   public static final String NEARBY_BONJOUR_SERVICE = "_pk-kagemusha._tcp";
   public static final String RECEIVE_REQUEST_CONTENT_TYPE =
@@ -188,7 +189,7 @@ public final class KagemushaPeerTransport {
       try {
         return switch (Objects.requireNonNull(kind, "kind")) {
           case RECEIVE_REQUEST -> new Payload(
-              kind, KagemushaRecursiveSpendProver.decodeRecipientPaymentRequest(archive));
+              kind, KagemushaRecursiveSpendProver.decodeRecipientReceiveOfferV2(archive));
           case PAYMENT -> new Payload(
               kind, KagemushaRecursiveSpendProver.decodePeerPayment(archive));
           case ACKNOWLEDGEMENT -> new Payload(

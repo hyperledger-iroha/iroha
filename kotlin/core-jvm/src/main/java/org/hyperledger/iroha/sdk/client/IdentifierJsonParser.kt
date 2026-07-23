@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.client
 
 import java.nio.charset.StandardCharsets
 import java.util.Base64
+import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.nexus.UaidLiteral
 
 /** Minimal JSON parser for identifier-policy and identifier-resolution payloads. */
@@ -18,11 +19,11 @@ object IdentifierJsonParser {
                 IdentifierPolicySummary(
                     requiredExactString(item["policy_id"], "identifier policy list.items[$i].policy_id"),
                     requiredExactString(item["owner"], "identifier policy list.items[$i].owner"),
-                    item["active"] == true,
+                    asBoolean(item["active"], "identifier policy list.items[$i].active"),
                     IdentifierNormalization.fromWireValue(
                         requiredExactLowercaseString(item["normalization"], "identifier policy list.items[$i].normalization")
                     ),
-                    requiredExactString(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
+                    requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key"),
                     requiredExactLowercaseString(item["backend"], "identifier policy list.items[$i].backend"),
                     optionalExactLowercaseString(item["input_encryption"], "identifier policy list.items[$i].input_encryption"),
                     optionalExactHexString(item["input_encryption_public_parameters"], "identifier policy list.items[$i].input_encryption_public_parameters"),
@@ -37,7 +38,14 @@ object IdentifierJsonParser {
                     else parseProofVerifier(
                         expectObject(item["proof_verifier"], "identifier policy list.items[$i].proof_verifier"),
                         "identifier policy list.items[$i].proof_verifier"
-                    )
+                    ),
+                    outputOpeningPublicKey = if (!item.containsKey("output_opening_public_key"))
+                        requiredPublicKeyLiteral(item["resolver_public_key"], "identifier policy list.items[$i].resolver_public_key")
+                    else
+                        requiredPublicKeyLiteral(
+                            item["output_opening_public_key"],
+                            "identifier policy list.items[$i].output_opening_public_key",
+                        ),
                 )
             )
         }
@@ -98,13 +106,13 @@ object IdentifierJsonParser {
     }
 
     private fun requiredString(value: Any?, path: String): String {
-        val string = optionalString(value)
+        val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         return string.trim()
     }
 
     private fun requiredExactString(value: Any?, path: String): String {
-        val string = optionalString(value)
+        val string = optionalString(value, path)
         check(!string.isNullOrBlank()) { "$path must be a non-empty string" }
         check(string.trim() == string) { "$path must not contain surrounding whitespace" }
         return string
@@ -113,6 +121,12 @@ object IdentifierJsonParser {
     private fun requiredExactLowercaseString(value: Any?, path: String): String {
         val string = requiredExactString(value, path)
         check(string == string.lowercase()) { "$path must be an exact lowercase wire value" }
+        return string
+    }
+
+    private fun requiredPublicKeyLiteral(value: Any?, path: String): String {
+        val string = requiredExactString(value, path)
+        check(decodePublicKeyLiteral(string) != null) { "$path must be a valid public key literal" }
         return string
     }
 
@@ -138,9 +152,10 @@ object IdentifierJsonParser {
         return hex
     }
 
-    private fun optionalString(value: Any?): String? {
+    private fun optionalString(value: Any?, path: String): String? {
         if (value == null) return null
-        return if (value is String) value else value.toString()
+        check(value is String) { "$path must be a string" }
+        return value
     }
 
     private fun asLong(value: Any?, path: String): Long {
@@ -151,6 +166,11 @@ object IdentifierJsonParser {
     private fun asOptionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
         return asLong(value, path)
+    }
+
+    private fun asBoolean(value: Any?, path: String): Boolean {
+        check(value is Boolean) { "$path must be a boolean" }
+        return value
     }
 
     private fun asUnsignedLong(value: Any?, path: String): Long {

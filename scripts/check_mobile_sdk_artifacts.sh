@@ -16,7 +16,10 @@ integration:
     and the manifest ABI/source fingerprint matches the checked-out bridge.
   - Apple archives contain their declared architectures and the complete
     Kagemusha recursive-spend symbol surface.
-  - Kotlin/Android SDK modules are included and publishable.
+  - Kotlin/Android SDK modules are included and publishable; when Android
+    outputs are required, raw cargo-ndk and generated stripped libraries match
+    embedded provenance, and generated/AAR bytes are identical while binding
+    the exact ABI-21 feature state.
 
 By default Android build outputs are not required. Pass --require-built-android
 or set MOBILE_SDK_REQUIRE_ANDROID_OUTPUTS=1 to require jar/aar outputs too.
@@ -95,6 +98,7 @@ CANDIDATE_LAB_SYMBOL_FRAGMENT="kagemusha_recursive_spend_candidate_lab_"
 CANDIDATE_LAB_FEATURE="kagemusha-candidate-evidence-lab"
 CANDIDATE_LAB_HEADER_MACRO="CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB"
 CANDIDATE_LAB_HEADER_MARKER="CONNECT_NORITO_KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
+ANDROID_NATIVE_PROVENANCE_ENTRY="assets/iroha/native-build-provenance-v1.json"
 
 # Exact non-shipping C surface consumed only by the authenticated candidate
 # evidence harness. These names may exist in source only behind the dedicated
@@ -152,6 +156,12 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2
   connect_norito_kagemusha_recipient_payment_request_create_v2
   connect_norito_kagemusha_recipient_payment_request_verify_v2
+  connect_norito_kagemusha_recipient_lineage_query_create_v2
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v1
+  connect_norito_kagemusha_recipient_registration_lineage_verify_v2
+  connect_norito_kagemusha_recipient_receive_offer_create_v2
+  connect_norito_kagemusha_recipient_receive_offer_project_v2
+  connect_norito_kagemusha_recipient_receive_offer_verify_v2
   connect_norito_kagemusha_request_authorization_signing_bytes_v2
   connect_norito_kagemusha_request_authorization_create_v2
   connect_norito_kagemusha_request_authorization_finalize_hardware_v2
@@ -160,6 +170,7 @@ KAGEMUSHA_C_SYMBOLS=(
   connect_norito_kagemusha_receiver_acknowledgement_signing_bytes_v2
   connect_norito_kagemusha_receiver_acknowledgement_create_v2
   connect_norito_kagemusha_receiver_acknowledgement_verify_v2
+  connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4
   connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4
   connect_norito_kagemusha_recursive_spend_bundle_summary_v4
@@ -175,6 +186,8 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  connect_norito_validation_fee_current_policy_proof_request_v1
+  connect_norito_validation_fee_current_policy_proof_verify_v1
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
@@ -202,6 +215,8 @@ KAGEMUSHA_JNI_METHODS=(
   nativeBuildVerifyRequestV4
   nativeCreateAcknowledgementV2
   nativeCreateAuthorizationV2
+  nativeCreateRecipientLineageQueryV2
+  nativeCreateRecipientReceiveOfferV2
   nativeCreateRecipientRequestV2
   nativeDeriveOutputMembershipPathsV4
   nativeFinalizeHardwareAuthorizationV2
@@ -214,6 +229,7 @@ KAGEMUSHA_JNI_METHODS=(
   nativePrepareAcknowledgementV2
   nativePrepareAuthorizationV2
   nativePrepareNoteOpeningV2
+  nativePreparePeerSplitChangeV4
   nativePrepareRedemptionChangeV4
   nativePrepareRecipientRequestV2
   nativePrepareTopUpV4
@@ -224,14 +240,23 @@ KAGEMUSHA_JNI_METHODS=(
   nativeProjectPeerPaymentV4
   nativeProjectReadinessV4
   nativeProjectRecipientRequestV2
+  nativeProjectRecipientReceiveOfferV2
   nativeProjectRedeemBuildResultV4
   nativeProjectSplitResultV4
   nativeProjectVerifyResultV4
   nativeValidateSpendableBranchV4
   nativeValidateTopUpProvenanceV4
   nativeVerifyAcknowledgementV2
+  nativeVerifyRecipientReceiveOfferV2
+  nativeVerifyRecipientRegistrationLineageV2
   nativeVerifyRecipientRequestV2
   nativeVerifySpendV4
+)
+
+VALIDATION_FEE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
 )
 
 relpath() {
@@ -1289,6 +1314,37 @@ check_xcframework() {
       elif [[ -e "$privacy_marker" ]]; then
         fail "default privacy artifact must not carry the privacy-production-enabled XCFramework marker"
       fi
+      if ! python3 - "$manifest" "$privacy_value" <<'PY'
+import json
+import sys
+
+
+def reject_duplicates(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON member")
+        result[key] = value
+    return result
+
+
+try:
+    with open(sys.argv[1], "r", encoding="utf-8") as handle:
+        payload = json.load(handle, object_pairs_hook=reject_duplicates)
+    privacy_production_enabled = sys.argv[2] == "true"
+    expected = ["privacy-production-enabled"] if privacy_production_enabled else []
+    valid = isinstance(payload, dict) and payload.get("cargo_features") == expected
+except (OSError, UnicodeError, ValueError, TypeError):
+    valid = False
+raise SystemExit(0 if valid else 1)
+PY
+      then
+        if [[ "$privacy_value" == "true" ]]; then
+          fail 'privacy-production NoritoBridge artifact cargo_features must be exactly ["privacy-production-enabled"]'
+        else
+          fail "default NoritoBridge artifact cargo_features must be exactly []"
+        fi
+      fi
     fi
     require_regex "$manifest" '"version"[[:space:]]*:[[:space:]]*"[^"]+"' "NoritoBridge artifact version"
     for slice in "${slices[@]}"; do
@@ -1500,7 +1556,7 @@ check_android_native_symbols() {
   local nm_tool
   local symbols
   local namespace
-  local expected_jni=()
+  local expected_jni=("${VALIDATION_FEE_JNI_SYMBOLS[@]}")
 
   if ! nm_tool="$(find_android_nm)"; then
     fail "llvm-nm (or MOBILE_SDK_ANDROID_NM) is required to inspect client-android $abi native bridge"
@@ -1542,7 +1598,10 @@ for raw in os.fdopen(3):
         or symbol.startswith("connect_norito_kagemusha_")
         or (
             symbol.startswith("Java_org_hyperledger_iroha_")
-            and "_KagemushaRecursiveSpendProver_" in symbol
+            and (
+                "_KagemushaRecursiveSpendProver_" in symbol
+                or "_ValidationFeeConsensusProofBridge_" in symbol
+            )
         )
     ):
         actual.add(symbol)
@@ -1585,6 +1644,384 @@ check_android_native_stripped() {
   fi
 }
 
+check_android_native_provenance() {
+  local client_aar="$1"
+
+  python3 - "$ROOT_DIR" "$client_aar" "$ANDROID_NATIVE_PROVENANCE_ENTRY" \
+    "$ALLOW_DIRTY_SOURCE" <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+import subprocess
+import sys
+import zipfile
+
+root = Path(sys.argv[1])
+aar_path = Path(sys.argv[2])
+manifest_entry = sys.argv[3]
+allow_dirty_source = sys.argv[4] == "1"
+abis = ("arm64-v8a", "x86_64")
+library_name = "libconnect_norito_bridge.so"
+sha256_pattern = re.compile(r"^[0-9a-f]{64}$")
+
+
+def fail(message):
+    print(f"[mobile-sdk-artifacts] ERROR: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+
+def object_without_duplicates(pairs):
+    value = {}
+    for key, child in pairs:
+        if key in value:
+            raise ValueError(f"duplicate JSON member: {key}")
+        value[key] = child
+    return value
+
+
+def sha256_bytes(payload):
+    return hashlib.sha256(payload).hexdigest()
+
+
+def read_regular_file(path, label, allowed_root=None):
+    allowed_root = allowed_root or (root / "kotlin/client-android/build")
+    try:
+        path.relative_to(allowed_root)
+    except ValueError:
+        fail(f"{label} escapes its allowed root: {path}")
+    current = path
+    while True:
+        if current.is_symlink():
+            fail(f"{label} must not traverse a symbolic link: {current}")
+        if current == allowed_root:
+            break
+        current = current.parent
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as error:
+        fail(f"missing or unreadable {label}: {path} ({error})")
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            fail(f"{label} must be a non-symbolic regular file: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as handle:
+            payload = handle.read()
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+        ) or len(payload) != before.st_size:
+            fail(f"{label} changed while it was being authenticated: {path}")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+try:
+    archive = zipfile.ZipFile(aar_path)
+except (OSError, zipfile.BadZipFile) as error:
+    fail(f"client-android release aar is unreadable: {error}")
+
+with archive:
+    infos = archive.infolist()
+    names = [info.filename for info in infos]
+    if len(names) != len(set(names)):
+        fail("client-android release aar contains duplicate ZIP entries")
+    if names.count(manifest_entry) != 1:
+        fail(f"client-android release aar must contain exactly one {manifest_entry}")
+    manifest_info = archive.getinfo(manifest_entry)
+    if stat.S_ISLNK(manifest_info.external_attr >> 16):
+        fail("client-android native provenance AAR entry must not be a symbolic link")
+    if manifest_info.file_size < 2 or manifest_info.file_size > 64 * 1024:
+        fail("client-android native provenance must contain 2..65536 bytes")
+    manifest_bytes = archive.read(manifest_info)
+    try:
+        manifest = json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=object_without_duplicates,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+        fail(f"client-android native provenance is invalid strict JSON: {error}")
+    if not isinstance(manifest, dict):
+        fail("client-android native provenance root must be an object")
+
+    expected_top_level = {
+        "schema",
+        "native_bridge_abi_version",
+        "build_profile",
+        "cargo_locked",
+        "privacy_production_enabled",
+        "cargo_features",
+        "source_commit",
+        "source_tree_dirty",
+        "source_fingerprint_sha256",
+        "cargo_lock_sha256",
+        "android_ndk_revision",
+        "strip_tool_sha256",
+        "libraries",
+    }
+    if set(manifest) != expected_top_level:
+        fail(
+            "client-android native provenance field inventory is not exact "
+            f"(missing={sorted(expected_top_level - set(manifest))}, "
+            f"unexpected={sorted(set(manifest) - expected_top_level)})"
+        )
+    if manifest["schema"] != "iroha.android-native-build-provenance.v1":
+        fail("client-android native provenance schema is not v1")
+    if type(manifest["native_bridge_abi_version"]) is not int or manifest["native_bridge_abi_version"] != 21:
+        fail("client-android native provenance does not bind exact ABI 21")
+    if manifest["build_profile"] != "release" or manifest["cargo_locked"] is not True:
+        fail("client-android native provenance must bind a locked Cargo release build")
+    production = manifest["privacy_production_enabled"]
+    if type(production) is not bool:
+        fail("client-android native provenance privacy_production_enabled must be boolean")
+    expected_features = ["privacy-production-enabled"] if production else []
+    if manifest["cargo_features"] != expected_features:
+        fail(
+            "client-android native provenance cargo_features must be exactly "
+            f"{expected_features}"
+        )
+    if not isinstance(manifest["source_commit"], str) or not re.fullmatch(
+        r"[0-9a-f]{40}", manifest["source_commit"]
+    ):
+        fail("client-android native provenance source_commit is not canonical lowercase Git SHA-1")
+    if type(manifest["source_tree_dirty"]) is not bool:
+        fail("client-android native provenance source_tree_dirty must be boolean")
+    if manifest["source_tree_dirty"] and not allow_dirty_source:
+        fail("client-android release artifact must be built from a clean source tree")
+    for field in (
+        "source_fingerprint_sha256",
+        "cargo_lock_sha256",
+        "strip_tool_sha256",
+    ):
+        if not isinstance(manifest[field], str) or not sha256_pattern.fullmatch(manifest[field]):
+            fail(f"client-android native provenance {field} is not canonical SHA-256")
+    if not isinstance(manifest["android_ndk_revision"], str) or not re.fullmatch(
+        r"[0-9]+(?:\.[0-9]+){1,3}", manifest["android_ndk_revision"]
+    ):
+        fail("client-android native provenance Android NDK revision is not canonical")
+
+    source_snapshot_bytes = None
+    if (root / ".git").exists():
+        source_seal_script = root / "scripts/norito_bridge_source_seal.py"
+        try:
+            source_snapshot_bytes = subprocess.run(
+                [
+                    "python3",
+                    str(source_seal_script),
+                    "snapshot",
+                    "--root",
+                    str(root),
+                    "--platform",
+                    "android",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout
+            source_snapshot = json.loads(
+                source_snapshot_bytes.decode("utf-8"),
+                object_pairs_hook=object_without_duplicates,
+            )
+        except (OSError, subprocess.CalledProcessError) as error:
+            fail(f"unable to authenticate Android native provenance against checkout: {error}")
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as error:
+            fail(f"Android source-seal snapshot is invalid strict JSON: {error}")
+        expected_snapshot_fields = {
+            "platform",
+            "schema",
+            "source_commit",
+            "source_fingerprint_sha256",
+            "source_status",
+            "source_tree_dirty",
+            "targets",
+        }
+        if not isinstance(source_snapshot, dict) or set(source_snapshot) != expected_snapshot_fields:
+            fail("Android source-seal snapshot field inventory is not exact")
+        if source_snapshot["schema"] != "iroha.norito-bridge-source-seal.v1":
+            fail("Android source-seal snapshot schema is not canonical")
+        if source_snapshot["platform"] != "android" or source_snapshot["targets"] != [
+            "aarch64-linux-android",
+            "x86_64-linux-android",
+        ]:
+            fail("Android source-seal snapshot platform/target inventory is not exact")
+        if type(source_snapshot["source_tree_dirty"]) is not bool or not isinstance(
+            source_snapshot["source_status"], str
+        ):
+            fail("Android source-seal snapshot dirty state is malformed")
+        actual_dirty = source_snapshot["source_tree_dirty"]
+        if actual_dirty != bool(source_snapshot["source_status"]):
+            fail("Android source-seal snapshot dirty state disagrees with its exact status")
+        actual_commit = source_snapshot["source_commit"]
+        actual_fingerprint = source_snapshot["source_fingerprint_sha256"]
+        if manifest["source_commit"] != actual_commit:
+            fail("client-android native provenance source commit does not match checkout")
+        if manifest["source_tree_dirty"] != actual_dirty:
+            fail("client-android native provenance source dirty state does not match checkout")
+        if manifest["source_fingerprint_sha256"] != actual_fingerprint:
+            fail("client-android native provenance source fingerprint does not match checkout")
+        if actual_dirty and not allow_dirty_source:
+            fail("client-android release artifact cannot be certified against a dirty checkout")
+        cargo_lock = root / "Cargo.lock"
+        cargo_lock_bytes = read_regular_file(cargo_lock, "Iroha Cargo.lock", root)
+        if sha256_bytes(cargo_lock_bytes) != manifest["cargo_lock_sha256"]:
+            fail("client-android native provenance Cargo.lock digest does not match checkout")
+
+    mode = "production" if production else "default"
+    generated_manifest = root / (
+        "kotlin/client-android/build/generated/nativeProvenance/"
+        f"{mode}/iroha/native-build-provenance-v1.json"
+    )
+    generated_manifest_bytes = read_regular_file(
+        generated_manifest,
+        f"client-android {mode} generated native provenance",
+    )
+    if generated_manifest_bytes != manifest_bytes:
+        fail("client-android generated native provenance differs from release aar")
+
+    libraries = manifest["libraries"]
+    if not isinstance(libraries, dict) or set(libraries) != set(abis):
+        fail("client-android native provenance library ABI inventory is not exact")
+    expected_native_entries = {
+        f"jni/{abi}/{library_name}" for abi in abis
+    }
+    actual_native_entries = {
+        name for name in names if name.startswith("jni/") and not name.endswith("/")
+    }
+    if actual_native_entries != expected_native_entries:
+        fail(
+            "client-android release aar native bridge inventory is not exact "
+            f"(expected={sorted(expected_native_entries)}, "
+            f"actual={sorted(actual_native_entries)})"
+        )
+
+    def read_exact_native_tree(directory, label):
+        expected = {f"{abi}/{library_name}" for abi in abis}
+        try:
+            directory.relative_to(root / "kotlin/client-android/build")
+        except ValueError:
+            fail(f"{label} escapes the Android build root: {directory}")
+        if directory.is_symlink() or not directory.is_dir():
+            fail(f"{label} must be a non-symbolic directory: {directory}")
+        actual = set()
+        actual_directories = set()
+        for current, child_directories, child_files in os.walk(
+            directory, topdown=True, followlinks=False
+        ):
+            current_path = Path(current)
+            if current_path.is_symlink():
+                fail(f"{label} must not traverse a symbolic link: {current_path}")
+            for child in child_directories:
+                child_path = current_path / child
+                if child_path.is_symlink():
+                    fail(f"{label} must not traverse a symbolic link: {child_path}")
+                actual_directories.add(child_path.relative_to(directory).as_posix())
+            for child in child_files:
+                child_path = current_path / child
+                try:
+                    mode = child_path.lstat().st_mode
+                except OSError as error:
+                    fail(f"{label} contains an unreadable entry: {child_path} ({error})")
+                if not stat.S_ISREG(mode):
+                    fail(f"{label} contains a non-regular entry: {child_path}")
+                actual.add(child_path.relative_to(directory).as_posix())
+        if actual != expected or actual_directories != set(abis):
+            fail(
+                f"{label} inventory is not exact "
+                f"(expected_files={sorted(expected)}, actual_files={sorted(actual)}, "
+                f"expected_directories={sorted(abis)}, "
+                f"actual_directories={sorted(actual_directories)})"
+            )
+        return {
+            abi: read_regular_file(
+                directory / abi / library_name,
+                f"client-android {abi} {label} native bridge library",
+            )
+            for abi in abis
+        }
+
+    generated_by_abi = read_exact_native_tree(
+        root / f"kotlin/client-android/build/generated/jniLibs/{mode}",
+        "generated native bridge",
+    )
+    raw_by_abi = read_exact_native_tree(
+        root / f"kotlin/client-android/build/native/cargo-ndk/{mode}",
+        "raw cargo-ndk native bridge",
+    )
+
+    for abi in abis:
+        record = libraries[abi]
+        expected_record_fields = {
+            "aar_path",
+            "bytes",
+            "raw_bytes",
+            "raw_sha256",
+            "sha256",
+        }
+        if not isinstance(record, dict) or set(record) != expected_record_fields:
+            fail(f"client-android native provenance {abi} record field inventory is not exact")
+        entry = f"jni/{abi}/{library_name}"
+        if record["aar_path"] != entry:
+            fail(f"client-android native provenance {abi} AAR path is not canonical")
+        if type(record["bytes"]) is not int or record["bytes"] <= 0:
+            fail(f"client-android native provenance {abi} byte count is invalid")
+        if type(record["raw_bytes"]) is not int or record["raw_bytes"] <= 0:
+            fail(f"client-android native provenance {abi} raw byte count is invalid")
+        for field in ("raw_sha256", "sha256"):
+            if not isinstance(record[field], str) or not sha256_pattern.fullmatch(record[field]):
+                fail(f"client-android native provenance {abi} {field} is not canonical SHA-256")
+
+        generated_bytes = generated_by_abi[abi]
+        raw_bytes = raw_by_abi[abi]
+        info = archive.getinfo(entry)
+        if stat.S_ISLNK(info.external_attr >> 16):
+            fail(f"client-android {abi} native bridge AAR entry must not be a symbolic link")
+        aar_bytes = archive.read(info)
+        if len(generated_bytes) != record["bytes"] or len(aar_bytes) != record["bytes"]:
+            fail(f"client-android {abi} native bridge byte count differs from provenance")
+        if sha256_bytes(generated_bytes) != record["sha256"]:
+            fail(f"client-android {abi} generated native bridge differs from provenance")
+        if len(raw_bytes) != record["raw_bytes"]:
+            fail(f"client-android {abi} raw cargo-ndk native bridge byte count differs from provenance")
+        if sha256_bytes(raw_bytes) != record["raw_sha256"]:
+            fail(f"client-android {abi} raw cargo-ndk native bridge differs from provenance")
+        if aar_bytes != generated_bytes:
+            fail(f"client-android {abi} native bridge differs between generated output and release aar")
+
+    if source_snapshot_bytes is not None:
+        try:
+            source_snapshot_after = subprocess.run(
+                [
+                    "python3",
+                    str(root / "scripts/norito_bridge_source_seal.py"),
+                    "snapshot",
+                    "--root",
+                    str(root),
+                    "--platform",
+                    "android",
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            ).stdout
+        except (OSError, subprocess.CalledProcessError) as error:
+            fail(f"unable to re-authenticate Android source after artifact checks: {error}")
+        if source_snapshot_after != source_snapshot_bytes:
+            fail("Android source changed while native artifacts were being authenticated")
+
+print(mode)
+PY
+}
+
 check_android_package() {
   local settings="$ROOT_DIR/kotlin/settings.gradle.kts"
 
@@ -1600,13 +2037,20 @@ check_android_package() {
   if [[ "$REQUIRE_ANDROID_OUTPUTS" == "1" ]]; then
     local client_aar="$ROOT_DIR/kotlin/client-android/build/outputs/aar/client-android-release.aar"
     local abi
+    local native_mode
 
     require_glob "$ROOT_DIR/kotlin/core-jvm/build/libs/core-jvm-*.jar" "core-jvm built jar"
     require_glob "$client_aar" "client-android release aar"
 
     require_zip_entry "$client_aar" "AndroidManifest.xml" "client-android release aar"
     require_zip_entry "$client_aar" "classes.jar" "client-android release aar"
+    require_zip_entry "$client_aar" "$ANDROID_NATIVE_PROVENANCE_ENTRY" "client-android release aar"
     reject_candidate_lab_archive "$client_aar" "client-android release aar"
+
+    if ! native_mode="$(check_android_native_provenance "$client_aar")"; then
+      FAILURES=1
+      native_mode=""
+    fi
 
     local production_archive
     while IFS= read -r production_archive; do
@@ -1617,15 +2061,17 @@ check_android_package() {
     )
 
     for abi in arm64-v8a x86_64; do
-      local source_native="$ROOT_DIR/kotlin/client-android/src/main/jniLibs/$abi/libconnect_norito_bridge.so"
+      local source_native="$ROOT_DIR/kotlin/client-android/build/generated/jniLibs/$native_mode/$abi/libconnect_norito_bridge.so"
       local aar_entry="jni/$abi/libconnect_norito_bridge.so"
-      require_file "$source_native" "client-android $abi native bridge library"
-      reject_candidate_lab_content "$source_native" "client-android $abi production bridge"
+      if [[ -n "$native_mode" ]]; then
+        require_file "$source_native" "client-android $abi generated native bridge library"
+        reject_candidate_lab_content "$source_native" "client-android $abi generated production bridge"
+      fi
       require_zip_entry "$client_aar" "jni/$abi/libconnect_norito_bridge.so" "client-android release aar"
-      if [[ -f "$source_native" && -f "$client_aar" ]] \
+      if [[ -n "$native_mode" && -f "$source_native" && -f "$client_aar" ]] \
           && unzip -Z1 "$client_aar" 2>/dev/null | grep -Fxq -- "$aar_entry"; then
         if [[ "$(hash_file "$source_native")" != "$(hash_zip_entry "$client_aar" "$aar_entry")" ]]; then
-          fail "client-android $abi native bridge differs between jniLibs and release aar"
+          fail "client-android $abi native bridge differs between generated output and release aar"
         fi
         if [[ "${MOBILE_SDK_SKIP_BINARY_INSPECTION:-0}" != "1" ]]; then
           check_android_native_stripped "$source_native" "$abi"

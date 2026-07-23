@@ -541,6 +541,7 @@ fn proposal_status_label(status: crate::state::GovernanceProposalStatus) -> &'st
         GPS::Approved => "approved",
         GPS::Rejected => "rejected",
         GPS::Enacted => "enacted",
+        GPS::Superseded => "superseded",
     }
 }
 
@@ -2277,7 +2278,7 @@ impl StateTelemetry {
     ) {
         use crate::state::GovernanceProposalStatus as GPS;
 
-        let mut counts = [0u64; 4];
+        let mut counts = [0u64; 5];
         let mut cache = self
             .governance_status_cache
             .lock()
@@ -2290,6 +2291,7 @@ impl StateTelemetry {
                 GPS::Approved => counts[1] = counts[1].saturating_add(1),
                 GPS::Rejected => counts[2] = counts[2].saturating_add(1),
                 GPS::Enacted => counts[3] = counts[3].saturating_add(1),
+                GPS::Superseded => counts[4] = counts[4].saturating_add(1),
             }
         }
         drop(cache);
@@ -2303,6 +2305,7 @@ impl StateTelemetry {
             (GPS::Approved, counts[1]),
             (GPS::Rejected, counts[2]),
             (GPS::Enacted, counts[3]),
+            (GPS::Superseded, counts[4]),
         ] {
             self.metrics
                 .governance_proposals_status
@@ -3869,13 +3872,14 @@ impl StateTelemetry {
             return;
         }
 
-        let mut counts = [0u64; 4];
+        let mut counts = [0u64; 5];
         for status in collected {
             match status {
                 GPS::Proposed => counts[0] = counts[0].saturating_add(1),
                 GPS::Approved => counts[1] = counts[1].saturating_add(1),
                 GPS::Rejected => counts[2] = counts[2].saturating_add(1),
                 GPS::Enacted => counts[3] = counts[3].saturating_add(1),
+                GPS::Superseded => counts[4] = counts[4].saturating_add(1),
             }
         }
 
@@ -3884,6 +3888,7 @@ impl StateTelemetry {
             (GPS::Approved, counts[1]),
             (GPS::Rejected, counts[2]),
             (GPS::Enacted, counts[3]),
+            (GPS::Superseded, counts[4]),
         ] {
             self.metrics
                 .governance_proposals_status

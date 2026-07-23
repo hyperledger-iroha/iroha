@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
@@ -47,6 +48,7 @@ object IdentifierReceiptVerifier {
     }
 
     private fun verifyEd25519(publicKey: ByteArray, message: ByteArray, signature: ByteArray): Boolean {
+        if (!Ed25519PublicKeyAdmission.isValid(publicKey)) return false
         try {
             val verifier = Ed25519Signer()
             verifier.init(false, Ed25519PublicKeyParameters(publicKey, 0))

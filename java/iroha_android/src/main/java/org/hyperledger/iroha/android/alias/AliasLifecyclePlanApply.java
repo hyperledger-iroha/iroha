@@ -24,7 +24,7 @@ public final class AliasLifecyclePlanApply {
       final AliasLifecycleTransactionPlanV1 plan,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce,
+      final Long nonce,
       final Map<String, JsonValue> metadata) {
     return buildTransactionPayload(
         request,
@@ -45,7 +45,7 @@ public final class AliasLifecyclePlanApply {
       final AliasLifecycleInstructionFrameCodec frameCodec,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce,
+      final Long nonce,
       final Map<String, JsonValue> metadata) {
     if (request == null
         || plan == null
@@ -97,7 +97,7 @@ public final class AliasLifecyclePlanApply {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce,
+      final Long nonce,
       final Map<String, JsonValue> metadata)
       throws NoritoException, SigningException {
     if (client == null || transactionBuilder == null || signer == null) {
@@ -125,7 +125,7 @@ public final class AliasLifecyclePlanApply {
       final Signer signer,
       final FeePaymentIntent feePayment,
       final long creationTimeMs,
-      final Integer nonce,
+      final Long nonce,
       final Map<String, JsonValue> metadata)
       throws NoritoException, SigningException {
     return signAndSubmit(

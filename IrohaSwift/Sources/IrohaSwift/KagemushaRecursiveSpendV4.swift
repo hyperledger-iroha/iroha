@@ -933,6 +933,35 @@ public struct KagemushaRecursiveSpendAppendLocalRequestV4: Equatable, Sendable {
     }
 }
 
+/// Encrypted-at-rest, crash-safe form of an already constructed local append
+/// carrier. The carrier remains opaque because it contains note openings; the
+/// native ABI-21 decoder revalidates every field before proving. Callers bind
+/// it to the authenticated artifact release that was durable with the wallet
+/// reservation and must verify the returned operation/request digests.
+public struct KagemushaRecursiveSpendPersistedAppendLocalRequestV4: Equatable, Sendable {
+    public let noritoArchive: Data
+    public let artifactBinding: KagemushaRecursiveSpendArtifactBindingV4
+
+    public init(
+        noritoArchive: Data,
+        artifactBinding: KagemushaRecursiveSpendArtifactBindingV4
+    ) throws {
+        guard !noritoArchive.isEmpty,
+              noritoArchive.count <= KagemushaRecursiveSpend.maximumPeerArchiveBytesV4 else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "persistedAppendLocalRequestV4.size"
+            )
+        }
+        try KagemushaRecursiveSpend.requireArchive(
+            noritoArchive,
+            schema: KagemushaRecursiveSpend.appendLocalRequestWireNameV4,
+            field: "persistedAppendLocalRequestV4"
+        )
+        self.noritoArchive = Data(noritoArchive)
+        self.artifactBinding = artifactBinding
+    }
+}
+
 /// Canonical ABI-21 receiver-verification request.
 public struct KagemushaRecursiveSpendVerifyRequestV4: Equatable, Sendable {
     public let bundle: KagemushaRecursiveSpendBundleV4
@@ -1326,6 +1355,53 @@ public extension KagemushaRecursiveSpend {
         )
     }
 
+    /// Prepare owned sender change for an ordinary one- or two-input peer split.
+    ///
+    /// Native reauthenticates every ordered input/opening pair, the exact signed
+    /// receiver request and value conservation, then uses a peer-split-only KDF
+    /// domain. The returned opening is local secret material.
+    public static func preparePeerSplitChangeV4(
+        inputs: [KagemushaRecursiveSpendSpendableBranchV4],
+        recipientRequest: KagemushaVerifiedRecipientPaymentRequest,
+        changeAmount: KagemushaScaledAmount,
+        operationID: Data,
+        entropy: Data
+    ) throws -> KagemushaRecursiveSpendPeerSplitChangePreparationV4 {
+        let local = try KagemushaRecursiveSpendPeerSplitChangePrepareRequestV4(
+            inputs: inputs,
+            recipientRequest: recipientRequest.request,
+            changeAmount: changeAmount,
+            operationID: operationID,
+            entropy: entropy
+        )
+        let summaries = try inputs.map { try $0.bundle.projectedSummary() }
+        let total = try KagemushaScaledAmount.sum(summaries.map(\.amount))
+        let conserved = try recipientRequest.request.payload.amount.adding(changeAmount)
+        guard total == conserved,
+              summaries.allSatisfy({
+                  $0.assetDefinitionID == recipientRequest.request.payload.assetDefinitionID
+              }) else {
+            throw KagemushaRecursiveSpendError.invalidField("peerSplitChangeV4.value")
+        }
+        var requestArchive = try KagemushaRecursiveSpendCodecsV4
+            .encodePeerSplitChangePrepareRequest(local)
+        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+        guard var resultArchive = try NoritoNativeBridge.shared
+            .kagemushaRecursiveSpendPeerSplitChangePrepareV4(
+                requestArchive: requestArchive
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        defer { resultArchive.resetBytes(in: 0..<resultArchive.count) }
+        return try KagemushaRecursiveSpendCodecs.decodePeerSplitChangePrepareResultV4(
+            resultArchive,
+            inputOpenings: inputs.map(\.opening),
+            inputSummaries: summaries,
+            recipientRequest: recipientRequest.request,
+            changeAmount: changeAmount
+        )
+    }
+
     static func validateRedemptionChangeV4(
         inputSummary: KagemushaRecursiveSpendBundleSummaryV4,
         changeAmount: KagemushaScaledAmount,
@@ -1411,6 +1487,41 @@ public extension KagemushaRecursiveSpend {
                 throw KagemushaRecursiveSpendError.proofBackendUnavailable
             } catch NativeBridgeError.kagemushaBusy {
                 throw KagemushaRecursiveSpendError.proofWorkerBusy
+            }
+        }
+    }
+
+    /// Resumes an append whose secret-bearing local carrier was committed in
+    /// encrypted wallet state before process death.
+    public static func appendSpendV4(
+        persistedRequest: KagemushaRecursiveSpendPersistedAppendLocalRequestV4,
+        signedRecipientRequest: KagemushaVerifiedRecipientPaymentRequest,
+        installedArtifacts: KagemushaRecursiveSpendInstalledArtifactSetV4
+    ) throws -> KagemushaRecursiveSpendSplitResultV4 {
+        try installedArtifacts.requireInstalled()
+        guard persistedRequest.artifactBinding == installedArtifacts.binding else {
+            throw KagemushaRecursiveSpendError.invalidField("artifactBindingV4")
+        }
+        var requestArchive = persistedRequest.noritoArchive
+        defer { requestArchive.resetBytes(in: 0..<requestArchive.count) }
+        try ensureProofBackendAvailableV4()
+        do {
+            guard let output = try NoritoNativeBridge.shared.kagemushaRecursiveSpendAppendV4(
+                requestArchive: requestArchive,
+                recipientRequestArchive: signedRecipientRequest.request.archive,
+                verifiedAtMilliseconds: signedRecipientRequest.verifiedAtMilliseconds
+            ) else {
+                throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+            }
+            return try KagemushaRecursiveSpendSplitResultV4(noritoArchive: output)
+        } catch let error as NativeBridgeError {
+            switch error {
+            case .kagemushaRecursiveSpendV4Unavailable:
+                throw KagemushaRecursiveSpendError.proofBackendUnavailable
+            case .kagemushaBusy:
+                throw KagemushaRecursiveSpendError.proofWorkerBusy
+            default:
+                throw error
             }
         }
     }

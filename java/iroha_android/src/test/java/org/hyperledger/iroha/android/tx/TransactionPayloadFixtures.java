@@ -103,7 +103,7 @@ final class TransactionPayloadFixtures {
     private final String authority;
     private final long creationTimeMs;
     private final Optional<Long> timeToLiveMs;
-    private final Optional<Integer> nonce;
+    private final Optional<Long> nonce;
     private final Map<String, Object> payload;
     private final String encoded;
     private final TransactionPayload decodedPayload;
@@ -114,7 +114,7 @@ final class TransactionPayloadFixtures {
         final String authority,
         final long creationTimeMs,
         final Optional<Long> timeToLiveMs,
-        final Optional<Integer> nonce,
+        final Optional<Long> nonce,
         final Map<String, Object> payload,
         final String encoded) {
       this.name = name;
@@ -159,7 +159,7 @@ final class TransactionPayloadFixtures {
           asNumber(creationTimeRaw, "creation_time_ms").longValue();
       final Optional<Long> timeToLiveMs =
           optionalLong(timeToLiveRaw, "time_to_live_ms");
-      final Optional<Integer> nonce = optionalInt(nonceRaw, "nonce");
+      final Optional<Long> nonce = optionalLong(nonceRaw, "nonce");
       final Object encoded = map.get("encoded");
       final Object payloadBase64 = map.get("payload_base64");
       final String resolvedEncoded =
@@ -190,7 +190,7 @@ final class TransactionPayloadFixtures {
       return timeToLiveMs;
     }
 
-    Optional<Integer> nonce() {
+    Optional<Long> nonce() {
       return nonce;
     }
 
@@ -270,7 +270,7 @@ final class TransactionPayloadFixtures {
       builder.setTimeToLiveMs(ttl == null ? null : asNumber(ttl, "time_to_live_ms").longValue());
 
       final Object nonce = payload.get("nonce");
-      builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").intValue());
+      builder.setNonce(nonce == null ? null : asNumber(nonce, "nonce").longValue());
 
       final Map<String, Object> metadataRaw = payload.get("metadata") == null
           ? Collections.emptyMap()
@@ -481,14 +481,6 @@ final class TransactionPayloadFixtures {
       return Optional.empty();
     }
     return Optional.of(asNumber(value, field).longValue());
-  }
-
-  private static Optional<Integer> optionalInt(final Object value, final String field) {
-    if (value == null) {
-      return Optional.empty();
-    }
-    final long raw = asNumber(value, field).longValue();
-    return Optional.of(Math.toIntExact(raw));
   }
 
 }

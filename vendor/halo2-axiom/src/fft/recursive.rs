@@ -1,7 +1,7 @@
 //! This contains the recursive FFT.
 
 use crate::{
-    arithmetic::{self, parallelize, FftGroup},
+    arithmetic::{self, FftGroup, parallelize},
     multicore,
 };
 use std::{

@@ -72,6 +72,8 @@ pub mod profile_stats;
 mod push;
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(feature = "app_api")]
+mod validation_fee_api;
 mod vpn;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -12657,84 +12659,6 @@ fn offline_receiver_lineage_inconsistent(message: impl Into<String>) -> Error {
 }
 
 #[cfg(feature = "app_api")]
-fn committed_transactions_for_lineage_block(
-    block: &iroha_data_model::block::SignedBlock,
-) -> Vec<CommittedTransaction> {
-    let block_hash = block.hash();
-    block
-        .entrypoint_hashes()
-        .zip(block.entrypoint_proofs())
-        .zip(block.entrypoints_cloned())
-        .zip(block.result_hashes())
-        .zip(block.result_proofs())
-        .zip(block.results().cloned())
-        .map(
-            |(
-                ((((entrypoint_hash, entrypoint_proof), entrypoint), result_hash), result_proof),
-                result,
-            )| CommittedTransaction {
-                block_hash,
-                entrypoint_hash,
-                entrypoint_proof,
-                entrypoint,
-                result_hash,
-                result_proof,
-                result,
-                merge_inclusion: None,
-            },
-        )
-        .collect()
-}
-
-#[cfg(feature = "app_api")]
-fn registration_transaction_for_lineage(
-    block: &iroha_data_model::block::SignedBlock,
-    transaction_hash: HashOf<SignedTransaction>,
-    expected_registration: &iroha_data_model::offline::OfflineDeviceAttestationRegistration,
-) -> Result<CommittedTransaction, Error> {
-    let mut matches = committed_transactions_for_lineage_block(block)
-        .into_iter()
-        .filter(|committed| match &committed.entrypoint {
-            TransactionEntrypoint::External(transaction) => transaction.hash() == transaction_hash,
-            _ => false,
-        });
-    let committed = matches.next().ok_or_else(|| {
-        offline_receiver_lineage_inconsistent(
-            "The persisted registration transaction is absent from its admission block.",
-        )
-    })?;
-    if matches.next().is_some() {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The registration transaction appears more than once in its admission block.",
-        ));
-    }
-    if committed.result.as_ref().is_err() {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The persisted registration provenance names a rejected transaction.",
-        ));
-    }
-    let TransactionEntrypoint::External(transaction) = &committed.entrypoint else {
-        unreachable!("the lookup selected only external transactions")
-    };
-    let registrations = transaction
-        .instructions()
-        .explicit_instructions()
-        .filter_map(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<RegisterOfflineDeviceAttestation>()
-        })
-        .filter(|instruction| instruction.registration() == expected_registration)
-        .count();
-    if registrations != 1 {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The admitting transaction does not contain exactly one copy of the canonical registration.",
-        ));
-    }
-    Ok(committed)
-}
-
-#[cfg(feature = "app_api")]
 #[axum::debug_handler]
 async fn handler_offline_recipient_lineage(
     State(app): State<SharedAppState>,
@@ -12767,125 +12691,171 @@ async fn handler_offline_recipient_lineage(
     let evaluated_header = evaluated_block.header();
     let evaluated_at_ms =
         u64::try_from(evaluated_header.creation_time().as_millis()).unwrap_or(u64::MAX);
-    if request.chain_id != *app.chain_id {
+    if request.version != iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION
+        || request.trusted_checkpoint_height == 0
+    {
         return Err(Error::AppQueryValidation {
-            code: "offline_receiver_lineage_chain_mismatch",
-            message: "The signed recipient request targets a different chain.".to_owned(),
+            code: "offline_receiver_lineage_request_invalid",
+            message: "The receiver-lineage query version or checkpoint height is invalid."
+                .to_owned(),
         });
     }
-    request
-        .validate_at(evaluated_at_ms)
-        .map_err(|error| Error::AppQueryValidation {
+    let selector = &request.selector;
+    if selector.chain_id != *app.chain_id {
+        return Err(Error::AppQueryValidation {
+            code: "offline_receiver_lineage_chain_mismatch",
+            message: "The receiver-lineage selector targets a different chain.".to_owned(),
+        });
+    }
+    if selector.receiver_device_id.is_empty()
+        || selector.receiver_device_id.len() > 128
+        || selector.receiver_device_id.trim() != selector.receiver_device_id
+        || selector.receiver_device_id.chars().any(char::is_control)
+    {
+        return Err(Error::AppQueryValidation {
             code: "offline_receiver_lineage_request_invalid",
-            message: format!("The signed recipient request is invalid: {error}"),
-        })?;
-    let request_digest = request
-        .digest()
-        .map_err(|error| Error::AppQueryValidation {
-            code: "offline_receiver_lineage_request_invalid",
-            message: format!("The signed recipient request digest is invalid: {error}"),
-        })?;
-    let resolution =
-        iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_recipient_registration_v1(
+            message: "The receiver device identifier is invalid.".to_owned(),
+        });
+    }
+    let snapshot =
+        iroha_core::smartcontracts::isi::offline::isi::derive_kagemusha_active_receiver_snapshot_v1(
             state_view.world(),
-            &request,
             evaluated_height,
             evaluated_at_ms,
         )
+        .map_err(offline_receiver_lineage_inconsistent)?;
+    let receiver_key = iroha_data_model::offline::KagemushaActiveReceiverKeyV1 {
+        account_id: selector.recipient.clone(),
+        device_id: selector.receiver_device_id.clone(),
+        asset_definition_id: selector.asset.clone(),
+    };
+    let (active_receiver_entry, active_receiver_membership) = snapshot
+        .active_membership(&receiver_key)
         .map_err(|message| {
-            if message.starts_with("no on-chain registration") {
+            if message.contains("not active") {
                 Error::AppNotFound {
                     code: "offline_receiver_not_registered",
                     message,
                 }
-            } else if message.contains("superseded") || message.contains("expired") {
+            } else if message.contains("multiple") {
                 Error::AppConflict {
-                    code: "offline_receiver_registration_inactive",
-                    message,
-                }
-            } else if message.starts_with("the recipient payment request") {
-                Error::AppQueryValidation {
-                    code: "offline_receiver_lineage_request_invalid",
+                    code: "offline_receiver_registration_ambiguous",
                     message,
                 }
             } else {
                 offline_receiver_lineage_inconsistent(message)
             }
         })?;
+    let iroha_data_model::offline::KagemushaActiveReceiverEntryV1::Active(active) =
+        &active_receiver_entry
+    else {
+        return Err(Error::AppConflict {
+            code: "offline_receiver_registration_ambiguous",
+            message: "The receiver tuple has multiple active registrations.".to_owned(),
+        });
+    };
+    let resolution = iroha_core::smartcontracts::isi::offline::isi::resolve_kagemusha_active_receiver_registration_v1(
+        state_view.world(),
+        active,
+        evaluated_height,
+        evaluated_at_ms,
+    )
+    .map_err(offline_receiver_lineage_inconsistent)?;
+    if *active.value.registration_hash.as_ref() != resolution.registration_hash
+        || *active.value.admission_policy_hash.as_ref() != resolution.admission_policy_hash
+        || active.value.admission_height != resolution.admission_height
+        || active.value.admission_transaction_hash.as_ref()
+            != resolution.admission_transaction_hash.as_ref()
+        || active.value.public_key != resolution.registration.public_key
+    {
+        return Err(offline_receiver_lineage_inconsistent(
+            "The active-receiver snapshot disagrees with protected registration state.",
+        ));
+    }
     let evaluated_block_hash = evaluated_block.hash();
     drop(evaluated_block);
     drop(state_view);
 
-    let admission_height_usize = usize::try_from(resolution.admission_height)
-        .ok()
-        .and_then(NonZeroUsize::new)
-        .ok_or_else(|| {
-            offline_receiver_lineage_inconsistent(
-                "The persisted registration admission height is outside the host range.",
-            )
-        })?;
-    let indexed_heights = app
+    let active_receiver_witness = app
         .kura
-        .get_block_heights_by_transaction_hash(resolution.admission_transaction_hash)
-        .ok_or_else(|| {
-            offline_receiver_lineage_inconsistent(
-                "The transaction index is incomplete for receiver-lineage resolution.",
-            )
-        })?;
-    if indexed_heights.len() != 1 || !indexed_heights.contains(&admission_height_usize) {
-        return Err(offline_receiver_lineage_inconsistent(
-            "The registration transaction index does not match persisted admission provenance.",
-        ));
-    }
-    let admission_block = app.kura.get_block(admission_height_usize).ok_or_else(|| {
-        offline_receiver_lineage_inconsistent(
-            "The registration admission block body is unavailable on this Torii node.",
-        )
-    })?;
-    let admission_block_header = admission_block.header();
-    let registration_transaction = registration_transaction_for_lineage(
-        &admission_block,
-        resolution.admission_transaction_hash,
-        &resolution.registration,
-    )?;
-    let admission_finality = app
-        .kura
-        .v2_finality_artifact(resolution.admission_height)
+        .kagemusha_active_receiver_witness_proof_v1(evaluated_height)
         .map_err(|error| {
             offline_receiver_lineage_inconsistent(format!(
-                "The registration finality artifact is invalid: {error}"
+                "The evaluated active-receiver witness proof is invalid: {error}"
             ))
         })?
         .ok_or_else(|| {
             offline_receiver_lineage_inconsistent(
-                "The registration admission block has no retained finality artifact.",
+                "The evaluated block has no retained active-receiver witness proof.",
             )
         })?;
-    if admission_finality.height != resolution.admission_height
-        || admission_finality.block_hash != admission_block.hash()
-        || admission_block_header.hash() != admission_finality.block_hash
-        || registration_transaction.block_hash != admission_finality.block_hash
+    if active_receiver_witness
+        .commitment()
+        .map_err(offline_receiver_lineage_inconsistent)?
+        != snapshot.commitment
     {
         return Err(offline_receiver_lineage_inconsistent(
-            "The registration transaction, header, and finality artifact are not bound to one block.",
+            "The retained receiver witness commitment differs from the evaluated state snapshot.",
         ));
     }
+
+    let proof_count = evaluated_height
+        .checked_sub(request.trusted_checkpoint_height)
+        .and_then(|gap| gap.checked_add(1))
+        .and_then(|count| usize::try_from(count).ok())
+        .ok_or_else(|| Error::AppQueryValidation {
+            code: "offline_receiver_lineage_checkpoint_invalid",
+            message: "The trusted checkpoint is newer than the evaluated block.".to_owned(),
+        })?;
+    if proof_count > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_PROOFS
+    {
+        return Err(Error::AppConflict {
+            code: "offline_receiver_lineage_checkpoint_too_old",
+            message: "The trusted checkpoint is outside the bounded 63-block advancement window."
+                .to_owned(),
+        });
+    }
+    let mut finality_chain = Vec::with_capacity(proof_count);
+    for height in request.trusted_checkpoint_height..=evaluated_height {
+        finality_chain.push(
+            iroha_core::bridge::build_finality_proof(app.state.as_ref(), height).map_err(
+                |error| {
+                    offline_receiver_lineage_inconsistent(format!(
+                        "The finality proof at height {height} is unavailable: {error}"
+                    ))
+                },
+            )?,
+        );
+    }
+    let finality_chain_bytes = norito::to_bytes(&finality_chain).map_err(|error| {
+        offline_receiver_lineage_inconsistent(format!(
+            "The finality proof chain cannot be encoded: {error}"
+        ))
+    })?;
+    if finality_chain_bytes.len()
+        > iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_MAX_FINALITY_CHAIN_BYTES
+    {
+        return Err(Error::AppConflict {
+            code: "offline_receiver_lineage_checkpoint_too_old",
+            message: "The finality proof chain exceeds the bounded mobile response budget."
+                .to_owned(),
+        });
+    }
+    let evaluated_context_id = finality_chain
+        .last()
+        .ok_or_else(|| offline_receiver_lineage_inconsistent("The finality chain is empty."))?
+        .finality_artifact
+        .context_id();
 
     Ok(NoritoBody(
         iroha_torii_shared::offline_api::OfflineRecipientRegistrationLineage {
             version: iroha_torii_shared::offline_api::OFFLINE_RECIPIENT_LINEAGE_VERSION,
-            request_digest: hex::encode(request_digest),
-            registration_hash: hex::encode(resolution.registration_hash),
-            admission_policy_hash: hex::encode(resolution.admission_policy_hash),
-            evaluated_policy_hash: hex::encode(resolution.admission_policy_hash),
-            registration: resolution.registration,
-            admission_block_height: resolution.admission_height,
-            admission_block_header,
-            registration_transaction_hash: hex::encode(
-                resolution.admission_transaction_hash.as_ref(),
-            ),
-            registration_transaction,
-            admission_finality,
+            selector: request.selector,
+            active_receiver_entry,
+            active_receiver_membership,
+            active_receiver_witness,
+            finality_chain,
+            evaluated_context_id,
             evaluated_block_height: evaluated_height,
             evaluated_block_hash: hex::encode(evaluated_block_hash.as_ref()),
         },
@@ -13122,7 +13092,7 @@ mod offline_kagemusha_readiness_tests {
     }
 
     #[test]
-    fn readiness_projects_exact_abi20_five_role_registry_and_artifact_set() {
+    fn readiness_projects_exact_abi21_five_role_registry_and_artifact_set() {
         let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
         let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
         let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);
@@ -52722,6 +52692,22 @@ impl Torii {
             mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
             mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
             mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_post!(
+                VALIDATION_FEE_CURRENT_POLICY_PROOF,
+                validation_fee_api::handler_current_policy_proof
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSALS,
+                validation_fee_api::handler_proposals
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSAL_DETAIL,
+                validation_fee_api::handler_proposal_detail
+            );
+            mount_post!(
+                VALIDATION_FEE_PROPOSAL_DRAFT,
+                validation_fee_api::handler_proposal_draft
+            );
             mount_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
             mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);

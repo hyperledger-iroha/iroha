@@ -23,8 +23,8 @@ public final class ContractJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "contract call response"), "contract call response");
     return new ContractCallResponse(
-        Boolean.TRUE.equals(root.get("ok")),
-        Boolean.TRUE.equals(root.get("submitted")),
+        requiredBoolean(root.get("ok"), "contract call response.ok"),
+        requiredBoolean(root.get("submitted"), "contract call response.submitted"),
         requiredString(root.get("dataspace"), "contract call response.dataspace"),
         HttpClientTransport.normalizeHex32(
             requiredString(root.get("code_hash_hex"), "contract call response.code_hash_hex"),
@@ -32,15 +32,16 @@ public final class ContractJsonParser {
         HttpClientTransport.normalizeHex32(
             requiredString(root.get("abi_hash_hex"), "contract call response.abi_hash_hex"),
             "abiHashHex"),
-        asLong(root.get("creation_time_ms"), "contract call response.creation_time_ms"),
-        optionalString(root.get("contract_address")),
+        asNonNegativeLong(
+            root.get("creation_time_ms"), "contract call response.creation_time_ms"),
+        optionalString(root.get("contract_address"), "contract call response.contract_address"),
         root.containsKey("tx_hash_hex") && root.get("tx_hash_hex") != null
             ? HttpClientTransport.normalizeHex32(
                 requiredString(root.get("tx_hash_hex"), "contract call response.tx_hash_hex"),
                 "txHashHex")
             : null,
         optionalObject(root.get("pipeline_status"), "contract call response.pipeline_status"),
-        optionalString(root.get("entrypoint")),
+        optionalString(root.get("entrypoint"), "contract call response.entrypoint"),
         asOptionalNonNegativeLong(
             root.get("transaction_ttl_ms"), "contract call response.transaction_ttl_ms"),
         optionalHash(root.get("entrypoint_hash_hex"), "contract call response.entrypoint_hash_hex"),
@@ -63,12 +64,12 @@ public final class ContractJsonParser {
         requiredString(receipt.get("status"), path + ".status"),
         requiredString(receipt.get("transport"), path + ".transport"),
         requiredString(receipt.get("dataspace"), path + ".dataspace"),
-        optionalString(receipt.get("contract_alias")),
-        optionalString(receipt.get("contract_address")),
+        optionalString(receipt.get("contract_alias"), path + ".contract_alias"),
+        optionalString(receipt.get("contract_address"), path + ".contract_address"),
         optionalHash(receipt.get("code_hash_hex"), path + ".code_hash_hex"),
         optionalHash(receipt.get("abi_hash_hex"), path + ".abi_hash_hex"),
         optionalHash(receipt.get("tx_hash_hex"), path + ".tx_hash_hex"),
-        optionalString(receipt.get("entrypoint")),
+        optionalString(receipt.get("entrypoint"), path + ".entrypoint"),
         optionalHash(receipt.get("entrypoint_hash_hex"), path + ".entrypoint_hash_hex"),
         gasLimit,
         asOptionalNonNegativeLong(receipt.get("gas_used"), path + ".gas_used"),
@@ -89,7 +90,7 @@ public final class ContractJsonParser {
         true,
         requiredExactAccountId(root.get("resolved_multisig_account_id"), "multisig response.resolved_multisig_account_id"),
         optionalBoolean(root.get("submitted"), "multisig response.submitted"),
-        optionalString(root.get("proposal_id")),
+        optionalString(root.get("proposal_id"), "multisig response.proposal_id"),
         root.containsKey("instructions_hash") && root.get("instructions_hash") != null
             ? HttpClientTransport.normalizeHex32(
                 requiredString(root.get("instructions_hash"), "multisig response.instructions_hash"),
@@ -113,9 +114,9 @@ public final class ContractJsonParser {
     final Map<String, Object> root =
         expectObject(parse(payload, "governance contract response"), "governance contract response");
     return new GovernanceContractResponse(
-        Boolean.TRUE.equals(root.get("found")),
+        requiredBoolean(root.get("found"), "governance contract response.found"),
         requiredString(root.get("contract_address"), "governance contract response.contract_address"),
-        optionalString(root.get("dataspace")),
+        optionalString(root.get("dataspace"), "governance contract response.dataspace"),
         root.containsKey("code_hash_hex") && root.get("code_hash_hex") != null
             ? HttpClientTransport.normalizeHex32(
                 requiredString(root.get("code_hash_hex"), "governance contract response.code_hash_hex"),
@@ -143,8 +144,10 @@ public final class ContractJsonParser {
   }
 
   private static String requiredString(final Object value, final String path) {
-    final String string = optionalString(value);
-    if (string == null || string.trim().isEmpty()) {
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    if (string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     return string.trim();
@@ -160,11 +163,10 @@ public final class ContractJsonParser {
   }
 
   private static String requiredExactString(final Object value, final String path) {
-    if (value == null) {
-      throw new IllegalStateException(path + " must be a non-empty string");
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
     }
-    final String string = value instanceof String ? (String) value : String.valueOf(value);
-    if (string == null || string.trim().isEmpty()) {
+    if (string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
     if (!string.trim().equals(string)) {
@@ -173,11 +175,13 @@ public final class ContractJsonParser {
     return string;
   }
 
-  private static String optionalString(final Object value) {
+  private static String optionalString(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    final String string = value instanceof String ? (String) value : String.valueOf(value);
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string when present");
+    }
     final String trimmed = string.trim();
     return trimmed.isEmpty() ? null : trimmed;
   }
@@ -206,14 +210,15 @@ public final class ContractJsonParser {
     return (Boolean) value;
   }
 
+  private static boolean requiredBoolean(final Object value, final String path) {
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " must be a boolean");
+    }
+    return bool.booleanValue();
+  }
+
   private static long asLong(final Object value, final String path) {
-    if (!(value instanceof Number number)) {
-      throw new IllegalStateException(path + " must be a number");
-    }
-    if (number instanceof Float || number instanceof Double) {
-      throw new IllegalStateException(path + " must be an integer");
-    }
-    return number.longValue();
+    return JsonNumbers.asLong(value, path);
   }
 
   private static Long asOptionalLong(final Object value, final String path) {
@@ -226,6 +231,14 @@ public final class ContractJsonParser {
   private static Long asOptionalNonNegativeLong(final Object value, final String path) {
     final Long parsed = asOptionalLong(value, path);
     if (parsed != null && parsed.longValue() < 0L) {
+      throw new IllegalStateException(path + " must be non-negative");
+    }
+    return parsed;
+  }
+
+  private static long asNonNegativeLong(final Object value, final String path) {
+    final long parsed = asLong(value, path);
+    if (parsed < 0L) {
       throw new IllegalStateException(path + " must be non-negative");
     }
     return parsed;
@@ -249,7 +262,10 @@ public final class ContractJsonParser {
     if (value == null) {
       return null;
     }
-    final String literal = (value instanceof String ? (String) value : String.valueOf(value)).trim();
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a base64 string when present");
+    }
+    final String literal = string.trim();
     if (literal.isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty base64 string");
     }

@@ -54,12 +54,12 @@ enum class IrohaPeerWireCompressionPolicyV1 {
 class IrohaPeerWireLimitsV1 @JvmOverloads constructor(
     val maximumCanonicalBytes: Int = 32 * 1024,
     val maximumOfflineNoteEncodedBytes: Int = 24_576,
-    val maximumKagemushaEncodedBytes: Int = 12_288,
+    val maximumKagemushaEncodedBytes: Int = 24_576,
 ) {
     init {
         require(maximumCanonicalBytes in 1..(32 * 1_024))
         require(maximumOfflineNoteEncodedBytes in 1..24_576)
-        require(maximumKagemushaEncodedBytes in 1..12_288)
+        require(maximumKagemushaEncodedBytes in 1..24_576)
     }
 
     fun maximumEncodedBytes(profile: IrohaPeerPayloadProfile): Int = when (profile) {
@@ -117,7 +117,7 @@ private fun validateTypedCanonicalPayload(
     if (profile != IrohaPeerPayloadProfile.KAGEMUSHA_RECURSIVE_SPEND) return
     val schema = when (kind) {
         IrohaPeerPayloadKind.RECEIVE_REQUEST ->
-            "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2"
+            "iroha_torii_shared::offline_api::OfflineRecipientReceiveOfferV2"
         IrohaPeerPayloadKind.PAYMENT ->
             "iroha_data_model::offline::model::KagemushaRecursiveSpendPeerPaymentV4"
         IrohaPeerPayloadKind.ACKNOWLEDGEMENT ->
@@ -237,7 +237,7 @@ class IrohaPeerWireMessageV1 private constructor(
         const val HEADER_LENGTH = 84
         const val MAXIMUM_CANONICAL_BYTES = 32 * 1024
         const val MAXIMUM_OFFLINE_NOTE_ENCODED_BYTES = 24_576
-        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = 12_288
+        const val MAXIMUM_KAGEMUSHA_ENCODED_BYTES = 24_576
         private val MAGIC = "IPM1".toByteArray(Charsets.US_ASCII)
         private val CANONICAL_DOMAIN = "IROHA-PEER-PAYLOAD-V1\u0000".toByteArray(Charsets.UTF_8)
         private val MESSAGE_DOMAIN = "IROHA-PEER-MESSAGE-V1\u0000".toByteArray(Charsets.UTF_8)

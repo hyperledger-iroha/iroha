@@ -997,10 +997,16 @@ export class AccountAddress {
   }
 
   static fromCanonicalBytes(bytes) {
-    if (!bytes || bytes.length === 0) {
+    if (bytes == null) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
-    const data = Uint8Array.from(bytes);
+    if (typeof bytes === "string") {
+      throw new TypeError("canonical address bytes must be binary data or a numeric byte array");
+    }
+    const data = normalizeBytes(bytes);
+    if (data.length === 0) {
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    }
     const header = decodeHeader(data[0]);
     let controllerCursor = 1;
     const [controller, decodedCursor] = decodeController(data, controllerCursor);
@@ -1182,7 +1188,14 @@ export function encodeI105AccountAddress(canonicalBytes, options = {}) {
     options,
     "encodeI105AccountAddress",
   );
-  return encodeI105String(normalizedOptions.chainDiscriminant, canonicalBytes, normalizedOptions);
+  const canonical = normalizeBytes(canonicalBytes);
+  // This helper encodes AccountId bytes, so apply the same controller policy
+  // as the decoding path before rendering an I105 literal.
+  const address = AccountAddress.fromCanonicalBytes(canonical);
+  return encodeI105String(
+    normalizedOptions.chainDiscriminant,
+    address.canonicalBytes(),
+  );
 }
 
 export function decodeI105AccountAddress(encoded, options = {}) {

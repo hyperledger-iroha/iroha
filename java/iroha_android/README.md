@@ -63,7 +63,7 @@ Kotlin projects while preserving these exact coordinates in generated POMs.
 
 The first-release peer transport has one wire family only: IPM1 messages,
 IQR1/IRQR QR frames, authenticated IPN1 Nearby records, and the NFC application
-identifier `F049524F48415045455201`. The new `IrohaPeer*V1` APIs never fall
+identifier `F0504B45504B524E464301`. The new `IrohaPeer*V1` APIs never fall
 back to the older Kagemusha QR, Nearby service, or NFC APDU formats.
 
 Create the common envelope with `IrohaPeerWireMessageV1`. QR senders call
@@ -134,9 +134,8 @@ fields. Both BEGIN and COMMIT callbacks have a five-second fail-closed deadline
 and must be idempotent because a timeout makes the durable result ambiguous.
 Late callbacks cannot mutate a newer tap. IPA1 resumes at byte zero, while IDA1
 takes precedence after COMMIT and ACK-phase BEGIN is rejected.
-The NFC value and the 32-KiB canonical, 24,576-byte Offline Note encoded, and
-12,288-byte bounded Kagemusha encoded wire limits are hard constructor
-ceilings.
+The NFC value and the 32-KiB canonical and 24,576-byte encoded-body limits for
+both Offline Note and bounded Kagemusha handoffs are hard constructor ceilings.
 
 The AAR merges the version-bounded Nearby/NFC permissions and ships
 `@xml/iroha_peer_nfc_v1_aids`. A wallet must still register its concrete HCE
@@ -160,7 +159,8 @@ service explicitly. The service subclasses the transitive Kotlin
 
 The merged manifest includes `NFC`, legacy `ACCESS_WIFI_STATE` /
 `CHANGE_WIFI_STATE`, legacy `BLUETOOTH` / `BLUETOOTH_ADMIN`,
-`ACCESS_COARSE_LOCATION` through API 28, `ACCESS_FINE_LOCATION` on APIs 29–31,
+`ACCESS_COARSE_LOCATION` through API 31, `ACCESS_FINE_LOCATION` on APIs 29–31
+(requested together with coarse location on Android 12),
 `BLUETOOTH_ADVERTISE` / `BLUETOOTH_CONNECT` / `BLUETOOTH_SCAN` from API 31,
 `NEARBY_WIFI_DEVICES` from API 32, and `ACCESS_LOCAL_NETWORK` from API 37.
 Before starting a rail, the host app requests every applicable dangerous
@@ -177,17 +177,19 @@ dependencies, so Java and Kotlin do not maintain divergent cryptographic or
 APDU implementations. Shared vectors live in `fixtures/offline/peer_*.json`.
 
 Profile `1` requires schema `1` and a maximum 24,576-byte encoded body. Profile
-`2` requires schema `0x0102` and is a 12,288-byte bounded handoff for a mainline
+`2` requires schema `0x0102` and is a 24,576-byte bounded handoff for a mainline
 typed Kagemusha native archive. Generic IPM validates its exact ABI21 envelope
 without native code; production code then performs deeper semantic decoding
 through `IrohaPeerKagemushaAdapterV1`. Full ABI21
 QR/NFC/native archives up to 32 MiB continue to use the independent
 `KagemushaQrStream`, `KagemushaNfcProtocol`, and `KagemushaNearby`
-facades with distinct `PKK2*`/`PKKQ1`, F050, and Bonjour identifiers.
-Kagemusha Nearby's JSON/text envelope has its own smaller bound. Those rails
-are never negotiated, reinterpreted, or used as fallback for Retail Offline
-Peer V1. The no-old-AID/raw-text/unauthenticated-Nearby rule applies to
-`IrohaPeer*V1`, not the retained ABI21 family. Do not use profile `2` for a
+facades. Kagemusha retains its distinct `PKK2*`/`PKKQ1` text and Bonjour
+identifiers, while NFC uses the sole canonical AID
+`F0504B45504B524E464301`. Nearby uses the authenticated binary `PKNB1`
+envelope and its own smaller bound. Those rails are never negotiated,
+reinterpreted, or used as fallback for Retail Offline Peer V1. The
+no-raw-text/no-unauthenticated-Nearby rule applies to `IrohaPeer*V1`; the
+retained ABI21 family also has no old AID. Do not use profile `2` for a
 sidecar/demo representation.
 
 These transport changes are client-side and require no backend API change.
