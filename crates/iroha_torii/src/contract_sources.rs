@@ -22,7 +22,7 @@ use iroha_data_model::{
     },
     query::error::QueryExecutionFail,
     smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
-    transaction::{TransactionEntrypoint, executable::Executable},
+    transaction::TransactionEntrypoint,
 };
 use ivm::analysis::ProgramAnalysis;
 use mv::storage::StorageReadOnly;
@@ -834,10 +834,11 @@ fn locate_instruction_box(
                     | TransactionEntrypoint::PrivateKaigi(_)
                     | TransactionEntrypoint::Time(_) => return Err(not_found()),
                 };
-                let Executable::Instructions(instructions) = tx.instructions() else {
-                    return Err(not_found());
-                };
-                let instruction = instructions.get(lookup_index).ok_or_else(not_found)?;
+                let instruction = tx
+                    .instructions()
+                    .explicit_instructions()
+                    .nth(lookup_index)
+                    .ok_or_else(not_found)?;
                 return Ok(instruction.clone());
             }
         }
@@ -1476,7 +1477,11 @@ mod tests {
         let chain: dm::ChainId = "test-chain".parse().expect("chain");
         let authority_key = checked_contract_sources_key_fixture(Algorithm::Ed25519);
         let authority = dm::AccountId::new(authority_key.public_key().clone());
-        let mut builder = dm::TransactionBuilder::new(chain, authority);
+        let mut builder = dm::TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1_710_000_000_000));
         let signed = builder
             .with_instructions(instructions)

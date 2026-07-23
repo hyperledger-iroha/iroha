@@ -17,6 +17,7 @@ pub use asset::{
 /// Re-export asset-definition visitor helpers used by the default executor.
 pub use asset_definition::{
     visit_register_asset_definition, visit_remove_asset_definition_key_value,
+    visit_set_asset_definition_alias, visit_set_asset_definition_balance_policy,
     visit_set_asset_definition_key_value, visit_transfer_asset_definition,
     visit_unregister_asset_definition,
 };
@@ -49,16 +50,34 @@ use iroha_smart_contract::data_model::{
         SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
         SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
         UnregisterProviderOwner, UpsertProviderCredit,
+        alias_setup::{
+            CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
+            RebindAccountAlias, RenewAliasLease,
+        },
+        asset_alias::{SetAssetDefinitionAlias, SetAssetDefinitionBalancePolicy},
         bridge::{ApplySccpRouteGovernance, RecordBridgeReceipt},
         contract_alias::SetContractAlias,
         defi::DeFiInstructionBox,
         governance::{EnactReferendum, ProposeSccpRouteGovernance, RegisterCitizen},
+        nexus::{
+            ActivateFeeSponsorProgramRevision, BeginCloseFeeSponsorProgram, CloseFeeSponsorProgram,
+            CreateFeeSponsorProgram, EnrollFeeSponsorBeneficiary, FundFeeSponsorProgram,
+            PauseFeeSponsorProgram, RegisterVerifiedFeeSponsorVaultAllocation,
+            RegisterVerifiedLaneRelay, StageFeeSponsorProgramRevision,
+            UnenrollFeeSponsorBeneficiary, WithdrawFeeSponsorProgram,
+        },
+        offline::{
+            ActivateKagemushaRecursiveReleaseV4, RedeemKagemushaRecursiveV4,
+            RegisterOfflineDeviceAttestation, SetOfflineDeviceAttestationPolicy,
+            TopUpKagemushaRecursiveV4,
+        },
         repo::{RepoInstructionBox, RepoIsi, RepoMarginCallIsi, ReverseRepoIsi},
         settlement::SettlementInstructionBox,
         smart_contract_code::{
-            ActivateContractInstance, CancelSmartContractCodeUpload, DeactivateContractInstance,
-            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
-            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
+            ActivateContractInstance, CancelSmartContractCodeUpload, CommitContractDeployment,
+            DeactivateContractInstance, FinalizeSmartContractCodeUpload,
+            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
+            UploadSmartContractCodeChunk,
         },
     },
     prelude::*,
@@ -156,6 +175,14 @@ fn has_contract_deployment_self_bootstrap_prefix(
     authority: &AccountId,
     instructions: &[InstructionBox],
 ) -> bool {
+    if instructions
+        .iter()
+        .any(|instruction| instruction.as_any().is::<CommitContractDeployment>())
+    {
+        // Atomic deployment consumes a pre-existing authority's reserved nonce. It must never
+        // inherit the narrow upload-only account bootstrap exception.
+        return false;
+    }
     let Some([register, grant, deployment]) = instructions.get(..3) else {
         return false;
     };
@@ -450,6 +477,15 @@ mod contract_deployment_bootstrap_tests {
                 code_hash,
             }
             .into(),
+            CommitContractDeployment {
+                expected_deploy_nonce: 7,
+                contract_address: contract_address.clone(),
+                code_hash,
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
             RegisterSmartContractBytes {
                 code_hash,
                 code: vec![0x01],
@@ -590,6 +626,29 @@ mod contract_deployment_bootstrap_tests {
             &authority, &shifted
         ));
 
+        let mut atomic_deployment = exact.clone();
+        atomic_deployment.push(
+            CommitContractDeployment {
+                expected_deploy_nonce: 0,
+                contract_address: ContractAddress::derive(
+                    0x1234,
+                    &authority,
+                    0,
+                    DataSpaceId::UNIVERSAL,
+                )
+                .expect("atomic deployment contract address"),
+                code_hash: Hash::new(b"executor atomic deployment bootstrap fixture"),
+                contract_alias: "payments::universal".parse().expect("contract alias"),
+                lease_expiry_ms: None,
+                expected_previous_contract_address: None,
+            }
+            .into(),
+        );
+        assert!(!has_contract_deployment_self_bootstrap_prefix(
+            &authority,
+            &atomic_deployment
+        ));
+
         let mut metadata = Metadata::default();
         metadata.insert("bootstrap".parse().expect("metadata key"), "forbidden");
         let decorated_accounts = [
@@ -670,6 +729,19 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
             }
         }
         Executable::ContractCall(_) => {}
+        Executable::Batch(items) => {
+            for item in items {
+                if executor.verdict().is_err() {
+                    break;
+                }
+                if let iroha_smart_contract::data_model::transaction::ExecutableBatchItem::Instruction(
+                    isi,
+                ) = item
+                {
+                    executor.visit_instruction(isi);
+                }
+            }
+        }
         Executable::Instructions(instructions) => {
             let allow_deployment_self_bootstrap =
                 has_contract_deployment_self_bootstrap_prefix(
@@ -712,6 +784,43 @@ pub fn visit_instruction<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &In
     isi.dispatch(executor);
 }
 
+/// Forward declarative alias setup to Core's consensus-critical classifier and executor.
+pub fn visit_ensure_alias<V: Execute + Visit + ?Sized>(executor: &mut V, isi: &EnsureAlias) {
+    execute!(executor, isi);
+}
+
+/// Forward guarded alias lease renewal to Core's expiry-CAS executor.
+pub fn visit_renew_alias_lease<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &RenewAliasLease,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward alias auto-renew configuration to Core's owner-only CAS executor.
+pub fn visit_configure_alias_auto_renew<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &ConfigureAliasAutoRenew,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward explicit alias rebinding to Core's target-account CAS executor.
+pub fn visit_rebind_account_alias<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &RebindAccountAlias,
+) {
+    execute!(executor, isi);
+}
+
+/// Forward primary-alias compare-and-set to Core's lifecycle executor.
+pub fn visit_compare_and_set_primary_account_alias<V: Execute + Visit + ?Sized>(
+    executor: &mut V,
+    isi: &CompareAndSetPrimaryAccountAlias,
+) {
+    execute!(executor, isi);
+}
+
 trait InstructionDispatch {
     fn dispatch<V: Execute + Visit + ?Sized>(&self, executor: &mut V);
 }
@@ -732,6 +841,26 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<ExecuteTrigger>() {
             executor.visit_execute_trigger(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<EnsureAlias>() {
+            executor.visit_ensure_alias(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RenewAliasLease>() {
+            executor.visit_renew_alias_lease(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ConfigureAliasAutoRenew>() {
+            executor.visit_configure_alias_auto_renew(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<RebindAccountAlias>() {
+            executor.visit_rebind_account_alias(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CompareAndSetPrimaryAccountAlias>() {
+            executor.visit_compare_and_set_primary_account_alias(isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<BurnBox>() {
@@ -809,6 +938,9 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<ActivateContractInstance>() {
             execute!(executor, isi);
         }
+        if let Some(isi) = any.downcast_ref::<CommitContractDeployment>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<RegisterSmartContractBytes>() {
             execute!(executor, isi);
         }
@@ -827,8 +959,34 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetContractAlias>() {
             execute!(executor, isi);
         }
+        // Core owns offline note/device validation and the exact governance permissions for
+        // attestation-policy mutations. Forward every native offline instruction so those
+        // consensus-critical checks run.
+        if let Some(isi) = any.downcast_ref::<TopUpKagemushaRecursiveV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RedeemKagemushaRecursiveV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateKagemushaRecursiveReleaseV4>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterOfflineDeviceAttestation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<SetOfflineDeviceAttestationPolicy>() {
+            execute!(executor, isi);
+        }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
             visit_set_asset_key_value(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetDefinitionAlias>() {
+            asset_definition::visit_set_asset_definition_alias(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAssetDefinitionBalancePolicy>() {
+            asset_definition::visit_set_asset_definition_balance_policy(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetAssetTransferFreeze>() {
@@ -858,6 +1016,44 @@ impl InstructionDispatch for InstructionBox {
         if let Some(isi) = any.downcast_ref::<SetLaneRelayEmergencyValidators>() {
             nexus::visit_set_lane_relay_emergency_validators(executor, isi);
             return;
+        }
+        // Core performs the consensus-critical proof, lifecycle, immutable-revision, vault,
+        // and exact delegated-permission checks for the typed fee-program surface.
+        if let Some(isi) = any.downcast_ref::<RegisterVerifiedLaneRelay>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<RegisterVerifiedFeeSponsorVaultAllocation>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CreateFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<StageFeeSponsorProgramRevision>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<ActivateFeeSponsorProgramRevision>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<PauseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<BeginCloseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<CloseFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<EnrollFeeSponsorBeneficiary>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<UnenrollFeeSponsorBeneficiary>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<FundFeeSponsorProgram>() {
+            execute!(executor, isi);
+        }
+        if let Some(isi) = any.downcast_ref::<WithdrawFeeSponsorProgram>() {
+            execute!(executor, isi);
         }
         if let Some(isi) = any.downcast_ref::<TransferBox>() {
             executor.visit_transfer(isi);
@@ -1050,12 +1246,13 @@ impl InstructionDispatch for InstructionBox {
 /// Permission-checked visitors for native settlement instructions.
 pub mod settlement {
     use iroha_executor_data_model::permission::settlement::{
-        CanManageFxCorridors, CanSetFxCorridorPolicy, CanSettleFxCorridor,
+        CanManageFxCorridors, CanSetFxCorridorPolicy,
     };
 
     use super::*;
 
-    /// Dispatch a settlement instruction, enforcing typed corridor policy scopes.
+    /// Dispatch a settlement instruction, gating policy updates and deferring settlement-source
+    /// authorization to Core.
     pub fn visit_settlement_instruction<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &SettlementInstructionBox,
@@ -1080,23 +1277,276 @@ pub mod settlement {
                     "FX corridor policy updates require an exact typed policy permission"
                 );
             }
-            SettlementInstructionBox::SettleFxCorridor(settle) => {
-                let exact = CanSettleFxCorridor {
-                    policy_id: settle.policy_id().clone(),
-                };
-                if CanManageFxCorridors.is_owned_by(authority, executor.host())
-                    || exact.is_owned_by(authority, executor.host())
-                {
-                    execute!(executor, isi);
-                }
-                deny!(
-                    executor,
-                    "FX settlement requires an exact typed corridor permission"
-                );
-            }
+            // Core resolves the governed corridor source and applies the source-specific
+            // authorization rule. In particular, transaction-authority corridors are
+            // intentionally self-service, while fixed-account corridors require the exact
+            // typed settlement permission and source-account match.
+            SettlementInstructionBox::SettleFxCorridor(_) => execute!(executor, isi),
             SettlementInstructionBox::Dvp(_) | SettlementInstructionBox::Pvp(_) => {
                 execute!(executor, isi);
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod core_authorization_dispatch_tests {
+    use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_data_model::{
+        alias_setup::{
+            AliasDataSpaceIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
+            AliasTargetV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1,
+        },
+        block::BlockHeader,
+        isi::{
+            alias_setup::{
+                CompareAndSetPrimaryAccountAlias, ConfigureAliasAutoRenew, EnsureAlias,
+                RebindAccountAlias, RenewAliasLease,
+            },
+            settlement::SettleFxCorridor,
+        },
+        nexus::DataSpaceId,
+        offline::{
+            KagemushaDevicePublicKeyV2, OfflineDeviceAttestationPolicy,
+            OfflineDeviceAttestationRegistration,
+        },
+        prelude::{AccountId, AssetDefinitionId, DomainId, Quantity, ValidationFail},
+    };
+
+    use super::*;
+    use crate::{Iroha, prelude};
+
+    #[derive(Debug)]
+    struct TestExecutor {
+        host: Iroha,
+        context: prelude::Context,
+        verdict: crate::data_model::executor::Result<(), ValidationFail>,
+    }
+
+    impl TestExecutor {
+        fn new(authority: AccountId) -> Self {
+            Self {
+                host: Iroha,
+                context: prelude::Context {
+                    authority,
+                    curr_block: BlockHeader::new(
+                        NonZeroU64::new(2).expect("non-genesis block height"),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    ),
+                },
+                verdict: Ok(()),
+            }
+        }
+    }
+
+    impl Execute for TestExecutor {
+        fn host(&self) -> &Iroha {
+            &self.host
+        }
+
+        fn context(&self) -> &prelude::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut prelude::Context {
+            &mut self.context
+        }
+
+        fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+            &self.verdict
+        }
+
+        fn deny(&mut self, reason: ValidationFail) {
+            self.verdict = Err(reason);
+        }
+    }
+
+    impl Visit for TestExecutor {
+        fn visit_ensure_alias(&mut self, operation: &EnsureAlias) {
+            super::visit_ensure_alias(self, operation);
+        }
+
+        fn visit_renew_alias_lease(&mut self, operation: &RenewAliasLease) {
+            super::visit_renew_alias_lease(self, operation);
+        }
+
+        fn visit_configure_alias_auto_renew(&mut self, operation: &ConfigureAliasAutoRenew) {
+            super::visit_configure_alias_auto_renew(self, operation);
+        }
+
+        fn visit_rebind_account_alias(&mut self, operation: &RebindAccountAlias) {
+            super::visit_rebind_account_alias(self, operation);
+        }
+
+        fn visit_compare_and_set_primary_account_alias(
+            &mut self,
+            operation: &CompareAndSetPrimaryAccountAlias,
+        ) {
+            super::visit_compare_and_set_primary_account_alias(self, operation);
+        }
+    }
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive checked FX executor fixture keypair");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn asset(domain: &str, name: &str) -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("valid FX asset domain"),
+            name.parse().expect("valid FX asset name"),
+        )
+    }
+
+    fn offline_attestation_registration(
+        account_id: AccountId,
+    ) -> OfflineDeviceAttestationRegistration {
+        let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&[
+            0x04, 0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6, 0xe5, 0x63,
+            0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb, 0x33, 0xa0, 0xf4, 0xa1, 0x39,
+            0x45, 0xd8, 0x98, 0xc2, 0x96, 0x4f, 0xe3, 0x42, 0xe2, 0xfe, 0x1a, 0x7f, 0x9b, 0x8e,
+            0xe7, 0xeb, 0x4a, 0x7c, 0x0f, 0x9e, 0x16, 0x2b, 0xce, 0x33, 0x57, 0x6b, 0x31, 0x5e,
+            0xce, 0xcb, 0xb6, 0x40, 0x68, 0x37, 0xbf, 0x51, 0xf5,
+        ])
+        .expect("canonical uncompressed P-256 generator point");
+        let attestation_report = b"executor-offline-attestation-report".to_vec();
+        let evidence = b"executor-offline-attestation-evidence".to_vec();
+
+        OfflineDeviceAttestationRegistration {
+            version: 1,
+            platform: "android-keymint".to_owned(),
+            key_id: "executor-offline-key".to_owned(),
+            device_id: "executor-offline-device".to_owned(),
+            account_id,
+            asset_definition_id: None,
+            ios_team_id: None,
+            ios_bundle_id: None,
+            ios_environment: None,
+            android_package_name: Some("org.hyperledger.iroha.executor".to_owned()),
+            android_signing_certificate_sha256: Some(vec![0x51; 32]),
+            public_key,
+            assertion_scheme: "android-keymint".to_owned(),
+            assertion_key_algorithm: "ecdsa-p256-sha256".to_owned(),
+            assertion_public_key: vec![0x52; 65],
+            assertion_usage_count_limit: Some(1),
+            one_use: true,
+            challenge_hash: Hash::new(b"executor-offline-attestation-challenge"),
+            attestation_report_hash: Hash::new(&attestation_report),
+            attestation_report,
+            evidence_hash: Hash::new(&evidence),
+            evidence,
+            recent_block_height: 42,
+            recent_block_hash: Hash::new(b"executor-offline-attestation-block"),
+            expires_at_ms: 2_000_000_000_000,
+        }
+    }
+
+    #[test]
+    fn fx_settlement_reaches_core_without_executor_permission() {
+        let authority = account(0x41);
+        let settlement = SettlementInstructionBox::SettleFxCorridor(SettleFxCorridor {
+            policy_id: "mobile_aed_pkr".parse().expect("valid FX policy name"),
+            expected_policy_revision: 1,
+            source_asset_definition_id: asset("cbuae", "aed"),
+            destination_asset_definition_id: asset("sbp", "pkr"),
+            settlement_id: "mobile_fx_1".parse().expect("valid settlement id"),
+            recipient: account(0x42),
+            source_amount: Quantity::from(10_u32),
+        });
+        let mut executor = TestExecutor::new(authority);
+
+        settlement::visit_settlement_instruction(&mut executor, &settlement);
+
+        assert!(
+            executor.verdict().is_ok(),
+            "the default executor must defer FX source authorization to Core"
+        );
+    }
+
+    #[test]
+    fn offline_attestation_instructions_reach_core_authorization() {
+        let authority = account(0x43);
+        let instructions = [
+            InstructionBox::from(RegisterOfflineDeviceAttestation::new(
+                offline_attestation_registration(authority.clone()),
+            )),
+            InstructionBox::from(SetOfflineDeviceAttestationPolicy::new(
+                OfflineDeviceAttestationPolicy {
+                    version: 1,
+                    trusted_roots: Vec::new(),
+                    revoked_certificate_sha256: Vec::new(),
+                    ios_apps: Vec::new(),
+                    android_apps: Vec::new(),
+                    require_ios_app_policy: false,
+                    require_android_app_policy: false,
+                },
+            )),
+        ];
+
+        for instruction in instructions {
+            let mut executor = TestExecutor::new(authority.clone());
+            visit_instruction(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_ok(),
+                "offline instructions must reach Core authorization"
+            );
+        }
+    }
+
+    #[test]
+    fn alias_lifecycle_instructions_reach_core_dispatch() {
+        let authority = account(0x44);
+        let replacement = account(0x45);
+        let dataspace = ResolvedDataSpaceV1::new(
+            "universal".parse().expect("canonical dataspace alias"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let target = AliasTargetV1::Dataspace(dataspace.clone());
+        let account_alias = ResolvedAccountAliasV1::new(
+            "merchant@universal"
+                .parse()
+                .expect("canonical account alias"),
+            DataSpaceId::UNIVERSAL,
+        );
+        let guard = AliasQuoteGuardV1 {
+            expected_policy_version: 1,
+            expected_payment_asset: "61CtjvNd9T3THAR65GsMVHr82Bjc"
+                .parse()
+                .expect("payment asset definition id"),
+            max_amount: Quantity::one(),
+            valid_until_ms: u64::MAX,
+        };
+        let instructions: Vec<InstructionBox> = vec![
+            EnsureAlias::new(
+                AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+                    dataspace,
+                    owner: authority.clone(),
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                guard.clone(),
+            )
+            .into(),
+            RenewAliasLease::new(target.clone(), 1, 2, guard).into(),
+            ConfigureAliasAutoRenew::new(target, 0, None).into(),
+            RebindAccountAlias::new(account_alias.clone(), authority.clone(), replacement).into(),
+            CompareAndSetPrimaryAccountAlias::new(authority.clone(), None, Some(account_alias))
+                .into(),
+        ];
+
+        for instruction in instructions {
+            let mut executor = TestExecutor::new(authority.clone());
+            visit_instruction(&mut executor, &instruction);
+            assert!(
+                executor.verdict().is_ok(),
+                "registered alias instruction must reach Core dispatch: {instruction:?}"
+            );
         }
     }
 }
@@ -1922,7 +2372,7 @@ pub mod sorafs {
 /// Permission-checked visitors for domain lifecycle instructions.
 pub mod domain {
     use iroha_executor_data_model::permission::domain::{
-        CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain,
+        CanModifyDomainMetadata, CanUnregisterDomain,
     };
     use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
 
@@ -1931,7 +2381,11 @@ pub mod domain {
         account::is_account_owner, domain::is_domain_owner, revoke_permissions,
     };
 
-    /// Registers a domain when genesis or a caller with the register-domain permission requests it.
+    /// Registers a domain only while applying genesis.
+    ///
+    /// Ordinary signed transactions must use the declarative `EnsureAlias`
+    /// instruction so lease acquisition, catalog resolution, and ownership
+    /// checks stay atomic.
     pub fn visit_register_domain<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         isi: &Register<Domain>,
@@ -1939,11 +2393,11 @@ pub mod domain {
         if executor.context().curr_block.is_genesis() {
             execute!(executor, isi);
         }
-        if CanRegisterDomain.is_owned_by(&executor.context().authority, executor.host()) {
-            execute!(executor, isi);
-        }
 
-        deny!(executor, "Can't register domain");
+        deny!(
+            executor,
+            "Raw domain registration is reserved for genesis; use EnsureAlias"
+        );
     }
 
     /// Unregisters a domain after checking that the caller governs the domain or holds the revoke permission.
@@ -2070,18 +2524,34 @@ pub mod domain {
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
             AnyPermission::CanRegisterAccount(permission) => &permission.domain == domain_id,
             AnyPermission::CanResolveAccountAlias(permission) => {
-                matches!(
-                    permission.scope,
-                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
-                )
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
+            }
+            AnyPermission::CanDelegateAccountAliasResolution(permission) => {
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
             }
             AnyPermission::CanManageAccountAlias(permission) => {
-                matches!(
-                    permission.scope,
-                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(ref domain)
-                        if domain == domain_id
-                )
+                match &permission.scope {
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(domain) => domain == domain_id,
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(alias) => {
+                        alias.canonical_name.domain.as_ref() == Some(domain_id.name())
+                            && &alias.canonical_name.dataspace == domain_id.dataspace()
+                    }
+                    iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Dataspace(_) => false,
+                }
             }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
                 asset_definition_matches_domain(&permission.asset_definition)
@@ -2126,10 +2596,16 @@ pub mod domain {
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanTransferNft(permission) => permission.nft.domain() == domain_id,
             AnyPermission::CanModifyNftMetadata(permission) => permission.nft.domain() == domain_id,
-            AnyPermission::CanUseFeeSponsor(_)
+            AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(permission) => {
+                &permission.domain == domain_id
+            }
+            AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
+            | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -2141,6 +2617,9 @@ pub mod domain {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanManageOfflineEscrow(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
+            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2171,7 +2650,8 @@ pub mod domain {
             | AnyPermission::CanRollbackOracleChange(_)
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_) => false,
         }
     }
 }
@@ -2412,7 +2892,15 @@ pub mod account {
             AnyPermission::CanManageZkAceIdentityForAccount(permission) => {
                 permission.account == *account_id
             }
-            AnyPermission::CanUseFeeSponsor(permission) => permission.sponsor == *account_id,
+            AnyPermission::CanManageFeeSponsorProgram(permission) => {
+                permission.sponsor == *account_id
+            }
+            AnyPermission::CanEnrollFeeSponsorProgram(permission) => {
+                permission.program_id.sponsor == *account_id
+            }
+            AnyPermission::CanWithdrawFeeSponsorProgram(permission) => {
+                permission.program_id.sponsor == *account_id
+            }
             AnyPermission::CanInvokeContractEntrypoint(permission) => {
                 permission.contract.subject_id() == *account_id
             }
@@ -2422,7 +2910,9 @@ pub mod account {
             | AnyPermission::CanModifyTrigger(_)
             | AnyPermission::CanModifyTriggerMetadata(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanManagePeers(_)
             | AnyPermission::CanManageLaneRelayEmergency(_)
             | AnyPermission::CanRegisterDomain(_)
@@ -2444,6 +2934,9 @@ pub mod account {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanManageOfflineEscrow(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
+            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2473,7 +2966,9 @@ pub mod account {
             | AnyPermission::CanRollbackOracleChange(_)
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
-            | AnyPermission::CanPublishSpaceDirectoryManifest(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifest(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_) => false,
         }
     }
 }
@@ -2625,6 +3120,52 @@ pub mod asset_definition {
         );
     }
 
+    /// Updates an asset-definition alias when genesis or the definition owner invokes it.
+    pub fn visit_set_asset_definition_alias<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetDefinitionAlias,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            &isi.asset_definition_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+        deny!(
+            executor,
+            "Only the asset-definition owner may change its alias"
+        );
+    }
+
+    /// Updates balance partitioning when genesis or the definition owner invokes it.
+    pub fn visit_set_asset_definition_balance_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAssetDefinitionBalancePolicy,
+    ) {
+        if executor.context().curr_block.is_genesis() {
+            execute!(executor, isi);
+        }
+        match is_asset_definition_owner(
+            &isi.asset_definition_id,
+            &executor.context().authority,
+            executor.host(),
+        ) {
+            Err(err) => deny!(executor, err),
+            Ok(true) => execute!(executor, isi),
+            Ok(false) => {}
+        }
+        deny!(
+            executor,
+            "Only the asset-definition owner may change its balance policy"
+        );
+    }
+
     pub(crate) fn is_permission_asset_definition_associated(
         permission: &Permission,
         asset_definition_id: &AssetDefinitionId,
@@ -2676,7 +3217,9 @@ pub mod asset_definition {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -2695,6 +3238,9 @@ pub mod asset_definition {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanManageOfflineEscrow(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
+            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanUpgradeExecutor(_)
             | AnyPermission::CanRegisterSmartContractCode(_)
@@ -2726,7 +3272,11 @@ pub mod asset_definition {
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
-            | AnyPermission::CanUseFeeSponsor(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
+            | AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
         }
     }
 }
@@ -3109,7 +3659,7 @@ pub mod asset {
                 name::Name,
                 nexus::LaneId,
                 peer::PeerId,
-                prelude::{Json, Numeric, Quantity},
+                prelude::{Json, Quantity},
                 repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
             },
             prelude::{Context, Visit},
@@ -3284,7 +3834,7 @@ pub mod asset {
                 validator.clone(),
                 PeerId::from(validator.signatory().clone()),
                 validator,
-                Numeric::from(1u64),
+                Quantity::from(1_u64),
                 Metadata::default(),
             );
             let instruction_box: InstructionBox = instruction.into();
@@ -3302,7 +3852,7 @@ pub mod asset {
             let (mut executor, _) = StubExecutor::new(2);
             let instruction = RegisterCitizen {
                 owner: executor.context().authority.clone(),
-                amount: 0,
+                amount: Quantity::zero(),
             };
             let instruction_box: InstructionBox = instruction.into();
 
@@ -3323,7 +3873,7 @@ pub mod asset {
                 source_tx: [0x11; 32],
                 dest_tx: None,
                 proof_hash: [0x22; 32],
-                amount: 1,
+                amount: 1_u64.into(),
                 asset_id: b"wBTC#btc".to_vec(),
                 recipient: b"alice@main".to_vec(),
             };
@@ -3627,18 +4177,76 @@ pub mod role {
 
     use super::*;
 
+    #[derive(Clone, Copy)]
+    pub(super) enum RoleDelegationOperation {
+        Grant,
+        Revoke,
+    }
+
+    pub(super) fn validate_role_delegation_permissions(
+        role: &Role,
+        authority: &AccountId,
+        context: &crate::prelude::Context,
+        host: &Iroha,
+        operation: RoleDelegationOperation,
+    ) -> Result<(), ValidationFail> {
+        for permission in role.permissions() {
+            let any_permission = AnyPermission::try_from(permission).map_err(|_| {
+                ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
+            })?;
+            match operation {
+                RoleDelegationOperation::Grant => {
+                    crate::permission::ValidateGrantRevoke::validate_grant(
+                        &any_permission,
+                        authority,
+                        context,
+                        host,
+                    )?;
+                }
+                RoleDelegationOperation::Revoke => {
+                    crate::permission::ValidateGrantRevoke::validate_revoke(
+                        &any_permission,
+                        authority,
+                        context,
+                        host,
+                    )?;
+                }
+            }
+        }
+        Ok(())
+    }
+
     macro_rules! impl_execute_grant_revoke_account_role {
-        ($executor:ident, $isi:ident) => {
+        ($executor:ident, $isi:ident, $operation:ident) => {
             let role_id = $isi.object();
 
-            if $executor.context().curr_block.is_genesis()
-                || find_account_roles($executor.context().authority.clone(), $executor.host())
-                    .any(|authority_role_id| authority_role_id == *role_id)
-            {
+            if $executor.context().curr_block.is_genesis() {
                 execute!($executor, $isi)
             }
 
-            deny!($executor, "Can't grant or revoke role to another account");
+            if !find_account_roles($executor.context().authority.clone(), $executor.host())
+                .any(|authority_role_id| authority_role_id == *role_id)
+            {
+                deny!(
+                    $executor,
+                    "Can't grant or revoke a role the authority does not hold"
+                );
+            }
+
+            let Some(role) = find_role(role_id, $executor.host()) else {
+                deny!($executor, "Can't grant or revoke an unknown role");
+            };
+            if let Err(error) = validate_role_delegation_permissions(
+                &role,
+                &$executor.context().authority,
+                $executor.context(),
+                $executor.host(),
+                RoleDelegationOperation::$operation,
+            ) {
+                deny!($executor, error);
+            }
+
+            execute!($executor, $isi)
         };
     }
 
@@ -3685,6 +4293,40 @@ pub mod role {
             .map(|role| role.dbg_expect("Failed to get role from cursor"))
     }
 
+    fn find_role(role_id: &RoleId, host: &Iroha) -> Option<Role> {
+        use iroha_smart_contract::DebugExpectExt as _;
+
+        host.query(FindRoles)
+            .execute()
+            .dbg_expect("INTERNAL BUG: `FindAllRoles` must never fail")
+            .map(|role| role.dbg_expect("Failed to get role from cursor"))
+            .find(|role| role.id() == role_id)
+    }
+
+    pub(super) fn validated_role_registration_permissions(
+        role: &Role,
+        authority: &AccountId,
+        context: &crate::prelude::Context,
+        host: &Iroha,
+    ) -> Result<Vec<AnyPermission>, ValidationFail> {
+        let mut permissions = Vec::with_capacity(role.permissions().len());
+        for permission in role.permissions() {
+            let any_permission = AnyPermission::try_from(permission).map_err(|_| {
+                ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
+            })?;
+            if !context.curr_block.is_genesis() {
+                crate::permission::ValidateGrantRevoke::validate_grant(
+                    &any_permission,
+                    authority,
+                    context,
+                    host,
+                )?;
+            }
+            permissions.push(any_permission);
+        }
+        Ok(permissions)
+    }
+
     /// Registers a role and seeds its permissions when the caller controls role governance.
     pub fn visit_register_role<V: Execute + Visit + ?Sized>(
         executor: &mut V,
@@ -3728,25 +4370,16 @@ pub mod role {
             }
         }
 
-        for permission in role.inner().permissions() {
-            iroha_smart_contract::log::debug!(&format!("Checking `{permission:?}`"));
-
-            let Ok(any_permission) = AnyPermission::try_from(permission) else {
-                deny!(
-                    executor,
-                    ValidationFail::NotPermitted(format!("{permission:?}: Unknown permission"))
-                );
-            };
-            if !executor.context().curr_block.is_genesis()
-                && let Err(error) = crate::permission::ValidateGrantRevoke::validate_grant(
-                    &any_permission,
-                    role.grant_to(),
-                    executor.context(),
-                    executor.host(),
-                )
-            {
-                deny!(executor, error);
-            }
+        let permissions = match validated_role_registration_permissions(
+            role.inner(),
+            &executor.context().authority,
+            executor.context(),
+            executor.host(),
+        ) {
+            Ok(permissions) => permissions,
+            Err(error) => deny!(executor, error),
+        };
+        for any_permission in permissions {
             new_role = new_role.add_permission(any_permission);
         }
 
@@ -3784,7 +4417,7 @@ pub mod role {
         executor: &mut V,
         isi: &Grant<RoleId, Account>,
     ) {
-        impl_execute_grant_revoke_account_role!(executor, isi);
+        impl_execute_grant_revoke_account_role!(executor, isi, Grant);
     }
 
     /// Revokes a role from an account after verifying role management permissions.
@@ -3792,7 +4425,7 @@ pub mod role {
         executor: &mut V,
         isi: &Revoke<RoleId, Account>,
     ) {
-        impl_execute_grant_revoke_account_role!(executor, isi);
+        impl_execute_grant_revoke_account_role!(executor, isi, Revoke);
     }
 
     /// Grants a permission to a role after ensuring the caller may mutate role permissions.
@@ -4046,7 +4679,9 @@ pub mod trigger {
             | AnyPermission::CanModifyAccountMetadata(_)
             | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
+            | AnyPermission::CanDelegateAccountAliasResolution(_)
             | AnyPermission::CanManageAccountAlias(_)
+            | AnyPermission::CanReadRestrictedDataspace(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)
             | AnyPermission::CanModifyAssetDefinitionMetadata(_)
             | AnyPermission::CanModifyAssetMetadataWithDefinition(_)
@@ -4063,6 +4698,9 @@ pub mod trigger {
             | AnyPermission::CanSetParameters(_)
             | AnyPermission::CanManageSccpGovernance(_)
             | AnyPermission::CanProposeSccpRouteGovernance(_)
+            | AnyPermission::CanManageOfflineEscrow(_)
+            | AnyPermission::CanActivateKagemushaRecursiveReleaseV4(_)
+            | AnyPermission::CanManageOfflineDeviceAttestationPolicy(_)
             | AnyPermission::CanManageRoles(_)
             | AnyPermission::CanRegisterNft(_)
             | AnyPermission::CanUnregisterNft(_)
@@ -4098,7 +4736,11 @@ pub mod trigger {
             | AnyPermission::CanResolveOracleDispute(_)
             | AnyPermission::CanManageTwitterBindings(_)
             | AnyPermission::CanPublishSpaceDirectoryManifest(_)
-            | AnyPermission::CanUseFeeSponsor(_) => false,
+            | AnyPermission::CanPublishSpaceDirectoryManifestForUaid(_)
+            | AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(_)
+            | AnyPermission::CanManageFeeSponsorProgram(_)
+            | AnyPermission::CanEnrollFeeSponsorProgram(_)
+            | AnyPermission::CanWithdrawFeeSponsorProgram(_) => false,
         }
     }
 
@@ -4108,9 +4750,15 @@ pub mod trigger {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_executor_data_model::permission::{
-            account::{AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias},
+            account::{
+                AccountAliasPermissionScope, CanDelegateAccountAliasResolution,
+                CanManageAccountAlias, CanResolveAccountAlias,
+            },
             asset::{CanModifyAssetMetadata, CanModifyAssetMetadataWithDefinition},
-            nexus::CanUseFeeSponsor,
+            nexus::{
+                CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram,
+                CanPublishSpaceDirectoryManifestForAccountDomain, CanWithdrawFeeSponsorProgram,
+            },
             sccp::CanManageSccpGovernance,
             sorafs::{
                 CanApproveSorafsPin, CanBindSorafsAlias, CanCompleteSorafsReplicationOrder,
@@ -4129,6 +4777,7 @@ pub mod trigger {
             account::AccountId,
             asset::{AssetDefinitionId, AssetId},
             domain::DomainId,
+            nexus::FeeSponsorProgramId,
         };
 
         fn fixture_key_pair(seed: u8) -> KeyPair {
@@ -4264,38 +4913,99 @@ pub mod trigger {
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
 
-            let permission = Permission::from(AnyPermission::CanUseFeeSponsor(CanUseFeeSponsor {
-                sponsor: sponsor.clone(),
-                policy: "default".parse().expect("fee sponsor policy name is valid"),
-            }));
+            let program_id = FeeSponsorProgramId::new(
+                sponsor.clone(),
+                "default"
+                    .parse()
+                    .expect("fee sponsor program name is valid"),
+            );
+            let permissions = [
+                Permission::from(AnyPermission::CanManageFeeSponsorProgram(
+                    CanManageFeeSponsorProgram {
+                        sponsor: sponsor.clone(),
+                    },
+                )),
+                Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
+                    CanEnrollFeeSponsorProgram {
+                        program_id: program_id.clone(),
+                    },
+                )),
+                Permission::from(AnyPermission::CanWithdrawFeeSponsorProgram(
+                    CanWithdrawFeeSponsorProgram { program_id },
+                )),
+            ];
 
-            assert!(
-                !domain::is_permission_domain_associated(&permission, &domain_id),
-                "fee sponsor permission should not bind to domains"
-            );
-            assert!(
-                !domain::is_permission_domain_associated(&permission, &other_domain),
-                "fee sponsor permission should not bind to unrelated domains"
-            );
-            assert!(
-                account::is_permission_account_associated(&permission, &sponsor),
-                "fee sponsor permission should bind to sponsor account"
-            );
-            assert!(
-                !account::is_permission_account_associated(&permission, &other_account),
-                "fee sponsor permission should not bind to unrelated accounts"
-            );
-            assert!(
-                !asset_definition::is_permission_asset_definition_associated(
+            for permission in permissions {
+                assert!(!domain::is_permission_domain_associated(
                     &permission,
-                    &asset_definition_id
+                    &domain_id
+                ));
+                assert!(!domain::is_permission_domain_associated(
+                    &permission,
+                    &other_domain
+                ));
+                assert!(account::is_permission_account_associated(
+                    &permission,
+                    &sponsor
+                ));
+                assert!(!account::is_permission_account_associated(
+                    &permission,
+                    &other_account
+                ));
+                assert!(
+                    !asset_definition::is_permission_asset_definition_associated(
+                        &permission,
+                        &asset_definition_id
+                    )
+                );
+                assert!(!is_permission_trigger_associated(&permission, &trigger_id));
+            }
+        }
+
+        #[test]
+        fn account_domain_manifest_and_program_associations_remain_independent() {
+            let hbl_domain = DomainId::try_new("hbl", "sbp").expect("HBL domain must be valid");
+            let ubl_domain = DomainId::try_new("ubl", "sbp").expect("UBL domain must be valid");
+            let sponsor = sample_account_id(0x31, &hbl_domain);
+            let unrelated = sample_account_id(0x33, &ubl_domain);
+
+            let publisher = Permission::from(
+                AnyPermission::CanPublishSpaceDirectoryManifestForAccountDomain(
+                    CanPublishSpaceDirectoryManifestForAccountDomain {
+                        dataspace: DataSpaceId::new(10),
+                        domain: hbl_domain.clone(),
+                    },
                 ),
-                "fee sponsor permission should not bind to asset definitions"
             );
-            assert!(
-                !is_permission_trigger_associated(&permission, &trigger_id),
-                "fee sponsor permission should not bind to triggers"
-            );
+            assert!(domain::is_permission_domain_associated(
+                &publisher,
+                &hbl_domain
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &publisher,
+                &ubl_domain
+            ));
+
+            let enrollment = Permission::from(AnyPermission::CanEnrollFeeSponsorProgram(
+                CanEnrollFeeSponsorProgram {
+                    program_id: FeeSponsorProgramId::new(
+                        sponsor.clone(),
+                        "retail".parse().expect("retail sponsor program"),
+                    ),
+                },
+            ));
+            assert!(!domain::is_permission_domain_associated(
+                &enrollment,
+                &hbl_domain
+            ));
+            assert!(account::is_permission_account_associated(
+                &enrollment,
+                &sponsor
+            ));
+            assert!(!account::is_permission_account_associated(
+                &enrollment,
+                &unrelated
+            ));
         }
 
         #[test]
@@ -4310,6 +5020,12 @@ pub mod trigger {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
                 },
             ));
+            let delegate_permission =
+                Permission::from(AnyPermission::CanDelegateAccountAliasResolution(
+                    CanDelegateAccountAliasResolution {
+                        scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
+                    },
+                ));
             let manage_permission = Permission::from(AnyPermission::CanManageAccountAlias(
                 CanManageAccountAlias {
                     scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
@@ -4323,6 +5039,14 @@ pub mod trigger {
             assert!(
                 !domain::is_permission_domain_associated(&resolve_permission, &other_domain),
                 "alias resolve permission should not bind to other domains"
+            );
+            assert!(
+                domain::is_permission_domain_associated(&delegate_permission, &domain_id),
+                "alias resolve-delegation permission should bind to the matching domain"
+            );
+            assert!(
+                !domain::is_permission_domain_associated(&delegate_permission, &other_domain),
+                "alias resolve-delegation permission should not bind to other domains"
             );
             assert!(
                 domain::is_permission_domain_associated(&manage_permission, &domain_id),
@@ -4357,7 +5081,7 @@ mod sorafs_permission_tests {
         },
         metadata::Metadata,
         permission::Permission as PermissionObject,
-        prelude::ValidationFail,
+        prelude::{Quantity, ValidationFail},
         query::sorafs::prelude::{
             FindSorafsModerationAppeal, FindSorafsModerationJurorEligibility,
             FindSorafsModerationPolicy, FindSorafsModerationStatus,
@@ -4391,7 +5115,7 @@ mod sorafs_permission_tests {
         CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
-        parameter::CanSetParameters, sccp::CanManageSccpGovernance,
+        domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
     };
 
     use super::*;
@@ -4426,7 +5150,7 @@ mod sorafs_permission_tests {
         bytes.try_into().expect("Ed25519 public key length")
     }
 
-    #[derive(Debug)]
+    #[derive(Debug, iroha_executor_derive::Visit)]
     struct MockExecutor {
         host: Iroha,
         ctx: prelude::Context,
@@ -4477,8 +5201,6 @@ mod sorafs_permission_tests {
             self.verdict = Err(reason);
         }
     }
-
-    impl Visit for MockExecutor {}
 
     fn assert_denied_without_permission<T: Clone>(
         instruction: T,
@@ -4664,10 +5386,10 @@ mod sorafs_permission_tests {
     fn upsert_provider_credit() -> UpsertProviderCredit {
         UpsertProviderCredit::new(ProviderCreditRecord::new(
             sample_provider_id(),
-            1,
-            0,
-            0,
-            0,
+            Quantity::from(1_u32),
+            Quantity::zero(),
+            Quantity::zero(),
+            Quantity::zero(),
             0,
             0,
             Metadata::default(),
@@ -4968,6 +5690,28 @@ mod sorafs_permission_tests {
         );
     }
 
+    #[test]
+    fn derived_default_visit_dispatches_private_juror_eligibility_query() {
+        with_mock_permissions(vec![PermissionObject::from(CanRegisterSorafsPin)], || {
+            let query = iroha_smart_contract::data_model::query::AnyQueryBox::Singular(
+                FindSorafsModerationJurorEligibility::new(
+                    "appeal-case".to_owned(),
+                    "round-1".to_owned(),
+                    owner_account_id(),
+                )
+                .into(),
+            );
+            let mut executor = MockExecutor::new(false);
+
+            executor.visit_query(&query);
+
+            assert!(
+                executor.verdict().is_err(),
+                "derived default Visit dispatch must not bypass foreign juror privacy"
+            );
+        });
+    }
+
     fn custom_parameter(name: &str) -> SetParameter {
         let id = iroha_smart_contract::data_model::parameter::CustomParameterId::new(
             name.parse().expect("test custom parameter id"),
@@ -5144,6 +5888,22 @@ mod sorafs_permission_tests {
     }
 
     #[test]
+    fn raw_domain_registration_is_genesis_only() {
+        let domain_id = DomainId::try_new("planned", "universal").expect("valid domain id");
+        let instruction = Register::domain(Domain::new(domain_id));
+
+        assert_denied_with_permission(
+            instruction.clone(),
+            PermissionObject::from(CanRegisterDomain),
+            domain::visit_register_domain,
+        );
+
+        let mut genesis = MockExecutor::new(true);
+        domain::visit_register_domain(&mut genesis, &instruction);
+        assert!(genesis.verdict().is_ok());
+    }
+
+    #[test]
     fn genesis_can_apply_typed_sccp_governance_without_seeded_permission() {
         let mut executor = MockExecutor::new(true);
         bridge::visit_apply_sccp_route_governance(&mut executor, &remove_sccp_route());
@@ -5197,6 +5957,338 @@ pub mod permission {
         isi: &Revoke<Permission, Account>,
     ) {
         impl_execute!(executor, isi, validate_revoke, Revoke<Permission, Account>);
+    }
+}
+
+#[cfg(test)]
+mod governed_offline_permission_tests {
+    use core::num::NonZeroU64;
+
+    use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_data_model::{
+        block::BlockHeader,
+        nexus::FeeSponsorProgramId,
+        permission::Permission as PermissionObject,
+        prelude::{AccountId, Grant, Json, Register, Revoke, Role, RoleId, ValidationFail},
+    };
+    use iroha_executor_data_model::permission::{
+        nexus::{
+            CanEnrollFeeSponsorProgram, CanManageFeeSponsorProgram, CanWithdrawFeeSponsorProgram,
+        },
+        offline::{
+            CanActivateKagemushaRecursiveReleaseV4, CanManageOfflineDeviceAttestationPolicy,
+            CanManageOfflineEscrow,
+        },
+        parameter::CanSetParameters,
+        role::CanManageRoles,
+    };
+
+    use super::*;
+    use crate::{Iroha, permission::test_override, prelude};
+
+    #[derive(Debug)]
+    struct TestExecutor {
+        host: Iroha,
+        context: prelude::Context,
+        verdict: crate::data_model::executor::Result<(), ValidationFail>,
+    }
+
+    impl TestExecutor {
+        fn at_height(authority: AccountId, height: u64) -> Self {
+            Self {
+                host: Iroha,
+                context: prelude::Context {
+                    authority,
+                    curr_block: BlockHeader::new(
+                        NonZeroU64::new(height).expect("non-zero block height"),
+                        None,
+                        None,
+                        None,
+                        0,
+                        0,
+                    ),
+                },
+                verdict: Ok(()),
+            }
+        }
+
+        fn genesis(authority: AccountId) -> Self {
+            Self::at_height(authority, 1)
+        }
+
+        fn post_genesis(authority: AccountId) -> Self {
+            Self::at_height(authority, 2)
+        }
+    }
+
+    impl Execute for TestExecutor {
+        fn host(&self) -> &Iroha {
+            &self.host
+        }
+
+        fn context(&self) -> &prelude::Context {
+            &self.context
+        }
+
+        fn context_mut(&mut self) -> &mut prelude::Context {
+            &mut self.context
+        }
+
+        fn verdict(&self) -> &crate::data_model::executor::Result<(), ValidationFail> {
+            &self.verdict
+        }
+
+        fn deny(&mut self, reason: ValidationFail) {
+            self.verdict = Err(reason);
+        }
+    }
+
+    impl Visit for TestExecutor {}
+
+    fn account(seed: u8) -> AccountId {
+        let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+            .expect("derive deterministic permission fixture account");
+        AccountId::new(key_pair.public_key().clone())
+    }
+
+    fn governed_offline_permissions() -> [PermissionObject; 3] {
+        [
+            CanManageOfflineEscrow.into(),
+            CanActivateKagemushaRecursiveReleaseV4.into(),
+            CanManageOfflineDeviceAttestationPolicy.into(),
+        ]
+    }
+
+    fn assert_genesis_only_denial(
+        verdict: &Result<(), ValidationFail>,
+        permission: &PermissionObject,
+    ) {
+        let error = verdict
+            .as_ref()
+            .expect_err("post-genesis governed offline permission mutation must fail");
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(
+            error
+                .to_string()
+                .contains("only allowed inside the genesis block"),
+            "unexpected rejection for {permission:?}: {error}",
+        );
+    }
+
+    #[test]
+    fn genesis_accepts_all_exact_governed_offline_permission_grants() {
+        let bootstrap = account(40);
+        let destination = account(41);
+
+        for token in governed_offline_permissions() {
+            let grant = Grant::account_permission(token.clone(), destination.clone());
+            let mut executor = TestExecutor::genesis(bootstrap.clone());
+            permission::visit_grant_account_permission(&mut executor, &grant);
+            assert!(
+                executor.verdict().is_ok(),
+                "default executor must admit the exact genesis grant {token:?}: {:?}",
+                executor.verdict(),
+            );
+        }
+    }
+
+    #[test]
+    fn governed_offline_permissions_are_not_delegable_post_genesis() {
+        let banking = account(41);
+        let third_party = account(42);
+        for token in governed_offline_permissions() {
+            let previous = test_override::replace_permissions(vec![token.clone()]);
+            for destination in [banking.clone(), third_party.clone()] {
+                let grant = Grant::account_permission(token.clone(), destination);
+                let mut executor = TestExecutor::post_genesis(banking.clone());
+                permission::visit_grant_account_permission(&mut executor, &grant);
+                assert_genesis_only_denial(executor.verdict(), &token);
+            }
+            test_override::replace_permissions(previous);
+        }
+    }
+
+    #[test]
+    fn governed_offline_permissions_are_not_revocable_post_genesis() {
+        let banking = account(43);
+        for token in governed_offline_permissions() {
+            let previous = test_override::replace_permissions(vec![token.clone()]);
+            let revoke = Revoke::account_permission(token.clone(), banking.clone());
+            let mut executor = TestExecutor::post_genesis(banking.clone());
+            permission::visit_revoke_account_permission(&mut executor, &revoke);
+            test_override::replace_permissions(previous);
+            assert_genesis_only_denial(executor.verdict(), &token);
+        }
+    }
+
+    fn role_with_permissions(
+        id: &str,
+        grant_to: AccountId,
+        permissions: impl IntoIterator<Item = PermissionObject>,
+    ) -> Role {
+        let mut role = Role::new(id.parse::<RoleId>().expect("role id"), grant_to);
+        for permission in permissions {
+            role = role.add_permission(permission);
+        }
+        role.inner().clone()
+    }
+
+    #[test]
+    fn role_membership_revalidates_genesis_only_permissions() {
+        let holder = account(44);
+        let context = TestExecutor::post_genesis(holder.clone());
+
+        for (index, permission) in governed_offline_permissions().into_iter().enumerate() {
+            let role = role_with_permissions(
+                &format!("governed_offline_{index}"),
+                holder.clone(),
+                [permission.clone()],
+            );
+            for operation in [
+                role::RoleDelegationOperation::Grant,
+                role::RoleDelegationOperation::Revoke,
+            ] {
+                let error = role::validate_role_delegation_permissions(
+                    &role,
+                    &holder,
+                    context.context(),
+                    context.host(),
+                    operation,
+                )
+                .expect_err("a genesis-only permission must not escape through role membership");
+                assert!(
+                    error
+                        .to_string()
+                        .contains("only allowed inside the genesis block"),
+                    "unexpected role rejection for {permission:?}: {error}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn role_membership_revalidates_every_sponsor_bound_permission() {
+        let sponsor = account(45);
+        let outsider = account(46);
+        let context = TestExecutor::post_genesis(outsider.clone());
+        let program_id = FeeSponsorProgramId::new(
+            sponsor.clone(),
+            "retail".parse().expect("retail program name"),
+        );
+        let permissions = [
+            PermissionObject::from(CanManageFeeSponsorProgram {
+                sponsor: sponsor.clone(),
+            }),
+            PermissionObject::from(CanEnrollFeeSponsorProgram {
+                program_id: program_id.clone(),
+            }),
+            PermissionObject::from(CanWithdrawFeeSponsorProgram { program_id }),
+        ];
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(CanSetParameters)]);
+
+        for (index, permission) in permissions.into_iter().enumerate() {
+            let role = role_with_permissions(
+                &format!("sponsor_bound_{index}"),
+                outsider.clone(),
+                [permission.clone()],
+            );
+            for operation in [
+                role::RoleDelegationOperation::Grant,
+                role::RoleDelegationOperation::Revoke,
+            ] {
+                let error = role::validate_role_delegation_permissions(
+                    &role,
+                    &outsider,
+                    context.context(),
+                    context.host(),
+                    operation,
+                )
+                .expect_err("a non-sponsor role holder must not redelegate sponsor authority");
+                assert!(matches!(error, ValidationFail::NotPermitted(_)));
+            }
+        }
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn role_membership_preserves_safe_exact_permission_delegation() {
+        let holder = account(47);
+        let context = TestExecutor::post_genesis(holder.clone());
+        let permission = PermissionObject::from(CanSetParameters);
+        let role = role_with_permissions(
+            "ordinary_exact_permission",
+            holder.clone(),
+            [permission.clone()],
+        );
+        let previous = test_override::replace_permissions(vec![permission]);
+
+        for operation in [
+            role::RoleDelegationOperation::Grant,
+            role::RoleDelegationOperation::Revoke,
+        ] {
+            role::validate_role_delegation_permissions(
+                &role,
+                &holder,
+                context.context(),
+                context.host(),
+                operation,
+            )
+            .expect("an exact holder may delegate an ordinary role");
+        }
+
+        test_override::replace_permissions(previous);
+    }
+
+    #[test]
+    fn role_membership_rejects_unknown_permission_contents() {
+        let holder = account(48);
+        let context = TestExecutor::post_genesis(holder.clone());
+        let role = role_with_permissions(
+            "unknown_permission",
+            holder.clone(),
+            [PermissionObject::new(
+                "UnknownRolePermission".to_owned(),
+                Json::new(()),
+            )],
+        );
+
+        let error = role::validate_role_delegation_permissions(
+            &role,
+            &holder,
+            context.context(),
+            context.host(),
+            role::RoleDelegationOperation::Grant,
+        )
+        .expect_err("unknown role permissions must fail closed");
+        assert!(error.to_string().contains("Unknown permission"));
+    }
+
+    #[test]
+    fn role_registration_validates_sponsor_permissions_against_transaction_authority() {
+        let sponsor = account(49);
+        let manager = account(50);
+        let role = Role::new(
+            "manager_seeded_sponsor_role"
+                .parse::<RoleId>()
+                .expect("role id"),
+            sponsor.clone(),
+        )
+        .add_permission(CanManageFeeSponsorProgram { sponsor });
+        let registration = Register::role(role);
+        let previous =
+            test_override::replace_permissions(vec![PermissionObject::from(CanManageRoles)]);
+        let mut executor = TestExecutor::post_genesis(manager);
+
+        role::visit_register_role(&mut executor, &registration);
+
+        test_override::replace_permissions(previous);
+        let error = executor
+            .verdict()
+            .as_ref()
+            .expect_err("a non-sponsor role manager must not seed sponsor authority");
+        assert!(matches!(error, ValidationFail::NotPermitted(_)));
+        assert!(error.to_string().contains("only the sponsor account"));
     }
 }
 

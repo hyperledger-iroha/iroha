@@ -78,14 +78,14 @@ fn query_basic_scenarios() -> eyre::Result<()> {
 
     // find_blocks_reversed
     {
-        submit_register_domain_with_network_lease(
+        submit_ensure_domain_for_network(
             &network,
             &client,
             Domain::new(DomainId::try_new("domain1-blocks", "universal")?),
         )?;
         rt.block_on(async { network.ensure_blocks(2).await })?;
 
-        submit_register_domain_with_network_lease(
+        submit_ensure_domain_for_network(
             &network,
             &client,
             Domain::new(DomainId::try_new("domain2-blocks", "universal")?),
@@ -113,9 +113,11 @@ fn query_basic_scenarios() -> eyre::Result<()> {
     // find_transactions_reversed
     {
         let domain_id: DomainId = DomainId::try_new("domain1-txs", "universal")?;
-        ensure_domain_registration_lease_for_network(&network, &domain_id)?;
-        let register_domain = Register::domain(Domain::new(domain_id));
-        client.submit_blocking(register_domain.clone())?;
+        let register_domain = domain_setup_instruction(&domain_id, &client.account)?;
+        client.submit_blocking(
+            register_domain.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
 
         let txs = client.query(FindTransactions).execute_all()?;
         let TransactionEntrypoint::External(entrypoint) = txs[0].entrypoint() else {
@@ -125,7 +127,7 @@ fn query_basic_scenarios() -> eyre::Result<()> {
             eyre::bail!("entrypoint should be builtin instructions");
         };
         assert_eq!(instructions.len(), 1);
-        assert_eq!(instructions[0], register_domain.into());
+        assert_eq!(instructions[0], register_domain);
     }
 
     Ok(())

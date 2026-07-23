@@ -77,8 +77,8 @@ fn seed_slash_snapshot(
         ALICE_ID.clone(),
         iroha_core::state::GovernanceLockRecord {
             owner: ALICE_ID.clone(),
-            amount: 60,
-            slashed: 40,
+            amount: 60_u64.into(),
+            slashed: 40_u64.into(),
             expiry_height: 100,
             direction: 0,
             duration_blocks: 100,
@@ -92,8 +92,8 @@ fn seed_slash_snapshot(
     ledger.slashes.insert(
         ALICE_ID.clone(),
         iroha_core::state::GovernanceSlashEntry {
-            total_slashed: 40,
-            total_restituted: 0,
+            total_slashed: 40_u64.into(),
+            total_restituted: 0_u64.into(),
             last_reason: GovernanceSlashReason::DoubleVote,
             last_height: 1,
         },
@@ -128,7 +128,7 @@ fn double_vote_slashes_plain_lock() {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
-    gov_cfg.min_bond_amount = 10;
+    gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = slash_id.clone();
     gov_cfg.slash_double_vote_bps = 2_000; // 20%
@@ -160,7 +160,7 @@ fn double_vote_slashes_plain_lock() {
         let ballot_ok = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 20,
+            amount: 20_u64.into(),
             duration_blocks: 200,
             direction: 0,
         };
@@ -178,7 +178,7 @@ fn double_vote_slashes_plain_lock() {
     let ballot_conflict = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
-        amount: 30,
+        amount: 30_u64.into(),
         duration_blocks: 200,
         direction: 1, // switch direction to force double-vote slash
     };
@@ -195,7 +195,7 @@ fn double_vote_slashes_plain_lock() {
                 iroha_data_model::events::data::governance::GovernanceEvent::LockSlashed(payload)
             )) if payload.referendum_id == rid
                 && payload.reason == GovernanceSlashReason::DoubleVote
-                && payload.amount == 4
+                && payload.amount == Quantity::from(4_u64)
                 && payload.destination == slash_id
         )
     }));
@@ -213,8 +213,8 @@ fn double_vote_slashes_plain_lock() {
         .get(&rid)
         .and_then(|locks| locks.locks.get(&alice))
         .expect("lock present after slash");
-    assert_eq!(lock.amount, 16);
-    assert_eq!(lock.slashed, 4);
+    assert_eq!(lock.amount, Quantity::from(16_u64));
+    assert_eq!(lock.slashed, Quantity::from(4_u64));
     let escrow_balance = view
         .world()
         .asset(&escrow_asset_id)
@@ -279,7 +279,7 @@ fn restitution_restores_slashed_balance() {
         iroha_data_model::isi::governance::RestituteGovernanceLock {
             referendum_id: rid.clone(),
             owner: ALICE_ID.clone(),
-            amount: 30,
+            amount: 30_u64.into(),
             reason: "appeal_upheld".to_string(),
         }
         .execute(&ALICE_ID, &mut stx)
@@ -290,7 +290,7 @@ fn restitution_restores_slashed_balance() {
                 ev.as_data_event(),
                 Some(iroha_data_model::events::data::DataEvent::Governance(
                     iroha_data_model::events::data::governance::GovernanceEvent::LockRestituted(payload)
-                )) if payload.amount == 30
+                )) if payload.amount == Quantity::from(30_u64)
                     && payload.reason == GovernanceSlashReason::Restitution
                     && payload.note == "appeal_upheld"
             )
@@ -306,8 +306,8 @@ fn restitution_restores_slashed_balance() {
         .get(&rid)
         .and_then(|locks| locks.locks.get(&alice))
         .expect("lock present after restitution");
-    assert_eq!(lock.amount, 90);
-    assert_eq!(lock.slashed, 10);
+    assert_eq!(lock.amount, Quantity::from(90_u64));
+    assert_eq!(lock.slashed, Quantity::from(10_u64));
 
     let escrow_balance = view
         .world()

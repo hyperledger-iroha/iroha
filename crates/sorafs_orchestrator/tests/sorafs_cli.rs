@@ -42,7 +42,7 @@ use sorafs_manifest::{
     ReputationProviderInputV1, ReputationProviderMetricsV1, ReputationReserveStageV1,
     ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1, ReputationSnapshotV1,
     ReputationWeightsV1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1, SignedReputationSnapshotV1,
-    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorAmount, build_reputation_snapshot,
+    StorageClass, StreamTokenBodyV1, StreamTokenV1, XorQuantity, build_reputation_snapshot,
     validate_governance_dag_head_against_chain_v1,
 };
 use tempfile::TempDir;
@@ -526,7 +526,8 @@ fn por_report_outputs_markdown() {
     let slashing_event = PorSlashingEventV1 {
         provider_id: [0x90; 32],
         manifest_digest: [0x91; 32],
-        penalty_xor: XorAmount::from_micro(250_000_000),
+        penalty_xor: XorQuantity::try_from_micro(250_000_000)
+            .expect("legacy micro-XOR value is representable"),
         verdict_cid: "ipfs://verdict".to_string(),
         decided_at: 1_700_000_200,
     };

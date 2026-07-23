@@ -9,7 +9,7 @@ use std::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
     ValidationFail,
-    account::{AccountId, MultisigMember, MultisigPolicy, rekey::AccountRekeyRecord},
+    account::{AccountId, MultisigMember, MultisigPolicy},
     isi::{
         AddSignatory, CustomInstruction, InstructionBox, RemoveSignatory, SetAccountQuorum,
         error::{InstructionExecutionError, InvalidParameterError},
@@ -475,13 +475,9 @@ fn rekey_account_id(
     let account_value = state_transaction
         .world
         .accounts
-        .remove(old_account.clone())
+        .get(old_account)
+        .cloned()
         .ok_or_else(|| InstructionExecutionError::Find(FindError::Account(old_account.clone())))?;
-
-    state_transaction
-        .world
-        .accounts
-        .insert(new_account.clone(), account_value.clone());
 
     let mut labels_to_repoint: BTreeSet<_> = state_transaction
         .world
@@ -491,6 +487,15 @@ fn rekey_account_id(
         .unwrap_or_default()
         .into_iter()
         .collect();
+    labels_to_repoint.extend(
+        state_transaction
+            .world
+            .account_aliases
+            .view()
+            .iter()
+            .filter(|(_, account_id)| *account_id == old_account)
+            .map(|(label, _)| label.clone()),
+    );
     labels_to_repoint.extend(
         state_transaction
             .world
@@ -504,23 +509,131 @@ fn rekey_account_id(
         labels_to_repoint.insert(label);
     }
 
-    for label in labels_to_repoint {
+    // Alias bindings and authoritative SNS ownership are one invariant. Scan the authoritative
+    // namespace, rather than only the binding indexes, so acquired-but-unbound and
+    // binding-cleared leases are migrated too. Preflight every update before mutating state.
+    let alias_lease_updates = crate::sns::prepare_all_account_alias_lease_rekeys(
+        state_transaction,
+        old_account,
+        new_account,
+    )
+    .map_err(|err| {
+        InstructionExecutionError::InvariantViolation(
+            format!("cannot preflight account-alias leases for rekey: {err}").into(),
+        )
+    })?;
+    let now_ms = state_transaction.block_unix_timestamp_ms();
+    for label in &labels_to_repoint {
+        let Some((_, record)) = alias_lease_updates.get(label) else {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("cannot rekey account alias `{label:?}`: authoritative SNS lease is missing or owned by another account").into(),
+            ));
+        };
+        if !matches!(
+            crate::sns::effective_status(record, now_ms),
+            iroha_data_model::sns::NameStatus::Active
+        ) {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot rekey account alias `{label:?}`: authoritative SNS lease is not active"
+                )
+                .into(),
+            ));
+        }
+    }
+
+    // Build every continuity update before changing the account table. A malformed or missing
+    // record must fail this canonical rekey atomically instead of leaving a partially moved
+    // account when this helper is exercised directly.
+    let mut rekey_record_updates = Vec::with_capacity(labels_to_repoint.len());
+    for label in &labels_to_repoint {
+        let record = state_transaction
+            .world
+            .account_rekey_records
+            .get(label)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    format!(
+                        "cannot rekey account alias `{label:?}` without its canonical continuity record"
+                    )
+                    .into(),
+                )
+            })?;
+        if &record.label != label || &record.active_account_id != old_account {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot rekey account alias `{label:?}` whose continuity record does not target `{old_account}`"
+                )
+                .into(),
+            ));
+        }
+        let record = record
+            .repoint_for_account_id_rekey(new_account.clone())
+            .map_err(|error| {
+                InstructionExecutionError::InvariantViolation(
+                    format!("cannot extend malformed account rekey history: {error}").into(),
+                )
+            })?;
+        rekey_record_updates.push((label.clone(), record));
+    }
+
+    let old_multisig_role = multisig_role_for(home_domain, old_account);
+    let new_multisig_role = multisig_role_for(home_domain, new_account);
+    if old_multisig_role != new_multisig_role
+        && state_transaction
+            .world
+            .roles
+            .get(&new_multisig_role)
+            .is_some()
+    {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!("role `{new_multisig_role}` already exists").into(),
+        ));
+    }
+
+    let assets_to_move: Vec<_> = state_transaction
+        .world
+        .assets_in_account_iter(old_account)
+        .map(|asset| asset.id().clone())
+        .collect();
+    for asset_id in &assets_to_move {
+        let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
+            asset_id.definition().clone(),
+            new_account.clone(),
+            *asset_id.scope(),
+        );
+        if state_transaction.world.assets.get(&new_asset_id).is_some() {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!("asset `{new_asset_id}` already exists").into(),
+            ));
+        }
+    }
+
+    state_transaction
+        .world
+        .accounts
+        .remove(old_account.clone())
+        .expect("account existence was preflighted");
+    state_transaction
+        .world
+        .accounts
+        .insert(new_account.clone(), account_value.clone());
+
+    for (label, record) in rekey_record_updates {
         state_transaction
             .world
             .insert_account_alias_binding(label.clone(), new_account.clone());
-        let record = match state_transaction
-            .world
-            .account_rekey_records
-            .get(&label)
-            .cloned()
-        {
-            Some(record) => record.repoint_to_account(new_account.clone()),
-            None => AccountRekeyRecord::new(label.clone(), new_account.clone()),
-        };
         state_transaction
             .world
             .account_rekey_records
             .insert(label, record);
+    }
+    for (_, (storage_key, record)) in alias_lease_updates {
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(storage_key, norito::codec::Encode::encode(&record));
     }
 
     if let Some(uaid) = account_value.uaid().copied() {
@@ -551,20 +664,6 @@ fn rekey_account_id(
             .world
             .account_permissions
             .insert(new_account.clone(), perms);
-    }
-
-    let old_multisig_role = multisig_role_for(home_domain, old_account);
-    let new_multisig_role = multisig_role_for(home_domain, new_account);
-    if old_multisig_role != new_multisig_role
-        && state_transaction
-            .world
-            .roles
-            .get(&new_multisig_role)
-            .is_some()
-    {
-        return Err(InstructionExecutionError::InvariantViolation(
-            format!("role `{new_multisig_role}` already exists").into(),
-        ));
     }
 
     if old_multisig_role != new_multisig_role {
@@ -599,22 +698,12 @@ fn rekey_account_id(
         state_transaction.world.account_roles.insert(new_key, ());
     }
 
-    let assets_to_move: Vec<_> = state_transaction
-        .world
-        .assets_in_account_iter(old_account)
-        .map(|asset| asset.id().clone())
-        .collect();
     for asset_id in assets_to_move {
         let new_asset_id = iroha_data_model::asset::AssetId::with_scope(
             asset_id.definition().clone(),
             new_account.clone(),
             *asset_id.scope(),
         );
-        if state_transaction.world.assets.get(&new_asset_id).is_some() {
-            return Err(InstructionExecutionError::InvariantViolation(
-                format!("asset `{new_asset_id}` already exists").into(),
-            ));
-        }
         if let Some(value) = state_transaction.world.assets.remove(asset_id.clone()) {
             state_transaction
                 .world
@@ -3028,14 +3117,18 @@ mod tests {
         ChainId, IntoKeyValue, Registrable,
         account::{
             Account, AccountController, AccountId, MultisigMember, MultisigPolicy,
-            rekey::{AccountAlias, AccountAliasDomain},
+            rekey::{AccountAlias, AccountAliasDomain, AccountRekeyTransitionProvenance},
+        },
+        alias_setup::{
+            AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1, AliasIntentV1,
+            AliasLeaseAcquisitionV1, AliasQuoteGuardV1, ResolvedAccountAliasV1,
         },
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
         isi::{
             AddSignatory, ExecuteTrigger, Grant, Mint, RemoveSignatory, SetAccountQuorum,
-            account_alias_lease::AcquireAccountAliasLease, domain_link::SetAccountAliasBinding,
+            alias_setup::EnsureAlias,
         },
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, UniversalAccountId},
         permission::Permission,
@@ -3057,7 +3150,10 @@ mod tests {
         executor::Executor,
         kura::Kura,
         query::store::LiveQueryStore,
-        sns::{SnsNamespace, get_name_record, seed_default_namespace_policies},
+        sns::{
+            SnsNamespace, get_name_record, policy_by_id, quote_resolved_name_registration,
+            seed_default_namespace_policies,
+        },
         state::{State, World},
     };
 
@@ -3218,6 +3314,28 @@ mod tests {
             Some(AccountAliasDomain::new(domain_id.name().clone())),
             dataspace,
         );
+        let selector = crate::sns::selector_for_account_alias(
+            &label,
+            &state_transaction.nexus.dataspace_catalog,
+        )
+        .expect("account alias selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(account_id)
+            .expect("account address");
+        let lease = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&lease),
+        );
         state_transaction
             .world
             .account_mut(account_id)
@@ -3234,6 +3352,59 @@ mod tests {
             ),
         );
         label
+    }
+
+    fn account_alias_lease_record(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: &AccountAlias,
+    ) -> iroha_data_model::sns::NameRecordV1 {
+        let selector = crate::sns::selector_for_account_alias(
+            alias,
+            &state_transaction.nexus.dataspace_catalog,
+        )
+        .expect("account alias selector");
+        let bytes = state_transaction
+            .world
+            .smart_contract_state
+            .get(&crate::sns::record_storage_key(&selector))
+            .expect("account alias lease");
+        let mut slice = bytes.as_slice();
+        let record = norito::codec::Decode::decode(&mut slice).expect("decode account alias lease");
+        assert!(slice.is_empty(), "account alias lease must be canonical");
+        record
+    }
+
+    fn assert_account_rekey_not_applied(
+        state_transaction: &StateTransaction<'_, '_>,
+        old_account: &AccountId,
+        new_account: &AccountId,
+        aliases: &[AccountAlias],
+    ) {
+        assert!(
+            state_transaction.world.account(old_account).is_ok(),
+            "failed rekey must retain the old account"
+        );
+        assert!(
+            state_transaction.world.account(new_account).is_err(),
+            "failed rekey must not materialize the new account"
+        );
+        for alias in aliases {
+            assert_eq!(
+                state_transaction.world.account_aliases.get(alias),
+                Some(old_account),
+                "failed rekey must preserve alias target"
+            );
+            assert_eq!(
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .get(alias)
+                    .expect("account rekey record")
+                    .active_account_id,
+                *old_account,
+                "failed rekey must preserve the active rekey-record account"
+            );
+        }
     }
 
     fn load_signatory_memberships(
@@ -3309,27 +3480,57 @@ mod tests {
     }
 
     fn durable_int_value(bytes: &[u8]) -> i64 {
-        let tlv = ivm::pointer_abi::validate_tlv_bytes(bytes).expect("durable int TLV");
+        use ivm::state_value::{
+            StateValueAtomV1, StateValueKindV1, StateValueNodeV1, StateValueRecordV1,
+            StateValueSchemaV1, state_value_schema_hash_v1,
+        };
+
+        // Typed durable state stores a schema-bound Norito record. The authenticated
+        // pointer-ABI envelope is the record's leaf atom, not the outer storage bytes.
+        let schema = StateValueSchemaV1 {
+            nodes: vec![StateValueNodeV1::Leaf(StateValueKindV1::Int)],
+        };
+        let schema_bytes = norito::to_bytes(&schema).expect("encode durable int schema");
+        let record: StateValueRecordV1 =
+            norito::decode_from_bytes(bytes).expect("decode durable int state record");
         assert_eq!(
-            tlv.type_id,
-            ivm::pointer_abi::PointerType::NoritoBytes,
-            "durable int values should use NoritoBytes TLV"
+            norito::to_bytes(&record).expect("re-encode durable int state record"),
+            bytes,
+            "durable int state record must use canonical Norito encoding"
         );
-        norito::decode_from_bytes(tlv.payload).expect("durable int payload")
+        assert_eq!(
+            record.schema_hash,
+            state_value_schema_hash_v1(&schema_bytes),
+            "durable int state record must bind the exact Int schema"
+        );
+        assert!(
+            schema.validate_atoms(&record.atoms),
+            "durable int state record must match the Int atom stream"
+        );
+        let [StateValueAtomV1::Pointer(envelope)] = record.atoms.as_slice() else {
+            panic!("durable int state record must contain one pointer atom");
+        };
+        ivm::numeric_tlv::decode_int_bytes(envelope)
+            .expect("decode canonical durable int pointer")
+            .try_to_i64()
+            .expect("test durable int value fits i64")
     }
 
-    fn durable_state_values_under_prefix(
+    fn durable_state_values_under_contract_prefix(
         state_transaction: &StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         prefix: &str,
     ) -> Vec<Vec<u8>> {
-        let prefix_with_child = format!("{prefix}/");
+        let scope_digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let physical_prefix = format!("sc/{scope_digest}/{prefix}");
+        let prefix_with_child = format!("{physical_prefix}/");
         state_transaction
             .world
             .smart_contract_state
             .iter()
             .filter_map(|(key, value)| {
                 let key = key.as_ref();
-                (key == prefix || key.starts_with(prefix_with_child.as_str()))
+                (key == physical_prefix || key.starts_with(prefix_with_child.as_str()))
                     .then(|| value.clone())
             })
             .collect()
@@ -3569,19 +3770,47 @@ mod tests {
         } else {
             Account::new(retail_account.clone())
         };
+        let resolved_alias = ResolvedAccountAliasV1::new(
+            "clear-orbit-3941@hbl.sbp"
+                .parse()
+                .expect("resolved FI account alias"),
+            sbp,
+        );
+        let selector = crate::alias_setup::selector_for_resolved_alias_target(
+            &iroha_data_model::alias_setup::AliasTargetV1::AccountAlias(resolved_alias.clone()),
+        )
+        .expect("FI account alias selector");
+        let quote = quote_resolved_name_registration(
+            state_transaction.world(),
+            selector,
+            &retail_account,
+            1,
+            None,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .expect("FI account alias quote");
+        let policy_version = policy_by_id(
+            state_transaction.world(),
+            iroha_data_model::sns::ACCOUNT_ALIAS_SUFFIX_ID,
+        )
+        .expect("account alias policy")
+        .policy_version;
         let instructions = vec![
             InstructionBox::from(Register::account(registration_account)),
-            InstructionBox::from(AcquireAccountAliasLease::new(
-                alias.clone(),
-                retail_account.clone(),
-                multisig_id.clone(),
-                1,
-                None,
-            )),
-            InstructionBox::from(SetAccountAliasBinding::bind(
-                retail_account.clone(),
-                alias.clone(),
-                None,
+            InstructionBox::from(EnsureAlias::new(
+                AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+                    alias: resolved_alias,
+                    target_account: retail_account.clone(),
+                    provision: AccountProvisionV1::Existing,
+                    role: AccountAliasRoleV1::Additional,
+                }),
+                AliasLeaseAcquisitionV1::new(1, None),
+                AliasQuoteGuardV1 {
+                    expected_policy_version: policy_version,
+                    expected_payment_asset: payment_asset_definition_id.clone(),
+                    max_amount: quote.charge_amount,
+                    valid_until_ms: u64::MAX,
+                },
             )),
         ];
         let instructions_hash = HashOf::new(&instructions);
@@ -4265,6 +4494,35 @@ mod tests {
             vec![multisig_id.clone()],
             "rekey record should retain the prior concrete multisig account"
         );
+        assert_eq!(
+            rekey_record.transition_provenance,
+            vec![AccountRekeyTransitionProvenance::AccountIdRekey],
+            "canonical multisig rekey must record trusted account-id provenance"
+        );
+        let lease = account_alias_lease_record(&state_transaction, &alias);
+        assert_eq!(
+            lease.owner, updated_account,
+            "authoritative SNS ownership must follow the canonical multisig account id"
+        );
+        let old_address = iroha_data_model::account::AccountAddress::from_account_id(&multisig_id)
+            .expect("old multisig address");
+        let new_address =
+            iroha_data_model::account::AccountAddress::from_account_id(&updated_account)
+                .expect("updated multisig address");
+        assert!(
+            lease
+                .controllers
+                .iter()
+                .any(|controller| controller.account_address.as_ref() == Some(&new_address)),
+            "SNS owner controller must follow the canonical multisig account id"
+        );
+        assert!(
+            lease
+                .controllers
+                .iter()
+                .all(|controller| controller.account_address.as_ref() != Some(&old_address)),
+            "SNS controllers must not retain the obsolete multisig account id"
+        );
         let proposal = proposal_value(&state_transaction, &updated_account, &instructions_hash)
             .expect("proposal should move to the rekeyed account");
         assert_eq!(
@@ -4881,6 +5139,372 @@ mod tests {
             ))))
             | Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound)) => {}
             Err(err) => panic!("unexpected proposal state after approval: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn rekey_account_id_preflights_every_alias_lease_without_partial_mutation() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-rekey-alias-lease-preflight"),
+        );
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id = DomainId::try_new("rekey", "universal").expect("domain id");
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        let foreign_owner = new_account_id(&checked_keypair());
+
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &old_account,
+            &domain_id,
+            "register rekey domain",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &old_account,
+            &domain_id,
+            &old_account,
+            "register old account",
+        );
+        let aliases = [
+            "a_missing",
+            "b_foreign",
+            "c_inactive",
+            "d_malformed",
+            "e_duplicate",
+        ]
+        .map(|label| {
+            bind_account_label(
+                &mut state_transaction,
+                &old_account,
+                &old_account,
+                &domain_id,
+                label,
+            )
+        });
+        let lease_keys = aliases.clone().map(|alias| {
+            let selector = crate::sns::selector_for_account_alias(
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .expect("selector");
+            crate::sns::record_storage_key(&selector)
+        });
+        let canonical_leases = lease_keys.clone().map(|key| {
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&key)
+                .expect("canonical lease")
+                .clone()
+        });
+
+        state_transaction
+            .world
+            .smart_contract_state
+            .remove(lease_keys[0].clone());
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("missing lease must reject account rekey");
+        assert!(
+            err.to_string()
+                .contains("missing or owned by another account"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[0].clone(), canonical_leases[0].clone());
+
+        let mut foreign_lease = account_alias_lease_record(&state_transaction, &aliases[1]);
+        foreign_lease.owner = foreign_owner;
+        state_transaction.world.smart_contract_state.insert(
+            lease_keys[1].clone(),
+            norito::codec::Encode::encode(&foreign_lease),
+        );
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("foreign-owned lease must reject account rekey");
+        assert!(
+            err.to_string().contains("owned by another account"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[1].clone(), canonical_leases[1].clone());
+
+        let mut inactive_lease = account_alias_lease_record(&state_transaction, &aliases[2]);
+        inactive_lease.expires_at_ms = 0;
+        state_transaction.world.smart_contract_state.insert(
+            lease_keys[2].clone(),
+            norito::codec::Encode::encode(&inactive_lease),
+        );
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("inactive lease must reject account rekey");
+        assert!(err.to_string().contains("not active"), "{err}");
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[2].clone(), canonical_leases[2].clone());
+
+        let mut malformed_lease = canonical_leases[3].clone();
+        malformed_lease.push(0xFF);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[3].clone(), malformed_lease);
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("non-canonical lease bytes must reject account rekey");
+        let error_text = err.to_string();
+        assert!(
+            error_text.contains("failed to decode SNS lease")
+                || error_text.contains("failed to decode account-alias SNS record")
+                || error_text.contains("trailing bytes"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[3].clone(), canonical_leases[3].clone());
+
+        let mut duplicate_replacement_lease =
+            account_alias_lease_record(&state_transaction, &aliases[4]);
+        let new_address = iroha_data_model::account::AccountAddress::from_account_id(&new_account)
+            .expect("new account address");
+        duplicate_replacement_lease.controllers.push(
+            iroha_data_model::sns::NameControllerV1::account(&new_address),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            lease_keys[4].clone(),
+            norito::codec::Encode::encode(&duplicate_replacement_lease),
+        );
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("pre-existing replacement controller must reject account rekey");
+        assert!(
+            err.to_string()
+                .contains("already contains the replacement account controller"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .smart_contract_state
+            .insert(lease_keys[4].clone(), canonical_leases[4].clone());
+
+        let canonical_rekey_record = state_transaction
+            .world
+            .account_rekey_records
+            .get(&aliases[0])
+            .cloned()
+            .expect("canonical continuity record");
+        state_transaction
+            .world
+            .account_rekey_records
+            .remove(aliases[0].clone());
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("missing continuity record must reject account rekey");
+        assert!(
+            err.to_string().contains("canonical continuity record"),
+            "{err}"
+        );
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), canonical_rekey_record.clone());
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+
+        let mut malformed_rekey_record = canonical_rekey_record.clone();
+        malformed_rekey_record
+            .transition_provenance
+            .push(AccountRekeyTransitionProvenance::LegacyUnspecified);
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), malformed_rekey_record);
+        let err = rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect_err("malformed continuity record must reject account rekey");
+        assert!(
+            err.to_string().contains("malformed account rekey history"),
+            "{err}"
+        );
+        assert_account_rekey_not_applied(&state_transaction, &old_account, &new_account, &aliases);
+        state_transaction
+            .world
+            .account_rekey_records
+            .insert(aliases[0].clone(), canonical_rekey_record);
+
+        rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect("canonical active leases should migrate atomically");
+        for alias in &aliases {
+            assert_eq!(
+                state_transaction.world.account_aliases.get(alias),
+                Some(&new_account)
+            );
+            let lease = account_alias_lease_record(&state_transaction, alias);
+            assert_eq!(lease.owner, new_account);
+            let new_address =
+                iroha_data_model::account::AccountAddress::from_account_id(&new_account)
+                    .expect("new account address");
+            assert!(
+                lease
+                    .controllers
+                    .iter()
+                    .any(|controller| controller.account_address.as_ref() == Some(&new_address))
+            );
+        }
+    }
+
+    #[test]
+    fn rekey_account_id_migrates_acquired_unbound_and_binding_cleared_leases() {
+        let state = State::new_with_chain(
+            World::new(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+            ChainId::from("multisig-rekey-unbound-alias-leases"),
+        );
+        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, None, 10, 0));
+        let mut state_transaction = block.transaction();
+        let domain_id = DomainId::try_new("unbound", "universal").expect("domain id");
+        let old_account = new_account_id(&checked_keypair());
+        let new_account = new_account_id(&checked_keypair());
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &old_account,
+            &domain_id,
+            "register domain",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &old_account,
+            &domain_id,
+            &old_account,
+            "register account",
+        );
+
+        let aliases = ["acquired_unbound", "binding_cleared"].map(|label| {
+            let alias = AccountAlias::new(
+                label.parse().expect("alias label"),
+                Some(AccountAliasDomain::new(domain_id.name().clone())),
+                DataSpaceId::UNIVERSAL,
+            );
+            let selector = crate::sns::selector_for_account_alias(
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .expect("selector");
+            let address = iroha_data_model::account::AccountAddress::from_account_id(&old_account)
+                .expect("old account address");
+            let lease = iroha_data_model::sns::NameRecordV1::new(
+                selector.clone(),
+                old_account.clone(),
+                vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+                0,
+                0,
+                u64::MAX,
+                u64::MAX,
+                u64::MAX,
+                Metadata::default(),
+            );
+            state_transaction.world.smart_contract_state.insert(
+                crate::sns::record_storage_key(&selector),
+                norito::codec::Encode::encode(&lease),
+            );
+            alias
+        });
+        for alias in &aliases {
+            assert!(state_transaction.world.account_aliases.get(alias).is_none());
+            assert!(
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .get(alias)
+                    .is_none()
+            );
+        }
+
+        rekey_account_id(
+            &mut state_transaction,
+            &old_account,
+            &new_account,
+            Some(&domain_id),
+        )
+        .expect("all owned leases should migrate even without bindings");
+
+        assert!(state_transaction.world.account(&old_account).is_err());
+        assert!(state_transaction.world.account(&new_account).is_ok());
+        let new_address = iroha_data_model::account::AccountAddress::from_account_id(&new_account)
+            .expect("new account address");
+        for alias in &aliases {
+            let lease = account_alias_lease_record(&state_transaction, alias);
+            assert_eq!(lease.owner, new_account);
+            assert_eq!(
+                lease.controllers,
+                vec![iroha_data_model::sns::NameControllerV1::account(
+                    &new_address
+                )]
+            );
+            assert!(
+                state_transaction.world.account_aliases.get(alias).is_none(),
+                "unbound leases must remain unbound"
+            );
+            assert!(
+                state_transaction
+                    .world
+                    .account_rekey_records
+                    .get(alias)
+                    .is_none(),
+                "unbound leases must not gain resolution records"
+            );
         }
     }
 
@@ -6629,7 +7253,7 @@ seiyaku TriggerDispatch {
         let (program, manifest) = ivm::KotodamaCompiler::new()
             .compile_source_with_manifest(&src)
             .expect("compile staged mint-like contract");
-        let (_bytecode, _contract_address) = install_trigger_contract(
+        let (_bytecode, contract_address) = install_trigger_contract(
             &mut state_transaction,
             &signer1_id,
             &signer1,
@@ -6647,7 +7271,7 @@ seiyaku TriggerDispatch {
                     "asset_id":"66owaQmAQMuHxPzxUN3bqZ6FJfDa",
                     "to_account_id":"{multisig_id}",
                     "amount":"111",
-                    "requested_by_actor_hex":"7b226163746f72223a226f70657261746f7231227d",
+                    "requested_by_actor_hex":"0x7b226163746f72223a226f70657261746f7231227d",
                     "created_at_ms":"1779225455574",
                     "expires_at_ms":"1779311855574"
                 }}
@@ -6688,7 +7312,11 @@ seiyaku TriggerDispatch {
             "finalized proposal should leave terminal proposal state"
         );
 
-        let statuses = durable_state_values_under_prefix(&state_transaction, "ProposalStatus");
+        let statuses = durable_state_values_under_contract_prefix(
+            &state_transaction,
+            &contract_address,
+            "ProposalStatus",
+        );
         assert_eq!(
             statuses.len(),
             1,

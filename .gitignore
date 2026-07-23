@@ -172,6 +172,7 @@ IrohaSwift/(A\ Document\ Being\ Saved\ By\ swift-test*/
 
 .*.log
 **/*.log
+!fixtures/android/device_lab/slot-sample/logs/runtime.log
 !fixtures/sccp/release_evidence_v1/artifacts/phases/
 fixtures/sccp/release_evidence_v1/artifacts/phases/*
 !fixtures/sccp/release_evidence_v1/artifacts/phases/*.log

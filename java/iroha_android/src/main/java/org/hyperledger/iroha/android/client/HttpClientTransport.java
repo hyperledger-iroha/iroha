@@ -23,8 +23,26 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import org.hyperledger.iroha.android.KeyManagementException;
+import org.hyperledger.iroha.android.alias.AccountAliasName;
+import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasAutoRenewPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLeaseRenewPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLifecyclePlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanJsonParser;
+import org.hyperledger.iroha.android.alias.AliasLifecycleTransactionPlanV1;
+import org.hyperledger.iroha.android.alias.AliasSetupModels;
+import org.hyperledger.iroha.android.alias.AccountOnboardingApplyRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingJsonParser;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanReceiptV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingReceiptVerifier;
+import org.hyperledger.iroha.android.alias.AccountOnboardingResponseV1;
+import org.hyperledger.iroha.android.alias.AccountOnboardingResponseVerifier;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanJsonParser;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
 import org.hyperledger.iroha.android.client.queue.PendingTransactionQueue;
 import org.hyperledger.iroha.android.crypto.export.KeyExportBundle;
 import org.hyperledger.iroha.android.crypto.export.KeyExportException;
@@ -37,6 +55,8 @@ import org.hyperledger.iroha.android.nexus.UaidManifestsResponse;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioQuery;
 import org.hyperledger.iroha.android.nexus.UaidPortfolioResponse;
 import org.hyperledger.iroha.android.model.zk.VerifyingKeyBackendTag;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchRequest;
 import org.hyperledger.iroha.android.sorafs.GatewayFetchSummary;
 import org.hyperledger.iroha.android.sorafs.SorafsGatewayClient;
@@ -61,6 +81,7 @@ import org.hyperledger.iroha.android.client.transport.TransportResponse;
  * outbound calls.
  */
 public final class HttpClientTransport implements IrohaClient {
+  private static final String ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token";
 
   private static final String RETRY_SIGNAL_ID = "android.torii.http.retry";
   private static final String PIPELINE_STATUS_SIGNAL = "android.torii.pipeline.status";
@@ -626,7 +647,7 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<VpnProfile> getVpnProfile() {
     final TransportRequest request =
         buildJsonGetRequest("/v1/vpn/profile", Collections.emptyMap());
-    return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile");
+    return fetchJson(request, VpnJsonParser::parseProfile, "vpn profile", 200);
   }
 
   /** Creates a signed quote for a native XOR VPN lease escrow. */
@@ -640,7 +661,7 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.exitClass(), requestBody.meteringPublicKeyHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/quotes", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseQuote, "vpn quote create");
+    return fetchJson(request, VpnJsonParser::parseQuote, "vpn quote create", 201);
   }
 
   /** Opens a VPN session after the exact quote-bound native lease transaction commits. */
@@ -657,7 +678,7 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.meteringPublicKeyHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/sessions", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseSession, "vpn session create");
+    return fetchJson(request, VpnJsonParser::parseSession, "vpn session create", 201);
   }
 
   /** Fetches an active VPN session owned by the signed account. */
@@ -671,7 +692,8 @@ public final class HttpClientTransport implements IrohaClient {
             "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
             null,
             canonicalAuth);
-    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseSession, "vpn session lookup");
+    return fetchJsonAllowingNotFound(
+        request, VpnJsonParser::parseSession, "vpn session lookup", 200);
   }
 
   /** Deletes an active VPN session and returns Torii's disconnect receipt when present. */
@@ -685,7 +707,8 @@ public final class HttpClientTransport implements IrohaClient {
             "/v1/vpn/sessions/" + encodePathSegment(normalizedSessionId),
             null,
             canonicalAuth);
-    return fetchJsonAllowingNotFound(request, VpnJsonParser::parseReceipt, "vpn session delete");
+    return fetchJsonAllowingNotFound(
+        request, VpnJsonParser::parseReceipt, "vpn session delete", 200);
   }
 
   /** Submits an operator receipt and returns the native lease settlement instruction. */
@@ -701,14 +724,14 @@ public final class HttpClientTransport implements IrohaClient {
                 requestBody.leaseIdHex()));
     final TransportRequest request =
         buildVpnRequest("POST", "/v1/vpn/receipts", body, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseReceipt, "vpn receipt submit");
+    return fetchJson(request, VpnJsonParser::parseReceipt, "vpn receipt submit", 201);
   }
 
   /** Lists VPN receipts for the signed account. */
   public CompletableFuture<VpnReceiptListResponse> listVpnReceipts(
       final ToriiCanonicalRequestAuth canonicalAuth) {
     final TransportRequest request = buildVpnRequest("GET", "/v1/vpn/receipts", null, canonicalAuth);
-    return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list");
+    return fetchJson(request, VpnJsonParser::parseReceiptList, "vpn receipt list", 200);
   }
 
   /** Registers verifier metadata via {@code POST /v1/zk/vk/register}. */
@@ -727,50 +750,80 @@ public final class HttpClientTransport implements IrohaClient {
     return executeAccepted(request, "verifying key update", 202);
   }
 
-  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
-  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias,
-      final Long leaseExpiryMs) {
-    final byte[] body =
-        encodeJsonBody(
-            buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs));
-    final TransportRequest request = buildJsonPostRequest("/v1/contracts/deploy", body);
-    return fetchOptionalJson(request, ContractJsonParser::parseDeployResponse, "contract deploy");
+  /** Quotes the exact unsigned transaction payload before signing. */
+  public CompletableFuture<FeeQuoteResponse> quoteFees(
+      final Map<String, Object> unsignedPayload,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(unsignedPayload, "unsignedPayload");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final Object authority = unsignedPayload.get("authority");
+    if (!(authority instanceof String) || !authority.equals(canonicalAuth.accountId())) {
+      throw new IllegalArgumentException(
+          "canonicalAuth.accountId must equal unsignedPayload.authority");
+    }
+    final FeePaymentIntent requestedIntent =
+        FeePaymentJson.parse(unsignedPayload.get("fee_payment"), "unsignedPayload.fee_payment");
+    final Map<String, Object> requestBody = new LinkedHashMap<>();
+    requestBody.put("payload", unsignedPayload);
+    final byte[] body = encodeJsonBody(requestBody);
+    return fetchJson(
+            buildVpnRequest("POST", "/v1/fees/quote", body, canonicalAuth),
+            FeePaymentJson::parseQuote,
+            "fee quote",
+            200)
+        .thenApply(
+            quote -> {
+              if (!requestedIntent.hasSamePayerAndGasBound(quote.intent())) {
+                throw new IllegalArgumentException(
+                    "fee quote response changed the requested payer, sponsor revision, or gas bound");
+              }
+              return quote;
+            });
   }
 
-  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
-  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias) {
-    return deployContract(authority, privateKey, codeB64, contractAlias, null);
+  /** Fetches one exact on-chain fee sponsor program under canonical request authentication. */
+  public CompletableFuture<FeeSponsorProgramResponse> getFeeSponsorProgram(
+      final FeeSponsorProgramId programId,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(programId, "programId");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final Map<String, Object> requestBody = new LinkedHashMap<>();
+    requestBody.put("program_id", programId.literal());
+    final byte[] body = encodeJsonBody(requestBody);
+    return fetchJson(
+            buildVpnRequest("POST", "/v1/fee-sponsor-programs/by-id", body, canonicalAuth),
+            FeePaymentJson::parseProgram,
+            "fee sponsor program lookup",
+            200)
+        .thenApply(
+            program -> {
+              if (!programId.equals(program.id())) {
+                throw new IllegalArgumentException(
+                    "fee sponsor program response id does not match the requested program");
+              }
+              return program;
+            });
   }
 
   /** Calls a deployed contract via `POST /v1/contracts/call`. */
   public CompletableFuture<ContractCallResponse> callContract(
       final String authority,
       final String privateKey,
-      final long gasLimit,
+      final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
-      final Object payload,
-      final String gasAssetId) {
+      final Object payload) {
     final byte[] body =
         encodeJsonBody(
             buildContractCallPayload(
                 authority,
                 privateKey,
-                gasLimit,
+                feePayment,
                 contractAddress,
                 contractAlias,
                 entrypoint,
-                payload,
-                gasAssetId));
+                payload));
     final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
     return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
   }
@@ -786,12 +839,14 @@ public final class HttpClientTransport implements IrohaClient {
 
   /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
   public CompletableFuture<GovernanceContractResponse> getGovernanceContract(
-      final String contractAddress) {
+      final String contractAddress, final ToriiCanonicalRequestAuth canonicalAuth) {
     final String normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress");
     final TransportRequest request =
-        buildJsonGetRequest(
+        buildVpnRequest(
+            "GET",
             "/v1/gov/contracts/" + encodePathSegment(normalizedAddress),
-            Collections.emptyMap());
+            null,
+            canonicalAuth);
     return fetchJson(
         request,
         ContractJsonParser::parseGovernanceContractResponse,
@@ -816,11 +871,243 @@ public final class HttpClientTransport implements IrohaClient {
   @Override
   public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
       final String alias) {
-    final String normalizedAlias = normalizeNonBlank(alias, "alias");
+    final String normalizedAlias = AccountAliasName.parse(alias).canonicalText();
     final byte[] body = encodeJsonBody(objectMapOf("alias", normalizedAlias));
     final TransportRequest request = buildJsonPostRequest("/v1/aliases/resolve", body);
     return fetchJsonAllowingNotFound(
-        request, AccountAliasJsonParser::parseResolution, "account alias resolve");
+        request,
+        response -> parsePinnedAliasResolution(response, normalizedAlias),
+        "account alias resolve");
+  }
+
+  /** Plans one atomic alias setup transaction without invoking a mutation route. */
+  @Override
+  public CompletableFuture<AliasTransactionPlanV1> planAliasSetup(
+      final AliasSetupPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    Objects.requireNonNull(requestBody, "requestBody");
+    Objects.requireNonNull(canonicalAuth, "canonicalAuth");
+    final byte[] body = encodeJsonBody(requestBody.toJsonMap());
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/aliases/setup/plan", body, canonicalAuth);
+    return fetchJson(
+        request,
+        response -> {
+          final AliasTransactionPlanV1 plan = AliasTransactionPlanJsonParser.parse(response);
+          if (!plan.body().authority().equals(canonicalAuth.accountId())) {
+            throw new IllegalArgumentException(
+                "alias setup plan authority does not match the canonical request signer");
+          }
+          return plan;
+        },
+        "alias setup plan",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasLeaseRenewal(
+      final AliasLeaseRenewPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return planAliasLifecycle(
+        "/v1/aliases/lease/renew/plan",
+        requestBody,
+        canonicalAuth,
+        "alias lease renewal plan");
+  }
+
+  @Override
+  public CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasAutoRenew(
+      final AliasAutoRenewPlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    return planAliasLifecycle(
+        "/v1/aliases/auto-renew/plan",
+        requestBody,
+        canonicalAuth,
+        "alias auto-renew plan");
+  }
+
+  private CompletableFuture<AliasLifecycleTransactionPlanV1> planAliasLifecycle(
+      final String path,
+      final AliasLifecyclePlanRequestV1 requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth,
+      final String context) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    final TransportRequest request = buildVpnRequest("POST", path, body, canonicalAuth);
+    return fetchJson(
+        request,
+        response -> {
+          final AliasLifecycleTransactionPlanV1 plan =
+              AliasLifecycleTransactionPlanJsonParser.parse(response);
+          if (!plan.body().authority().equals(canonicalAuth.accountId())) {
+            throw new IllegalArgumentException(
+                context + " authority does not match the canonical request signer");
+          }
+          return plan;
+        },
+        context,
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody, final String onboardingToken) {
+    return planSponsoredAccountOnboarding(requestBody, onboardingToken, null);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingPlanReceiptV1> planSponsoredAccountOnboarding(
+      final AccountOnboardingPlanRequestV1 requestBody,
+      final String onboardingToken,
+      final String expectedAuthority) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildOnboardingRequest("POST", "/v1/accounts/onboard/plan", body, onboardingToken),
+        response ->
+            AccountOnboardingReceiptVerifier.requireValidForRequest(
+                requestBody,
+                AccountOnboardingJsonParser.parseReceipt(response),
+                expectedAuthority),
+        "sponsored account onboarding plan",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+      final AccountOnboardingPlanReceiptV1 receipt, final String onboardingToken) {
+    return applySponsoredAccountOnboarding(receipt, onboardingToken, null);
+  }
+
+  @Override
+  public CompletableFuture<AccountOnboardingResponseV1> applySponsoredAccountOnboarding(
+      final AccountOnboardingPlanReceiptV1 receipt,
+      final String onboardingToken,
+      final String expectedAuthority) {
+    AccountOnboardingReceiptVerifier.requireValid(receipt, expectedAuthority);
+    final byte[] body =
+        JsonEncoder.encode(new AccountOnboardingApplyRequestV1(receipt).toJsonMap())
+            .getBytes(StandardCharsets.UTF_8);
+    return fetchJson(
+        buildOnboardingRequest("POST", "/v1/accounts/onboard", body, onboardingToken),
+        AccountOnboardingJsonParser::parseResponse,
+        "sponsored account onboarding apply",
+        null,
+        (response, statusCode) ->
+            AccountOnboardingResponseVerifier.requireValidForReceipt(
+                receipt, response, statusCode.intValue()));
+  }
+
+  @Override
+  public CompletableFuture<AliasSetupModels.AliasSetupReportV1> getAccountOnboardingReadiness(
+      final String onboardingToken) {
+    return fetchJson(
+        buildOnboardingRequest(
+            "GET", "/v1/accounts/onboarding/readiness", null, onboardingToken),
+        AccountOnboardingJsonParser::parseReadiness,
+        "account onboarding readiness",
+        200);
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasIndexResolution>> resolveAccountAliasIndex(
+      final BigInteger index) {
+    AccountAliasUInt64.require(index, "index");
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("index", index);
+    final byte[] body = JsonEncoder.encode(payload).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildJsonPostRequest("/v1/aliases/resolve-index", body),
+        response -> parsePinnedAliasIndexResolution(response, index),
+        "account alias index resolve");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasIndexResolution>> resolveAccountAliasIndex(
+      final BigInteger index, final ToriiCanonicalRequestAuth canonicalAuth) {
+    AccountAliasUInt64.require(index, "index");
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("index", index);
+    final byte[] body = JsonEncoder.encode(payload).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildVpnRequest("POST", "/v1/aliases/resolve-index", body, canonicalAuth),
+        response -> parsePinnedAliasIndexResolution(response, index),
+        "account alias index resolve");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasesByAccount>> listAccountAliases(
+      final AccountAliasesByAccountRequest requestBody) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildJsonPostRequest("/v1/aliases/by-account", body),
+        response -> parsePinnedAliasesByAccount(response, requestBody),
+        "account aliases lookup");
+  }
+
+  @Override
+  public CompletableFuture<Optional<AccountAliasesByAccount>> listAccountAliases(
+      final AccountAliasesByAccountRequest requestBody,
+      final ToriiCanonicalRequestAuth canonicalAuth) {
+    final byte[] body =
+        JsonEncoder.encode(requestBody.toJsonMap()).getBytes(StandardCharsets.UTF_8);
+    return fetchJsonAllowingNotFound(
+        buildVpnRequest("POST", "/v1/aliases/by-account", body, canonicalAuth),
+        response -> parsePinnedAliasesByAccount(response, requestBody),
+        "account aliases lookup");
+  }
+
+  /** Resolves a restricted account alias with canonical Iroha request headers. */
+  @Override
+  public CompletableFuture<Optional<AccountAliasResolution>> resolveAccountAlias(
+      final String alias, final ToriiCanonicalRequestAuth canonicalAuth) {
+    final String normalizedAlias = AccountAliasName.parse(alias).canonicalText();
+    final byte[] body = encodeJsonBody(objectMapOf("alias", normalizedAlias));
+    final TransportRequest request =
+        buildVpnRequest("POST", "/v1/aliases/resolve", body, canonicalAuth);
+    return fetchJsonAllowingNotFound(
+        request,
+        response -> parsePinnedAliasResolution(response, normalizedAlias),
+        "account alias resolve");
+  }
+
+  private static AccountAliasResolution parsePinnedAliasResolution(
+      final byte[] response, final String requestedAlias) {
+    final AccountAliasResolution resolution = AccountAliasJsonParser.parseResolution(response);
+    if (!AccountAliasName.parse(resolution.alias()).canonicalText().equals(requestedAlias)) {
+      throw new IllegalArgumentException(
+          "account alias response does not match the requested alias");
+    }
+    return resolution;
+  }
+
+  private static AccountAliasIndexResolution parsePinnedAliasIndexResolution(
+      final byte[] response, final BigInteger requestedIndex) {
+    final AccountAliasIndexResolution resolution =
+        AccountAliasReadJsonParser.parseIndexResolution(response);
+    if (!resolution.index().equals(requestedIndex)) {
+      throw new IllegalArgumentException(
+          "account alias index response does not match the requested index");
+    }
+    return resolution;
+  }
+
+  private static AccountAliasesByAccount parsePinnedAliasesByAccount(
+      final byte[] response, final AccountAliasesByAccountRequest request) {
+    final AccountAliasesByAccount aliases = AccountAliasReadJsonParser.parseByAccount(response);
+    if (!aliases.accountId().equals(request.accountId())) {
+      throw new IllegalArgumentException(
+          "account aliases response does not match the requested account");
+    }
+    for (final AccountAliasListItem item : aliases.items()) {
+      if ((request.dataspace() != null && !request.dataspace().equals(item.dataspace()))
+          || (request.domain() != null && !request.domain().equals(item.domain()))) {
+        throw new IllegalArgumentException(
+            "account aliases response contains entries outside the requested scope");
+      }
+    }
+    return aliases;
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -1583,6 +1870,50 @@ public final class HttpClientTransport implements IrohaClient {
     return builder.build();
   }
 
+  private TransportRequest buildOnboardingRequest(
+      final String method,
+      final String path,
+      final byte[] body,
+      final String onboardingToken) {
+    final String token = requireOnboardingCredential(onboardingToken);
+    for (final String key : config.defaultHeaders().keySet()) {
+      if (ONBOARDING_TOKEN_HEADER.equalsIgnoreCase(key)) {
+        throw new IllegalArgumentException(
+            ONBOARDING_TOKEN_HEADER
+                + " must be supplied only through the sponsored onboarding API");
+      }
+    }
+    final TransportRequest.Builder builder =
+        TransportRequest.builder()
+            .setUri(resolvePath(path))
+            .setMethod(method)
+            .addHeader("Accept", "application/json")
+            .setTimeout(config.requestTimeout());
+    if (body != null) {
+      builder.setBody(body).addHeader("Content-Type", "application/json");
+    }
+    for (final Map.Entry<String, String> entry : config.defaultHeaders().entrySet()) {
+      builder.addHeader(entry.getKey(), entry.getValue());
+    }
+    builder.addHeader(ONBOARDING_TOKEN_HEADER, token);
+    return builder.build();
+  }
+
+  private static String requireOnboardingCredential(final String value) {
+    if (value == null || value.length() < 32 || value.length() > 256) {
+      throw new IllegalArgumentException(
+          "onboarding token must contain 32..256 printable non-whitespace ASCII bytes");
+    }
+    for (int index = 0; index < value.length(); index++) {
+      final char character = value.charAt(index);
+      if (character < '!' || character > '~') {
+        throw new IllegalArgumentException(
+            "onboarding token must contain 32..256 printable non-whitespace ASCII bytes");
+      }
+    }
+    return value;
+  }
+
   private static Map<String, String> buildCanonicalHeaders(
       final String method,
       final URI target,
@@ -1679,6 +2010,23 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
+    return fetchJson(request, parser, errorContext, null, null);
+  }
+
+  private <T> CompletableFuture<T> fetchJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus) {
+    return fetchJson(request, parser, errorContext, acceptedStatus, null);
+  }
+
+  private <T> CompletableFuture<T> fetchJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus,
+      final BiFunction<T, Integer, T> responseValidator) {
     notifyRequest(request);
     final CompletableFuture<T> future = new CompletableFuture<>();
     executor
@@ -1701,7 +2049,11 @@ public final class HttpClientTransport implements IrohaClient {
                       response.message(),
                       null,
                       extractRejectCode(response));
-              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+              final boolean statusAccepted =
+                  acceptedStatus == null
+                      ? response.statusCode() >= 200 && response.statusCode() < 300
+                      : response.statusCode() == acceptedStatus;
+              if (!statusAccepted) {
                 final RuntimeException error =
                     new RuntimeException(
                         errorContext + " request failed with status " + response.statusCode());
@@ -1711,8 +2063,12 @@ public final class HttpClientTransport implements IrohaClient {
               }
               try {
                 final T parsed = parser.apply(response.body());
+                final T validated =
+                    responseValidator == null
+                        ? parsed
+                        : responseValidator.apply(parsed, response.statusCode());
                 notifyResponse(request, clientResponse);
-                future.complete(parsed);
+                future.complete(validated);
               } catch (final RuntimeException ex) {
                 notifyFailure(request, ex);
                 future.completeExceptionally(ex);
@@ -1783,6 +2139,14 @@ public final class HttpClientTransport implements IrohaClient {
       final TransportRequest request,
       final Function<byte[], T> parser,
       final String errorContext) {
+    return fetchJsonAllowingNotFound(request, parser, errorContext, null);
+  }
+
+  private <T> CompletableFuture<Optional<T>> fetchJsonAllowingNotFound(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext,
+      final Integer acceptedStatus) {
     notifyRequest(request);
     final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
     executor
@@ -1810,7 +2174,11 @@ public final class HttpClientTransport implements IrohaClient {
                 future.complete(Optional.empty());
                 return;
               }
-              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+              final boolean statusAccepted =
+                  acceptedStatus == null
+                      ? response.statusCode() >= 200 && response.statusCode() < 300
+                      : response.statusCode() == acceptedStatus;
+              if (!statusAccepted) {
                 final RuntimeException error =
                     new RuntimeException(
                         errorContext + " request failed with status " + response.statusCode());
@@ -2003,37 +2371,16 @@ public final class HttpClientTransport implements IrohaClient {
     return payload;
   }
 
-  static Map<String, Object> buildDeployContractPayload(
-      final String authority,
-      final String privateKey,
-      final String codeB64,
-      final String contractAlias,
-      final Long leaseExpiryMs) {
-    final Map<String, Object> payload = new LinkedHashMap<>();
-    payload.put("authority", normalizeNonBlank(authority, "authority"));
-    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
-    payload.put("code_b64", normalizeRequiredBase64Payload(codeB64, "codeB64"));
-    payload.put("contract_alias", normalizeNonBlank(contractAlias, "contractAlias"));
-    if (leaseExpiryMs != null) {
-      if (leaseExpiryMs.longValue() < 0L) {
-        throw new IllegalArgumentException("leaseExpiryMs must be non-negative");
-      }
-      payload.put("lease_expiry_ms", leaseExpiryMs);
-    }
-    return payload;
-  }
-
   static Map<String, Object> buildContractCallPayload(
       final String authority,
       final String privateKey,
-      final long gasLimit,
+      final FeePaymentIntent feePayment,
       final String contractAddress,
       final String contractAlias,
       final String entrypoint,
-      final Object payloadValue,
-      final String gasAssetId) {
-    if (gasLimit <= 0L) {
-      throw new IllegalArgumentException("gasLimit must be positive");
+      final Object payloadValue) {
+    if (feePayment == null || feePayment.gasLimit() == null) {
+      throw new IllegalArgumentException("contract feePayment must include gasLimit");
     }
     final Map<String, Object> payload = new LinkedHashMap<>();
     payload.put("authority", normalizeNonBlank(authority, "authority"));
@@ -2043,10 +2390,7 @@ public final class HttpClientTransport implements IrohaClient {
     if (payloadValue != null) {
       payload.put("payload", payloadValue);
     }
-    if (gasAssetId != null) {
-      payload.put("gas_asset_id", normalizeNonBlank(gasAssetId, "gasAssetId"));
-    }
-    payload.put("gas_limit", gasLimit);
+    payload.put("fee_payment", feePayment.toJsonMap());
     return payload;
   }
 
@@ -2088,9 +2432,7 @@ public final class HttpClientTransport implements IrohaClient {
       }
       payload.put("creation_time_ms", request.creationTimeMs());
     }
-    if (request.feeSponsor() != null) {
-      payload.put("fee_sponsor", normalizeNonBlank(request.feeSponsor(), "feeSponsor"));
-    }
+    payload.put("fee_payment", request.feePayment().toJsonMap());
     if (request.memo() != null) {
       payload.put("memo", normalizeNonBlank(request.memo(), "memo"));
     }
@@ -2485,6 +2827,8 @@ public final class HttpClientTransport implements IrohaClient {
       throw new IllegalArgumentException("authority is required and must be canonical");
     }
     SccpSubmitEncoding.requireCanonicalAuthority((String) fields.get("authority"), "authority");
+    final FeePaymentIntent feePayment =
+        FeePaymentJson.parse(fields.get("fee_payment"), "bridge submit payload.fee_payment");
     final boolean hasSignature = fields.containsKey("signature_b64");
     final Object signature = fields.get("signature_b64");
     if (hasSignature) {
@@ -2520,7 +2864,8 @@ public final class HttpClientTransport implements IrohaClient {
       SccpSubmitEncoding.normalizeOptionalTransactionPayload(
           (String) transactionPayload,
           normalizedCreationTime,
-          (String) fields.get("authority"));
+          (String) fields.get("authority"),
+          feePayment);
     }
     if ("/v1/bridge/messages".equals(path)) {
       final String nativeProof = requiredSccpArtifact(fields, "native_proof_b64");
@@ -2762,6 +3107,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final java.util.Set<String> SCCP_PROOF_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "destination_proof_b64",
@@ -2769,6 +3115,7 @@ public final class HttpClientTransport implements IrohaClient {
   private static final java.util.Set<String> SCCP_MESSAGE_SUBMIT_FIELDS =
       java.util.Set.of(
           "authority",
+          "fee_payment",
           "signature_b64",
           "transaction_payload_b64",
           "native_proof_b64",

@@ -4,33 +4,45 @@
 //! queue-drain and state-apply boilerplate when exercising app API endpoints.
 
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    str::FromStr as _,
+    sync::Arc,
     time::Duration,
 };
 
 use iroha_config::parameters::{defaults, defaults::zk::fastpq};
 use iroha_core::{
     block::{BlockBuilder, CommittedBlock},
-    queue::{Queue, TransactionGuard},
+    governance::manifest::LaneManifestRegistry,
+    queue::{Queue, RouteLegRole, RoutingDecision, RoutingPlan, TransactionGuard},
     smartcontracts::Execute,
-    state::{State, StateBlock, StateReadOnly},
+    state::{State, StateBlock, StateReadOnly, WorldReadOnly},
+    tx::AcceptedTransaction,
 };
-use iroha_crypto::Algorithm;
+use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     ChainId, Registrable,
     account::AccountId,
-    block::{BlockHeader, SignedBlock},
+    block::{
+        BlockExecutionContextBundle, BlockHeader, ExternalExecutionContext,
+        ExternalExecutionRouteLeg, ExternalExecutionRouteRole, SignedBlock,
+    },
     content::ContentAuthMode,
     domain::DomainId,
+    isi::smart_contract_code::{
+        CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+        SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
+    },
     jurisdiction::JdgSignatureScheme,
+    nexus::{DataSpaceId, LaneId},
     permission,
-    prelude::{Account, Domain, ExposedPrivateKey, Grant},
+    prelude::{
+        Account, Domain, ExposedPrivateKey, Grant, InstructionBox, Name, TransactionBuilder,
+    },
+    smart_contract::{CONTRACT_DEPLOY_NONCE_METADATA_KEY, ContractAddress},
     sorafs::pricing::PricingScheduleRecord,
 };
 use iroha_executor_data_model::permission::{
@@ -58,8 +70,6 @@ pub struct ContractCallOptions<'a> {
     pub entrypoint: &'a str,
     /// Serialized JSON payload passed to the contract call.
     pub payload: Option<&'a norito::json::Value>,
-    /// Gas-paying asset identifier to attach to the request.
-    pub gas_asset_id: Option<&'a str>,
     /// Upper bound on gas consumption for the call.
     pub gas_limit: u64,
 }
@@ -91,19 +101,51 @@ pub fn apply_queued_in_one_block(
         return 0;
     }
 
-    let accepted: Vec<_> = guards
+    let mut accepted: Vec<_> = guards
         .iter()
-        .map(TransactionGuard::clone_accepted)
+        .map(|guard| {
+            (
+                guard.clone_accepted(),
+                guard.routing(),
+                guard.routing_plan(),
+            )
+        })
         .collect();
     let applied = accepted.len();
+
+    // Synthetic Torii states do not all install the production lane-manifest snapshot. Preserve
+    // every explicit test registry, including registries that intentionally omit lane zero, but
+    // bind the live Nexus catalog when the registry is entirely empty so execution-context
+    // validation exercises the same manifest gate as a running node.
+    if state.lane_manifests.read().statuses().is_empty() {
+        let nexus = state.nexus_snapshot();
+        let manifests =
+            Arc::new(LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance));
+        state.install_lane_manifests(&manifests);
+    }
+
+    // `BlockBuilder::new` canonicalizes transactions by entrypoint hash. Mirror that order before
+    // constructing the explicit fixture context so every context remains aligned with its block
+    // entrypoint. Supplying a non-empty context also bypasses Core's automatic single-height lane
+    // ownership fixture, which is unsuitable for this helper's multi-block synthetic chains.
+    accepted.sort_unstable_by_key(|(tx, _, _)| tx.hash_as_entrypoint());
+    let execution_context = BlockExecutionContextBundle::new(
+        accepted
+            .iter()
+            .map(|(tx, routing, plan)| {
+                execution_context_for_routing_plan(tx.hash_as_entrypoint(), *routing, plan)
+            })
+            .collect(),
+    );
 
     let latest_block = state.view().latest_block();
     let leader = checked_random_keypair_with_algorithm(
         iroha_crypto::Algorithm::BlsNormal,
         "apply queued block leader fixture",
     );
-    let new_block = BlockBuilder::new(accepted)
+    let new_block = BlockBuilder::new(accepted.into_iter().map(|(tx, _, _)| tx).collect())
         .chain(0, latest_block.as_deref())
+        .with_execution_context(Some(execution_context))
         .sign(leader.private_key())
         .unpack(|_| {});
 
@@ -135,6 +177,33 @@ pub fn apply_queued_in_one_block(
     applied
 }
 
+fn execution_context_for_routing_plan(
+    entrypoint_hash: iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
+    routing: RoutingDecision,
+    plan: &RoutingPlan,
+) -> ExternalExecutionContext {
+    debug_assert_eq!(routing, plan.coordinator_route());
+    let legs = plan
+        .legs()
+        .into_iter()
+        .map(|leg| {
+            let role = match leg.role {
+                RouteLegRole::Coordinator => ExternalExecutionRouteRole::Coordinator,
+                RouteLegRole::Participant => ExternalExecutionRouteRole::Participant,
+            };
+            ExternalExecutionRouteLeg::new(leg.route.lane_id, leg.route.dataspace_id, role)
+        })
+        .collect();
+
+    ExternalExecutionContext::with_routing_plan(
+        entrypoint_hash,
+        routing.lane_id,
+        routing.dataspace_id,
+        plan.digest(),
+        legs,
+    )
+}
+
 /// Repeatedly drain and apply queued transactions, incrementing block height
 /// starting at `start_height`, until the queue is empty. Returns total applied.
 pub fn drain_queue_and_apply_all(
@@ -163,10 +232,14 @@ pub fn finalize_committed_block(
     mut state_block: StateBlock<'_>,
     committed_block: CommittedBlock,
 ) {
+    let signed_block: SignedBlock = committed_block.as_ref().clone();
+    state
+        .view()
+        .kura()
+        .store_block(Arc::new(signed_block))
+        .expect("store committed test block before publishing its state height");
     let _ = state_block.apply_without_execution(&committed_block, Vec::new());
     state_block.commit().unwrap();
-    let signed_block: SignedBlock = committed_block.into();
-    let _ = state.view().kura().store_block(Arc::new(signed_block));
 }
 
 /// Build a minimal self-describing contract artifact containing a single HALT.
@@ -316,30 +389,112 @@ pub fn grant_contract_operator_permissions(state: &Arc<State>, authority: &Accou
         .expect("commit contract operator permissions");
 }
 
-/// Build JSON string for deploy request body.
-pub fn deploy_request_json(
-    account: &AccountId,
+/// Build and enqueue a locally signed atomic contract deployment transaction.
+///
+/// This deliberately exercises the native deployment instructions instead of
+/// recreating the retired server-side signing endpoint in test routers.
+pub fn enqueue_locally_signed_contract_deployment(
+    state: &Arc<State>,
+    queue: &Arc<Queue>,
+    chain_id: &ChainId,
+    authority: &AccountId,
     private_key: &ExposedPrivateKey,
-    code_b64: &str,
-) -> String {
-    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+    artifact: &[u8],
+) -> (ContractAddress, String, String) {
+    let verified = ivm::verify_contract_artifact(artifact).expect("verify contract artifact");
+    let key_pair =
+        KeyPair::from_private_key(private_key.0.clone()).expect("derive local deployment key pair");
+    assert_eq!(
+        key_pair.public_key(),
+        authority.signatory(),
+        "local deployment key must match authority"
+    );
+    let manifest = verified
+        .manifest
+        .try_signed(&key_pair)
+        .expect("sign contract manifest locally");
 
-    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-        &format!(
-            "deploy{}",
-            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ),
+    let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
+        .expect("contract deployment nonce metadata key");
+    let state_view = state.view();
+    let deploy_nonce = state_view
+        .world
+        .account(authority)
+        .expect("deployment authority exists")
+        .metadata()
+        .get(&nonce_key)
+        .map(|value| {
+            value
+                .clone()
+                .try_into_any_norito::<u64>()
+                .expect("canonical contract deployment nonce")
+        })
+        .unwrap_or(0);
+    drop(state_view);
+
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!("fixture{deploy_nonce}"),
         None,
         "universal",
     )
     .expect("construct contract alias");
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("code_b64", code_b64),
-        crate::json_entry("contract_alias", alias),
-    ]);
-    norito::json::to_json(&value).expect("serialize deploy request")
+    let contract_address = ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        authority,
+        deploy_nonce,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive contract address");
+    let total_size = u64::try_from(artifact.len()).expect("artifact size fits u64");
+    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))
+        .expect("contract upload chunk count fits u32");
+    assert_ne!(chunk_count, 0, "contract artifact must not be empty");
+
+    let mut instructions =
+        Vec::with_capacity(usize::try_from(chunk_count).expect("chunk count fits usize") + 3);
+    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
+            code_hash: verified.code_hash,
+            total_size,
+            chunk_index: u32::try_from(index).expect("chunk index fits u32"),
+            chunk_count,
+            chunk: chunk.to_vec(),
+        }));
+    }
+    instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+        code_hash: verified.code_hash,
+        total_size,
+        chunk_count,
+    }));
+    instructions.push(InstructionBox::from(RegisterSmartContractCode { manifest }));
+    instructions.push(InstructionBox::from(CommitContractDeployment {
+        expected_deploy_nonce: deploy_nonce,
+        contract_address: contract_address.clone(),
+        code_hash: verified.code_hash,
+        contract_alias,
+        lease_expiry_ms: None,
+        expected_previous_contract_address: None,
+    }));
+
+    let transaction = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(key_pair.private_key());
+    queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(transaction)),
+            state.view(),
+        )
+        .expect("enqueue locally signed contract deployment");
+
+    (
+        contract_address,
+        hex::encode(verified.code_hash.as_ref()),
+        hex::encode(verified.abi_hash.as_ref()),
+    )
 }
 
 /// Build JSON string for contract call request body.
@@ -358,10 +513,13 @@ pub fn contract_call_request_json(
     if let Some(value) = options.payload {
         entries.push(crate::json_entry("payload", value.clone()));
     }
-    if let Some(asset) = options.gas_asset_id {
-        entries.push(crate::json_entry("gas_asset_id", asset));
-    }
-    entries.push(crate::json_entry("gas_limit", options.gas_limit));
+    entries.push(crate::json_entry(
+        "fee_payment",
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(options.gas_limit),
+        ),
+    ));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract call request")
 }
@@ -461,6 +619,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
             trust_gossip: defaults::network::TRUST_GOSSIP,
@@ -791,7 +950,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             },
             sorafs_por: Default::default(),
             sorafs_appeal_finance_settlement: Default::default(),
-            onboarding: None,
+            account_onboarding: None,
         },
         soracloud_runtime: A::SoracloudRuntime::default(),
         kura: A::Kura {
@@ -1117,9 +1276,9 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             citizenship_asset_id: defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
-            citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+            citizenship_bond_amount: defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
             citizenship_escrow_account: defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150,
+            min_bond_amount: 150_u64.into(),
             bond_escrow_account: defaults::governance::bond_escrow_account_id(),
             slash_receiver_account: defaults::governance::slash_receiver_account_id(),
             slash_double_vote_bps: 0,
@@ -1172,7 +1331,7 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             min_turnout: 0,
             parliament_committee_size: defaults::governance::PARLIAMENT_COMMITTEE_SIZE,
             parliament_term_blocks: defaults::governance::PARLIAMENT_TERM_BLOCKS,
-            parliament_min_stake: defaults::governance::PARLIAMENT_MIN_STAKE,
+            parliament_min_stake: defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id: defaults::governance::parliament_eligibility_asset_id(
             )
             .parse()
@@ -1297,18 +1456,24 @@ mod tests {
     use iroha_core::{
         kura::Kura,
         query::store::LiveQueryStore,
-        queue::Queue,
+        queue::{Queue, RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan},
         state::{State, StateReadOnly, World},
         tx::AcceptedTransaction,
     };
+    use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         ChainId, Level, Registrable,
         account::{Account, AccountId},
+        block::ExternalExecutionRouteRole,
         isi::Log,
-        transaction::TransactionBuilder,
+        nexus::{DataSpaceId, LaneId},
+        transaction::{TransactionBuilder, TransactionEntrypoint},
     };
 
-    use super::{apply_queued_in_one_block, contract_code_hash_hex, minimal_ivm_program};
+    use super::{
+        apply_queued_in_one_block, contract_code_hash_hex, execution_context_for_routing_plan,
+        minimal_ivm_program,
+    };
 
     #[test]
     fn contract_code_hash_hex_matches_domain_separated_full_artifact_hash() {
@@ -1337,16 +1502,55 @@ mod tests {
     }
 
     #[test]
+    fn fixture_execution_context_preserves_full_routing_plan() {
+        let coordinator = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(20));
+        let participant = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(30));
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
+        );
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(Hash::new(
+            b"torii fixture routed transaction",
+        ));
+
+        let context = execution_context_for_routing_plan(entrypoint_hash, coordinator, &plan);
+
+        assert_eq!(context.entrypoint_hash, entrypoint_hash);
+        assert_eq!(context.lane_id, coordinator.lane_id);
+        assert_eq!(context.dataspace_id, coordinator.dataspace_id);
+        assert_eq!(context.routing_plan_digest, plan.digest());
+        assert_eq!(context.routing_plan_legs.len(), 2);
+        assert_eq!(
+            context.routing_plan_legs[0].role,
+            ExternalExecutionRouteRole::Coordinator
+        );
+        assert_eq!(
+            context.routing_plan_legs[1].role,
+            ExternalExecutionRouteRole::Participant
+        );
+        assert_eq!(context.routing_plan_legs[1].lane_id, participant.lane_id);
+        assert_eq!(
+            context.routing_plan_legs[1].dataspace_id,
+            participant.dataspace_id
+        );
+    }
+
+    #[test]
     fn apply_queued_in_one_block_overrides_chain_id() {
         let keypair = checked_random_keypair("queued transaction signer fixture");
         let authority = AccountId::new(keypair.public_key().clone());
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let world = World::with([], [Account::new(authority.clone()).build(&authority)], []);
-        let state = Arc::new(State::new_for_testing(world, kura, query));
         let chain_id: ChainId = "chain".parse().expect("chain id");
+        let state = Arc::new(State::new_with_chain_for_testing(
+            world,
+            kura,
+            query,
+            chain_id.clone(),
+        ));
 
-        assert_ne!(&state.chain_id, &chain_id);
+        assert_eq!(&state.chain_id, &chain_id);
 
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
         let queue = Arc::new(Queue::from_config(
@@ -1354,16 +1558,92 @@ mod tests {
             events,
         ));
 
-        let tx = TransactionBuilder::new(chain_id.clone(), authority)
-            .with_instructions([Log::new(
-                Level::INFO,
-                "queued transaction fixture".to_owned(),
-            )])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "queued transaction fixture".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let first_tx_hash = tx.hash();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         queue.push(accepted, state.view()).expect("queue push");
 
         let applied = apply_queued_in_one_block(&state, &queue, &chain_id, 1);
         assert_eq!(applied, 1);
+        let view = state.view();
+        assert_eq!(view.height(), 1);
+        let first_block = view
+            .latest_block()
+            .expect("committed test block remains readable from Kura");
+        let first_block_hash = first_block.hash();
+        assert_eq!(first_block.header().height().get(), 1);
+        assert_eq!(
+            view.kura().get_block_height_by_hash(first_block_hash),
+            core::num::NonZeroUsize::new(1)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        drop(view);
+
+        let second_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "second queued transaction fixture".to_owned(),
+        )])
+        .sign(keypair.private_key());
+        let second_tx_hash = second_tx.hash();
+        queue
+            .push(
+                AcceptedTransaction::new_unchecked(Cow::Owned(second_tx)),
+                state.view(),
+            )
+            .expect("second queue push");
+        assert_eq!(apply_queued_in_one_block(&state, &queue, &chain_id, 2), 1);
+        let view = state.view();
+        assert_eq!(view.height(), 2);
+        let second_block = view
+            .latest_block()
+            .expect("second committed test block remains readable from Kura");
+        assert_eq!(second_block.header().height().get(), 2);
+        assert_eq!(
+            second_block.header().prev_block_hash(),
+            Some(first_block_hash),
+            "the synthetic test chain must preserve canonical parent linkage"
+        );
+        assert_eq!(
+            view.kura().get_block_height_by_hash(second_block.hash()),
+            core::num::NonZeroUsize::new(2)
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(second_tx_hash)
+                .expect("transaction index is complete"),
+            [core::num::NonZeroUsize::new(2).expect("nonzero")]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(
+            view.kura()
+                .get_block_heights_by_transaction_hash(first_tx_hash)
+                .expect("transaction index remains complete"),
+            [core::num::NonZeroUsize::new(1).expect("nonzero")]
+                .into_iter()
+                .collect(),
+            "storing the successor must preserve the first transaction index"
+        );
     }
 }

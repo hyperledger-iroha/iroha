@@ -3209,11 +3209,11 @@ impl WsvHost {
         }
         let resolved_amount = axt::resolve_handle_amount(&intent, proof.as_ref())
             .map_err(axt::HandleAmountResolutionError::to_vm_error)?;
-        if resolved_amount.amount > handle.budget.remaining {
+        if &resolved_amount.amount > &handle.budget.remaining {
             return Err(VMError::PermissionDenied);
         }
-        if let Some(per_use) = handle.budget.per_use
-            && resolved_amount.amount > per_use
+        if let Some(per_use) = handle.budget.per_use.as_ref()
+            && &resolved_amount.amount > per_use
         {
             return Err(VMError::PermissionDenied);
         }
@@ -5463,7 +5463,7 @@ impl IVMHost for WsvHost {
                 }
                 // Shield
                 if let Some(instr) = any_ref.downcast_ref::<DMZk::Shield>() {
-                    let amount = Numeric::new(*instr.amount(), 0);
+                    let amount = instr.amount().as_numeric().clone();
                     // Permission: Shield(asset)
                     let tok = PermissionToken::Shield(instr.asset().clone());
                     if !self.wsv.has_permission(&self.caller, &tok) {
@@ -5500,7 +5500,7 @@ impl IVMHost for WsvHost {
                 }
                 // Unshield
                 if let Some(instr) = any_ref.downcast_ref::<DMZk::Unshield>() {
-                    let amount = Numeric::new(*instr.public_amount(), 0);
+                    let amount = instr.public_amount().as_numeric().clone();
                     // Permission: Unshield(asset)
                     let tok = PermissionToken::Unshield(instr.asset().clone());
                     if !self.wsv.has_permission(&self.caller, &tok) {

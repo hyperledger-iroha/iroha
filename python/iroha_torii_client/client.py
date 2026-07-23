@@ -24,8 +24,9 @@ Example
 'ab01cdf...'
 >>> client.delete_attachment(meta["id"])
 
-The helper keeps dependencies minimal (``requests`` only) so it can be reused
-from tests or scripts without pulling the full CLI.
+The helper keeps dependencies minimal (``requests`` plus ``blake3`` for exact
+asset-definition address validation) so it can be reused from tests or scripts
+without pulling the full CLI.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ import math
 import re
 import secrets
 import time
+import unicodedata
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import (
@@ -59,6 +61,7 @@ from typing import (
 from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 import requests
+from blake3 import blake3
 
 from .norito_frame import validate_norito_frame
 from .sccp import (
@@ -98,6 +101,7 @@ _SCCP_PROOF_REQUEST_NORITO_TYPE_NAME = (
 
 
 BASE58_ALPHABET = tuple("123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz")
+BASE58_INDEX = {symbol: idx for idx, symbol in enumerate(BASE58_ALPHABET)}
 IROHA_POEM_KANA_HALFWIDTH = (
     "ｲ", "ﾛ", "ﾊ", "ﾆ", "ﾎ", "ﾍ", "ﾄ", "ﾁ", "ﾘ", "ﾇ", "ﾙ", "ｦ", "ﾜ", "ｶ", "ﾖ", "ﾀ",
     "ﾚ", "ｿ", "ﾂ", "ﾈ", "ﾅ", "ﾗ", "ﾑ", "ｳ", "ヰ", "ﾉ", "ｵ", "ｸ", "ﾔ", "ﾏ", "ｹ", "ﾌ",
@@ -127,6 +131,242 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
+_SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_QUANTITY_MAX_TEXT_LENGTH = 155
+_QUANTITY_MAX_MANTISSA = (1 << 511) - 1
+_VPN_HELPER_TICKET_BYTES = 664
+_VPN_HELPER_TICKET_HEX_LENGTH = _VPN_HELPER_TICKET_BYTES * 2
+_VPN_EXIT_CLASSES = frozenset({"standard", "low-latency", "high-security"})
+_VPN_SESSION_STATUSES = frozenset({"active"})
+_VPN_RECEIPT_STATUSES = frozenset({"disconnected", "expired", "replaced", "settled"})
+_VPN_RECEIPT_SOURCES = frozenset({"torii", "relay", "wsv"})
+_VPN_LEASE_SECONDS_MAX = (1 << 32) - 1
+_VPN_UINT64_MAX = (1 << 64) - 1
+_VPN_QUOTE_REQUEST_FIELDS = frozenset(
+    {"exit_class", "exitClass", "metering_public_key_hex", "meteringPublicKeyHex"}
+)
+_VPN_SESSION_REQUEST_FIELDS = frozenset(
+    {
+        "exit_class",
+        "exitClass",
+        "quote_id",
+        "quoteId",
+        "payment_tx_hash",
+        "paymentTxHash",
+        "metering_public_key_hex",
+        "meteringPublicKeyHex",
+    }
+)
+_VPN_RECEIPT_REQUEST_FIELDS = frozenset(
+    {
+        "relay_receipt_hex",
+        "relayReceiptHex",
+        "client_voucher_hex",
+        "clientVoucherHex",
+        "lease_id_hex",
+        "leaseIdHex",
+    }
+)
+_VPN_TX_INSTRUCTION_FIELDS = frozenset({"wire_id", "payload_hex"})
+_VPN_PROFILE_RESPONSE_FIELDS = frozenset(
+    {
+        "available",
+        "relay_endpoint",
+        "supported_exit_classes",
+        "default_exit_class",
+        "lease_secs",
+        "dns_push_interval_secs",
+        "meter_family",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "display_billing_label",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "settlement_grace_secs",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+    }
+)
+_VPN_QUOTE_RESPONSE_FIELDS = frozenset(
+    {
+        "quote_id",
+        "lease_id_hex",
+        "session_id_hex",
+        "payment_reference",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "lease_secs",
+        "quote_expires_at_ms",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "meter_family",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+        "metering_public_key_hex",
+        "open_lease_instruction",
+        "tx_instructions",
+    }
+)
+_VPN_SESSION_RESPONSE_FIELDS = frozenset(
+    {
+        "session_id",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "lease_secs",
+        "expires_at_ms",
+        "connected_at_ms",
+        "meter_family",
+        "quote_id",
+        "payment_reference",
+        "payment_tx_hash",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "flow_label_bits",
+        "padding_budget_ms",
+        "relay_tls_spki_sha256_hex",
+        "route_pushes",
+        "excluded_routes",
+        "dns_servers",
+        "tunnel_addresses",
+        "mtu_bytes",
+        "helper_ticket_hex",
+        "bytes_in",
+        "bytes_out",
+        "status",
+    }
+)
+_VPN_RECEIPT_RESPONSE_FIELDS = frozenset(
+    {
+        "session_id",
+        "account_id",
+        "exit_class",
+        "relay_endpoint",
+        "meter_family",
+        "connected_at_ms",
+        "disconnected_at_ms",
+        "duration_ms",
+        "bytes_in",
+        "bytes_out",
+        "status",
+        "receipt_source",
+        "quote_id",
+        "payment_tx_hash",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "lease_fee",
+        "earned_fee",
+        "refunded_fee",
+        "lease_id_hex",
+        "settle_lease_instruction",
+        "tx_instructions",
+    }
+)
+_VPN_RECEIPT_LIST_RESPONSE_FIELDS = frozenset({"items", "total"})
+
+
+def _canonical_quantity(value: Any, context: str) -> str:
+    """Decode one canonical bounded non-negative Quantity JSON string."""
+
+    if not isinstance(value, str):
+        raise RuntimeError(f"{context} must be a quantity string")
+    if len(value) > _QUANTITY_MAX_TEXT_LENGTH:
+        raise RuntimeError(f"{context} exceeds the quantity text length bound")
+    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None:
+        raise RuntimeError(f"{context} must be a canonical non-negative quantity")
+    fraction = matched.group(2) or ""
+    mantissa = int(matched.group(1) + fraction)
+    if mantissa > _QUANTITY_MAX_MANTISSA:
+        raise RuntimeError(f"{context} exceeds the signed 512-bit domain")
+    return value
+
+
+_SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
+    {
+        "version",
+        "order_id_hex",
+        "side",
+        "tier",
+        "price_per_gib",
+        "quantity_gib",
+        "remaining_gib",
+        "owner_account_hex",
+        "expiry_unix",
+        "nonce",
+        "maker_fee_bps",
+        "taker_fee_bps",
+        "signature",
+    }
+)
+_SORAFS_ORDERBOOK_FILL_FIELDS = frozenset(
+    {"trade", "maker_remaining_gib", "taker_remaining_gib", "gross_value"}
+)
+_SORAFS_ORDERBOOK_TRADE_FIELDS = frozenset(
+    {
+        "version",
+        "trade_id_hex",
+        "maker_order_id_hex",
+        "taker_order_id_hex",
+        "tier",
+        "price_per_gib",
+        "filled_gib",
+        "maker_fee",
+        "taker_fee",
+        "timestamp_unix",
+    }
+)
+_SORAFS_ORDERBOOK_CHANNEL_FIELDS = frozenset(
+    {
+        "version",
+        "channel_id_hex",
+        "trade_id_hex",
+        "buyer_account_hex",
+        "provider_id_hex",
+        "total_bytes",
+        "remaining_bytes",
+        "xor_locked",
+        "status",
+        "opened_at_unix",
+        "updated_at_unix",
+    }
+)
+_SORAFS_ORDERBOOK_RECEIPT_FIELDS = frozenset(
+    {
+        "version",
+        "receipt_id_hex",
+        "channel_id_hex",
+        "trade_id_hex",
+        "range",
+        "chunk_hash_hex",
+        "bytes_delivered",
+        "xor_debited",
+        "provider_credit",
+        "fee_amount",
+        "issued_at_unix",
+        "settlement_signature",
+    }
+)
+
+
 def _decode_base_n(digits: Sequence[int], base: int) -> bytes:
     value = 0
     for digit in digits:
@@ -327,10 +567,6 @@ __all__ = [
     "TransactionInstruction",
     "GovernanceInstructionDraft",
     "GovernanceProposalDraft",
-    "ContractDeployContractReceipt",
-    "ContractDeployHajimariCallReceipt",
-    "ContractDeployAssertionReceipt",
-    "ContractDeployResponse",
     "ContractOperationReceipt",
     "ContractCallResponse",
     "PipelineDiagnostic",
@@ -424,6 +660,14 @@ __all__ = [
     "SumeragiV2TimeoutReference",
     "SumeragiV2HeightContextStatus",
     "SumeragiV2CommitQcStatus",
+    "SumeragiV2VoteQuorumStatus",
+    "SumeragiV2TimeoutQuorumStatus",
+    "SumeragiV2OutboundIntentStatus",
+    "SumeragiV2WorkStatus",
+    "SumeragiV2QueueLivenessStatus",
+    "SumeragiV2ProgressTransitionStatus",
+    "SumeragiV2IgnoreCount",
+    "SumeragiV2LivenessStatus",
     "SumeragiV2AdapterQueueStatus",
     "SumeragiV2TxQueueStatus",
     "SumeragiV2OperatorStatus",
@@ -452,6 +696,7 @@ __all__ = [
     "OfflineActiveUnshieldVerifier",
     "OfflineActiveRecursiveStepEqVerifier",
     "OfflineActiveRecursiveStepEpVerifier",
+    "OfflineAuthenticatedArtifactSet",
     "OfflineReadiness",
     "OfflineAssetScale",
     "OfflineScaledAmountJson",
@@ -481,7 +726,7 @@ __all__ = [
     "OfflineBranchPathJson",
     "OfflineBranchClaimJson",
     "OfflineSpendBranchJson",
-    "KagemushaArtifactBindingJson",
+    "KagemushaArtifactBindingV4Json",
     "OfflinePeerSplitTransitionJson",
     "OfflineRedemptionChangeTransitionJson",
     "OfflinePeerSplitTransitionVariantJson",
@@ -492,15 +737,15 @@ __all__ = [
     "OfflineUnshieldPublicInputsJson",
     "OfflineRedemptionIntentJson",
     "OfflineRedeemChangeJson",
-    "KagemushaTopUpRequestV2",
-    "KagemushaRedeemRequestV2",
+    "KagemushaTopUpRequestV4",
+    "KagemushaRedeemRequestV4",
     "OfflineOperationKind",
     "OfflinePendingState",
     "OfflineOperationReference",
     "OfflineScaledAmount",
     "OfflineSpendableNote",
     "OfflineVerifierKeyId",
-    "KagemushaArtifactBinding",
+    "KagemushaArtifactBindingV4",
     "OfflineTopUpAnchor",
     "OfflineTopUpFinalityProofAnchor",
     "OfflineTopUpFinalityConsensusMode",
@@ -2619,9 +2864,10 @@ class OfflineSpendBranchJson(_OfflineTaggedUnitJsonOptional):
     branch: Literal["recipient", "change"]
 
 
-class KagemushaArtifactBindingJson(TypedDict):
-    """Identity of the one authenticated Kagemusha V3 artifact installation."""
+class KagemushaArtifactBindingV4Json(TypedDict):
+    """Identity of the one authenticated Kagemusha ABI-21/V4 release."""
 
+    version: Literal[4]
     generation: str
     manifest_sha256: List[int]
 
@@ -2678,12 +2924,13 @@ class OfflineRecursiveSpendStatementJson(_OfflineRecursiveSpendStatementJsonOpti
     asset: str
     asset_scale: OfflineAssetScale
     final_root: List[int]
+    next_zero_leaf_index: int
     topup_anchor_refs: List[OfflineTopUpAnchorReferenceJson]
     proof_step_count: int
     peer_hop_count: int
     current_note: OfflineSpendableNoteJson
     branch_claims: List[OfflineBranchClaimJson]
-    artifact_binding: KagemushaArtifactBindingJson
+    artifact_binding: KagemushaArtifactBindingV4Json
     verifier_key_id: OfflineVerifierKeyIdJson
 
 
@@ -2718,7 +2965,7 @@ class OfflineUnshieldPublicInputsJson(TypedDict):
 
 class _OfflineRedemptionIntentJsonOptional(TypedDict, total=False):
     change_output: Optional[OfflineSpendableNoteJson]
-    change_artifact_binding: Optional[KagemushaArtifactBindingJson]
+    change_artifact_binding: Optional[KagemushaArtifactBindingV4Json]
 
 
 class OfflineRedemptionIntentJson(_OfflineRedemptionIntentJsonOptional):
@@ -2749,27 +2996,35 @@ class OfflineRedeemChangeJson(TypedDict):
 
 
 @dataclass(frozen=True)
-class KagemushaTopUpRequestV2:
-    """Canonical Norito top-up request plus its embedded operation identifier."""
+class KagemushaTopUpRequestV4:
+    """Canonical ABI-21/V4 Norito top-up request and operation identifier."""
 
     norito: bytes
     operation_id: str
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(self.norito, "KagemushaTopUpRequestV2.norito")
+        _validate_kagemusha_norito_request(
+            self.norito,
+            _KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES,
+            "KagemushaTopUpRequestV4.norito",
+        )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
 
 
 @dataclass(frozen=True)
-class KagemushaRedeemRequestV2:
-    """Canonical Norito redemption request plus its embedded operation identifier."""
+class KagemushaRedeemRequestV4:
+    """Canonical ABI-21/V4 Norito redemption request and operation identifier."""
 
     norito: bytes
     operation_id: str
 
     def __post_init__(self) -> None:
-        _validate_kagemusha_norito_request(self.norito, "KagemushaRedeemRequestV2.norito")
+        _validate_kagemusha_norito_request(
+            self.norito,
+            _KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES,
+            "KagemushaRedeemRequestV4.norito",
+        )
         object.__setattr__(self, "norito", bytes(self.norito))
         object.__setattr__(self, "operation_id", _require_offline_operation_id(self.operation_id))
 
@@ -2801,9 +3056,19 @@ _OFFLINE_HASH_LITERAL_RE = re.compile(r"^hash:([0-9A-F]{64})#([0-9A-F]{4})$")
 _OFFLINE_BLS_VALIDATOR_ID_RE = re.compile(r"^ea0130[0-9A-F]{96}$")
 _OFFLINE_MAX_JSON_DEPTH = 128
 _OFFLINE_MAX_JSON_RESPONSE_BYTES = 256 * 1024
-_KAGEMUSHA_MAX_NORITO_REQUEST_BYTES = 256 * 1024
-_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 19
+_KAGEMUSHA_TOP_UP_MAX_NORITO_REQUEST_BYTES = 512 * 1024
+_KAGEMUSHA_REDEEM_MAX_NORITO_REQUEST_BYTES = 48 * 1024 * 1024
+_KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION = 21
 _KAGEMUSHA_MAX_HOPS = 8
+_KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4 = 16 * 1024 * 1024
+_KAGEMUSHA_VERIFIER_BACKEND = "halo2/ipa"
+_KAGEMUSHA_VERIFIER_ROLES = {
+    "active_transfer_verifier": "confidential_transfer_v2_verifier_record",
+    "active_topup_shield_verifier": "kagemusha_topup_shield_v2_verifier_record",
+    "active_unshield_verifier": "confidential_unshield_v3_verifier_record",
+    "active_recursive_step_eq_verifier": "kagemusha_recursive_step_eq_v4_verifier_record",
+    "active_recursive_step_ep_verifier": "kagemusha_recursive_step_ep_v4_verifier_record",
+}
 _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_transfer_verifier":
         "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
@@ -2812,20 +3077,24 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+        "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
 }
 
 
-def _validate_kagemusha_norito_request(value: Any, context: str) -> None:
+def _validate_kagemusha_norito_request(
+    value: Any,
+    maximum_bytes: int,
+    context: str,
+) -> None:
     if type(value) is not bytes:
         raise TypeError(f"{context} must be immutable bytes")
     if not value:
         raise ValueError(f"{context} must not be empty")
-    if len(value) > _KAGEMUSHA_MAX_NORITO_REQUEST_BYTES:
+    if len(value) > maximum_bytes:
         raise ValueError(
-            f"{context} exceeds {_KAGEMUSHA_MAX_NORITO_REQUEST_BYTES} bytes"
+            f"{context} exceeds {maximum_bytes} bytes"
         )
 
 
@@ -2845,12 +3114,9 @@ def _offline_exact_string(value: Any, context: str, *, non_empty: bool = True) -
 
 def _offline_asset_selector(value: Any, context: str) -> str:
     selector = _offline_exact_string(value, context)
-    pattern = (
-        _OFFLINE_ASSET_ALIAS_RE
-        if "#" in selector
-        else _OFFLINE_ASSET_DEFINITION_ID_RE
-    )
-    if pattern.fullmatch(selector) is None:
+    if "#" not in selector:
+        return _offline_canonical_asset_definition_id(selector, context)
+    if _OFFLINE_ASSET_ALIAS_RE.fullmatch(selector) is None:
         raise RuntimeError(
             f"{context} must be a canonical Base58 asset definition id or lowercase scoped asset alias"
         )
@@ -2862,6 +3128,23 @@ def _offline_canonical_asset_definition_id(value: Any, context: str) -> str:
     if _OFFLINE_ASSET_DEFINITION_ID_RE.fullmatch(asset_definition_id) is None:
         raise RuntimeError(
             f"{context} must be a canonical unprefixed Base58 asset definition id"
+        )
+    # Keep this complete validation synchronized with the normative Rust codec:
+    # `iroha_data_model::asset::AssetDefinitionId::parse_address_literal`.
+    payload = _decode_base_n(
+        [BASE58_INDEX[symbol] for symbol in asset_definition_id],
+        len(BASE58_ALPHABET),
+    )
+    uuid_bytes = payload[1:17]
+    if (
+        len(payload) != 21
+        or payload[0] != 1
+        or payload[17:] != blake3(payload[:17]).digest(length=4)
+        or (uuid_bytes[6] >> 4) != 0b0100
+        or (uuid_bytes[8] & 0b1100_0000) != 0b1000_0000
+    ):
+        raise RuntimeError(
+            f"{context} must be a canonical checksummed UUIDv4 asset definition id"
         )
     return asset_definition_id
 
@@ -3158,6 +3441,20 @@ class OfflineActiveTransferVerifier:
     withdrawal_height: Optional[int]
 
 
+@dataclass(frozen=True)
+class OfflineAuthenticatedArtifactSet:
+    """Exact authenticated ABI-21 V4 recursive release selected for readiness."""
+
+    generation: str
+    manifest_sha256: str
+    release_policy_sha256: str
+    release_attestation_sha256: str
+    activation_height: int
+    withdrawal_height: int
+    max_proof_bytes: int
+    asset_scale: int
+
+
 # Every readiness role exposes the same key-material-free registry record
 # shape. Distinct aliases keep role substitution visible at the API boundary.
 OfflineActiveTopUpShieldVerifier = OfflineActiveTransferVerifier
@@ -3206,6 +3503,7 @@ def _offline_active_transfer_verifier(
         _offline_required(record, "version", context),
         f"{context}.version",
         _OFFLINE_MAX_U32,
+        positive=True,
     )
     circuit_id = _offline_exact_string(
         _offline_required(record, "circuit_id", context),
@@ -3219,6 +3517,10 @@ def _offline_active_transfer_verifier(
         _offline_required(record, "public_inputs_schema_hash", context),
         f"{context}.public_inputs_schema_hash",
     )
+    if commitment == "0" * 64 or public_inputs_schema_hash == "0" * 64:
+        raise RuntimeError(
+            f"{context} commitment and public_inputs_schema_hash must be non-zero"
+        )
     max_proof_bytes = _offline_unsigned(
         _offline_required(record, "max_proof_bytes", context),
         f"{context}.max_proof_bytes",
@@ -3257,6 +3559,114 @@ def _offline_active_transfer_verifier(
     )
 
 
+def _offline_authenticated_artifact_set(
+    value: Any,
+    evaluated_block_height: int,
+    context: str,
+) -> OfflineAuthenticatedArtifactSet:
+    record = _offline_mapping(value, context)
+    _offline_exact_object_fields(
+        record,
+        context,
+        required=(
+            "generation",
+            "manifest_sha256",
+            "release_policy_sha256",
+            "release_attestation_sha256",
+            "activation_height",
+            "withdrawal_height",
+            "max_proof_bytes",
+            "asset_scale",
+        ),
+    )
+    generation = _offline_exact_string(
+        _offline_required(record, "generation", context),
+        f"{context}.generation",
+    )
+    try:
+        generation_bytes = generation.encode("ascii")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(
+            f"{context}.generation must be a canonical portable artifact identifier"
+        ) from exc
+    if (
+        len(generation_bytes) > 128
+        or not generation_bytes[0:1].isalnum()
+        or not generation_bytes[-1:].isalnum()
+        or any(
+            not (byte < 128 and (chr(byte).isalnum() or byte in b"._-"))
+            for byte in generation_bytes
+        )
+    ):
+        raise RuntimeError(
+            f"{context}.generation must be a canonical portable artifact identifier"
+        )
+    basename = generation.split(".", 1)[0].lower()
+    if basename in {"con", "prn", "aux", "nul"} or (
+        len(basename) == 4
+        and basename[:3] in {"com", "lpt"}
+        and basename[3] in "123456789"
+    ):
+        raise RuntimeError(
+            f"{context}.generation must not use a Windows reserved basename"
+        )
+
+    digests: Dict[str, str] = {}
+    for field in (
+        "manifest_sha256",
+        "release_policy_sha256",
+        "release_attestation_sha256",
+    ):
+        digest = _offline_required(record, field, context)
+        if not isinstance(digest, str) or _OFFLINE_TRANSACTION_HASH_RE.fullmatch(digest) is None:
+            raise RuntimeError(
+                f"{context}.{field} must be a lowercase 64-character SHA-256 digest"
+            )
+        digests[field] = digest
+    if any(digest == "0" * 64 for digest in digests.values()) or len(set(digests.values())) != 3:
+        raise RuntimeError(f"{context} digests must be non-zero and pairwise distinct")
+
+    activation_height = _offline_unsigned(
+        _offline_required(record, "activation_height", context),
+        f"{context}.activation_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    withdrawal_height = _offline_unsigned(
+        _offline_required(record, "withdrawal_height", context),
+        f"{context}.withdrawal_height",
+        _OFFLINE_MAX_U64,
+        positive=True,
+    )
+    if withdrawal_height <= activation_height:
+        raise RuntimeError(f"{context}.withdrawal_height must be after activation_height")
+    if activation_height > evaluated_block_height:
+        raise RuntimeError(f"{context}.activation_height is after the evaluated block")
+    if withdrawal_height <= evaluated_block_height:
+        raise RuntimeError(f"{context}.withdrawal_height is not after the evaluated block")
+    max_proof_bytes = _offline_unsigned(
+        _offline_required(record, "max_proof_bytes", context),
+        f"{context}.max_proof_bytes",
+        _KAGEMUSHA_RECURSIVE_PROOF_PAIR_MAX_BYTES_V4,
+        positive=True,
+    )
+    asset_scale = _offline_unsigned(
+        _offline_required(record, "asset_scale", context),
+        f"{context}.asset_scale",
+        _OFFLINE_MAX_ASSET_SCALE,
+    )
+    return OfflineAuthenticatedArtifactSet(
+        generation=generation,
+        manifest_sha256=digests["manifest_sha256"],
+        release_policy_sha256=digests["release_policy_sha256"],
+        release_attestation_sha256=digests["release_attestation_sha256"],
+        activation_height=activation_height,
+        withdrawal_height=withdrawal_height,
+        max_proof_bytes=max_proof_bytes,
+        asset_scale=asset_scale,
+    )
+
+
 @dataclass(frozen=True)
 class OfflineReadiness:
     """Snapshot-bound offline readiness for one asset definition."""
@@ -3272,6 +3682,7 @@ class OfflineReadiness:
     active_unshield_verifier: Optional[OfflineActiveUnshieldVerifier]
     active_recursive_step_eq_verifier: Optional[OfflineActiveRecursiveStepEqVerifier]
     active_recursive_step_ep_verifier: Optional[OfflineActiveRecursiveStepEpVerifier]
+    artifact_set: Optional[OfflineAuthenticatedArtifactSet]
     proof_backend_available: bool
     recursive_lineage_supported: bool
     ready: bool
@@ -3303,6 +3714,7 @@ class OfflineReadiness:
                 "active_unshield_verifier",
                 "active_recursive_step_eq_verifier",
                 "active_recursive_step_ep_verifier",
+                "artifact_set",
                 "proof_backend_available",
                 "recursive_lineage_supported",
                 "ready",
@@ -3399,7 +3811,16 @@ class OfflineReadiness:
                 )
             )
         for field, verifier in parsed_verifiers.items():
-            if verifier is not None and verifier.circuit_id != _KAGEMUSHA_VERIFIER_CIRCUITS[field]:
+            if verifier is None:
+                continue
+            if (
+                verifier.id.backend != _KAGEMUSHA_VERIFIER_BACKEND
+                or verifier.id.name != _KAGEMUSHA_VERIFIER_ROLES[field]
+            ):
+                raise RuntimeError(
+                    f"{context}.{field}.id does not match its production Kagemusha role"
+                )
+            if verifier.circuit_id != _KAGEMUSHA_VERIFIER_CIRCUITS[field]:
                 raise RuntimeError(
                     f"{context}.{field}.circuit_id does not match its Kagemusha role"
                 )
@@ -3410,11 +3831,71 @@ class OfflineReadiness:
         active_recursive_step_ep_verifier = parsed_verifiers[
             "active_recursive_step_ep_verifier"
         ]
+        raw_artifact_set = _offline_required(record, "artifact_set", context)
+        artifact_set = (
+            None
+            if raw_artifact_set is None
+            else _offline_authenticated_artifact_set(
+                raw_artifact_set,
+                evaluated_block_height,
+                f"{context}.artifact_set",
+            )
+        )
         active_records = [verifier for verifier in parsed_verifiers.values() if verifier is not None]
         if len({(record.id.backend, record.id.name) for record in active_records}) != len(active_records):
             raise RuntimeError(f"{context} must not reuse a verifier id across roles")
         if len({record.commitment for record in active_records}) != len(active_records):
             raise RuntimeError(f"{context} must not reuse a verifier commitment across roles")
+        if len({record.public_inputs_schema_hash for record in active_records}) != len(
+            active_records
+        ):
+            raise RuntimeError(
+                f"{context} must not reuse a verifier public-input schema hash across roles"
+            )
+        recursive_verifiers = (
+            active_recursive_step_eq_verifier,
+            active_recursive_step_ep_verifier,
+        )
+        if (recursive_verifiers[0] is None) != (recursive_verifiers[1] is None):
+            raise RuntimeError(
+                f"{context} must report the ABI-21 V4 recursive verifier pair atomically"
+            )
+        if artifact_set is None:
+            if any(verifier is not None for verifier in recursive_verifiers):
+                raise RuntimeError(
+                    f"{context}.artifact_set must accompany the ABI-21 V4 recursive verifier pair"
+                )
+        else:
+            if any(verifier is None for verifier in recursive_verifiers):
+                raise RuntimeError(
+                    f"{context}.artifact_set requires the ABI-21 V4 recursive verifier pair"
+                )
+            if asset_scale != artifact_set.asset_scale:
+                raise RuntimeError(
+                    f"{context}.artifact_set.asset_scale must equal the authoritative asset scale"
+                )
+            for field, verifier in zip(
+                ("active_recursive_step_eq_verifier", "active_recursive_step_ep_verifier"),
+                recursive_verifiers,
+            ):
+                if verifier is None:
+                    raise RuntimeError(
+                        f"{context}.{field} is required with the ABI-21 V4 artifact set"
+                    )
+                if verifier.version == 0:
+                    raise RuntimeError(f"{context}.{field}.version must be positive for ABI-21 V4")
+                if verifier.max_proof_bytes != artifact_set.max_proof_bytes:
+                    raise RuntimeError(
+                        f"{context}.{field}.max_proof_bytes must equal artifact_set.max_proof_bytes"
+                    )
+                if verifier.activation_height != artifact_set.activation_height:
+                    raise RuntimeError(
+                        f"{context}.{field}.activation_height must equal artifact_set.activation_height"
+                    )
+                if verifier.withdrawal_height != artifact_set.withdrawal_height:
+                    raise RuntimeError(
+                        f"{context}.{field}.withdrawal_height must equal artifact_set.withdrawal_height"
+                    )
         proof_backend_available = _offline_required(
             record, "proof_backend_available", context
         )
@@ -3461,8 +3942,23 @@ class OfflineReadiness:
                     f"{blocker_context}.message must not exceed 1024 Unicode characters"
                 )
             blockers.append(OfflineReadinessBlocker(code=code, message=message))
-        if ready != (len(blockers) == 0):
-            raise RuntimeError(f"{context}.ready must be true exactly when blockers is empty")
+        recursive_registry_codes = blocker_codes & {
+            "recursive_v4_registry_unavailable",
+            "recursive_v4_registry_malformed",
+        }
+        if artifact_set is None:
+            if len(recursive_registry_codes) != 1:
+                raise RuntimeError(
+                    f"{context}.artifact_set null requires exactly one ABI-21 V4 registry blocker"
+                )
+            if proof_backend_available:
+                raise RuntimeError(
+                    f"{context}.proof_backend_available requires an authenticated artifact_set"
+                )
+        elif recursive_registry_codes:
+            raise RuntimeError(
+                f"{context}.artifact_set contradicts the ABI-21 V4 registry blocker set"
+            )
         if ("asset_scale_unavailable" in blocker_codes) != (asset_scale is None):
             raise RuntimeError(
                 f"{context}.asset_scale_unavailable must be present exactly when asset_scale is null"
@@ -3501,30 +3997,37 @@ class OfflineReadiness:
             raise RuntimeError(
                 f"{context}.proof_backend_available contradicts the blocker set"
             )
-        expected_recursive_lineage = (
+        expected_recursive_lineage_supported = (
             proof_backend_available
+            and artifact_set is not None
             and active_recursive_step_eq_verifier is not None
             and active_recursive_step_ep_verifier is not None
         )
-        if recursive_lineage_supported != expected_recursive_lineage:
+        if recursive_lineage_supported != expected_recursive_lineage_supported:
             raise RuntimeError(
-                f"{context}.recursive_lineage_supported contradicts the recursive verifier state"
+                f"{context}.recursive_lineage_supported must equal the exact authenticated ABI-21 lineage conjunction"
             )
-        if ("recursive_lineage_unavailable" in blocker_codes) == recursive_lineage_supported:
+        lineage_blocked = "recursive_lineage_unavailable" in blocker_codes
+        if lineage_blocked == recursive_lineage_supported:
             raise RuntimeError(
                 f"{context}.recursive_lineage_supported contradicts the blocker set"
             )
-        if ready and (
-            asset_scale is None
-            or asset_scale > _OFFLINE_MAX_ASSET_SCALE
-            or active_transfer_verifier is None
-            or active_topup_shield_verifier is None
-            or active_unshield_verifier is None
-            or not proof_backend_available
-            or not recursive_lineage_supported
-        ):
+        expected_ready = (
+            proof_backend_available
+            and recursive_lineage_supported
+            and artifact_set is not None
+            and asset_scale is not None
+            and asset_scale <= _OFFLINE_MAX_ASSET_SCALE
+            and active_transfer_verifier is not None
+            and active_topup_shield_verifier is not None
+            and active_unshield_verifier is not None
+            and active_recursive_step_eq_verifier is not None
+            and active_recursive_step_ep_verifier is not None
+            and not blockers
+        )
+        if ready != expected_ready:
             raise RuntimeError(
-                f"{context}.ready requires a supported scale and active transfer and top-up shield verifiers"
+                f"{context}.ready must equal the complete ABI-21 runtime conjunction"
             )
         return cls(
             required_bridge_abi_version=required_bridge_abi_version,
@@ -3538,6 +4041,7 @@ class OfflineReadiness:
             active_unshield_verifier=active_unshield_verifier,
             active_recursive_step_eq_verifier=active_recursive_step_eq_verifier,
             active_recursive_step_ep_verifier=active_recursive_step_ep_verifier,
+            artifact_set=artifact_set,
             proof_backend_available=proof_backend_available,
             recursive_lineage_supported=recursive_lineage_supported,
             ready=ready,
@@ -3601,9 +4105,10 @@ class OfflineVerifierKeyId:
 
 
 @dataclass(frozen=True)
-class KagemushaArtifactBinding:
-    """Content-addressed recursive proof artifact installation."""
+class KagemushaArtifactBindingV4:
+    """Content-addressed ABI-21/V4 recursive proof release."""
 
+    version: Literal[4]
     generation: str
     manifest_sha256: Tuple[int, ...]
 
@@ -3612,7 +4117,7 @@ class KagemushaArtifactBinding:
 class OfflineTopUpAnchor:
     """Closed, cross-checked finalized receipt returned by an applied top-up."""
 
-    version: Literal[2]
+    version: Literal[4]
     chain_id: str
     payer: str
     asset: str
@@ -3625,7 +4130,7 @@ class OfflineTopUpAnchor:
     topup_operation_id: Tuple[int, ...]
     shield_verifier_id: OfflineVerifierKeyId
     shield_verifier_commitment: Tuple[int, ...]
-    artifact_binding: KagemushaArtifactBinding
+    artifact_binding: KagemushaArtifactBindingV4
     finalized_height: int
     finalized_tx_hash: Tuple[int, ...]
     anchor_digest: Tuple[int, ...]
@@ -4750,8 +5255,8 @@ def _offline_top_up_anchor(
     version = _offline_unsigned(
         _offline_required(record, "version", context), f"{context}.version", (1 << 16) - 1
     )
-    if version != 2:
-        raise RuntimeError(f"{context}.version must be 2")
+    if version != 4:
+        raise RuntimeError(f"{context}.version must be 4")
     amount = _offline_scaled_amount_model(
         _offline_required(record, "amount", context), f"{context}.amount"
     )
@@ -4832,8 +5337,15 @@ def _offline_top_up_anchor(
     _offline_exact_object_fields(
         artifact_record,
         artifact_context,
-        required=("generation", "manifest_sha256"),
+        required=("version", "generation", "manifest_sha256"),
     )
+    artifact_version = _offline_unsigned(
+        _offline_required(artifact_record, "version", artifact_context),
+        f"{artifact_context}.version",
+        (1 << 16) - 1,
+    )
+    if artifact_version != 4:
+        raise RuntimeError(f"{artifact_context}.version must be 4")
     artifact_generation = _offline_exact_string(
         _offline_required(artifact_record, "generation", artifact_context),
         f"{artifact_context}.generation",
@@ -4842,7 +5354,8 @@ def _offline_top_up_anchor(
         raise RuntimeError(
             f"{artifact_context}.generation must contain at most 128 UTF-8 bytes"
         )
-    artifact_binding = KagemushaArtifactBinding(
+    artifact_binding = KagemushaArtifactBindingV4(
+        version=4,
         generation=artifact_generation,
         manifest_sha256=_offline_fixed_bytes(
             _offline_required(artifact_record, "manifest_sha256", artifact_context),
@@ -4852,7 +5365,7 @@ def _offline_top_up_anchor(
     )
 
     return OfflineTopUpAnchor(
-        version=2,
+        version=4,
         chain_id=chain_id,
         payer=_offline_exact_string(
             _offline_required(record, "payer", context), f"{context}.payer"
@@ -5463,7 +5976,11 @@ class VpnQuoteCreateRequest:
     def to_payload(self) -> Dict[str, Any]:
         exit_class = "" if self.exit_class is None else self.exit_class
         return {
-            "exit_class": ToriiClient._require_string(exit_class, "vpn quote exit_class")
+            "exit_class": ToriiClient._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn quote exit_class",
+            )
             if exit_class
             else "",
             "metering_public_key_hex": ToriiClient._normalize_hex_string(
@@ -5486,10 +6003,14 @@ class VpnSessionCreateRequest:
     def to_payload(self) -> Dict[str, Any]:
         exit_class = "" if self.exit_class is None else self.exit_class
         return {
-            "exit_class": ToriiClient._require_string(exit_class, "vpn session exit_class")
+            "exit_class": ToriiClient._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn session exit_class",
+            )
             if exit_class
             else "",
-            "quote_id": ToriiClient._normalize_hex_string(
+            "quote_id": ToriiClient._normalize_vpn_canonical_hex_input(
                 self.quote_id,
                 context="vpn session quote_id",
                 expected_length=64,
@@ -5556,7 +6077,7 @@ class VpnProfile:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     settlement_grace_secs: int
     flow_label_bits: int
     padding_budget_ms: int
@@ -5579,7 +6100,7 @@ class VpnQuote:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     route_pushes: List[str]
     excluded_routes: List[str]
     dns_servers: List[str]
@@ -5612,7 +6133,7 @@ class VpnSession:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
+    lease_fee: str
     flow_label_bits: int
     padding_budget_ms: int
     relay_tls_spki_sha256_hex: Optional[str]
@@ -5648,9 +6169,9 @@ class VpnReceipt:
     fee_asset_id: str
     escrow_account_id: str
     operator_account_id: str
-    lease_fee_nanos: int
-    earned_fee_nanos: int
-    refunded_fee_nanos: int
+    lease_fee: str
+    earned_fee: str
+    refunded_fee: str
     lease_id_hex: str
     settle_lease_instruction: Optional[TransactionInstruction]
     tx_instructions: List[TransactionInstruction]
@@ -5739,64 +6260,6 @@ class PipelineTransactionStatusResponse:
         return self.diagnostics[0] if self.diagnostics else None
 
 
-@dataclass(frozen=True)
-class ContractDeployContractReceipt:
-    """One contract receipt returned by ``POST /v1/contracts/deploy``."""
-
-    name: str
-    contract_alias: Optional[str]
-    contract_address: Optional[str]
-    previous_contract_address: Optional[str]
-    kaizen: bool
-    dataspace: Optional[str]
-    deploy_nonce: Optional[int]
-    tx_hash_hex: Optional[str]
-    pipeline_status: Optional[PipelineTransactionStatusResponse]
-    code_hash_hex: str
-    abi_hash_hex: str
-    status: str
-
-
-@dataclass(frozen=True)
-class ContractDeployHajimariCallReceipt:
-    """One hajimari-call receipt returned by ``POST /v1/contracts/deploy``."""
-
-    id: str
-    contract_alias: Optional[str]
-    entrypoint: Optional[str]
-    tx_hash_hex: Optional[str]
-    pipeline_status: Optional[PipelineTransactionStatusResponse]
-    status: str
-
-
-@dataclass(frozen=True)
-class ContractDeployAssertionReceipt:
-    """One assertion receipt returned by ``POST /v1/contracts/deploy``."""
-
-    id: str
-    contract_alias: Optional[str]
-    entrypoint: Optional[str]
-    status: str
-    actual_result: Any
-    expected_result: Any
-    error: Optional[str]
-
-
-@dataclass(frozen=True)
-class ContractDeployResponse:
-    """Canonical bundle receipt returned by ``POST /v1/contracts/deploy``."""
-
-    ok: bool
-    bundle_name: str
-    bundle_digest: str
-    chain_fingerprint: str
-    dry_run: bool
-    completed_stages: List[str]
-    failure_point: Optional[str]
-    contracts: List[ContractDeployContractReceipt]
-    hajimari_calls: List[ContractDeployHajimariCallReceipt]
-    assertions: List[ContractDeployAssertionReceipt]
-
 
 @dataclass(frozen=True)
 class ContractOperationReceipt:
@@ -5815,8 +6278,7 @@ class ContractOperationReceipt:
     entrypoint_hash_hex: Optional[str]
     gas_limit: Optional[int]
     gas_used: Optional[int]
-    gas_asset_id: Optional[str]
-    fee_sponsor: Optional[str]
+    fee_payment: Optional[Dict[str, Any]]
     payload_digest_hex: str
 
 
@@ -6316,6 +6778,7 @@ class SumeragiV2QcReference:
     """Stable semantic reference to a v2 quorum certificate."""
 
     round: SumeragiV2Round
+    proposal_round: SumeragiV2Round
     phase: str
     subject: SumeragiV2BlockSubject
     execution_commitment: SumeragiV2ExecutionCommitment
@@ -6353,6 +6816,102 @@ class SumeragiV2CommitQcStatus:
     min_signers: int
     signed_power: int
     total_power: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2VoteQuorumStatus:
+    """Partial dual quorum for one exact round and proposal."""
+
+    round: SumeragiV2Round
+    proposal_round: SumeragiV2Round
+    subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
+    signer_count: int
+    signed_power: int
+    min_signers: int
+    total_power: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2TimeoutQuorumStatus:
+    """Partial timeout quorum for one exact round."""
+
+    round: SumeragiV2Round
+    signer_count: int
+    signed_power: int
+    min_signers: int
+    total_power: int
+    certificate_formed: bool
+
+
+@dataclass(frozen=True)
+class SumeragiV2OutboundIntentStatus:
+    """Durable outbound protocol intent and its delivery stage."""
+
+    kind: str
+    round: SumeragiV2Round
+    proposal_round: Optional[SumeragiV2Round]
+    subject: Optional[SumeragiV2BlockSubject]
+    execution_commitment: Optional[SumeragiV2ExecutionCommitment]
+    stage: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2WorkStatus:
+    """Local terminating-work stages for the active height."""
+
+    candidate: str
+    body_recovery: str
+    body_store: str
+    validation: str
+    application: str
+    successor_height: str
+
+
+@dataclass(frozen=True)
+class SumeragiV2QueueLivenessStatus:
+    """Occupancy and accumulated oldest-item service debt for one bounded queue."""
+
+    queue: str
+    depth: int
+    capacity: int
+    oldest_age_ms: Optional[int]
+    service_debt: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2ProgressTransitionStatus:
+    """Last tracked reducer transition and its local age."""
+
+    generation: int
+    round: SumeragiV2Round
+    transition: str
+    age_ms: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2IgnoreCount:
+    """Per-height count for one closed reducer ignore reason."""
+
+    reason: str
+    count: int
+
+
+@dataclass(frozen=True)
+class SumeragiV2LivenessStatus:
+    """Authoritative progress diagnostics for the active height."""
+
+    generation: int
+    prepare_quorums: List[SumeragiV2VoteQuorumStatus]
+    commit_quorums: List[SumeragiV2VoteQuorumStatus]
+    timeout_quorums: List[SumeragiV2TimeoutQuorumStatus]
+    outbound_intents: List[SumeragiV2OutboundIntentStatus]
+    work: SumeragiV2WorkStatus
+    queues: List[SumeragiV2QueueLivenessStatus]
+    last_progress: Optional[SumeragiV2ProgressTransitionStatus]
+    no_progress_age_ms: int
+    blocker: Optional[str]
+    ignore_counts: List[SumeragiV2IgnoreCount]
 
 
 @dataclass(frozen=True)
@@ -6417,6 +6976,7 @@ class SumeragiV2Status:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: Tuple[str]
     height: int
     view: int
@@ -6431,6 +6991,7 @@ class SumeragiV2Status:
     last_committed_subject: Optional[SumeragiV2BlockSubject]
     height_context: SumeragiV2HeightContextStatus
     last_commit_qc: Optional[SumeragiV2CommitQcStatus]
+    liveness: SumeragiV2LivenessStatus
     safety_halt: SumeragiSafetyHaltStatus
     lane_settlement_commitments: List[Dict[str, Any]]
     lane_relay_envelopes: List[Dict[str, Any]]
@@ -6509,13 +7070,7 @@ class PipelinePreflightFees:
     per_byte_fee: Any
     per_instruction_fee: Any
     per_gas_unit_fee: Any
-    sponsorship_enabled: bool
-    sponsor_max_fee: Any
-    sponsor_verified_balance_safety_floor: Any
-    canonical_sponsor_account_id: Optional[str]
-    fee_receipts_activation_height: int
-    external_settlement_enabled: bool
-    burn_from_unix_timestamp_ms: int
+    sponsor_vault_custody_account_id: str
     settlement_mode: str
     successful_claim_fee_exempt_authorities: List[str]
 
@@ -6553,7 +7108,6 @@ class _SumeragiV2StatusParser:
     MAX_NATIVE_AMX_PARTICIPANT_SETTLEMENT_RECEIPTS = 4096
     MAX_U32 = (1 << 32) - 1
     MAX_U64 = (1 << 64) - 1
-    MAX_U128 = (1 << 128) - 1
 
     @classmethod
     def parse(cls, payload: Any) -> SumeragiV2Status:
@@ -6563,6 +7117,7 @@ class _SumeragiV2StatusParser:
             "node_fingerprint",
             "build_fingerprint",
             "config_fingerprint",
+            "restart_required",
             "height_context_id",
             "height",
             "view",
@@ -6577,6 +7132,7 @@ class _SumeragiV2StatusParser:
             "last_committed_subject",
             "height_context",
             "last_commit_qc",
+            "liveness",
             "safety_halt",
             "lane_settlement_commitments",
             "lane_relay_envelopes",
@@ -6600,8 +7156,14 @@ class _SumeragiV2StatusParser:
 
         height = cls._unsigned(record.get("height"), "sumeragi.height")
         view = cls._unsigned(record.get("view"), "sumeragi.view")
+        height_context_id = cls._context_id(
+            record.get("height_context_id"), "sumeragi.height_context_id"
+        )
         leader = cls._unsigned(
             record.get("leader"), "sumeragi.leader", maximum=cls.MAX_U32
+        )
+        restart_required = cls._boolean(
+            record.get("restart_required"), "sumeragi.restart_required"
         )
         height_context = cls._height_context(
             record.get("height_context"), context="sumeragi.height_context"
@@ -6643,18 +7205,31 @@ class _SumeragiV2StatusParser:
                     "sumeragi committed subject and QC must be absent at height zero"
                 )
         else:
-            if last_subject is None or last_commit is None:
+            if (last_subject is None) != (last_commit is None):
                 raise RuntimeError(
-                    "sumeragi committed subject and QC are required after height zero"
+                    "sumeragi committed subject and QC are required together when either is present after height zero"
                 )
             if (
-                last_commit.certificate.phase != "commit"
-                or last_commit.certificate.round.height != last_committed_height
-                or last_commit.certificate.subject != last_subject
+                last_subject is not None
+                and last_commit is not None
+                and (
+                    last_commit.certificate.phase != "commit"
+                    or last_commit.certificate.round.height != last_committed_height
+                    or last_commit.certificate.subject != last_subject
+                )
             ):
                 raise RuntimeError(
                     "sumeragi.last_commit_qc does not certify the committed subject"
                 )
+
+        liveness = cls._liveness(
+            record.get("liveness"),
+            context="sumeragi.liveness",
+            height=height,
+            view=view,
+            context_id=height_context_id,
+            height_context=height_context,
+        )
 
         return SumeragiV2Status(
             protocol_version=protocol_version,
@@ -6667,9 +7242,8 @@ class _SumeragiV2StatusParser:
             config_fingerprint=cls._hash(
                 record.get("config_fingerprint"), "sumeragi.config_fingerprint"
             ),
-            height_context_id=cls._context_id(
-                record.get("height_context_id"), "sumeragi.height_context_id"
-            ),
+            restart_required=restart_required,
+            height_context_id=height_context_id,
             height=height,
             view=view,
             phase=cls._tagged(
@@ -6719,6 +7293,7 @@ class _SumeragiV2StatusParser:
             last_committed_subject=last_subject,
             height_context=height_context,
             last_commit_qc=last_commit,
+            liveness=liveness,
             safety_halt=cls._safety_halt(
                 record.get("safety_halt"), context="sumeragi.safety_halt"
             ),
@@ -6737,6 +7312,499 @@ class _SumeragiV2StatusParser:
                 record.get("local_peer_removed"), "sumeragi.local_peer_removed"
             ),
             operator=cls._operator(record.get("operator"), context="sumeragi.operator"),
+        )
+
+    @classmethod
+    def _liveness(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        height: int,
+        view: int,
+        context_id: Tuple[str],
+        height_context: SumeragiV2HeightContextStatus,
+    ) -> SumeragiV2LivenessStatus:
+        record = cls._mapping(value, context)
+        liveness_fields = {
+            "generation",
+            "prepare_quorums",
+            "commit_quorums",
+            "timeout_quorums",
+            "outbound_intents",
+            "work",
+            "queues",
+            "last_progress",
+            "no_progress_age_ms",
+            "blocker",
+            "ignore_counts",
+        }
+        unknown_liveness_fields = set(record) - liveness_fields
+        if unknown_liveness_fields:
+            raise RuntimeError(
+                f"{context} contains unknown field {sorted(unknown_liveness_fields)[0]}"
+            )
+        missing_liveness_fields = (
+            liveness_fields - {"last_progress", "blocker"} - set(record)
+        )
+        if missing_liveness_fields:
+            raise RuntimeError(
+                f"{context} is missing required field {sorted(missing_liveness_fields)[0]}"
+            )
+        generation = cls._unsigned(record.get("generation"), f"{context}.generation")
+
+        def bound_round(raw: Any, round_context: str) -> SumeragiV2Round:
+            parsed = cls._round(raw, context=round_context)
+            if parsed.context_id != context_id or parsed.height != height:
+                raise RuntimeError(f"{round_context} must match the active height context")
+            return parsed
+
+        def checked_round(raw: Any, round_context: str) -> SumeragiV2Round:
+            parsed = bound_round(raw, round_context)
+            if parsed.view > view:
+                raise RuntimeError(f"{round_context}.view must not exceed the active view")
+            return parsed
+
+        def vote_quorum(
+            raw: Any, quorum_context: str, *, phase: str
+        ) -> SumeragiV2VoteQuorumStatus:
+            quorum = cls._exact_mapping(
+                raw,
+                quorum_context,
+                {
+                    "round",
+                    "proposal_round",
+                    "subject",
+                    "execution_commitment",
+                    "signer_count",
+                    "signed_power",
+                    "min_signers",
+                    "total_power",
+                },
+            )
+            signer_count = cls._unsigned(
+                quorum.get("signer_count"),
+                f"{quorum_context}.signer_count",
+                maximum=height_context.validator_count,
+            )
+            min_signers = cls._unsigned(
+                quorum.get("min_signers"),
+                f"{quorum_context}.min_signers",
+                maximum=cls.MAX_U32,
+            )
+            signed_power = cls._unsigned(
+                quorum.get("signed_power"), f"{quorum_context}.signed_power"
+            )
+            total_power = cls._unsigned(
+                quorum.get("total_power"), f"{quorum_context}.total_power"
+            )
+            if (
+                min_signers != height_context.min_signers
+                or total_power != height_context.total_power
+                or signed_power < signer_count
+                or signed_power > total_power
+                or (height_context.mode == "permissioned" and signed_power != signer_count)
+            ):
+                raise RuntimeError(f"{quorum_context} disagrees with the frozen dual quorum")
+            round_ = checked_round(quorum.get("round"), f"{quorum_context}.round")
+            proposal_round = checked_round(
+                quorum.get("proposal_round"), f"{quorum_context}.proposal_round"
+            )
+            cls._validate_proposal_round(
+                proposal_round,
+                round_,
+                context=quorum_context,
+                require_equal=phase == "prepare",
+            )
+            return SumeragiV2VoteQuorumStatus(
+                round=round_,
+                proposal_round=proposal_round,
+                subject=cls._subject(
+                    quorum.get("subject"), context=f"{quorum_context}.subject"
+                ),
+                execution_commitment=cls._execution_commitment(
+                    quorum.get("execution_commitment"),
+                    context=f"{quorum_context}.execution_commitment",
+                ),
+                signer_count=signer_count,
+                signed_power=signed_power,
+                min_signers=min_signers,
+                total_power=total_power,
+            )
+
+        def vote_quorums(field: str, *, phase: str) -> List[SumeragiV2VoteQuorumStatus]:
+            raw_values = cls._array(
+                record.get(field), f"{context}.{field}", maximum=cls.MAX_VALIDATORS
+            )
+            return [
+                vote_quorum(item, f"{context}.{field}[{index}]", phase=phase)
+                for index, item in enumerate(raw_values)
+            ]
+
+        raw_timeouts = cls._array(
+            record.get("timeout_quorums"),
+            f"{context}.timeout_quorums",
+            maximum=cls.MAX_VALIDATORS,
+        )
+        timeout_quorums: List[SumeragiV2TimeoutQuorumStatus] = []
+        for index, raw in enumerate(raw_timeouts):
+            item_context = f"{context}.timeout_quorums[{index}]"
+            item = cls._exact_mapping(
+                raw,
+                item_context,
+                {
+                    "round",
+                    "signer_count",
+                    "signed_power",
+                    "min_signers",
+                    "total_power",
+                    "certificate_formed",
+                },
+            )
+            signer_count = cls._unsigned(
+                item.get("signer_count"),
+                f"{item_context}.signer_count",
+                maximum=height_context.validator_count,
+            )
+            signed_power = cls._unsigned(
+                item.get("signed_power"), f"{item_context}.signed_power"
+            )
+            min_signers = cls._unsigned(
+                item.get("min_signers"), f"{item_context}.min_signers"
+            )
+            total_power = cls._unsigned(
+                item.get("total_power"), f"{item_context}.total_power"
+            )
+            formed = cls._boolean(
+                item.get("certificate_formed"), f"{item_context}.certificate_formed"
+            )
+            if (
+                min_signers != height_context.min_signers
+                or total_power != height_context.total_power
+                or signed_power < signer_count
+                or signed_power > total_power
+                or (height_context.mode == "permissioned" and signed_power != signer_count)
+                or (
+                    formed
+                    and (
+                        signer_count < min_signers
+                        or signed_power * 3 <= total_power * 2
+                    )
+                )
+            ):
+                raise RuntimeError(f"{item_context} is not a valid partial timeout quorum")
+            timeout_quorums.append(
+                SumeragiV2TimeoutQuorumStatus(
+                    round=checked_round(item.get("round"), f"{item_context}.round"),
+                    signer_count=signer_count,
+                    signed_power=signed_power,
+                    min_signers=min_signers,
+                    total_power=total_power,
+                    certificate_formed=formed,
+                )
+            )
+
+        raw_outbound = cls._array(
+            record.get("outbound_intents"), f"{context}.outbound_intents", maximum=7
+        )
+        outbound_intents: List[SumeragiV2OutboundIntentStatus] = []
+        proposal_kinds = {
+            "proposal",
+            "prepare_vote",
+            "commit_vote",
+            "prepare_qc",
+            "commit_qc",
+        }
+        for index, raw in enumerate(raw_outbound):
+            item_context = f"{context}.outbound_intents[{index}]"
+            item = cls._mapping(raw, item_context)
+            outbound_fields = {
+                "kind",
+                "round",
+                "proposal_round",
+                "subject",
+                "execution_commitment",
+                "stage",
+            }
+            if set(item) - outbound_fields:
+                raise RuntimeError(f"{item_context} contains an unknown field")
+            if {"kind", "round", "stage"} - set(item):
+                raise RuntimeError(f"{item_context} is missing a required field")
+            kind = cls._tagged(
+                item.get("kind"),
+                tag="kind",
+                allowed=proposal_kinds | {"timeout_vote", "timeout_certificate"},
+                context=f"{item_context}.kind",
+            )
+            stage = cls._tagged(
+                item.get("stage"),
+                tag="stage",
+                allowed={"pending_persistence", "pending_signature", "queued", "sent"},
+                context=f"{item_context}.stage",
+            )
+            raw_subject = item.get("subject")
+            raw_execution = item.get("execution_commitment")
+            raw_proposal_round = item.get("proposal_round")
+            carries_proposal_round = kind in proposal_kinds
+            if carries_proposal_round != (raw_proposal_round is not None):
+                raise RuntimeError(
+                    f"{item_context} has inconsistent proposal_round for {kind}"
+                )
+            shape_is_valid = (
+                (kind == "proposal" and raw_subject is not None and raw_execution is None)
+                or (
+                    kind in proposal_kinds - {"proposal"}
+                    and raw_subject is not None
+                    and raw_execution is not None
+                )
+                or (
+                    kind not in proposal_kinds
+                    and raw_subject is None
+                    and raw_execution is None
+                )
+            )
+            if not shape_is_valid:
+                raise RuntimeError(f"{item_context} has inconsistent proposal fields")
+            round_ = bound_round(item.get("round"), f"{item_context}.round")
+            if kind != "commit_qc" and round_.view > view:
+                raise RuntimeError(
+                    f"{item_context}.round.view must not exceed the active view"
+                )
+            proposal_round = (
+                None
+                if raw_proposal_round is None
+                else bound_round(
+                    raw_proposal_round, f"{item_context}.proposal_round"
+                )
+            )
+            if proposal_round is not None:
+                cls._validate_proposal_round(
+                    proposal_round,
+                    round_,
+                    context=item_context,
+                    require_equal=kind in {"proposal", "prepare_vote", "prepare_qc"},
+                )
+            outbound_intents.append(
+                SumeragiV2OutboundIntentStatus(
+                    kind=kind,
+                    round=round_,
+                    proposal_round=proposal_round,
+                    subject=(
+                        None
+                        if raw_subject is None
+                        else cls._subject(raw_subject, context=f"{item_context}.subject")
+                    ),
+                    execution_commitment=(
+                        None
+                        if raw_execution is None
+                        else cls._execution_commitment(
+                            raw_execution,
+                            context=f"{item_context}.execution_commitment",
+                        )
+                    ),
+                    stage=stage,
+                )
+            )
+
+        raw_work = cls._exact_mapping(
+            record.get("work"),
+            f"{context}.work",
+            {
+                "candidate",
+                "body_recovery",
+                "body_store",
+                "validation",
+                "application",
+                "successor_height",
+            },
+        )
+        work_stage_names = {"idle", "queued", "running", "complete"}
+        parsed_work = {
+            field: cls._tagged(
+                raw_work.get(field),
+                tag="stage",
+                allowed=work_stage_names,
+                context=f"{context}.work.{field}",
+            )
+            for field in raw_work
+        }
+        work = SumeragiV2WorkStatus(**parsed_work)
+
+        raw_queues = cls._array(record.get("queues"), f"{context}.queues", maximum=10)
+        queues: List[SumeragiV2QueueLivenessStatus] = []
+        queue_names: set[str] = set()
+        for index, raw in enumerate(raw_queues):
+            item_context = f"{context}.queues[{index}]"
+            item = cls._mapping(raw, item_context)
+            queue_fields = {"queue", "depth", "capacity", "oldest_age_ms", "service_debt"}
+            if set(item) - queue_fields:
+                raise RuntimeError(f"{item_context} contains an unknown field")
+            if {"queue", "depth", "capacity", "service_debt"} - set(item):
+                raise RuntimeError(f"{item_context} is missing a required field")
+            queue = cls._tagged(
+                item.get("queue"),
+                tag="queue",
+                allowed={
+                    "ingress",
+                    "deferred_normal",
+                    "deferred_progress",
+                    "deferred_completion",
+                    "runtime_normal",
+                    "runtime_progress",
+                    "runtime_completion",
+                    "effect_completion",
+                    "network_ingress",
+                    "effect_dispatch",
+                },
+                context=f"{item_context}.queue",
+            )
+            if queue in queue_names:
+                raise RuntimeError(f"{item_context}.queue is duplicated")
+            queue_names.add(queue)
+            depth = cls._unsigned(
+                item.get("depth"), f"{item_context}.depth", maximum=cls.MAX_U32
+            )
+            capacity = cls._unsigned(
+                item.get("capacity"),
+                f"{item_context}.capacity",
+                positive=True,
+                maximum=cls.MAX_U32,
+            )
+            oldest_age = cls._optional_unsigned(
+                item.get("oldest_age_ms"), f"{item_context}.oldest_age_ms"
+            )
+            if depth > capacity or (depth == 0) != (oldest_age is None):
+                raise RuntimeError(f"{item_context} has inconsistent occupancy and age")
+            queues.append(
+                SumeragiV2QueueLivenessStatus(
+                    queue=queue,
+                    depth=depth,
+                    capacity=capacity,
+                    oldest_age_ms=oldest_age,
+                    service_debt=cls._unsigned(
+                        item.get("service_debt"), f"{item_context}.service_debt"
+                    ),
+                )
+            )
+
+        raw_progress = record.get("last_progress")
+        last_progress: Optional[SumeragiV2ProgressTransitionStatus] = None
+        if raw_progress is not None:
+            progress = cls._exact_mapping(
+                raw_progress,
+                f"{context}.last_progress",
+                {"generation", "round", "transition", "age_ms"},
+            )
+            progress_generation = cls._unsigned(
+                progress.get("generation"), f"{context}.last_progress.generation"
+            )
+            if progress_generation > generation:
+                raise RuntimeError(f"{context}.last_progress.generation is from the future")
+            last_progress = SumeragiV2ProgressTransitionStatus(
+                generation=progress_generation,
+                round=checked_round(
+                    progress.get("round"), f"{context}.last_progress.round"
+                ),
+                transition=cls._tagged(
+                    progress.get("transition"),
+                    tag="transition",
+                    allowed={
+                        "proposal_admitted",
+                        "body_available",
+                        "body_stored",
+                        "body_validated",
+                        "prepare_vote_admitted",
+                        "commit_vote_admitted",
+                        "timeout_vote_admitted",
+                        "prepare_quorum",
+                        "lock_installed",
+                        "commit_quorum",
+                        "timeout_certificate_installed",
+                        "decision_persisted",
+                        "applied",
+                        "successor_height_activated",
+                        "recovery_replayed",
+                    },
+                    context=f"{context}.last_progress.transition",
+                ),
+                age_ms=cls._unsigned(
+                    progress.get("age_ms"), f"{context}.last_progress.age_ms"
+                ),
+            )
+
+        raw_blocker = record.get("blocker")
+        blocker = (
+            None
+            if raw_blocker is None
+            else cls._tagged(
+                raw_blocker,
+                tag="blocker",
+                allowed={
+                    "missing_proposal",
+                    "body_unavailable",
+                    "prepare_quorum_missing",
+                    "commit_quorum_missing",
+                    "timeout_certificate_missing",
+                    "scheduler_starvation",
+                    "application_pending",
+                    "local_control_pending",
+                },
+                context=f"{context}.blocker",
+            )
+        )
+
+        raw_ignore = cls._array(
+            record.get("ignore_counts"), f"{context}.ignore_counts", maximum=12
+        )
+        ignore_counts: List[SumeragiV2IgnoreCount] = []
+        ignore_reasons: set[str] = set()
+        allowed_ignore_reasons = {
+            "wrong_height",
+            "wrong_view",
+            "stale_generation",
+            "busy",
+            "duplicate",
+            "no_matching_work",
+            "observer",
+            "view_closed",
+            "already_decided",
+            "recovery_pending",
+            "irrelevant_view",
+            "unsafe_proposal",
+        }
+        for index, raw in enumerate(raw_ignore):
+            item_context = f"{context}.ignore_counts[{index}]"
+            item = cls._exact_mapping(raw, item_context, {"reason", "count"})
+            reason = cls._tagged(
+                item.get("reason"),
+                tag="reason",
+                allowed=allowed_ignore_reasons,
+                context=f"{item_context}.reason",
+            )
+            if reason in ignore_reasons:
+                raise RuntimeError(f"{item_context}.reason is duplicated")
+            ignore_reasons.add(reason)
+            ignore_counts.append(
+                SumeragiV2IgnoreCount(
+                    reason=reason,
+                    count=cls._unsigned(item.get("count"), f"{item_context}.count"),
+                )
+            )
+
+        return SumeragiV2LivenessStatus(
+            generation=generation,
+            prepare_quorums=vote_quorums("prepare_quorums", phase="prepare"),
+            commit_quorums=vote_quorums("commit_quorums", phase="commit"),
+            timeout_quorums=timeout_quorums,
+            outbound_intents=outbound_intents,
+            work=work,
+            queues=queues,
+            last_progress=last_progress,
+            no_progress_age_ms=cls._unsigned(
+                record.get("no_progress_age_ms"), f"{context}.no_progress_age_ms"
+            ),
+            blocker=blocker,
+            ignore_counts=ignore_counts,
         )
 
     @staticmethod
@@ -6843,12 +7911,8 @@ class _SumeragiV2StatusParser:
         return value
 
     @classmethod
-    def _decimal_u128(cls, value: Any, context: str) -> str:
-        if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
-            raise RuntimeError(f"{context} must be a canonical unsigned decimal string")
-        if int(value, 10) > cls.MAX_U128:
-            raise RuntimeError(f"{context} exceeds u128")
-        return value
+    def _quantity(cls, value: Any, context: str) -> str:
+        return _canonical_quantity(value, context)
 
     @staticmethod
     def _numeric(value: Any, context: str) -> str:
@@ -7000,6 +8064,30 @@ class _SumeragiV2StatusParser:
             view=cls._unsigned(record.get("view"), f"{context}.view"),
         )
 
+    @staticmethod
+    def _validate_proposal_round(
+        proposal_round: SumeragiV2Round,
+        round_: SumeragiV2Round,
+        *,
+        context: str,
+        require_equal: bool,
+    ) -> None:
+        if (
+            proposal_round.context_id != round_.context_id
+            or proposal_round.height != round_.height
+        ):
+            raise RuntimeError(
+                f"{context}.proposal_round must match round context and height"
+            )
+        if proposal_round.view > round_.view:
+            raise RuntimeError(
+                f"{context}.proposal_round.view must not exceed round.view"
+            )
+        if require_equal and proposal_round != round_:
+            raise RuntimeError(
+                f"{context}.proposal_round must equal round for prepare"
+            )
+
     @classmethod
     def _subject(cls, value: Any, *, context: str) -> SumeragiV2BlockSubject:
         record = cls._mapping(value, context)
@@ -7019,14 +8107,26 @@ class _SumeragiV2StatusParser:
     @classmethod
     def _qc(cls, value: Any, *, context: str) -> SumeragiV2QcReference:
         record = cls._mapping(value, context)
+        round_ = cls._round(record.get("round"), context=f"{context}.round")
+        proposal_round = cls._round(
+            record.get("proposal_round"), context=f"{context}.proposal_round"
+        )
+        phase = cls._tagged(
+            record.get("phase"),
+            tag="phase",
+            allowed={"prepare", "commit"},
+            context=f"{context}.phase",
+        )
+        cls._validate_proposal_round(
+            proposal_round,
+            round_,
+            context=context,
+            require_equal=phase == "prepare",
+        )
         return SumeragiV2QcReference(
-            round=cls._round(record.get("round"), context=f"{context}.round"),
-            phase=cls._tagged(
-                record.get("phase"),
-                tag="phase",
-                allowed={"prepare", "commit"},
-                context=f"{context}.phase",
-            ),
+            round=round_,
+            proposal_round=proposal_round,
+            phase=phase,
             subject=cls._subject(record.get("subject"), context=f"{context}.subject"),
             execution_commitment=cls._execution_commitment(
                 record.get("execution_commitment"),
@@ -7271,10 +8371,10 @@ class _SumeragiV2StatusParser:
                 "lane_incarnation",
                 "dataspace_id",
                 "tx_count",
-                "total_local_micro",
-                "total_xor_due_micro",
-                "total_xor_after_haircut_micro",
-                "total_xor_variance_micro",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
                 "swap_metadata",
                 "receipts",
                 "nexus_fee_receipts",
@@ -7303,20 +8403,29 @@ class _SumeragiV2StatusParser:
                 receipt_context,
                 {
                     "source_id",
-                    "local_amount_micro",
-                    "xor_due_micro",
-                    "xor_after_haircut_micro",
-                    "xor_variance_micro",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
                     "timestamp_ms",
                 },
             )
             receipts.append(
                 {
                     "source_id": cls._byte32(receipt.get("source_id"), f"{receipt_context}.source_id"),
-                    "local_amount_micro": cls._decimal_u128(receipt.get("local_amount_micro"), f"{receipt_context}.local_amount_micro"),
-                    "xor_due_micro": cls._decimal_u128(receipt.get("xor_due_micro"), f"{receipt_context}.xor_due_micro"),
-                    "xor_after_haircut_micro": cls._decimal_u128(receipt.get("xor_after_haircut_micro"), f"{receipt_context}.xor_after_haircut_micro"),
-                    "xor_variance_micro": cls._decimal_u128(receipt.get("xor_variance_micro"), f"{receipt_context}.xor_variance_micro"),
+                    "local_amount": cls._quantity(
+                        receipt.get("local_amount"),
+                        f"{receipt_context}.local_amount",
+                    ),
+                    "xor_due": cls._quantity(receipt.get("xor_due"), f"{receipt_context}.xor_due"),
+                    "xor_after_haircut": cls._quantity(
+                        receipt.get("xor_after_haircut"),
+                        f"{receipt_context}.xor_after_haircut",
+                    ),
+                    "xor_variance": cls._quantity(
+                        receipt.get("xor_variance"),
+                        f"{receipt_context}.xor_variance",
+                    ),
                     "timestamp_ms": cls._unsigned(receipt.get("timestamp_ms"), f"{receipt_context}.timestamp_ms"),
                 }
             )
@@ -7422,10 +8531,17 @@ class _SumeragiV2StatusParser:
             "lane_incarnation": lane_incarnation,
             "dataspace_id": dataspace_id,
             "tx_count": cls._unsigned(record.get("tx_count"), f"{context}.tx_count"),
-            "total_local_micro": cls._decimal_u128(record.get("total_local_micro"), f"{context}.total_local_micro"),
-            "total_xor_due_micro": cls._decimal_u128(record.get("total_xor_due_micro"), f"{context}.total_xor_due_micro"),
-            "total_xor_after_haircut_micro": cls._decimal_u128(record.get("total_xor_after_haircut_micro"), f"{context}.total_xor_after_haircut_micro"),
-            "total_xor_variance_micro": cls._decimal_u128(record.get("total_xor_variance_micro"), f"{context}.total_xor_variance_micro"),
+            "total_local_amount": cls._quantity(
+                record.get("total_local_amount"), f"{context}.total_local_amount"
+            ),
+            "total_xor_due": cls._quantity(record.get("total_xor_due"), f"{context}.total_xor_due"),
+            "total_xor_after_haircut": cls._quantity(
+                record.get("total_xor_after_haircut"),
+                f"{context}.total_xor_after_haircut",
+            ),
+            "total_xor_variance": cls._quantity(
+                record.get("total_xor_variance"), f"{context}.total_xor_variance"
+            ),
             "swap_metadata": swap_metadata,
             "receipts": receipts,
             "nexus_fee_receipts": nexus_fee_receipts,
@@ -8096,18 +9212,18 @@ class _SumeragiV2StatusParser:
             or settlement["dataspace_id"] != dataspace_id
             or settlement["lane_incarnation"] != body["participant_lane_incarnation"]
             or settlement["tx_count"] != len(receipts)
-            or settlement["total_local_micro"] != "0"
-            or settlement["total_xor_due_micro"] != "0"
-            or settlement["total_xor_after_haircut_micro"] != "0"
-            or settlement["total_xor_variance_micro"] != "0"
+            or settlement["total_local_amount"] != "0"
+            or settlement["total_xor_due"] != "0"
+            or settlement["total_xor_after_haircut"] != "0"
+            or settlement["total_xor_variance"] != "0"
             or settlement["swap_metadata"] is not None
             or len(set(receipt_sources)) != len(receipt_sources)
             or receipt_sources.count(body["source_id"]) != 1
             or any(
-                receipt["local_amount_micro"] != "0"
-                or receipt["xor_due_micro"] != "0"
-                or receipt["xor_after_haircut_micro"] != "0"
-                or receipt["xor_variance_micro"] != "0"
+                receipt["local_amount"] != "0"
+                or receipt["xor_due"] != "0"
+                or receipt["xor_after_haircut"] != "0"
+                or receipt["xor_variance"] != "0"
                 or receipt["timestamp_ms"] != body["authority_context_height"]
                 for receipt in receipts
             )
@@ -9075,6 +10191,7 @@ class ToriiClient:
         *,
         authority: str,
         destination_proof_b64: str,
+        fee_payment: Mapping[str, Any],
         signature_b64: Optional[str] = None,
         transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
@@ -9087,6 +10204,7 @@ class ToriiClient:
 
         candidate: Dict[str, Any] = {
             "authority": authority,
+            "fee_payment": fee_payment,
             "destination_proof_b64": destination_proof_b64,
         }
         for key, value in (
@@ -9108,6 +10226,7 @@ class ToriiClient:
         *,
         authority: str,
         native_proof_b64: str,
+        fee_payment: Mapping[str, Any],
         signature_b64: Optional[str] = None,
         transaction_payload_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
@@ -9120,6 +10239,7 @@ class ToriiClient:
 
         candidate: Dict[str, Any] = {
             "authority": authority,
+            "fee_payment": fee_payment,
             "native_proof_b64": native_proof_b64,
         }
         for key, value in (
@@ -9394,11 +10514,12 @@ class ToriiClient:
         self,
         request: Union[VpnQuoteCreateRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnQuote:
         """Create a VPN quote carrying the native `OpenVpnLeaseEscrow` instruction."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn quote")
         payload = self._normalize_vpn_quote_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9415,11 +10536,12 @@ class ToriiClient:
         self,
         request: Union[VpnSessionCreateRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnSession:
         """Open a VPN session from a paid quote and matching metering key."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
         payload = self._normalize_vpn_session_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9436,11 +10558,12 @@ class ToriiClient:
         self,
         session_id: Union[str, bytes, bytearray, memoryview],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> Optional[VpnSession]:
         """Fetch an active VPN session, returning `None` when absent."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn session")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -9463,11 +10586,12 @@ class ToriiClient:
         self,
         session_id: Union[str, bytes, bytearray, memoryview],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> Optional[VpnReceipt]:
         """Disconnect a VPN session, returning the canonical lease receipt when present."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
         normalized = self._normalize_hex_string(
             session_id,
             context="vpn session_id",
@@ -9490,11 +10614,12 @@ class ToriiClient:
         self,
         request: Union[VpnReceiptSubmitRequest, Mapping[str, Any]],
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceipt:
         """Submit a relay receipt and receive the native `SettleVpnLease` instruction."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipt")
         payload = self._normalize_vpn_receipt_request(request)
         response = self._vpn_json_request(
             "POST",
@@ -9510,11 +10635,12 @@ class ToriiClient:
     def list_vpn_receipts(
         self,
         *,
-        canonical_auth: Optional[ToriiCanonicalRequestAuth] = None,
+        canonical_auth: ToriiCanonicalRequestAuth,
         headers: Optional[Mapping[str, str]] = None,
     ) -> VpnReceiptListResponse:
         """List recent disconnected or settled VPN lease receipts for the signed account."""
 
+        canonical_auth = self._require_vpn_canonical_auth(canonical_auth, "vpn receipts")
         response = self._vpn_json_request(
             "GET",
             "/v1/vpn/receipts",
@@ -10297,12 +11423,12 @@ class ToriiClient:
         return OfflineReadiness.from_payload(payload, asset)
 
     def submit_kagemusha_top_up(
-        self, request: KagemushaTopUpRequestV2
+        self, request: KagemushaTopUpRequestV4
     ) -> OfflineOperationReference:
         """Submit one canonical typed Norito Kagemusha top-up request."""
 
-        if not isinstance(request, KagemushaTopUpRequestV2):
-            raise TypeError("request must be KagemushaTopUpRequestV2")
+        if not isinstance(request, KagemushaTopUpRequestV4):
+            raise TypeError("request must be KagemushaTopUpRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_TOP_UP_PATH,
             "top_up",
@@ -10311,12 +11437,12 @@ class ToriiClient:
         )
 
     def submit_kagemusha_redeem(
-        self, request: KagemushaRedeemRequestV2
+        self, request: KagemushaRedeemRequestV4
     ) -> OfflineOperationReference:
         """Submit one canonical typed Norito Kagemusha redemption request."""
 
-        if not isinstance(request, KagemushaRedeemRequestV2):
-            raise TypeError("request must be KagemushaRedeemRequestV2")
+        if not isinstance(request, KagemushaRedeemRequestV4):
+            raise TypeError("request must be KagemushaRedeemRequestV4")
         return self._submit_kagemusha_command(
             _OFFLINE_REDEEM_PATH,
             "redeem",
@@ -10573,91 +11699,152 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Contract, governance, and council helpers
     # ------------------------------------------------------------------
-    def deploy_contract(
-        self,
-        *,
-        authority: str,
-        private_key: str,
-        code_b64: str,
-        contract_alias: str,
-        lease_expiry_ms: Optional[int] = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
-        gas_limit: Any = None,
-    ) -> Optional[ContractDeployResponse]:
-        """Deploy bytecode via ``POST /v1/contracts/deploy``."""
 
-        payload: Dict[str, Any] = {
-            "authority": self._require_non_empty_string(
-                authority,
-                "deploy_contract.authority",
-            ),
-            "private_key": self._require_non_empty_string(
-                private_key,
-                "deploy_contract.private_key",
-            ),
-            "code_b64": self._normalize_required_base64_payload(
-                code_b64,
-                "deploy_contract.code_b64",
-            ),
-            "contract_alias": self._require_non_empty_string(
-                contract_alias,
-                "deploy_contract.contract_alias",
-            ),
-        }
-        lease_expiry_value = self._normalize_optional_int(
-            lease_expiry_ms,
-            "deploy_contract.lease_expiry_ms",
-            allow_zero=True,
+    def quote_fees(
+        self,
+        unsigned_payload: Mapping[str, Any],
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> Dict[str, Any]:
+        """Quote the exact unsigned transaction via ``POST /v1/fees/quote``.
+
+        The returned ``intent`` may replace only the draft's fee maxima before
+        the exact payload is signed. It must not change the selected payer,
+        sponsor-program revision, or executable gas bound.
+        """
+
+        if not isinstance(unsigned_payload, Mapping):
+            raise TypeError("quote_fees.unsigned_payload must be an object")
+        authority = self._require_exact_i105_account_id(
+            unsigned_payload.get("authority"),
+            "quote_fees.unsigned_payload.authority",
         )
-        if lease_expiry_value is not None:
-            payload["lease_expiry_ms"] = lease_expiry_value
-        if gas_asset_id is not None:
-            payload["gas_asset_id"] = self._require_non_empty_string(
-                gas_asset_id,
-                "deploy_contract.gas_asset_id",
+        canonical_auth = self._require_vpn_canonical_auth(
+            canonical_auth,
+            "quote_fees",
+        )
+        if canonical_auth.account_id != authority:
+            raise ValueError(
+                "quote_fees.canonical_auth.account_id must equal the exact payload authority"
             )
-        if fee_sponsor is not None:
-            payload["fee_sponsor"] = self._normalize_canonical_account_id(
-                fee_sponsor,
-                "deploy_contract.fee_sponsor",
-            )
-        if gas_limit is not None:
-            gas_limit_value = self._coerce_int(gas_limit, "deploy_contract.gas_limit")
-            if gas_limit_value <= 0:
-                raise ValueError("deploy_contract.gas_limit must be positive")
-            payload["gas_limit"] = gas_limit_value
-        response = self._request(
+        requested_intent = self._normalize_fee_payment_intent(
+            unsigned_payload.get("fee_payment"),
+            context="quote_fees.unsigned_payload.fee_payment",
+        )
+        payload = self._vpn_json_request(
             "POST",
-            "/v1/contracts/deploy",
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
+            "/v1/fees/quote",
+            body_payload={
+                "payload": self._clone_json_value(
+                    unsigned_payload,
+                    context="quote_fees.unsigned_payload",
+                )
             },
-            data=json.dumps(payload).encode("utf-8"),
+            canonical_auth=canonical_auth,
+            context="fee quote response",
+            expected_status=(200,),
         )
-        self._expect_status(response, {200, 202})
-        body = self._maybe_json(response)
-        if body is None:
-            return None
-        record = self._ensure_mapping(body, "contract deploy response")
-        return self._parse_contract_deploy_response(
-            record,
-            context="contract deploy response",
+        if payload is None:
+            raise RuntimeError("fee quote endpoint returned no payload")
+        response = dict(self._ensure_mapping(payload, "fee quote response"))
+        try:
+            quoted_intent = self._normalize_fee_payment_intent(
+                response.get("intent"),
+                context="fee quote response.intent",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("fee quote response.intent is not canonical") from exc
+        requested_value = requested_intent["value"]
+        quoted_value = quoted_intent["value"]
+        same_selection = (
+            requested_intent["payer"] == quoted_intent["payer"]
+            and requested_value["gas_limit"] == quoted_value["gas_limit"]
         )
+        if same_selection and requested_intent["payer"] == "sponsor":
+            same_selection = (
+                requested_value["program_id"] == quoted_value["program_id"]
+                and requested_value["program_revision"]
+                == quoted_value["program_revision"]
+            )
+        if not same_selection:
+            raise RuntimeError(
+                "fee quote response changed the requested payer, sponsor revision, or gas bound"
+            )
+        return response
+
+    def get_fee_sponsor_program(
+        self,
+        program_id: str,
+        *,
+        canonical_auth: ToriiCanonicalRequestAuth,
+    ) -> Dict[str, Any]:
+        """Fetch one exact on-chain sponsor program by canonical identifier."""
+
+        literal = self._require_non_empty_string(
+            program_id,
+            "get_fee_sponsor_program.program_id",
+        )
+        sponsor, separator, name = literal.partition("/")
+        if (
+            literal != program_id
+            or separator != "/"
+            or not name
+            or "/" in name
+            or any(char.isspace() for char in name)
+        ):
+            raise ValueError(
+                "get_fee_sponsor_program.program_id must be an exact sponsor/program literal"
+            )
+        self._require_exact_i105_account_id(
+            sponsor,
+            "get_fee_sponsor_program.program_id.sponsor",
+        )
+        payload = self._vpn_json_request(
+            "POST",
+            "/v1/fee-sponsor-programs/by-id",
+            body_payload={"program_id": literal},
+            canonical_auth=self._require_vpn_canonical_auth(
+                canonical_auth,
+                "get_fee_sponsor_program",
+            ),
+            context="fee sponsor program response",
+            expected_status=(200,),
+        )
+        if payload is None:
+            raise RuntimeError("fee sponsor program endpoint returned no payload")
+        response = dict(self._ensure_mapping(payload, "fee sponsor program response"))
+        response_id = response.get("id")
+        if not isinstance(response_id, Mapping) or set(response_id) != {"sponsor", "name"}:
+            raise RuntimeError(
+                "fee sponsor program response.id must contain only sponsor and name"
+            )
+        try:
+            response_sponsor = self._require_exact_i105_account_id(
+                response_id.get("sponsor"),
+                "fee sponsor program response.id.sponsor",
+            )
+            response_name = _require_exact_non_empty_string(
+                response_id.get("name"),
+                "fee sponsor program response.id.name",
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("fee sponsor program response.id is not canonical") from exc
+        if response_sponsor != sponsor or response_name != name:
+            raise RuntimeError(
+                "fee sponsor program response.id does not match the requested program"
+            )
+        return response
 
     def call_contract(
         self,
         *,
         authority: str,
         private_key: str,
+        fee_payment: Mapping[str, Any],
         entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
-        gas_limit: Any,
     ) -> ContractCallResponse:
         """Invoke a deployed contract via ``POST /v1/contracts/call``."""
 
@@ -10687,20 +11874,12 @@ class ToriiClient:
                 payload,
                 context="call_contract.payload",
             )
-        if gas_asset_id is not None:
-            request_payload["gas_asset_id"] = self._require_non_empty_string(
-                gas_asset_id,
-                "call_contract.gas_asset_id",
-            )
-        if fee_sponsor is not None:
-            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
-                fee_sponsor,
-                "call_contract.fee_sponsor",
-            )
-        gas_limit_value = self._coerce_int(gas_limit, "call_contract.gas_limit")
-        if gas_limit_value <= 0:
-            raise ValueError("call_contract.gas_limit must be positive")
-        request_payload["gas_limit"] = gas_limit_value
+        normalized_fee_payment = self._normalize_fee_payment_intent(
+            fee_payment,
+            context="call_contract.fee_payment",
+            require_gas_limit=True,
+        )
+        request_payload["fee_payment"] = normalized_fee_payment
         response = self._request(
             "POST",
             "/v1/contracts/call",
@@ -10727,10 +11906,10 @@ class ToriiClient:
         multisig_account_alias: Optional[str] = None,
         signer_account_id: str,
         instructions: Sequence[Any],
+        fee_payment: Mapping[str, Any],
         public_key_hex: Optional[str] = None,
         signature_b64: Optional[str] = None,
         creation_time_ms: Optional[int] = None,
-        fee_sponsor: Optional[str] = None,
     ) -> MultisigResponse:
         """Propose a generic multisig instruction batch via ``POST /v1/multisig/propose``.
 
@@ -10768,6 +11947,11 @@ class ToriiClient:
                 for index, value in enumerate(instruction_values)
             ],
         }
+        normalized_fee_payment = self._normalize_fee_payment_intent(
+            fee_payment,
+            context="propose_multisig.fee_payment",
+        )
+        request_payload["fee_payment"] = normalized_fee_payment
         if has_account_id:
             request_payload["multisig_account_id"] = self._normalize_canonical_account_id(
                 multisig_account_id,
@@ -10796,12 +11980,6 @@ class ToriiClient:
         )
         if normalized_creation_time is not None:
             request_payload["creation_time_ms"] = normalized_creation_time
-        if fee_sponsor is not None:
-            request_payload["fee_sponsor"] = self._normalize_canonical_account_id(
-                fee_sponsor,
-                "propose_multisig.fee_sponsor",
-            )
-
         body = self._post_json(
             "/v1/multisig/propose",
             request_payload,
@@ -11339,6 +12517,15 @@ class ToriiClient:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+    @staticmethod
+    def _require_vpn_canonical_auth(
+        canonical_auth: Optional[ToriiCanonicalRequestAuth],
+        context: str,
+    ) -> ToriiCanonicalRequestAuth:
+        if canonical_auth is None:
+            raise ValueError(f"{context}.canonical_auth is required")
+        return canonical_auth
+
     def _vpn_json_request(
         self,
         method: str,
@@ -11416,11 +12603,16 @@ class ToriiClient:
         request: Union[VpnQuoteCreateRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn quote request")
+        cls._reject_unknown_fields(record, _VPN_QUOTE_REQUEST_FIELDS, "vpn quote request")
         exit_class = record.get("exit_class", record.get("exitClass", ""))
         if exit_class is None:
             exit_class = ""
         return {
-            "exit_class": cls._require_string(exit_class, "vpn quote exit_class")
+            "exit_class": cls._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn quote exit_class",
+            )
             if exit_class
             else "",
             "metering_public_key_hex": cls._normalize_hex_string(
@@ -11436,14 +12628,19 @@ class ToriiClient:
         request: Union[VpnSessionCreateRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn session request")
+        cls._reject_unknown_fields(record, _VPN_SESSION_REQUEST_FIELDS, "vpn session request")
         exit_class = record.get("exit_class", record.get("exitClass", ""))
         if exit_class is None:
             exit_class = ""
         return {
-            "exit_class": cls._require_string(exit_class, "vpn session exit_class")
+            "exit_class": cls._require_vpn_enum(
+                exit_class,
+                _VPN_EXIT_CLASSES,
+                "vpn session exit_class",
+            )
             if exit_class
             else "",
-            "quote_id": cls._normalize_hex_string(
+            "quote_id": cls._normalize_vpn_canonical_hex_input(
                 record.get("quote_id", record.get("quoteId")),
                 context="vpn session quote_id",
                 expected_length=64,
@@ -11466,6 +12663,7 @@ class ToriiClient:
         request: Union[VpnReceiptSubmitRequest, Mapping[str, Any]],
     ) -> Dict[str, Any]:
         record = cls._to_payload_mapping(request, context="vpn receipt request")
+        cls._reject_unknown_fields(record, _VPN_RECEIPT_REQUEST_FIELDS, "vpn receipt request")
         lease_id = record.get("lease_id_hex", record.get("leaseIdHex"))
         return {
             "relay_receipt_hex": cls._normalize_hex_string(
@@ -11488,8 +12686,9 @@ class ToriiClient:
     @staticmethod
     def _parse_vpn_tx_instruction(value: Any, *, context: str) -> TransactionInstruction:
         record = ToriiClient._ensure_mapping(value, context)
+        ToriiClient._validate_exact_fields(record, _VPN_TX_INSTRUCTION_FIELDS, context)
         wire_id = ToriiClient._require_string(record.get("wire_id"), f"{context}.wire_id")
-        payload_hex = ToriiClient._normalize_hex_string(
+        payload_hex = ToriiClient._require_exact_lower_even_hex_string(
             record.get("payload_hex"),
             context=f"{context}.payload_hex",
         )
@@ -11512,50 +12711,100 @@ class ToriiClient:
         value: Any,
         *,
         context: str,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
     ) -> List[TransactionInstruction]:
-        if value is None:
-            return []
         if not isinstance(value, list):
             raise RuntimeError(f"{context} must be a list")
+        if len(value) < minimum:
+            raise RuntimeError(f"{context} must contain at least {minimum} instruction")
+        if maximum is not None and len(value) > maximum:
+            raise RuntimeError(f"{context} must contain at most {maximum} instruction")
         return [
             cls._parse_vpn_tx_instruction(entry, context=f"{context}[{index}]")
             for index, entry in enumerate(value)
         ]
 
+    @staticmethod
+    def _parse_vpn_string_list(value: Any, *, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list of strings")
+        result: List[str] = []
+        for index, entry in enumerate(value):
+            if not isinstance(entry, str):
+                raise RuntimeError(f"{context}[{index}] must be a string")
+            result.append(entry)
+        return result
+
     @classmethod
     def _parse_vpn_profile(cls, payload: Mapping[str, Any], *, context: str) -> VpnProfile:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_PROFILE_RESPONSE_FIELDS, context)
         available = record.get("available")
         if not isinstance(available, bool):
             raise RuntimeError(f"{context}.available must be a boolean")
+        if "dns_push_interval_secs" not in record:
+            raise RuntimeError(f"{context}.dns_push_interval_secs is required")
+        dns_push_interval_secs = cls._require_vpn_uint64(
+            record["dns_push_interval_secs"],
+            f"{context}.dns_push_interval_secs",
+        )
+        if dns_push_interval_secs < 30:
+            raise RuntimeError(f"{context}.dns_push_interval_secs must be at least 30")
+        supported_exit_classes = cls._require_vpn_profile_exit_classes(
+            record.get("supported_exit_classes"),
+            f"{context}.supported_exit_classes",
+        )
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
+        settlement_grace_secs = cls._require_vpn_unsigned_range(
+            record.get("settlement_grace_secs"),
+            f"{context}.settlement_grace_secs",
+            minimum=1,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
         return VpnProfile(
             available=available,
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            supported_exit_classes=cls._parse_string_list(
-                record.get("supported_exit_classes"),
-                context=f"{context}.supported_exit_classes",
-            ),
-            default_exit_class=cls._require_string(
+            supported_exit_classes=supported_exit_classes,
+            default_exit_class=cls._require_vpn_enum(
                 record.get("default_exit_class"),
+                _VPN_EXIT_CLASSES,
                 f"{context}.default_exit_class",
             ),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            dns_push_interval_secs=cls._coerce_unsigned(
-                record.get("dns_push_interval_secs"),
-                f"{context}.dns_push_interval_secs",
-            ),
+            lease_secs=lease_secs,
+            dns_push_interval_secs=dns_push_interval_secs,
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
+            mtu_bytes=mtu_bytes,
             display_billing_label=cls._require_string(
                 record.get("display_billing_label"),
                 f"{context}.display_billing_label",
@@ -11569,49 +12818,78 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            settlement_grace_secs=cls._coerce_unsigned(
-                record.get("settlement_grace_secs"),
-                f"{context}.settlement_grace_secs",
-            ),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            settlement_grace_secs=settlement_grace_secs,
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
         )
 
     @classmethod
     def _parse_vpn_quote(cls, payload: Mapping[str, Any], *, context: str) -> VpnQuote:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_QUOTE_RESPONSE_FIELDS, context)
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
+        tx_instructions = cls._parse_vpn_tx_instructions(
+            record.get("tx_instructions"),
+            context=f"{context}.tx_instructions",
+            minimum=1,
+            maximum=1,
+        )
         return VpnQuote(
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
-            lease_id_hex=cls._normalize_hex_string(
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
+            lease_id_hex=cls._require_exact_lower_hex_string(
                 record.get("lease_id_hex"),
                 context=f"{context}.lease_id_hex",
                 expected_length=64,
             ),
-            session_id_hex=cls._normalize_hex_string(
+            session_id_hex=cls._require_exact_lower_hex_string(
                 record.get("session_id_hex"),
                 context=f"{context}.session_id_hex",
-                expected_length=64,
+                expected_length=32,
             ),
             payment_reference=cls._require_string(
                 record.get("payment_reference"),
                 f"{context}.payment_reference",
             ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            quote_expires_at_ms=cls._coerce_unsigned(
+            lease_secs=lease_secs,
+            quote_expires_at_ms=cls._require_vpn_uint64(
                 record.get("quote_expires_at_ms"),
                 f"{context}.quote_expires_at_ms",
             ),
@@ -11624,32 +12902,27 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
+            mtu_bytes=mtu_bytes,
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
-            metering_public_key_hex=cls._normalize_hex_string(
+            metering_public_key_hex=cls._require_exact_lower_hex_string(
                 record.get("metering_public_key_hex"),
                 context=f"{context}.metering_public_key_hex",
                 expected_length=64,
@@ -11658,33 +12931,65 @@ class ToriiClient:
                 record.get("open_lease_instruction"),
                 context=f"{context}.open_lease_instruction",
             ),
-            tx_instructions=cls._parse_vpn_tx_instructions(
-                record.get("tx_instructions"),
-                context=f"{context}.tx_instructions",
-            ),
+            tx_instructions=tx_instructions,
         )
 
     @classmethod
     def _parse_vpn_session(cls, payload: Mapping[str, Any], *, context: str) -> VpnSession:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_SESSION_RESPONSE_FIELDS, context)
+        lease_secs = cls._require_vpn_unsigned_range(
+            record.get("lease_secs"),
+            f"{context}.lease_secs",
+            minimum=1,
+            maximum=_VPN_LEASE_SECONDS_MAX,
+        )
+        flow_label_bits = cls._require_vpn_unsigned_constant(
+            record.get("flow_label_bits"),
+            f"{context}.flow_label_bits",
+            24,
+        )
+        padding_budget_ms = cls._require_vpn_unsigned_range(
+            record.get("padding_budget_ms"),
+            f"{context}.padding_budget_ms",
+            minimum=1,
+            maximum=65535,
+        )
+        mtu_bytes = cls._require_vpn_unsigned_constant(
+            record.get("mtu_bytes"),
+            f"{context}.mtu_bytes",
+            1280,
+        )
         return VpnSession(
-            session_id=cls._normalize_hex_string(record.get("session_id"), context=f"{context}.session_id", expected_length=64),
+            session_id=cls._require_exact_lower_hex_string(
+                record.get("session_id"),
+                context=f"{context}.session_id",
+                expected_length=64,
+            ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
-            lease_secs=cls._coerce_unsigned(record.get("lease_secs"), f"{context}.lease_secs"),
-            expires_at_ms=cls._coerce_unsigned(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
-            connected_at_ms=cls._coerce_unsigned(
+            lease_secs=lease_secs,
+            expires_at_ms=cls._require_vpn_uint64(record.get("expires_at_ms"), f"{context}.expires_at_ms"),
+            connected_at_ms=cls._require_vpn_uint64(
                 record.get("connected_at_ms"),
                 f"{context}.connected_at_ms",
             ),
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
             payment_reference=cls._require_string(
                 record.get("payment_reference"),
                 f"{context}.payment_reference",
             ),
-            payment_tx_hash=cls._normalize_hex_string(
+            payment_tx_hash=cls._require_exact_lower_hex_string(
                 record.get("payment_tx_hash"),
                 context=f"{context}.payment_tx_hash",
                 expected_length=64,
@@ -11698,66 +13003,88 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
-            ),
-            flow_label_bits=cls._coerce_unsigned(record.get("flow_label_bits"), f"{context}.flow_label_bits"),
-            padding_budget_ms=cls._coerce_unsigned(
-                record.get("padding_budget_ms"),
-                f"{context}.padding_budget_ms",
-            ),
-            relay_tls_spki_sha256_hex=cls._coerce_optional_string(
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            flow_label_bits=flow_label_bits,
+            padding_budget_ms=padding_budget_ms,
+            relay_tls_spki_sha256_hex=cls._require_optional_exact_lower_hex_string(
                 record.get("relay_tls_spki_sha256_hex"),
                 context=f"{context}.relay_tls_spki_sha256_hex",
+                expected_length=64,
             ),
-            route_pushes=cls._parse_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
-            excluded_routes=cls._parse_string_list(
+            route_pushes=cls._parse_vpn_string_list(record.get("route_pushes"), context=f"{context}.route_pushes"),
+            excluded_routes=cls._parse_vpn_string_list(
                 record.get("excluded_routes"),
                 context=f"{context}.excluded_routes",
             ),
-            dns_servers=cls._parse_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
-            tunnel_addresses=cls._parse_string_list(
+            dns_servers=cls._parse_vpn_string_list(record.get("dns_servers"), context=f"{context}.dns_servers"),
+            tunnel_addresses=cls._parse_vpn_string_list(
                 record.get("tunnel_addresses"),
                 context=f"{context}.tunnel_addresses",
             ),
-            mtu_bytes=cls._coerce_unsigned(record.get("mtu_bytes"), f"{context}.mtu_bytes"),
-            helper_ticket_hex=cls._normalize_hex_string(
+            mtu_bytes=mtu_bytes,
+            helper_ticket_hex=cls._require_vpn_helper_ticket_hex(
                 record.get("helper_ticket_hex"),
                 context=f"{context}.helper_ticket_hex",
             ),
-            bytes_in=cls._coerce_unsigned(record.get("bytes_in"), f"{context}.bytes_in"),
-            bytes_out=cls._coerce_unsigned(record.get("bytes_out"), f"{context}.bytes_out"),
-            status=cls._require_string(record.get("status"), f"{context}.status"),
+            bytes_in=cls._require_vpn_uint64(record.get("bytes_in"), f"{context}.bytes_in"),
+            bytes_out=cls._require_vpn_uint64(record.get("bytes_out"), f"{context}.bytes_out"),
+            status=cls._require_vpn_enum(
+                record.get("status"),
+                _VPN_SESSION_STATUSES,
+                f"{context}.status",
+            ),
         )
 
     @classmethod
     def _parse_vpn_receipt(cls, payload: Mapping[str, Any], *, context: str) -> VpnReceipt:
         record = cls._ensure_mapping(payload, context)
+        cls._validate_exact_fields(record, _VPN_RECEIPT_RESPONSE_FIELDS, context)
+        tx_instructions = cls._parse_vpn_tx_instructions(
+            record.get("tx_instructions"),
+            context=f"{context}.tx_instructions",
+            maximum=1,
+        )
         return VpnReceipt(
-            session_id=cls._normalize_hex_string(record.get("session_id"), context=f"{context}.session_id", expected_length=64),
+            session_id=cls._require_exact_lower_hex_string(
+                record.get("session_id"),
+                context=f"{context}.session_id",
+                expected_length=64,
+            ),
             account_id=cls._require_string(record.get("account_id"), f"{context}.account_id"),
-            exit_class=cls._require_string(record.get("exit_class"), f"{context}.exit_class"),
+            exit_class=cls._require_vpn_enum(
+                record.get("exit_class"),
+                _VPN_EXIT_CLASSES,
+                f"{context}.exit_class",
+            ),
             relay_endpoint=cls._require_string(record.get("relay_endpoint"), f"{context}.relay_endpoint"),
             meter_family=cls._require_string(record.get("meter_family"), f"{context}.meter_family"),
-            connected_at_ms=cls._coerce_unsigned(
+            connected_at_ms=cls._require_vpn_uint64(
                 record.get("connected_at_ms"),
                 f"{context}.connected_at_ms",
             ),
-            disconnected_at_ms=cls._coerce_unsigned(
+            disconnected_at_ms=cls._require_vpn_uint64(
                 record.get("disconnected_at_ms"),
                 f"{context}.disconnected_at_ms",
             ),
-            duration_ms=cls._coerce_unsigned(record.get("duration_ms"), f"{context}.duration_ms"),
-            bytes_in=cls._coerce_unsigned(record.get("bytes_in"), f"{context}.bytes_in"),
-            bytes_out=cls._coerce_unsigned(record.get("bytes_out"), f"{context}.bytes_out"),
-            status=cls._require_string(record.get("status"), f"{context}.status"),
-            receipt_source=cls._require_string(
+            duration_ms=cls._require_vpn_uint64(record.get("duration_ms"), f"{context}.duration_ms"),
+            bytes_in=cls._require_vpn_uint64(record.get("bytes_in"), f"{context}.bytes_in"),
+            bytes_out=cls._require_vpn_uint64(record.get("bytes_out"), f"{context}.bytes_out"),
+            status=cls._require_vpn_enum(
+                record.get("status"),
+                _VPN_RECEIPT_STATUSES,
+                f"{context}.status",
+            ),
+            receipt_source=cls._require_vpn_enum(
                 record.get("receipt_source"),
+                _VPN_RECEIPT_SOURCES,
                 f"{context}.receipt_source",
             ),
-            quote_id=cls._normalize_hex_string(record.get("quote_id"), context=f"{context}.quote_id", expected_length=64),
-            payment_tx_hash=cls._normalize_hex_string(
+            quote_id=cls._require_exact_lower_hex_string(
+                record.get("quote_id"),
+                context=f"{context}.quote_id",
+                expected_length=64,
+            ),
+            payment_tx_hash=cls._require_exact_lower_hex_string(
                 record.get("payment_tx_hash"),
                 context=f"{context}.payment_tx_hash",
                 expected_length=64,
@@ -11771,19 +13098,13 @@ class ToriiClient:
                 record.get("operator_account_id"),
                 f"{context}.operator_account_id",
             ),
-            lease_fee_nanos=cls._coerce_unsigned(
-                record.get("lease_fee_nanos"),
-                f"{context}.lease_fee_nanos",
+            lease_fee=cls._quantity(record.get("lease_fee"), f"{context}.lease_fee"),
+            earned_fee=cls._quantity(record.get("earned_fee"), f"{context}.earned_fee"),
+            refunded_fee=cls._quantity(
+                record.get("refunded_fee"),
+                f"{context}.refunded_fee",
             ),
-            earned_fee_nanos=cls._coerce_unsigned(
-                record.get("earned_fee_nanos"),
-                f"{context}.earned_fee_nanos",
-            ),
-            refunded_fee_nanos=cls._coerce_unsigned(
-                record.get("refunded_fee_nanos"),
-                f"{context}.refunded_fee_nanos",
-            ),
-            lease_id_hex=cls._normalize_hex_string(
+            lease_id_hex=cls._require_exact_lower_hex_string(
                 record.get("lease_id_hex"),
                 context=f"{context}.lease_id_hex",
                 expected_length=64,
@@ -11792,10 +13113,7 @@ class ToriiClient:
                 record.get("settle_lease_instruction"),
                 context=f"{context}.settle_lease_instruction",
             ),
-            tx_instructions=cls._parse_vpn_tx_instructions(
-                record.get("tx_instructions"),
-                context=f"{context}.tx_instructions",
-            ),
+            tx_instructions=tx_instructions,
         )
 
     @classmethod
@@ -11806,17 +13124,24 @@ class ToriiClient:
         context: str,
     ) -> VpnReceiptListResponse:
         record = cls._ensure_mapping(payload, context)
-        items_payload = record.get("items", [])
-        if items_payload is None:
-            items_payload = []
+        cls._validate_exact_fields(record, _VPN_RECEIPT_LIST_RESPONSE_FIELDS, context)
+        items_payload = record.get("items")
         if not isinstance(items_payload, list):
             raise RuntimeError(f"{context}.items must be a list")
+        if len(items_payload) > 24:
+            raise RuntimeError(f"{context}.items must contain at most 24 receipts")
+        total = cls._require_vpn_unsigned_range(
+            record.get("total"),
+            f"{context}.total",
+            minimum=0,
+            maximum=24,
+        )
         return VpnReceiptListResponse(
             items=[
                 cls._parse_vpn_receipt(entry, context=f"{context}.items[{index}]")
                 for index, entry in enumerate(items_payload)
             ],
-            total=cls._coerce_unsigned(record.get("total"), f"{context}.total"),
+            total=total,
         )
 
     def _request(
@@ -12203,6 +13528,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_order(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_ORDER_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12223,9 +13553,9 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "quantity_gib": cls._coerce_unsigned(record.get("quantity_gib"), f"{context}.quantity_gib"),
             "remaining_gib": cls._coerce_unsigned(record.get("remaining_gib"), f"{context}.remaining_gib"),
@@ -12261,6 +13591,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_fill(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_FILL_FIELDS,
+            context,
+        )
         return {
             "trade": cls._parse_sorafs_orderbook_trade(record.get("trade"), context=f"{context}.trade"),
             "maker_remaining_gib": cls._coerce_unsigned(
@@ -12271,15 +13606,20 @@ class ToriiClient:
                 record.get("taker_remaining_gib"),
                 f"{context}.taker_remaining_gib",
             ),
-            "gross_value_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("gross_value_micro_xor"),
-                f"{context}.gross_value_micro_xor",
+            "gross_value": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("gross_value"),
+                f"{context}.gross_value",
             ),
         }
 
     @classmethod
     def _parse_sorafs_orderbook_trade(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_TRADE_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12303,18 +13643,18 @@ class ToriiClient:
                 _SORAFS_ORDERBOOK_TIER_VALUES,
                 f"{context}.tier",
             ),
-            "price_per_gib_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("price_per_gib_micro_xor"),
-                f"{context}.price_per_gib_micro_xor",
+            "price_per_gib": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("price_per_gib"),
+                f"{context}.price_per_gib",
             ),
             "filled_gib": cls._coerce_unsigned(record.get("filled_gib"), f"{context}.filled_gib"),
-            "maker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("maker_fee_micro_xor"),
-                f"{context}.maker_fee_micro_xor",
+            "maker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("maker_fee"),
+                f"{context}.maker_fee",
             ),
-            "taker_fee_micro_xor": cls._normalize_sorafs_orderbook_decimal(
-                record.get("taker_fee_micro_xor"),
-                f"{context}.taker_fee_micro_xor",
+            "taker_fee": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("taker_fee"),
+                f"{context}.taker_fee",
             ),
             "timestamp_unix": cls._coerce_unsigned(record.get("timestamp_unix"), f"{context}.timestamp_unix"),
         }
@@ -12322,6 +13662,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_channel(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_CHANNEL_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12346,9 +13691,9 @@ class ToriiClient:
             ),
             "total_bytes": cls._coerce_unsigned(record.get("total_bytes"), f"{context}.total_bytes"),
             "remaining_bytes": cls._coerce_unsigned(record.get("remaining_bytes"), f"{context}.remaining_bytes"),
-            "xor_locked_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_locked_micro"),
-                f"{context}.xor_locked_micro",
+            "xor_locked": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_locked"),
+                f"{context}.xor_locked",
             ),
             "status": cls._normalize_sorafs_orderbook_label(
                 record.get("status"),
@@ -12362,6 +13707,11 @@ class ToriiClient:
     @classmethod
     def _parse_sorafs_orderbook_receipt(cls, payload: Any, *, context: str) -> Dict[str, Any]:
         record = cls._ensure_mapping(payload, context)
+        cls._require_exact_sorafs_orderbook_fields(
+            record,
+            _SORAFS_ORDERBOOK_RECEIPT_FIELDS,
+            context,
+        )
         return {
             "version": cls._normalize_sorafs_orderbook_unsigned(
                 record.get("version"),
@@ -12389,17 +13739,17 @@ class ToriiClient:
                 record.get("bytes_delivered"),
                 f"{context}.bytes_delivered",
             ),
-            "xor_debited_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("xor_debited_micro"),
-                f"{context}.xor_debited_micro",
+            "xor_debited": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("xor_debited"),
+                f"{context}.xor_debited",
             ),
-            "provider_credit_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("provider_credit_micro"),
-                f"{context}.provider_credit_micro",
+            "provider_credit": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("provider_credit"),
+                f"{context}.provider_credit",
             ),
-            "fee_amount_micro": cls._normalize_sorafs_orderbook_decimal(
-                record.get("fee_amount_micro"),
-                f"{context}.fee_amount_micro",
+            "fee_amount": cls._normalize_sorafs_orderbook_xor_quantity(
+                record.get("fee_amount"),
+                f"{context}.fee_amount",
             ),
             "issued_at_unix": cls._coerce_unsigned(record.get("issued_at_unix"), f"{context}.issued_at_unix"),
             "settlement_signature": cls._parse_sorafs_orderbook_signature(
@@ -12525,11 +13875,32 @@ class ToriiClient:
         )
 
     @classmethod
-    def _normalize_sorafs_orderbook_decimal(cls, value: Any, context: str) -> str:
-        literal = cls._require_non_empty_string(value, context)
-        if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
-            raise ValueError(f"{context} must be a non-negative decimal integer string")
-        return literal
+    def _normalize_sorafs_orderbook_xor_quantity(cls, value: Any, context: str) -> str:
+        if type(value) is not str:
+            raise TypeError(f"{context} must be a canonical XOR quantity string")
+        if len(value) > _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH:
+            raise ValueError(f"{context} exceeds the bounded XOR quantity text length")
+        match = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]*[1-9]))?", value)
+        if match is None:
+            raise ValueError(f"{context} must be a canonical non-negative XOR quantity")
+        fractional = match.group(2) or ""
+        if len(fractional) > 9:
+            raise ValueError(f"{context} must have at most 9 fractional decimal places")
+        mantissa = int(f"{match.group(1)}{fractional}")
+        if mantissa > (1 << 511) - 1:
+            raise ValueError(f"{context} exceeds the 512-bit signed quantity domain")
+        return value
+
+    @staticmethod
+    def _require_exact_sorafs_orderbook_fields(
+        record: Mapping[str, Any],
+        expected: frozenset[str],
+        context: str,
+    ) -> None:
+        unexpected = set(record).difference(expected)
+        if unexpected:
+            labels = ", ".join(sorted(str(field) for field in unexpected))
+            raise ValueError(f"{context} contains unknown or retired fields: {labels}")
 
     @classmethod
     def _normalize_sorafs_orderbook_unsigned(
@@ -12689,6 +14060,122 @@ class ToriiClient:
             )
         }
 
+    @classmethod
+    def _normalize_fee_payment_intent(
+        cls,
+        value: Mapping[str, Any],
+        *,
+        context: str,
+        require_gas_limit: bool = False,
+    ) -> Dict[str, Any]:
+        if not isinstance(value, Mapping):
+            raise TypeError(f"{context} must be an object")
+        if set(value) != {"payer", "value"}:
+            raise ValueError(f"{context} must contain only payer and value")
+        payer = _require_exact_non_empty_string(value.get("payer"), f"{context}.payer")
+        if payer not in {"authority", "sponsor"}:
+            raise ValueError(f"{context}.payer must be authority or sponsor")
+        payment = value.get("value")
+        if not isinstance(payment, Mapping):
+            raise TypeError(f"{context}.value must be an object")
+        allowed = {"charge_limits", "gas_limit"}
+        if payer == "sponsor":
+            allowed.update({"program_id", "program_revision"})
+        if set(payment) - allowed:
+            raise ValueError(f"{context}.value contains unsupported fields")
+        if "charge_limits" not in payment:
+            raise ValueError(f"{context}.value.charge_limits is required")
+        charge_limits = payment["charge_limits"]
+        if isinstance(charge_limits, (str, bytes, bytearray, memoryview)) or not isinstance(
+            charge_limits, Sequence
+        ):
+            raise TypeError(f"{context}.value.charge_limits must be an array")
+        if len(charge_limits) > 2:
+            raise ValueError(f"{context}.value.charge_limits contains too many entries")
+        normalized_limits: List[Dict[str, Any]] = []
+        previous_kind = -1
+        for index, raw in enumerate(charge_limits):
+            item_context = f"{context}.value.charge_limits[{index}]"
+            if not isinstance(raw, Mapping):
+                raise TypeError(f"{item_context} must be an object")
+            if set(raw) != {"kind", "asset_definition_id", "max_amount"}:
+                raise ValueError(f"{item_context} has unsupported or missing fields")
+            tagged_kind = raw["kind"]
+            if (
+                not isinstance(tagged_kind, Mapping)
+                or set(tagged_kind) != {"kind", "value"}
+                or tagged_kind.get("value") is not None
+            ):
+                raise ValueError(f"{item_context}.kind must be a canonical tagged unit")
+            kind_literal = tagged_kind.get("kind")
+            kind = 0 if kind_literal == "nexus" else 1 if kind_literal == "pipeline_gas" else -1
+            if kind < 0:
+                raise ValueError(f"{item_context}.kind is unsupported")
+            if kind <= previous_kind:
+                raise ValueError(
+                    f"{context}.value.charge_limits must be unique and canonically ordered"
+                )
+            previous_kind = kind
+            asset_definition_id = _offline_canonical_asset_definition_id(
+                raw["asset_definition_id"],
+                f"{item_context}.asset_definition_id",
+            )
+            max_amount = cls._quantity(raw["max_amount"], f"{item_context}.max_amount")
+            if max_amount == "0":
+                raise ValueError(f"{item_context}.max_amount must be positive")
+            normalized_limits.append(
+                {
+                    "kind": {"kind": kind_literal, "value": None},
+                    "asset_definition_id": asset_definition_id,
+                    "max_amount": max_amount,
+                }
+            )
+        gas_limit = payment.get("gas_limit")
+        if gas_limit is not None:
+            gas_limit = cls._normalize_optional_int(
+                gas_limit,
+                f"{context}.value.gas_limit",
+                allow_zero=False,
+            )
+        if require_gas_limit and gas_limit is None:
+            raise ValueError(f"{context}.value.gas_limit is required")
+        normalized_value: Dict[str, Any] = {
+            "charge_limits": normalized_limits,
+            "gas_limit": gas_limit,
+        }
+        if payer == "sponsor":
+            program_id = payment.get("program_id")
+            if not isinstance(program_id, Mapping) or set(program_id) != {"sponsor", "name"}:
+                raise ValueError(f"{context}.value.program_id must contain sponsor and name")
+            sponsor = cls._require_exact_i105_account_id(
+                program_id.get("sponsor"),
+                f"{context}.value.program_id.sponsor",
+            )
+            name = _require_exact_non_empty_string(
+                program_id.get("name"),
+                f"{context}.value.program_id.name",
+            )
+            if (
+                unicodedata.normalize("NFC", name) != name
+                or any(char.isspace() or ord(char) < 0x20 for char in name)
+                or any(char in "@#$/" for char in name)
+            ):
+                raise ValueError(f"{context}.value.program_id.name must be canonical")
+            revision = cls._normalize_optional_int(
+                payment.get("program_revision"),
+                f"{context}.value.program_revision",
+                allow_zero=False,
+            )
+            if revision is None:
+                raise ValueError(f"{context}.value.program_revision is required")
+            normalized_value.update(
+                {
+                    "program_id": {"sponsor": sponsor, "name": name},
+                    "program_revision": revision,
+                }
+            )
+        return {"payer": payer, "value": normalized_value}
+
     @staticmethod
     def _normalize_required_base64_payload(value: Any, context: str) -> str:
         if not isinstance(value, str):
@@ -12794,6 +14281,86 @@ class ToriiClient:
         if isinstance(payload, Mapping):
             return payload
         raise RuntimeError(f"{context} response must be a JSON object")
+
+    @staticmethod
+    def _reject_unknown_fields(
+        record: Mapping[str, Any],
+        allowed_fields: Iterable[str],
+        context: str,
+    ) -> None:
+        allowed = frozenset(allowed_fields)
+        extras = [str(key) for key in record if key not in allowed]
+        if extras:
+            raise RuntimeError(
+                f"{context} contains unsupported fields: {', '.join(sorted(extras))}"
+            )
+
+    @classmethod
+    def _validate_exact_fields(
+        cls,
+        record: Mapping[str, Any],
+        required_fields: Iterable[str],
+        context: str,
+    ) -> None:
+        required = frozenset(required_fields)
+        cls._reject_unknown_fields(record, required, context)
+        missing = [field for field in required if field not in record]
+        if missing:
+            raise RuntimeError(
+                f"{context} is missing required fields: {', '.join(sorted(missing))}"
+            )
+
+    @staticmethod
+    def _require_vpn_enum(value: Any, allowed: Iterable[str], context: str) -> str:
+        allowed_values = frozenset(allowed)
+        if not isinstance(value, str) or value not in allowed_values:
+            raise RuntimeError(
+                f"{context} must be one of: {', '.join(sorted(allowed_values))}"
+            )
+        return value
+
+    @classmethod
+    def _require_vpn_profile_exit_classes(cls, value: Any, context: str) -> List[str]:
+        if not isinstance(value, list):
+            raise RuntimeError(f"{context} must be a list")
+        exits = [
+            cls._require_vpn_enum(entry, _VPN_EXIT_CLASSES, f"{context}[{index}]")
+            for index, entry in enumerate(value)
+        ]
+        if len(exits) != 3 or len(set(exits)) != 3:
+            raise RuntimeError(f"{context} must contain exactly three unique exit classes")
+        return exits
+
+    @classmethod
+    def _require_vpn_unsigned_range(
+        cls,
+        value: Any,
+        context: str,
+        *,
+        minimum: int = 0,
+        maximum: Optional[int] = None,
+    ) -> int:
+        result = cls._require_vpn_uint64(value, context)
+        if result < minimum:
+            raise RuntimeError(f"{context} must be at least {minimum}")
+        if maximum is not None and result > maximum:
+            raise RuntimeError(f"{context} must be at most {maximum}")
+        return result
+
+    @classmethod
+    def _require_vpn_unsigned_constant(cls, value: Any, context: str, expected: int) -> int:
+        result = cls._require_vpn_uint64(value, context)
+        if result != expected:
+            raise RuntimeError(f"{context} must equal {expected}")
+        return result
+
+    @staticmethod
+    def _require_vpn_uint64(value: Any, context: str) -> int:
+        if type(value) is not int:
+            raise RuntimeError(f"{context} must be a JSON uint64 integer")
+        if value < 0 or value > _VPN_UINT64_MAX:
+            raise RuntimeError(f"{context} must be between 0 and {_VPN_UINT64_MAX}")
+        return value
 
     @staticmethod
     def _ensure_list(payload: Any, context: str) -> List[Any]:
@@ -13131,34 +14698,8 @@ class ToriiClient:
                     fees.get("per_gas_unit_fee"),
                     context=f"{context}.fees.per_gas_unit_fee",
                 ),
-                sponsorship_enabled=self._coerce_bool(
-                    fees.get("sponsorship_enabled"),
-                    f"{context}.fees.sponsorship_enabled",
-                ),
-                sponsor_max_fee=self._clone_json_value(
-                    fees.get("sponsor_max_fee"),
-                    context=f"{context}.fees.sponsor_max_fee",
-                ),
-                sponsor_verified_balance_safety_floor=self._clone_json_value(
-                    fees.get("sponsor_verified_balance_safety_floor"),
-                    context=f"{context}.fees.sponsor_verified_balance_safety_floor",
-                ),
-                canonical_sponsor_account_id=(
-                    None
-                    if fees.get("canonical_sponsor_account_id") is None
-                    else str(fees.get("canonical_sponsor_account_id"))
-                ),
-                fee_receipts_activation_height=self._coerce_int(
-                    fees.get("fee_receipts_activation_height"),
-                    f"{context}.fees.fee_receipts_activation_height",
-                ),
-                external_settlement_enabled=self._coerce_bool(
-                    fees.get("external_settlement_enabled"),
-                    f"{context}.fees.external_settlement_enabled",
-                ),
-                burn_from_unix_timestamp_ms=self._coerce_int(
-                    fees.get("burn_from_unix_timestamp_ms"),
-                    f"{context}.fees.burn_from_unix_timestamp_ms",
+                sponsor_vault_custody_account_id=str(
+                    fees.get("sponsor_vault_custody_account_id") or ""
                 ),
                 settlement_mode=str(fees.get("settlement_mode") or ""),
                 successful_claim_fee_exempt_authorities=self._parse_string_array(
@@ -14645,6 +16186,10 @@ class ToriiClient:
         return result
 
     @staticmethod
+    def _quantity(value: Any, context: str) -> str:
+        return _canonical_quantity(value, context)
+
+    @staticmethod
     def _require_hex_string(value: Any, context: str) -> str:
         if not isinstance(value, str) or not value:
             raise RuntimeError(f"{context} must be a non-empty hex string")
@@ -14680,6 +16225,85 @@ class ToriiClient:
         except ValueError as exc:
             raise RuntimeError(f"{context} must contain valid hexadecimal characters") from exc
         return normalized
+
+    @staticmethod
+    def _require_exact_lower_hex_string(
+        value: Any,
+        *,
+        context: str,
+        expected_length: int,
+    ) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) != expected_length
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must be an exact lowercase {expected_length // 2}-byte hex string"
+            )
+        return value
+
+    @classmethod
+    def _normalize_vpn_canonical_hex_input(
+        cls,
+        value: Union[str, bytes, bytearray, memoryview],
+        *,
+        context: str,
+        expected_length: int,
+    ) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return cls._normalize_hex_string(
+                value,
+                context=context,
+                expected_length=expected_length,
+            )
+        return cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=expected_length,
+        )
+
+    @classmethod
+    def _require_optional_exact_lower_hex_string(
+        cls,
+        value: Any,
+        *,
+        context: str,
+        expected_length: int,
+    ) -> Optional[str]:
+        if value is None:
+            return None
+        return cls._require_exact_lower_hex_string(
+            value,
+            context=context,
+            expected_length=expected_length,
+        )
+
+    @staticmethod
+    def _require_exact_lower_even_hex_string(value: Any, *, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) % 2 != 0
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must be an exact lowercase even-length hex string"
+            )
+        return value
+
+    @staticmethod
+    def _require_vpn_helper_ticket_hex(value: Any, *, context: str) -> str:
+        if (
+            not isinstance(value, str)
+            or len(value) != _VPN_HELPER_TICKET_HEX_LENGTH
+            or re.fullmatch(r"[0-9a-f]+", value) is None
+        ):
+            raise RuntimeError(
+                f"{context} must contain exactly {_VPN_HELPER_TICKET_HEX_LENGTH} lowercase "
+                f"hexadecimal characters ({_VPN_HELPER_TICKET_BYTES} bytes)"
+            )
+        return value
 
     @staticmethod
     def _require_exact_inline_hex_string(value: Any, *, context: str) -> None:
@@ -15182,207 +16806,6 @@ class ToriiClient:
             return None
         return ToriiClient._parse_pipeline_status_response(payload, context=context)
 
-    @staticmethod
-    def _parse_contract_deploy_contract_receipt(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> ContractDeployContractReceipt:
-        record = ToriiClient._ensure_mapping(payload, context)
-        tx_hash_hex_value = record.get("tx_hash_hex")
-        tx_hash_hex = None
-        if tx_hash_hex_value is not None:
-            tx_hash_hex = ToriiClient._normalize_hex_string(
-                tx_hash_hex_value,
-                context=f"{context}.tx_hash_hex",
-                expected_length=64,
-            )
-        deploy_nonce_value = record.get("deploy_nonce")
-        deploy_nonce = None
-        if deploy_nonce_value is not None:
-            deploy_nonce = ToriiClient._coerce_unsigned(
-                deploy_nonce_value,
-                f"{context}.deploy_nonce",
-            )
-        return ContractDeployContractReceipt(
-            name=ToriiClient._require_non_empty_string(record.get("name"), f"{context}.name"),
-            contract_alias=ToriiClient._coerce_optional_string(
-                record.get("contract_alias"),
-                context=f"{context}.contract_alias",
-            ),
-            contract_address=ToriiClient._coerce_optional_string(
-                record.get("contract_address"),
-                context=f"{context}.contract_address",
-            ),
-            previous_contract_address=ToriiClient._coerce_optional_string(
-                record.get("previous_contract_address"),
-                context=f"{context}.previous_contract_address",
-            ),
-            kaizen=bool(record.get("kaizen")),
-            dataspace=ToriiClient._coerce_optional_string(
-                record.get("dataspace"),
-                context=f"{context}.dataspace",
-            ),
-            deploy_nonce=deploy_nonce,
-            tx_hash_hex=tx_hash_hex,
-            pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
-                record.get("pipeline_status"),
-                context=f"{context}.pipeline_status",
-            ),
-            code_hash_hex=ToriiClient._normalize_hex_string(
-                record.get("code_hash_hex"),
-                context=f"{context}.code_hash_hex",
-                expected_length=64,
-            ),
-            abi_hash_hex=ToriiClient._normalize_hex_string(
-                record.get("abi_hash_hex"),
-                context=f"{context}.abi_hash_hex",
-                expected_length=64,
-            ),
-            status=ToriiClient._require_non_empty_string(
-                record.get("status"),
-                f"{context}.status",
-            ),
-        )
-
-    @staticmethod
-    def _parse_contract_deploy_call_receipt(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> ContractDeployHajimariCallReceipt:
-        record = ToriiClient._ensure_mapping(payload, context)
-        tx_hash_hex_value = record.get("tx_hash_hex")
-        tx_hash_hex = None
-        if tx_hash_hex_value is not None:
-            tx_hash_hex = ToriiClient._normalize_hex_string(
-                tx_hash_hex_value,
-                context=f"{context}.tx_hash_hex",
-                expected_length=64,
-            )
-        return ContractDeployHajimariCallReceipt(
-            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
-            contract_alias=ToriiClient._coerce_optional_string(
-                record.get("contract_alias"),
-                context=f"{context}.contract_alias",
-            ),
-            entrypoint=ToriiClient._coerce_optional_string(
-                record.get("entrypoint"),
-                context=f"{context}.entrypoint",
-            ),
-            tx_hash_hex=tx_hash_hex,
-            pipeline_status=ToriiClient._parse_optional_pipeline_status_response(
-                record.get("pipeline_status"),
-                context=f"{context}.pipeline_status",
-            ),
-            status=ToriiClient._require_non_empty_string(
-                record.get("status"),
-                f"{context}.status",
-            ),
-        )
-
-    @staticmethod
-    def _parse_contract_deploy_assertion_receipt(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> ContractDeployAssertionReceipt:
-        record = ToriiClient._ensure_mapping(payload, context)
-        return ContractDeployAssertionReceipt(
-            id=ToriiClient._require_non_empty_string(record.get("id"), f"{context}.id"),
-            contract_alias=ToriiClient._coerce_optional_string(
-                record.get("contract_alias"),
-                context=f"{context}.contract_alias",
-            ),
-            entrypoint=ToriiClient._coerce_optional_string(
-                record.get("entrypoint"),
-                context=f"{context}.entrypoint",
-            ),
-            status=ToriiClient._require_non_empty_string(
-                record.get("status"),
-                f"{context}.status",
-            ),
-            actual_result=record.get("actual_result"),
-            expected_result=record.get("expected_result"),
-            error=ToriiClient._coerce_optional_string(
-                record.get("error"),
-                context=f"{context}.error",
-            ),
-        )
-
-    @staticmethod
-    def _parse_contract_deploy_response(
-        payload: Mapping[str, Any],
-        *,
-        context: str,
-    ) -> ContractDeployResponse:
-        record = ToriiClient._ensure_mapping(payload, context)
-        contracts = ToriiClient._ensure_list(
-            record.get("contracts"),
-            context=f"{context}.contracts",
-        )
-        hajimari_calls = ToriiClient._ensure_list(
-            record.get("hajimari_calls"),
-            context=f"{context}.hajimari_calls",
-        )
-        assertions = ToriiClient._ensure_list(
-            record.get("assertions"),
-            context=f"{context}.assertions",
-        )
-        return ContractDeployResponse(
-            ok=bool(record.get("ok")),
-            bundle_name=ToriiClient._require_non_empty_string(
-                record.get("bundle_name"),
-                f"{context}.bundle_name",
-            ),
-            bundle_digest=ToriiClient._require_non_empty_string(
-                record.get("bundle_digest"),
-                f"{context}.bundle_digest",
-            ),
-            chain_fingerprint=ToriiClient._require_non_empty_string(
-                record.get("chain_fingerprint"),
-                f"{context}.chain_fingerprint",
-            ),
-            dry_run=bool(record.get("dry_run")),
-            completed_stages=ToriiClient._parse_string_list(
-                record.get("completed_stages"),
-                context=f"{context}.completed_stages",
-            ),
-            failure_point=ToriiClient._coerce_optional_string(
-                record.get("failure_point"),
-                context=f"{context}.failure_point",
-            ),
-            contracts=[
-                ToriiClient._parse_contract_deploy_contract_receipt(
-                    ToriiClient._ensure_mapping(
-                        item,
-                        f"{context}.contracts[{index}]",
-                    ),
-                    context=f"{context}.contracts[{index}]",
-                )
-                for index, item in enumerate(contracts)
-            ],
-            hajimari_calls=[
-                ToriiClient._parse_contract_deploy_call_receipt(
-                    ToriiClient._ensure_mapping(
-                        item,
-                        f"{context}.hajimari_calls[{index}]",
-                    ),
-                    context=f"{context}.hajimari_calls[{index}]",
-                )
-                for index, item in enumerate(hajimari_calls)
-            ],
-            assertions=[
-                ToriiClient._parse_contract_deploy_assertion_receipt(
-                    ToriiClient._ensure_mapping(
-                        item,
-                        f"{context}.assertions[{index}]",
-                    ),
-                    context=f"{context}.assertions[{index}]",
-                )
-                for index, item in enumerate(assertions)
-            ],
-        )
 
     @staticmethod
     def _parse_contract_call_response(
@@ -15531,13 +16954,16 @@ class ToriiClient:
                 record.get("gas_used"),
                 context=f"{context}.gas_used",
             ),
-            gas_asset_id=ToriiClient._coerce_optional_string(
-                record.get("gas_asset_id"),
-                context=f"{context}.gas_asset_id",
-            ),
-            fee_sponsor=ToriiClient._coerce_optional_string(
-                record.get("fee_sponsor"),
-                context=f"{context}.fee_sponsor",
+            fee_payment=(
+                ToriiClient._normalize_fee_payment_intent(
+                    ToriiClient._ensure_mapping(
+                        record.get("fee_payment"), f"{context}.fee_payment"
+                    ),
+                    context=f"{context}.fee_payment",
+                    require_gas_limit=True,
+                )
+                if record.get("fee_payment") is not None
+                else None
             ),
             payload_digest_hex=ToriiClient._normalize_hex_string(
                 record.get("payload_digest_hex"),

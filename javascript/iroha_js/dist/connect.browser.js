@@ -37,6 +37,7 @@ const CONTROL_PING = 4;
 const CONTROL_PONG = 5;
 const CONTROL_SERVER_EVENT = 6;
 const PAYLOAD_CONTROL = 0;
+const PAYLOAD_SIGN_REQUEST_RAW = 1;
 const PAYLOAD_SIGN_REQUEST_TX = 2;
 const PAYLOAD_SIGN_RESULT_OK = 3;
 const PAYLOAD_SIGN_RESULT_ERR = 4;
@@ -44,6 +45,9 @@ const CONTROL_AFTER_KEY_CLOSE = 0;
 const CONTROL_AFTER_KEY_REJECT = 1;
 const ALGORITHM_ED25519 = 0;
 const PRINTABLE_ASCII_RE = /^[\x20-\x7e]+$/;
+
+export const TORII_CANONICAL_REQUEST_DOMAIN_TAG =
+  "iroha:torii:canonical-request:v1";
 
 const CRC64_TABLE = (() => {
   const table = new Array(256);
@@ -99,6 +103,14 @@ function requireNonEmptyString(value, name) {
     throw new TypeError(`${name} must not be empty`);
   }
   return trimmed;
+}
+
+function requireExactNonEmptyString(value, name) {
+  const normalized = requireNonEmptyString(value, name);
+  if (normalized !== value) {
+    throw new TypeError(`${name} must not contain surrounding whitespace`);
+  }
+  return normalized;
 }
 
 function toUint8Array(value, name) {
@@ -677,6 +689,14 @@ function encodeSignRequestTxPayload(txBytes) {
   );
 }
 
+function encodeSignRequestRawPayload(domainTag, bytes) {
+  return concatBytes(
+    u32ToBytes(PAYLOAD_SIGN_REQUEST_RAW),
+    encodeLengthPrefixed(encodeNoritoString(domainTag)),
+    encodeLengthPrefixed(encodeNoritoBytes(bytes)),
+  );
+}
+
 function encodeCiphertextFrame({ sidBytes, dir, seq, ciphertext }) {
   const ciphertextStruct = encodeNoritoStruct([
     encodeDir(dir),
@@ -1090,6 +1110,29 @@ function accountEd25519PublicKey(accountId) {
   return Uint8Array.from(controller.publicKey);
 }
 
+function requireValidEd25519Signature(signature, message, publicKey) {
+  const normalizedSignature = toUint8Array(signature, "wallet signature");
+  if (normalizedSignature.length !== 64) {
+    throw new ConnectSignRequestError(
+      "INVALID_SIGNATURE",
+      `wallet Ed25519 signature must be 64 bytes (received ${normalizedSignature.length})`,
+    );
+  }
+  let valid = false;
+  try {
+    valid = ed25519.verify(normalizedSignature, message, publicKey);
+  } catch {
+    // Use one stable error for every malformed or mismatched wallet signature.
+  }
+  if (!valid) {
+    throw new ConnectSignRequestError(
+      "INVALID_SIGNATURE",
+      "wallet signature does not match the approved account and requested bytes",
+    );
+  }
+  return normalizedSignature;
+}
+
 function buildApprovalPreimage(preview, control, relayToken) {
   if (!isNoritoNoneOption(control.permissions) || !isNoritoNoneOption(control.proof)) {
     throw new Error("Connect approval verification does not support permission/proof payloads yet");
@@ -1294,6 +1337,38 @@ export function createConnectAppSession(options = {}) {
     appSeq += 1;
   }
 
+  function requestSignature(payloadBytes, verificationBytes = null) {
+    if (pendingSign) {
+      throw new ConnectSignRequestError(
+        "REQUEST_IN_FLIGHT",
+        "a wallet signature request is already in flight",
+      );
+    }
+    const request = {
+      ...createDeferred(),
+      verificationBytes,
+    };
+    pendingSign = request;
+    void (async () => {
+      try {
+        await approval.promise;
+        if (approvalFailure !== null) {
+          throw approvalFailure;
+        }
+        if (pendingSign !== request) {
+          return;
+        }
+        sendEncrypted(payloadBytes);
+      } catch (error) {
+        if (pendingSign === request) {
+          pendingSign = null;
+          request.reject(error);
+        }
+      }
+    })();
+    return request.promise;
+  }
+
   async function handleMessage(event) {
     try {
       const bytes = await bytesFromWebSocketMessage(event.data);
@@ -1378,8 +1453,23 @@ export function createConnectAppSession(options = {}) {
           pendingSign = null;
           return;
         }
-        pendingSign.resolve(envelope.payload.signature.signature);
+        const request = pendingSign;
+        let signature = envelope.payload.signature.signature;
+        if (request.verificationBytes !== null) {
+          try {
+            signature = requireValidEd25519Signature(
+              signature,
+              request.verificationBytes,
+              accountEd25519PublicKey(approved.accountId),
+            );
+          } catch (error) {
+            request.reject(error);
+            pendingSign = null;
+            return;
+          }
+        }
         pendingSign = null;
+        request.resolve(Uint8Array.from(signature));
         return;
       }
       if (envelope.payload.kind === "sign_result_err") {
@@ -1455,22 +1545,19 @@ export function createConnectAppSession(options = {}) {
       return copyConnectApproval(approved);
     },
     async signTransaction(unsignedTxBytes) {
-      if (pendingSign) {
-        throw new Error("a wallet signature request is already in flight");
-      }
-      await approval.promise;
-      if (approvalFailure !== null) {
-        throw approvalFailure;
-      }
       const txBytes = toUint8Array(unsignedTxBytes, "unsignedTxBytes");
-      pendingSign = createDeferred();
-      try {
-        sendEncrypted(encodeSignRequestTxPayload(txBytes));
-      } catch (error) {
-        pendingSign = null;
-        throw error;
-      }
-      return pendingSign.promise;
+      return requestSignature(encodeSignRequestTxPayload(txBytes));
+    },
+    async signRaw(domainTag, bytes) {
+      const normalizedDomainTag = requireExactNonEmptyString(
+        domainTag,
+        "domainTag",
+      );
+      const message = Uint8Array.from(toUint8Array(bytes, "bytes"));
+      return requestSignature(
+        encodeSignRequestRawPayload(normalizedDomainTag, message),
+        message,
+      );
     },
     close(reason = "client closed session") {
       if (closed) {
@@ -1498,4 +1585,51 @@ export function createConnectAppSession(options = {}) {
       return approved?.accountId ?? null;
     },
   };
+}
+
+/**
+ * Bind Torii canonical-request authentication to an approved Connect identity.
+ * The signer sends the exact canonical message bytes to the wallet as a raw
+ * request; no private key material is accepted or exposed by this adapter.
+ *
+ * @param {{waitForApproval: () => Promise<{accountId: string}>, signRaw: (domainTag: string, bytes: Uint8Array) => Promise<Uint8Array>}} session
+ * @returns {Promise<{readonly authAccountId: string, readonly sign: (input: {message: ArrayBuffer | ArrayBufferView}) => Promise<Uint8Array>}>}
+ */
+export async function createConnectCanonicalRequestAuth(session) {
+  if (!session || typeof session !== "object") {
+    throw new TypeError("session must be an object");
+  }
+  if (typeof session.waitForApproval !== "function") {
+    throw new TypeError("session.waitForApproval must be a function");
+  }
+  if (typeof session.signRaw !== "function") {
+    throw new TypeError("session.signRaw must be a function");
+  }
+  const approved = await session.waitForApproval();
+  if (!approved || typeof approved !== "object") {
+    throw new TypeError("session approval must be an object");
+  }
+  const authAccountId = requireExactNonEmptyString(
+    approved.accountId,
+    "approval.accountId",
+  );
+  const approvedPublicKey = accountEd25519PublicKey(authAccountId);
+  const sign = async (input) => {
+    if (!input || typeof input !== "object") {
+      throw new TypeError("canonical signer input must be an object");
+    }
+    const message = Uint8Array.from(
+      toUint8Array(input.message, "canonical signer input.message"),
+    );
+    const signature = await session.signRaw(
+      TORII_CANONICAL_REQUEST_DOMAIN_TAG,
+      Uint8Array.from(message),
+    );
+    return requireValidEd25519Signature(
+      signature,
+      message,
+      approvedPublicKey,
+    );
+  };
+  return Object.freeze({ authAccountId, sign });
 }

@@ -76,12 +76,23 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let mint = Mint::asset_quantity(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
-        let tx = test_client.build_transaction(instructions, metadata);
+        let tx = test_client.build_transaction(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            metadata,
+        );
 
         test_client.submit_transaction_blocking(&tx)?;
         wait_for_asset_value(&test_client, &asset_id, &numeric!(200), "first mint")?;
 
-        assert!(test_client.submit_all_blocking([mint]).is_err());
+        assert!(
+            test_client
+                .submit_all_blocking(
+                    [mint],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                )
+                .is_err()
+        );
     }
 
     // Case 2: if registered with non-zero value, it cannot be minted again.
@@ -102,16 +113,30 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let register_asset = Mint::asset_quantity(1_u32, asset_id.clone());
 
-        test_client.submit_all_blocking::<InstructionBox>([
-            create_asset.into(),
-            register_asset.clone().into(),
-        ])?;
+        test_client.submit_all_blocking::<InstructionBox>(
+            [create_asset.into(), register_asset.clone().into()],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         wait_for_asset_value(&test_client, &asset_id, &numeric!(1), "seeded mint")?;
 
-        assert!(test_client.submit_blocking(register_asset).is_err());
+        assert!(
+            test_client
+                .submit_blocking(
+                    register_asset,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                )
+                .is_err()
+        );
 
         let mint = Mint::asset_quantity(1u32, asset_id);
-        assert!(test_client.submit_blocking(mint).is_err());
+        assert!(
+            test_client
+                .submit_blocking(
+                    mint,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                )
+                .is_err()
+        );
     }
 
     Ok(())

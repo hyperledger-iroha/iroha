@@ -70,7 +70,7 @@ async fn set_up_trigger(
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
     let failand: DomainId = DomainId::try_new("failand", "universal")?;
-    let create_failand = Register::domain(Domain::new(failand.clone()));
+    let create_failand = domain_setup_instruction(&failand, &iroha.account)?;
 
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
@@ -97,19 +97,20 @@ async fn set_up_trigger(
         .first()
         .expect("test network should expose at least one peer")
         .client_for(&the_one_who_fails, account_keypair.private_key().clone());
-    ensure_domain_registration_lease_for_network(network, &failand)?;
     spawn_blocking({
         let client = iroha.clone();
-        let create_failand: InstructionBox = create_failand.into();
         let create_the_one_who_fails: InstructionBox = create_the_one_who_fails.into();
         let grant_register_trigger_permission: InstructionBox =
             grant_register_trigger_permission.into();
         move || {
-            client.submit_all_blocking::<InstructionBox>([
-                create_failand,
-                create_the_one_who_fails,
-                grant_register_trigger_permission,
-            ])?;
+            client.submit_all_blocking::<InstructionBox>(
+                [
+                    create_failand,
+                    create_the_one_who_fails,
+                    grant_register_trigger_permission,
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
             eyre::Result::<()>::Ok(())
         }
     })
@@ -118,7 +119,12 @@ async fn set_up_trigger(
         let client = authority_client.clone();
         let register_fail_on_account_events: InstructionBox =
             register_fail_on_account_events.into();
-        move || client.submit_blocking::<InstructionBox>(register_fail_on_account_events)
+        move || {
+            client.submit_blocking::<InstructionBox>(
+                register_fail_on_account_events,
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     Ok((failand, the_one_who_fails, fail_on_account_events))
@@ -149,7 +155,12 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
     spawn_blocking({
         let client = iroha.clone();
         let the_one_who_fails = the_one_who_fails.clone();
-        move || client.submit_blocking(Unregister::account(the_one_who_fails))
+        move || {
+            client.submit_blocking(
+                Unregister::account(the_one_who_fails),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     assert_eq!(
@@ -190,7 +201,12 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
     spawn_blocking({
         let client = iroha.clone();
         let failand = failand.clone();
-        move || client.submit_blocking(Unregister::domain(failand))
+        move || {
+            client.submit_blocking(
+                Unregister::domain(failand),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await??;
     assert_eq!(

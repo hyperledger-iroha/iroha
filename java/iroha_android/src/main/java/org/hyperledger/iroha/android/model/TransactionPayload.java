@@ -12,9 +12,8 @@ import org.hyperledger.iroha.android.address.AccountIdLiteral;
 /**
  * Representation of a transaction payload prior to Norito encoding.
  *
- * <p>The structure mirrors the Rust data model sufficiently for encoding and signing. Instruction
- * handling currently focuses on the IVM bytecode variant; support for general instruction lists will
- * be added alongside dedicated builders.
+ * <p>The structure mirrors the Rust data model for encoding and signing native instructions,
+ * deployed-contract calls, flat mixed batches, and IVM bytecode.
  */
 public final class TransactionPayload {
 
@@ -24,6 +23,7 @@ public final class TransactionPayload {
   private final Executable executable;
   private final Optional<Long> timeToLiveMs;
   private final Optional<Integer> nonce;
+  private final FeePaymentIntent feePayment;
   private final Map<String, JsonValue> metadata;
 
   private TransactionPayload(final Builder builder) {
@@ -33,6 +33,7 @@ public final class TransactionPayload {
     this.executable = builder.executable;
     this.timeToLiveMs = builder.timeToLiveMs;
     this.nonce = builder.nonce;
+    this.feePayment = Objects.requireNonNull(builder.feePayment, "feePayment");
     this.metadata = Collections.unmodifiableMap(new LinkedHashMap<>(builder.metadata));
   }
 
@@ -60,6 +61,10 @@ public final class TransactionPayload {
     return nonce;
   }
 
+  public FeePaymentIntent feePayment() {
+    return feePayment;
+  }
+
   public Map<String, JsonValue> metadata() {
     return metadata;
   }
@@ -72,6 +77,7 @@ public final class TransactionPayload {
         .setExecutable(executable)
         .setTimeToLiveMs(timeToLiveMs.orElse(null))
         .setNonce(nonce.orElse(null))
+        .setFeePayment(feePayment)
         .setMetadata(metadata);
   }
 
@@ -88,6 +94,7 @@ public final class TransactionPayload {
     private Executable executable = Executable.ivm(new byte[0]);
     private Optional<Long> timeToLiveMs = Optional.empty();
     private Optional<Integer> nonce = Optional.empty();
+    private FeePaymentIntent feePayment;
     private final Map<String, JsonValue> metadata = new LinkedHashMap<>();
 
     public Builder setChainId(final String chainId) {
@@ -121,6 +128,14 @@ public final class TransactionPayload {
       return setExecutable(Executable.instructions(instructions));
     }
 
+    public Builder setContractCall(final ContractInvocation invocation) {
+      return setExecutable(Executable.contractCall(invocation));
+    }
+
+    public Builder setBatch(final List<? extends ExecutableBatchItem> items) {
+      return setExecutable(Executable.batch(items));
+    }
+
     public Builder setTimeToLiveMs(final Long ttlMs) {
       if (ttlMs == null) {
         this.timeToLiveMs = Optional.empty();
@@ -140,6 +155,11 @@ public final class TransactionPayload {
       } else {
         this.nonce = Optional.of(nonce);
       }
+      return this;
+    }
+
+    public Builder setFeePayment(final FeePaymentIntent feePayment) {
+      this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
       return this;
     }
 
@@ -183,6 +203,24 @@ public final class TransactionPayload {
     }
 
     public TransactionPayload build() {
+      return build(true);
+    }
+
+    /** Internal codec hook that preserves decoding of historical, non-admissible payloads. */
+    public TransactionPayload buildDecodedForCodec() {
+      return build(false);
+    }
+
+    private TransactionPayload build(final boolean validateExecutableGas) {
+      if (feePayment == null) {
+        throw new IllegalStateException("feePayment must be set explicitly");
+      }
+      if (validateExecutableGas
+          && executable.requiresTransactionGasLimit()
+          && feePayment.gasLimit() == null) {
+        throw new IllegalStateException(
+            "feePayment.gasLimit is required for IVM and contract-call executables");
+      }
       return new TransactionPayload(this);
     }
 

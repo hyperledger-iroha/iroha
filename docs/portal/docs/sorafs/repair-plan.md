@@ -25,7 +25,7 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 | `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
 | `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
 | `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `max_penalty` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
+- Scheduler-generated proposals are capped at `max_penalty`; auditor submissions above the cap are rejected.
 - Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.

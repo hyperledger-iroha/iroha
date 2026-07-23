@@ -123,7 +123,7 @@ Generate a bare-metal local network: genesis, per-peer configs, client config, a
 
 ###### **Options:**
 
-* `-p`, `--peers <COUNT>` — Number of peers to generate
+* `-p`, `--peers <COUNT>` — Number of peers to generate (minimum four)
 
   Default value: `4`
 * `-s`, `--seed <SEED>` — Optional UTF-8 seed for deterministic keys

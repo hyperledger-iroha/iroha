@@ -465,43 +465,29 @@ async fn contract_routes_honor_api_token_requirement() {
 
     let app = torii.api_router_for_tests();
 
-    let denied = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(Uri::from_static("/v1/contracts/deploy"))
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from("{}"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/contracts/deploy"))
-            .header("x-api-token", "test-token")
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
-    )
-    .await;
-
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/contracts/deploy-bundle"))
-            .header("x-api-token", "test-token")
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
-    )
-    .await;
+    for (method, path) in [
+        ("POST", "/v1/contracts/deploy"),
+        ("POST", "/v1/contracts/deploy-bundle"),
+        (
+            "GET",
+            "/v1/contracts/deploy-bundles/not-a-real-bundle-digest",
+        ),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(method)
+                    .uri(path)
+                    .header("x-api-token", "test-token")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
+    }
 
     assert_route_is_not_auth_denied(
         app.clone(),
@@ -548,21 +534,4 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap(),
     )
     .await;
-
-    let status_resp = app
-        .oneshot(
-            Request::builder()
-                .uri(Uri::from_static(
-                    "/v1/contracts/deploy-bundles/not-a-real-bundle-digest",
-                ))
-                .header("x-api-token", "test-token")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert!(!matches!(
-        status_resp.status(),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
-    ));
 }

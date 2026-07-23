@@ -21,13 +21,13 @@ governance reviewers can audit every billing cycle.
      --gib 250 \
      --quote-out artifacts/sorafs_reserve/quotes/provider-alpha-apr.json
 
-  sorafs reserve ledger \
-    --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
-    --provider-account <i105-account-id> \
-    --treasury-account <i105-account-id> \
-    --reserve-account <i105-account-id> \
-    --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
-    --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
+   sorafs reserve ledger \
+     --quote artifacts/sorafs_reserve/quotes/provider-alpha-apr.json \
+     --provider-account <i105-account-id> \
+     --treasury-account <i105-account-id> \
+     --reserve-account <i105-account-id> \
+     --asset-definition 61CtjvNd9T3THAR65GsMVHr82Bjc \
+     --json-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.json
    ```
    The ledger helper attaches a `ledger_projection` block (rent due, reserve
    shortfall, top-up delta, underwriting booleans) plus the Norito `Transfer`
@@ -43,8 +43,10 @@ governance reviewers can audit every billing cycle.
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   The digest helper normalises micro‑XOR totals into XOR, records whether the
-   projection meets underwriting, and emits the **transfer feed** metrics
+   The digest helper validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR
+   fields and ambiguous JSON, records whether the projection meets
+   underwriting, and emits the **transfer feed** metrics
    `sorafs_reserve_ledger_transfer_xor` and
    `sorafs_reserve_ledger_instruction_total`. When multiple ledgers need to be
    processed (e.g., a batch of providers), repeat `--ledger`/`--label` pairs and

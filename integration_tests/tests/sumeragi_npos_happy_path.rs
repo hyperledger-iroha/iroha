@@ -86,7 +86,10 @@ async fn npos_happy_path_enforces_da_and_metrics_bounds() -> eyre::Result<()> {
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..BLOCK_TARGET {
-        client.submit_blocking(Log::new(Level::INFO, format!("npos happy seed {idx}")))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, format!("npos happy seed {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     network
         .ensure_blocks_with(|height| height.total >= BLOCK_TARGET)
@@ -166,9 +169,14 @@ async fn npos_large_da_payload_commits_with_consistent_v2_subject() -> eyre::Res
     let expected_height = client.get_status()?.blocks.saturating_add(1);
     let payload = "N".repeat(LARGE_PAYLOAD_BYTES);
     let submit_client = client.clone();
-    tokio::task::spawn_blocking(move || submit_client.submit(Log::new(Level::INFO, payload)))
-        .await
-        .wrap_err("join large NPoS DA submission")??;
+    tokio::task::spawn_blocking(move || {
+        submit_client.submit(
+            Log::new(Level::INFO, payload),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await
+    .wrap_err("join large NPoS DA submission")??;
 
     tokio::time::timeout(
         COMMIT_WAIT_BUDGET,

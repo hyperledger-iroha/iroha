@@ -13,6 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "fuzz_smoke.sh"
 WORKFLOW = ROOT / ".github" / "workflows" / "numeric_v1_fuzz.yml"
+NUMERIC_TARGET = ROOT / "crates" / "ivm" / "fuzz" / "fuzz_targets" / "numeric_v1.rs"
+NUMERIC_CORPUS = ROOT / "crates" / "ivm" / "fuzz" / "corpus" / "numeric_v1"
 PINNED_NIGHTLY = "nightly-2025-05-08"
 PINNED_CARGO_FUZZ = "0.13.2"
 
@@ -197,6 +199,54 @@ class FuzzSmokeTests(unittest.TestCase):
             workflow,
         )
         self.assertIn('      - "v*"', workflow)
+        self.assertIn("ref: ${{ github.sha }}", workflow)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', workflow)
+        self.assertIn("group: numeric-v1-fuzz-${{ github.sha }}", workflow)
+        self.assertIn("cancel-in-progress: false", workflow)
+
+    def test_dedicated_workflow_covers_every_numeric_semantics_input(self) -> None:
+        """Compiler, ABI, fixture, syscall-test, and spec edits all trigger fuzzing."""
+
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        required_paths = (
+            '"crates/kotodama_lang/src/**"',
+            '"crates/kotodama_lang/tests/**"',
+            '"crates/ivm/fuzz/**"',
+            '"crates/ivm/src/numeric_v1.rs"',
+            '"crates/ivm/src/numeric_gas.rs"',
+            '"crates/ivm/src/numeric_tlv.rs"',
+            '"crates/ivm/spec/syscalls.toml"',
+            '"crates/ivm/tests/**"',
+            '"crates/ivm_abi/src/**"',
+            '"docs/source/kotodama_numeric_v1.md"',
+            '"fixtures/numeric_v1_golden.json"',
+        )
+        for path in required_paths:
+            self.assertIn(path, workflow)
+
+    def test_numeric_target_exercises_arithmetic_corruption_and_staged_oog(self) -> None:
+        """The release target must not regress to shallow encode/decode-only fuzzing."""
+
+        source = NUMERIC_TARGET.read_text(encoding="utf-8")
+        for required in (
+            "exercise_envelope_corruptions",
+            "fuzz_decimal_arithmetic",
+            "try_decimal_div_exact",
+            "try_decimal_div_round",
+            "fuzz_staged_out_of_gas",
+            "VMError::SyscallOutOfGas",
+            "SyscallCompletion::Trap",
+        ):
+            self.assertIn(required, source)
+
+        self.assertTrue(
+            (NUMERIC_CORPUS / "arithmetic_full_width_seed")
+            .read_bytes()
+            .startswith(b"A")
+        )
+        self.assertTrue(
+            (NUMERIC_CORPUS / "staged_oog_seed").read_bytes().startswith(b"G")
+        )
 
 
 if __name__ == "__main__":

@@ -131,14 +131,11 @@ define_instruction_handlers! {
     dispatch_instruction::<SetParameter>,
     dispatch_instruction::<Upgrade>,
     dispatch_instruction::<Log>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::AcquireAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::account_alias_lease::RenewAccountAliasLease>,
-    dispatch_instruction::<iroha_data_model::isi::sns::RegisterSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::RenewSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::TransferSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::UpdateSnsNameControllers>,
-    dispatch_instruction::<iroha_data_model::isi::sns::FreezeSnsName>,
-    dispatch_instruction::<iroha_data_model::isi::sns::UnfreezeSnsName>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::EnsureAlias>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::RenewAliasLease>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::ConfigureAliasAutoRenew>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::RebindAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::alias_setup::CompareAndSetPrimaryAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::InvalidInstruction>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::CreateKaigi>,
     dispatch_instruction::<iroha_data_model::isi::kaigi::JoinKaigi>,
@@ -230,8 +227,6 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::space_directory::ExpireSpaceDirectoryManifest>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
-    dispatch_instruction::<iroha_data_model::isi::domain_link::SetPrimaryAccountAlias>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy>,
     dispatch_instruction::<iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy>,
@@ -253,8 +248,9 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::ram_lfe::DeactivateRamLfeProgramPolicy>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionAlias>,
     dispatch_instruction::<iroha_data_model::isi::SetAssetDefinitionBalancePolicy>,
-    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>,
-    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>,
+    dispatch_instruction::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>,
+    dispatch_instruction::<iroha_data_model::isi::offline::ActivateKagemushaRecursiveReleaseV4>,
     dispatch_instruction::<iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation>,
     dispatch_instruction::<iroha_data_model::isi::offline::SetOfflineDeviceAttestationPolicy>,
     dispatch_instruction::<iroha_data_model::isi::social::ClaimTwitterFollowReward>,
@@ -350,9 +346,19 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::staking::ExitPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::nexus::SetLaneRelayEmergencyValidators>,
     dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay>,
-    dispatch_instruction::<iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget>,
-    dispatch_instruction::<iroha_data_model::isi::nexus::UpsertFeeSponsorPolicy>,
-    dispatch_instruction::<iroha_data_model::isi::nexus::RemoveFeeSponsorPolicy>,
+    dispatch_instruction::<
+        iroha_data_model::isi::nexus::RegisterVerifiedFeeSponsorVaultAllocation
+    >,
+    dispatch_instruction::<iroha_data_model::isi::nexus::CreateFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::StageFeeSponsorProgramRevision>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::ActivateFeeSponsorProgramRevision>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::PauseFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::BeginCloseFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::CloseFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::EnrollFeeSponsorBeneficiary>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::UnenrollFeeSponsorBeneficiary>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::FundFeeSponsorProgram>,
+    dispatch_instruction::<iroha_data_model::isi::nexus::WithdrawFeeSponsorProgram>,
     dispatch_instruction::<iroha_data_model::isi::staking::RegisterPublicLaneValidator>,
     dispatch_instruction::<iroha_data_model::isi::staking::BondPublicLaneStake>,
     dispatch_instruction::<iroha_data_model::isi::staking::SchedulePublicLaneUnbond>,
@@ -377,6 +383,7 @@ define_instruction_handlers! {
         iroha_data_model::isi::smart_contract_code::CancelSmartContractCodeUpload
     >,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::ActivateContractInstance>,
+    dispatch_instruction::<iroha_data_model::isi::smart_contract_code::CommitContractDeployment>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::DeactivateContractInstance>,
     dispatch_instruction::<iroha_data_model::isi::smart_contract_code::RemoveSmartContractBytes>,
     dispatch_instruction::<verifying_keys::RegisterVerifyingKey>,
@@ -565,6 +572,35 @@ mod registry_dispatch_tests {
                 !registry.contains(wire_id),
                 "{wire_id} must not alias any default dispatcher entry"
             );
+        }
+    }
+
+    #[test]
+    fn retired_sns_mutations_have_no_native_dispatch_handler() {
+        let registry = iroha_data_model::isi::registry::default();
+        let removed_type_names = [
+            "iroha_data_model::isi::sns::RegisterSnsName",
+            "iroha_data_model::isi::sns::RenewSnsName",
+            "iroha_data_model::isi::sns::TransferSnsName",
+            "iroha_data_model::isi::sns::UpdateSnsNameControllers",
+            "iroha_data_model::isi::sns::FreezeSnsName",
+            "iroha_data_model::isi::sns::UnfreezeSnsName",
+        ];
+        let removed_wire_ids = [
+            "iroha.sns.name.register",
+            "iroha.sns.name.renew",
+            "iroha.sns.name.transfer",
+            "iroha.sns.name.controllers.update",
+            "iroha.sns.name.freeze",
+            "iroha.sns.name.unfreeze",
+        ];
+
+        for type_name in removed_type_names {
+            assert!(!has_dispatch_handler(type_name));
+            assert!(!registry.contains(type_name));
+        }
+        for wire_id in removed_wire_ids {
+            assert!(!registry.contains(wire_id));
         }
     }
 }
@@ -780,13 +816,11 @@ mod tests {
             AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceCatalog, DataSpaceId,
             DataSpaceMetadata, LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneCatalog, LaneConfig,
             LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope, ProofBlob, VerifiedLaneRelayRecord,
-            VerifiedNexusFeeBudgetRecord, lane_relay_fastpq_claim_digest,
-            nexus_fee_budget_claim_digest,
+            lane_relay_fastpq_claim_digest,
         },
         permission,
     };
     use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
-    use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{
         ALICE_ID, ALICE_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
         gen_account_in,
@@ -1057,120 +1091,6 @@ mod tests {
         }
     }
 
-    fn axt_fee_budget_proof_blob_for(
-        sponsor: &AccountId,
-        fee_asset_id: &str,
-        verified_balance: &Quantity,
-        manifest_root: [u8; 32],
-        expiry_slot: u64,
-    ) -> ProofBlob {
-        let fee_asset_id = fee_asset_id.trim();
-        let sponsor_bytes = sponsor.to_string();
-        let balance_bytes = verified_balance.to_string();
-        let source_tx_commitment = axt_test_digest(
-            b"axt-isi-test:budget-source-tx",
-            &[sponsor_bytes.as_bytes(), fee_asset_id.as_bytes()],
-        );
-        let claim_digest = nexus_fee_budget_claim_digest(sponsor, fee_asset_id, verified_balance);
-        let witness_commitment = axt_test_digest(
-            b"axt-isi-test:budget-witness",
-            &[sponsor_bytes.as_bytes(), balance_bytes.as_bytes()],
-        );
-        let policy_commitment = axt_test_digest(b"axt-isi-test:budget-policy", &[&manifest_root]);
-        let dsid = DataSpaceId::UNIVERSAL;
-        let binding = AxtFastpqBinding {
-            parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
-            source_dsid: dsid.as_u64(),
-            source_dataspace: "universal".to_owned(),
-            source_receipt_id: format!("budget-{}", hex::encode(source_tx_commitment.as_ref())),
-            source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
-            claim_type: "authorization".to_owned(),
-            claim_digest: hex::encode(claim_digest.as_ref()),
-            witness_commitment: hex::encode(witness_commitment.as_ref()),
-            policy_commitment: hex::encode(policy_commitment.as_ref()),
-            verified_effect_type: "nexus_fee_budget".to_owned(),
-            corridor: "isi-test-fee-budget".to_owned(),
-            verifier_id: "fastpq".to_owned(),
-            verifier_version: "v1".to_owned(),
-            target_dsids: vec![dsid.as_u64()],
-            effect_binding: Some(AxtEffectBinding {
-                destination_domain: None,
-                destination_account_id: Some(sponsor.to_string()),
-                vault_account_id: None,
-                issuance_account_id: None,
-                source_asset_definition_id: Some(fee_asset_id.to_owned()),
-                destination_asset_definition_id: None,
-                source_amount_i64: None,
-                destination_amount_i64: None,
-            }),
-        };
-        let mut dsid_bytes = [0_u8; 16];
-        dsid_bytes[..8].copy_from_slice(&dsid.as_u64().to_le_bytes());
-        let mut batch = fastpq_prover::TransitionBatch::new(
-            fastpq_prover::AXT_DEFAULT_PARAMETER,
-            fastpq_prover::PublicInputs {
-                dsid: dsid_bytes,
-                slot: expiry_slot,
-                old_root: axt_test_digest(
-                    b"axt-isi-test:budget-old-root",
-                    &[fee_asset_id.as_bytes()],
-                )
-                .into(),
-                new_root: manifest_root,
-                perm_root: axt_test_digest(
-                    b"axt-isi-test:budget-perm-root",
-                    &[sponsor_bytes.as_bytes()],
-                )
-                .into(),
-                tx_set_hash: axt_test_digest(
-                    b"axt-isi-test:budget-tx-set",
-                    &[balance_bytes.as_bytes()],
-                )
-                .into(),
-            },
-        );
-        batch.push(fastpq_prover::StateTransition::new(
-            b"axt/isi/nexus-fee-budget".to_vec(),
-            sponsor_bytes.as_bytes().to_vec(),
-            balance_bytes.as_bytes().to_vec(),
-            fastpq_prover::OperationKind::MetaSet,
-        ));
-        batch.sort();
-        batch.metadata.insert(
-            "entry_hash".to_owned(),
-            source_tx_commitment.as_ref().to_vec(),
-        );
-        fastpq_prover::bind_axt_batch(&mut batch, &binding).expect("bind AXT fee budget batch");
-        let proof = fastpq_prover::Prover::canonical_with_modes(
-            fastpq_prover::AXT_DEFAULT_PARAMETER,
-            fastpq_prover::ExecutionMode::Cpu,
-            fastpq_prover::PoseidonExecutionMode::Cpu,
-        )
-        .expect("FASTPQ prover")
-        .prove(&batch)
-        .expect("FASTPQ proof");
-        let fastpq_payload =
-            fastpq_prover::encode_axt_fastpq_payload(&batch, proof).expect("AXT FASTPQ payload");
-        let envelope = AxtProofEnvelope {
-            dsid,
-            manifest_root,
-            da_commitment: None,
-            proof: fastpq_payload,
-            fastpq_binding: Some(binding),
-            committed_amount: Some(
-                verified_balance
-                    .as_numeric()
-                    .try_mantissa_u128()
-                    .expect("test balance is an integer u128"),
-            ),
-            amount_commitment: None,
-        };
-        ProofBlob {
-            payload: norito::to_bytes(&envelope).expect("encode proof envelope"),
-            expiry_slot: Some(expiry_slot),
-        }
-    }
-
     fn state_with_test_domains(kura: &Arc<Kura>) -> Result<State> {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
@@ -1234,6 +1154,13 @@ mod tests {
         .expect("lane catalog");
         state_transaction.nexus.lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
         state_transaction.nexus.lane_catalog = lane_catalog;
+        state_transaction.lane_incarnations.insert(
+            lane_id,
+            iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
+        );
+        state_transaction
+            .lane_incarnation_activation_heights
+            .insert(lane_id, 0);
     }
 
     fn sample_lane_relay_envelope(
@@ -1249,10 +1176,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: dsid,
             tx_count: 1,
-            total_local_micro: 76,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -1327,10 +1254,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
             tx_count: 1,
-            total_local_micro: 76,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -1447,62 +1374,6 @@ mod tests {
             InstructionExecutionError::Conversion(message)
                 if message.contains("Unknown instruction type")
         ));
-        Ok(())
-    }
-
-    #[test]
-    async fn register_verified_nexus_fee_budget_persists_verified_cache_record() -> Result<()> {
-        let kura = Kura::blank_kura_for_testing();
-        let state = state_with_test_domains(&kura)?;
-        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
-        let block_header = valid_block.as_ref().header().clone();
-        let mut state_block = state.block(block_header.clone());
-        let mut state_transaction = state_block.transaction();
-
-        let sponsor = ALICE_ID.clone();
-        let fee_asset_id = "xor#universal";
-        let verified_balance = Quantity::from(10_u32);
-        let manifest_root = [0x63; 32];
-        state_transaction.nexus.enabled = true;
-        state_transaction.nexus.fees.fee_asset_id = fee_asset_id.to_owned();
-
-        let proof_blob = axt_fee_budget_proof_blob_for(
-            &sponsor,
-            fee_asset_id,
-            &verified_balance,
-            manifest_root,
-            block_header.height().get() + 10,
-        );
-        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedNexusFeeBudget {
-            sponsor_account_id: sponsor.clone(),
-            fee_asset_id: fee_asset_id.to_owned(),
-            verified_balance: verified_balance.clone(),
-            manifest_root,
-            proof_blob,
-        };
-
-        instruction.execute(&ALICE_ID, &mut state_transaction)?;
-        state_transaction.apply();
-        state_block.commit().unwrap();
-
-        let key: Name =
-            VerifiedNexusFeeBudgetRecord::state_key_for(&sponsor, fee_asset_id).parse()?;
-        let view = state.view();
-        let payload = view
-            .world
-            .smart_contract_state()
-            .get(&key)
-            .expect("verified fee budget cache record");
-        let json: Json = norito::decode_from_bytes(payload)?;
-        let record: VerifiedNexusFeeBudgetRecord = norito::json::from_slice(json.get().as_bytes())?;
-        assert_eq!(record.sponsor_account_id, sponsor);
-        assert_eq!(record.fee_asset_id, fee_asset_id);
-        assert_eq!(record.verified_balance, verified_balance);
-        assert_eq!(record.manifest_root, manifest_root);
-        assert_eq!(
-            record.fastpq_binding.verified_effect_type,
-            "nexus_fee_budget"
-        );
         Ok(())
     }
 
@@ -2301,10 +2172,10 @@ mod tests {
             .receipts
             .push(LaneSettlementReceipt {
                 source_id: [0xA5; 32],
-                local_amount_micro: 1,
-                xor_due_micro: 1,
-                xor_after_haircut_micro: 1,
-                xor_variance_micro: 0,
+                local_amount: "0.000001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000001".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+                xor_variance: "0".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_001_000,
             });
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
@@ -2782,7 +2653,81 @@ mod tests {
     }
 
     #[test]
-    async fn register_verified_lane_relay_persists_effect_proof_binding() -> Result<()> {
+    async fn register_verified_lane_relay_rejects_business_effect_smuggled_in_lane_proof()
+    -> Result<()> {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let valid_block = ValidBlock::new_dummy(checked_keypair().private_key());
+        let block_header = valid_block.as_ref().header().clone();
+        let mut state_block = state.block(block_header.clone());
+        let mut state_transaction = state_block.transaction();
+        let dsid = DataSpaceId::new(10);
+        let lane_id = LaneId::new(3);
+        configure_lane_relay_catalogs(&mut state_transaction, dsid, lane_id);
+
+        let envelope = sample_lane_relay_envelope(
+            block_header,
+            lane_id,
+            dsid,
+            [0x42; 32],
+            iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
+        );
+        let mut proof_blob = axt_lane_relay_proof_blob_for(
+            &envelope,
+            b"register-lane-relay-smuggled-business-effect",
+            state_transaction.block_height() + 10,
+        );
+        let mut proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
+        proof_envelope
+            .fastpq_binding
+            .as_mut()
+            .expect("test fastpq binding")
+            .effect_binding = Some(AxtEffectBinding {
+            destination_domain: Some("hbl.sbp".to_owned()),
+            destination_account_id: Some(ALICE_ID.to_string()),
+            vault_account_id: None,
+            issuance_account_id: None,
+            source_asset_definition_id: Some("aed#cbuae".to_owned()),
+            destination_asset_definition_id: Some("pkr#sbp".to_owned()),
+            source_amount_i64: Some(10),
+            destination_amount_i64: Some(760),
+        });
+        proof_blob.payload = norito::to_bytes(&proof_envelope)?;
+        let envelope = lane_relay_envelope_with_proof_payload(
+            envelope,
+            &proof_blob,
+            state_transaction.block_height(),
+        );
+        let relay_state_key = relay_state_key_for_test(&envelope);
+        let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
+            envelope,
+            proof_blob,
+            effect_proof_blob: None,
+        };
+
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("lane proof must not smuggle a business-effect binding");
+        assert!(matches!(
+            err,
+            InstructionExecutionError::InvalidParameter(
+                InvalidParameterError::SmartContract(message)
+            ) if message.contains("lane relay block proof must not carry a business-effect binding")
+        ));
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&relay_state_key)
+                .is_none(),
+            "rejected smuggled business effect must not persist relay state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    async fn register_verified_lane_relay_rejects_unanchored_business_effect_proof() -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
@@ -2817,34 +2762,39 @@ mod tests {
             state_transaction.block_height(),
         );
         let relay_state_key = relay_state_key_for_test(&envelope);
-        let proof_payload_hash = iroha_crypto::Hash::new(&proof_blob.payload);
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
             proof_blob,
             effect_proof_blob: Some(effect_proof_blob),
         };
 
-        instruction.execute(&ALICE_ID, &mut state_transaction)?;
-        let payload = state_transaction
-            .world
-            .smart_contract_state
-            .get(&relay_state_key)
-            .expect("verified relay record persisted");
-        let stored_json: Json = norito::decode_from_bytes(payload)?;
-        let record: VerifiedLaneRelayRecord =
-            norito::json::from_slice(stored_json.get().as_bytes())?;
-
-        assert_eq!(record.proof_payload_hash, proof_payload_hash);
-        assert_eq!(
-            record.fastpq_binding.verified_effect_type,
-            "aed_to_pkr_settlement"
+        let err = instruction
+            .execute(&ALICE_ID, &mut state_transaction)
+            .expect_err("unanchored business-effect proof must be rejected");
+        assert!(
+            matches!(
+                &err,
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message)
+                ) if message.contains("business-effect promotion is disabled")
+                    && message.contains("finalized, QC-anchored settlement ledger entry")
+            ),
+            "unexpected rejection before the business-effect promotion guard: {err:?}"
         );
-        assert!(record.fastpq_binding.effect_binding.is_some());
+        assert!(
+            state_transaction
+                .world
+                .smart_contract_state
+                .get(&relay_state_key)
+                .is_none(),
+            "rejected business-effect proof must not persist relay state"
+        );
         Ok(())
     }
 
     #[test]
-    async fn register_verified_lane_relay_rejects_lane_proof_as_effect_proof() -> Result<()> {
+    async fn register_verified_lane_relay_rejects_effect_proof_before_proof_verification()
+    -> Result<()> {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
@@ -2863,30 +2813,28 @@ mod tests {
             [0x42; 32],
             iroha_crypto::Hash::new(b"placeholder-axt-proof-payload"),
         );
-        let proof_blob = axt_lane_relay_proof_blob_for(
-            &envelope,
-            b"register-lane-relay-effect-lane-proof",
-            state_transaction.block_height() + 10,
-        );
-        let envelope = lane_relay_envelope_with_proof_payload(
-            envelope,
-            &proof_blob,
-            state_transaction.block_height(),
-        );
+        let proof_blob = ProofBlob {
+            payload: Vec::new(),
+            expiry_slot: None,
+        };
         let instruction = iroha_data_model::isi::nexus::RegisterVerifiedLaneRelay {
             envelope,
-            effect_proof_blob: Some(proof_blob.clone()),
+            effect_proof_blob: Some(ProofBlob {
+                payload: vec![0xFF],
+                expiry_slot: Some(state_transaction.block_height().saturating_sub(1)),
+            }),
             proof_blob,
         };
 
         let err = instruction
             .execute(&ALICE_ID, &mut state_transaction)
-            .expect_err("lane proof in the effect slot must be rejected");
+            .expect_err("disabled effect proof must be rejected before proof verification");
         assert!(matches!(
             err,
             InstructionExecutionError::InvalidParameter(
                 InvalidParameterError::SmartContract(message)
-            ) if message.contains("effect proof must not use lane_relay_block")
+            ) if message.contains("business-effect promotion is disabled")
+                && message.contains("finalized, QC-anchored settlement ledger entry")
         ));
         Ok(())
     }
@@ -3615,12 +3563,16 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
 
-        let tx = TransactionBuilder::new(chain_id.clone(), SAMPLE_GENESIS_ACCOUNT_ID.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "genesis stateless admission".to_owned(),
-            )])
-            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "genesis stateless admission".to_owned(),
+        )])
+        .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key());
         let crypto_cfg = state.crypto();
         assert!(
             AcceptedTransaction::accept(

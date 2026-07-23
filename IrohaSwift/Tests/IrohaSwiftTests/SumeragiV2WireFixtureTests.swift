@@ -6,6 +6,10 @@ import XCTest
 @testable import IrohaSwift
 
 final class SumeragiV2WireFixtureTests: XCTestCase {
+    func testUnsafeProposalIgnoreReasonUsesWireDiscriminantEleven() {
+        XCTAssertEqual(SumeragiV2IgnoreReason(rawValue: 11), .unsafeProposal)
+    }
+
     func testRustCanonicalMessageFixturesRoundtrip() throws {
         let messages = try fixtureRows().filter { $0.kind == "message" }
         XCTAssertEqual(Set(messages.map(\.name)), expectedMessageNames)
@@ -15,6 +19,42 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             let decoded = try SumeragiV2ConsensusMessage.decodeCanonical(encoded)
             XCTAssertEqual(decoded.encode(), encoded, row.name)
         }
+    }
+
+    func testLaterViewCommitFixturesPreserveProposalOrigin() throws {
+        func message(_ name: String) throws -> SumeragiV2ConsensusMessage {
+            let row = try XCTUnwrap(
+                fixtureRows().first { $0.kind == "message" && $0.name == name }
+            )
+            return try SumeragiV2ConsensusMessage.decodeCanonical(
+                Data(sumeragiV2Hex: row.hex)
+            )
+        }
+
+        guard case .vote(let vote) = try message("commit_vote_later_view").payload else {
+            return XCTFail("later-view Commit vote fixture decoded to the wrong payload")
+        }
+        guard case .quorumCertificate(let certificate) = try message(
+            "commit_quorum_certificate_later_view"
+        ).payload else {
+            return XCTFail("later-view CommitQC fixture decoded to the wrong payload")
+        }
+        guard case .commitCertificateResponse(let response) = try message(
+            "commit_certificate_response"
+        ).payload else {
+            return XCTFail("CommitQC response fixture decoded to the wrong payload")
+        }
+
+        XCTAssertEqual(vote.phase, .commit)
+        XCTAssertEqual(vote.round.view, 9)
+        XCTAssertEqual(vote.proposalRound.view, 1)
+        XCTAssertEqual(vote.round.contextID, vote.proposalRound.contextID)
+        XCTAssertEqual(vote.round.height, vote.proposalRound.height)
+        XCTAssertEqual(certificate.round, vote.round)
+        XCTAssertEqual(certificate.proposalRound, vote.proposalRound)
+        XCTAssertEqual(certificate.subject, vote.subject)
+        XCTAssertEqual(certificate.executionCommitment, vote.executionCommitment)
+        XCTAssertEqual(response.certificate.reference, certificate.reference)
     }
 
     func testCommitCertificateSigningPreimagesMatchRustExactly() throws {
@@ -69,6 +109,12 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
             return XCTFail("response fixture decoded to the wrong v2 payload")
         }
         XCTAssertEqual(response.certificate.phase, .commit)
+        XCTAssertEqual(response.certificate.round.view, 9)
+        XCTAssertEqual(response.certificate.proposalRound.view, 1)
+        XCTAssertEqual(
+            response.certificate.reference.proposalRound,
+            response.certificate.proposalRound
+        )
         XCTAssertEqual(response.signature.count, 48)
         XCTAssertEqual(response.requestHash, try request.requestHash())
         try response.validate(against: request)
@@ -136,6 +182,7 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         )
         let changedSubjectCertificate = try SumeragiV2QuorumCertificate(
             round: response.certificate.round,
+            proposalRound: response.certificate.proposalRound,
             phase: response.certificate.phase,
             subject: changedSubject,
             executionCommitment: response.certificate.executionCommitment,
@@ -162,9 +209,10 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         let decoded = try SumeragiV2Status.decodeCanonical(encoded)
         XCTAssertEqual(decoded.encode(), encoded)
         XCTAssertEqual(decoded.protocolVersion, SumeragiV2ConsensusMessage.protocolVersion)
+        XCTAssertFalse(decoded.restartRequired)
         XCTAssertEqual(decoded.height, 1)
         XCTAssertEqual(decoded.view, 3)
-        XCTAssertEqual(decoded.phase, .prepare)
+        XCTAssertEqual(decoded.phase, .commit)
         XCTAssertEqual(decoded.leader, 2)
         XCTAssertEqual(decoded.bodyState, .validated)
         XCTAssertEqual(decoded.pendingPersistenceID, 17)
@@ -180,6 +228,27 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         XCTAssertEqual(decoded.heightContext.quorum.minSigners, 3)
         XCTAssertEqual(decoded.heightContext.quorum.totalPower, 4)
         XCTAssertNil(decoded.lastCommitQC)
+        XCTAssertEqual(decoded.liveness.generation, 3)
+        XCTAssertEqual(decoded.liveness.prepareQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.commitQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.prepareQuorums.first?.round.view, 1)
+        XCTAssertEqual(decoded.liveness.prepareQuorums.first?.proposalRound.view, 1)
+        XCTAssertEqual(decoded.liveness.commitQuorums.first?.round.view, 3)
+        XCTAssertEqual(decoded.liveness.commitQuorums.first?.proposalRound.view, 1)
+        XCTAssertEqual(decoded.liveness.timeoutQuorums.count, 1)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.kind, .commitVote)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.round.view, 3)
+        XCTAssertEqual(decoded.liveness.outboundIntents.first?.proposalRound?.view, 1)
+        XCTAssertEqual(decoded.liveness.queues.count, 1)
+        XCTAssertEqual(decoded.liveness.queues.first?.queue, .effectDispatch)
+        XCTAssertEqual(decoded.liveness.blocker, .localControlPending)
+
+        // The fifth struct field follows four fixed-width fields and is the
+        // canonical one-byte `restart_required` boolean.
+        XCTAssertEqual(encoded[102], 1)
+        var invalidBoolean = encoded
+        invalidBoolean[103] = 2
+        XCTAssertThrowsError(try SumeragiV2Status.decodeCanonical(invalidBoolean))
     }
 
     func testExecutionCommitmentRejectsNoncanonicalTopUpProjection() throws {
@@ -312,6 +381,8 @@ final class SumeragiV2WireFixtureTests: XCTestCase {
         "proposal",
         "vote",
         "quorum_certificate",
+        "commit_vote_later_view",
+        "commit_quorum_certificate_later_view",
         "timeout_vote",
         "timeout_certificate",
         "payload_manifest",

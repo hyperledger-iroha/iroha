@@ -1,4 +1,4 @@
-// Representative trigger and localization sample for Kotodama grammar validation.
+// Representative trigger sample for Kotodama grammar validation.
 seiyaku TreasurySweep {
     error enum SweepError {
         EmptyTreasury = 1,
@@ -12,7 +12,7 @@ seiyaku TreasurySweep {
     trigger settle_block -> sweep {
         on pipeline block;
         repeats 1;
-        authority "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+        authority "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV";
         metadata {
             tag: "treasury";
             enabled: true;

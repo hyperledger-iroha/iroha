@@ -579,6 +579,26 @@ def build_command(
     return command
 
 
+def source_check_commands(
+    koto: Path, standard_sources: Iterable[Path], zk_sources: Iterable[Path]
+) -> list[list[os.PathLike[str] | str]]:
+    """Return one strict diagnostics request per independent deployable root.
+
+    Positional ``koto check`` inputs are one explicit source graph, so batching
+    unrelated ``seiyaku`` files would either weaken the driver's one-root
+    invariant or fail with ``E_MULTIPLE_SEIYAKU_ROOTS``.  Goldens are
+    independent deployment roots; check each in its own request and reserve
+    multi-file checking for an explicit locked project manifest.
+    """
+
+    commands: list[list[os.PathLike[str] | str]] = []
+    for source in sorted(standard_sources):
+        commands.append([koto, "check", "--format", "human", source])
+    for source in sorted(zk_sources):
+        commands.append([koto, "check", "--format", "human", "--zk", source])
+    return commands
+
+
 def validate_sources(koto: Path, root: Path, sources: Sequence[Path]) -> None:
     """Format-check and compile-check every tracked source under its V1 mode."""
 
@@ -604,8 +624,8 @@ def validate_sources(koto: Path, root: Path, sources: Sequence[Path]) -> None:
     standard_sources = sorted(set(ordinary) - set(zk_sources))
 
     run([koto, "fmt", "--check", *sources], root)
-    run([koto, "check", "--format", "human", *standard_sources], root)
-    run([koto, "check", "--format", "human", "--zk", *zk_sources], root)
+    for command in source_check_commands(koto, standard_sources, zk_sources):
+        run(command, root)
 
 
 def contract_test_commands(

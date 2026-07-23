@@ -56,6 +56,16 @@ final class ToriiAssetTransferTests: XCTestCase {
     private static let authority = try! authorityKey.accountId()
     private static let destination = try! destinationKey.accountId()
     private static let sponsor = try! sponsorKey.accountId()
+    private static let sponsorProgram = try! FeeSponsorProgramId(
+        sponsor: sponsor,
+        name: "wallet_fx"
+    )
+    private static let feePayment = FeePaymentIntent.sponsor(
+        programId: sponsorProgram,
+        programRevision: 1,
+        chargeLimits: [],
+        gasLimit: nil
+    )
     private static let assetDefinitionId: String = {
         var bytes = Data(repeating: 0, count: 16)
         bytes[0] = 0x10
@@ -80,7 +90,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         amount: String = "1.25",
         destination: String = ToriiAssetTransferTests.destination,
         memo: String? = "invoice 42",
-        feeSponsor: String? = ToriiAssetTransferTests.sponsor,
+        feePayment: FeePaymentIntent = ToriiAssetTransferTests.feePayment,
         creationTimeMs: UInt64 = 1_700_000_000_000,
         transactionTtlMs: UInt64 = 120_000,
         publicKeyHex: String? = nil,
@@ -93,7 +103,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             amount: amount,
             destination: destination,
             memo: memo,
-            feeSponsor: feeSponsor,
+            feePayment: feePayment,
             creationTimeMs: creationTimeMs,
             transactionTtlMs: transactionTtlMs,
             publicKeyHex: publicKeyHex,
@@ -140,11 +150,15 @@ final class ToriiAssetTransferTests: XCTestCase {
             Set(object.keys),
             Set([
                 "authority", "asset_definition_id", "asset_balance_scope", "amount",
-                "destination", "memo", "fee_sponsor", "creation_time_ms",
+                "destination", "memo", "fee_payment", "creation_time_ms",
                 "transaction_ttl_ms",
             ])
         )
         XCTAssertEqual(object["asset_balance_scope"] as? String, "dataspace:10")
+        let feePayment = try XCTUnwrap(object["fee_payment"] as? [String: Any])
+        XCTAssertEqual(feePayment["payer"] as? String, "sponsor")
+        let feePaymentValue = try XCTUnwrap(feePayment["value"] as? [String: Any])
+        XCTAssertEqual(feePaymentValue["program_revision"] as? UInt64, 1)
         XCTAssertNil(object["private_key"])
         XCTAssertNil(object["nonce"])
         XCTAssertNil(object["metadata"])
@@ -234,12 +248,6 @@ final class ToriiAssetTransferTests: XCTestCase {
             XCTAssertThrowsError(
                 try JSONEncoder().encode(request(destination: destination)),
                 destination
-            )
-        }
-        for sponsor in ["", "sponsor@wonderland", Self.sponsor + " "] {
-            XCTAssertThrowsError(
-                try JSONEncoder().encode(request(feeSponsor: sponsor)),
-                sponsor
             )
         }
         for definition in [
@@ -607,16 +615,13 @@ final class ToriiAssetTransferTests: XCTestCase {
             inspection(amount: "2"),
             inspection(metadata: [
                 "memo": .string("changed"),
-                "fee_sponsor": .string(Self.sponsor),
+            ]),
+            inspection(metadata: [
+                "memo": .signedInteger(1),
             ]),
             inspection(metadata: [
                 "memo": .string("invoice 42"),
-                "fee_sponsor": .signedInteger(1),
-            ]),
-            inspection(metadata: [
-                "memo": .string("invoice 42"),
-                "fee_sponsor": .string(Self.sponsor),
-                "nonce": .unsignedInteger(1),
+                "unexpected": .unsignedInteger(1),
             ]),
             inspection(executable: .contractCall(
                 DetachedContractCallInspection(
@@ -1627,7 +1632,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             "amount": "1.25",
             "destination": Self.destination,
             "memo": "invoice 42",
-            "fee_sponsor": Self.sponsor,
+            "fee_payment": feePaymentObject(Self.feePayment),
             "creation_time_ms": 1_700_000_000_000 as UInt64,
             "transaction_ttl_ms": 120_000 as UInt64,
         ]
@@ -1713,7 +1718,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             "transaction_ttl_ms": request.transactionTtlMs,
         ]
         if let memo = request.memo { intent["memo"] = memo }
-        if let feeSponsor = request.feeSponsor { intent["fee_sponsor"] = feeSponsor }
+        intent["fee_payment"] = feePaymentObject(request.feePayment)
         let receipt: [String: Any] = [
             "operation_kind": "asset_transfer",
             "status": "submitted",
@@ -1818,7 +1823,6 @@ final class ToriiAssetTransferTests: XCTestCase {
             timeToLiveMs: timeToLiveMs,
             metadata: metadata ?? [
                 "memo": .string("invoice 42"),
-                "fee_sponsor": .string(Self.sponsor),
             ],
             entrypointHash: entrypointHash ?? Data(repeating: 0x22, count: 32),
             executable: executable
@@ -1890,7 +1894,7 @@ final class ToriiAssetTransferTests: XCTestCase {
         let request = self.request(
             amount: amount,
             memo: nil,
-            feeSponsor: nil,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
             creationTimeMs: now
         )
         let transfer = TransferRequest(
@@ -1900,7 +1904,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             quantity: amount,
             destination: Self.destination,
             description: nil,
-            feeSponsor: nil,
+            feePayment: request.feePayment,
             ttlMs: request.transactionTtlMs,
             nonce: nil
         )
@@ -1924,6 +1928,7 @@ final class ToriiAssetTransferTests: XCTestCase {
             "asset_balance_scope": request.assetBalanceScope,
             "amount": request.amount,
             "destination": request.destination,
+            "fee_payment": feePaymentObject(request.feePayment),
             "creation_time_ms": request.creationTimeMs,
             "transaction_ttl_ms": request.transactionTtlMs,
         ]
@@ -1975,6 +1980,11 @@ final class ToriiAssetTransferTests: XCTestCase {
 
     private func hashBytes() -> Data {
         Data(repeating: 0x11, count: 32)
+    }
+
+    private func feePaymentObject(_ intent: FeePaymentIntent) -> [String: Any] {
+        let data = try! intent.canonicalJSONData()
+        return try! JSONSerialization.jsonObject(with: data) as! [String: Any]
     }
 
     private func hashHex(_ byte: UInt8) -> String {

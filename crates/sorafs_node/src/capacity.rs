@@ -1124,12 +1124,13 @@ mod tests {
             provider_id: [0x11; 32],
             stake: sorafs_manifest::provider_advert::StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 5_000,
+                stake_amount: sorafs_manifest::deal::XorQuantity::try_from_micro(5_000)
+                    .expect("legacy micro-XOR stake is representable"),
             },
             committed_capacity_gib: 500,
             chunker_commitments: vec![ChunkerCommitmentV1 {
                 profile_id: "sorafs.sf1@1.0.0".into(),
-                profile_aliases: Some(vec!["sorafs.sf1@1.0.0".into()]),
+                profile_aliases: Some(vec!["sorafs.sf1@1.0.0".into(), "sorafs-sf1".into()]),
                 committed_gib: 500,
                 capability_refs: Vec::new(),
             }],

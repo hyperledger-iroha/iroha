@@ -87,7 +87,19 @@ pub fn render_fixture() -> String {
                 ),
                 ("entrypoint", Value::from("quote")),
                 ("payload", payload_value),
-                ("gas_limit", Value::from(1_500_000_u64)),
+                (
+                    "fee_payment",
+                    object([
+                        ("payer", Value::from("authority")),
+                        (
+                            "value",
+                            object([
+                                ("charge_limits", Value::Array(vec![])),
+                                ("gas_limit", Value::from(1_500_000_u64)),
+                            ]),
+                        ),
+                    ]),
+                ),
             ]),
         ),
         (

@@ -13,7 +13,7 @@ use iroha_data_model::{
     prelude::*,
     repo::{RepoAgreement, RepoGovernance},
 };
-use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
+use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity, RoundingMode};
 
 use super::prelude::*;
 use crate::{
@@ -132,29 +132,40 @@ fn compute_accrued_interest(
         )
     })?;
     let elapsed_fraction = Numeric::from(elapsed_ms)
-        .checked_div(Numeric::from(ACT_360_YEAR_MS), NumericSpec::fractional(18));
-    let elapsed_fraction = elapsed_fraction.ok_or_else(|| {
-        InstructionExecutionError::InvariantViolation(
-            "failed to compute repo elapsed fraction".into(),
+        .try_decimal_div_round(
+            &Numeric::from(ACT_360_YEAR_MS),
+            18,
+            RoundingMode::TowardZero,
         )
-    })?;
-    let rate_time = rate_fraction
-        .checked_mul(elapsed_fraction, NumericSpec::fractional(18))
-        .ok_or_else(|| {
+        .map_err(|err| {
             InstructionExecutionError::InvariantViolation(
-                "repo interest calculation overflowed (rate*time)".into(),
+                format!("failed to compute repo elapsed fraction: {err}").into(),
+            )
+        })?;
+    let rate_time = rate_fraction
+        .try_decimal_mul(&elapsed_fraction)
+        .and_then(|value| value.try_quantize(18, RoundingMode::TowardZero))
+        .map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("repo interest calculation failed (rate*time): {err}").into(),
             )
         })?;
     let raw_interest = principal
         .as_numeric()
-        .clone()
-        .checked_mul(rate_time, NumericSpec::fractional(28))
-        .ok_or_else(|| {
+        .try_decimal_mul(&rate_time)
+        .and_then(|value| value.try_quantize(28, RoundingMode::TowardZero))
+        .map_err(|err| {
             InstructionExecutionError::InvariantViolation(
-                "repo interest calculation overflowed (principal * factor)".into(),
+                format!("repo interest calculation failed (principal * factor): {err}").into(),
             )
         })?;
-    let rounded = raw_interest.round(NumericSpec::fractional(cash_spec.scale().unwrap_or(28)));
+    let rounded = raw_interest
+        .try_quantize(cash_spec.scale().unwrap_or(28), RoundingMode::TowardZero)
+        .map_err(|err| {
+            InstructionExecutionError::InvariantViolation(
+                format!("failed to quantize repo interest: {err}").into(),
+            )
+        })?;
     assert_numeric_spec_with(&rounded, cash_spec)?;
     Quantity::from_canonical_numeric(rounded).map_err(|err| {
         InstructionExecutionError::InvariantViolation(

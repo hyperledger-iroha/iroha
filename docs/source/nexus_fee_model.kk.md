@@ -23,22 +23,30 @@ operators can reconcile gas debits against the Nexus fee model.
   or `tier3`), and a `volatility_class` (`stable`, `elevated`, `dislocated`).
   These flags feed the settlement router so the resulting XOR
   quote matches the canonical TWAP and haircut tier for the lane.
-- IVM transactions must include `gas_limit` metadata (`u64`, > 0) to cap fee
-  exposure. The `/v1/contracts/call` endpoint requires `gas_limit`
-  explicitly, and invalid values are rejected.
-- When a transaction sets `fee_sponsor` metadata, the sponsor must grant
-  `CanUseFeeSponsor { sponsor }` to the caller. Unauthorized sponsorship
-  attempts are rejected and recorded.
+- Every transaction must carry the required typed, signature-bound
+  `fee_payment` (`FeePaymentIntent`). It selects the authority or one exact
+  on-chain sponsor program and immutable revision, and includes signed charge
+  maxima plus a positive gas bound when gas is required. The legacy metadata
+  keys `fee_sponsor`, `gas_limit`, and `gas_asset_id` are rejected.
+- Quote before signing: build the exact unsigned payload, have its authority
+  authenticate `POST /v1/fees/quote`, inspect the recommended intent, replace
+  only `payload.fee_payment`, then sign and submit that exact payload. A quote
+  is an observation, not a reservation; admission rechecks current state.
+- Direct settlement supports either the authority or one exact sponsor
+  program. Receipt-lane (`lane_relay_burn`) settlement is exact-sponsor-only:
+  authority-paid Nexus fees are rejected with
+  `relay_capacity_unavailable` because an authority balance is not an
+  authenticated receipt source lock.
 - Every transaction that pays gas records a `LaneSettlementReceipt`.  Each
   receipt stores the caller-provided source identifier, the local micro-amount,
   the XOR due immediately, the XOR expected after the haircut, the realised
-  safety margin (`xor_variance_micro`), and the block timestamp in milliseconds.
+  safety margin (`xor_variance`), and the block timestamp in milliseconds.
 - Block execution aggregates receipts per lane/dataspace and publishes them
   via `lane_settlement_commitments` in `/v1/sumeragi/status`.  The totals
-  expose `total_local_micro`, `total_xor_due_micro`, and
-  `total_xor_after_haircut_micro` summed over the block for nightly
+  expose `total_local_amount`, `total_xor_due`, and
+  `total_xor_after_haircut` summed over the block for nightly
   reconciliation exports.
-- A new `total_xor_variance_micro` counter tracks how much safety margin was
+- A new `total_xor_variance` counter tracks how much safety margin was
   consumed (difference between the due XOR and the post-haircut expectation),
   and `swap_metadata` documents the deterministic conversion parameters
   (TWAP, epsilon, liquidity profile, and volatility_class) so auditors can

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CI wrapper that validates the SwiftPM manifest with and without the Norito bridge.
+# CI wrapper that validates SwiftPM's mandatory Norito bridge policy.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -17,7 +17,6 @@ export SWIFT_SPM_REPORT_DIR="${REPORT_DIR}"
 export SWIFT_SPM_SUMMARY="${SWIFT_SPM_SUMMARY:-${REPORT_DIR}/summary.json}"
 export SWIFT_SPM_WITH_BRIDGE_LOG="${SWIFT_SPM_WITH_BRIDGE_LOG:-${REPORT_DIR}/with_bridge.log}"
 export SWIFT_SPM_MISSING_BRIDGE_LOG="${SWIFT_SPM_MISSING_BRIDGE_LOG:-${REPORT_DIR}/missing_bridge_required.log}"
-export SWIFT_SPM_OPTIONAL_BRIDGE_LOG="${SWIFT_SPM_OPTIONAL_BRIDGE_LOG:-${REPORT_DIR}/missing_bridge_optional.log}"
 
 "${CHECK_SCRIPT}"
 

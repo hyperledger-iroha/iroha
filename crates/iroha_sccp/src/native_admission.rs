@@ -15,12 +15,13 @@ use iroha_data_model::bridge::{
 
 use super::{
     BscNativeSourceError, BscNativeSourceProofV1, EthereumNativeSourceErrorV1,
-    EthereumNativeSourceProofV1, H256, SccpPayloadV1, TronNativeSourceError,
-    TronNativeSourceProofV1, bsc_native_anchor_block_number, canonical_sccp_payload_bytes,
-    payload_hash, sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
+    EthereumNativeSourceProofV1, H256, SccpPayloadV1, SccpSolanaAgaveSourceProofV1,
+    SolanaNativeSourceErrorV1, TronNativeSourceError, TronNativeSourceProofV1,
+    bsc_native_anchor_block_number, canonical_sccp_payload_bytes, payload_hash,
+    sccp_lane_id_hash_v1, sccp_lane_source_event_digest_v1, sccp_message_id,
     sccp_message_source_domain, sccp_message_target_domain, sccp_source_identity_hash_v1,
     verify_bsc_native_source, verify_ethereum_native_source_proof_v1,
-    verify_sccp_payload_structure, verify_tron_native_source,
+    verify_sccp_payload_structure, verify_sccp_solana_agave_source_v1, verify_tron_native_source,
 };
 
 /// Maximum canonical Norito size of a native source envelope or inbound proof.
@@ -65,6 +66,8 @@ pub enum SccpNativeSourceProofV1 {
     EthereumBeacon(Box<EthereumNativeSourceProofV1>),
     /// BNB Smart Chain Parlia finality and execution-MPT proof.
     BscParlia(Box<BscNativeSourceProofV1>),
+    /// Solana testnet recursive Agave rooted-bank and instruction proof.
+    SolanaAgave(Box<SccpSolanaAgaveSourceProofV1>),
     /// TRON `DPoS` replay and transaction-inclusion proof.
     TronDpos(Box<TronNativeSourceProofV1>),
 }
@@ -76,6 +79,7 @@ impl SccpNativeSourceProofV1 {
         match self {
             Self::EthereumBeacon(_) => BridgeNativeProofBackendV1::EthereumBeacon,
             Self::BscParlia(_) => BridgeNativeProofBackendV1::BscParlia,
+            Self::SolanaAgave(_) => BridgeNativeProofBackendV1::SolanaAgave,
             Self::TronDpos(_) => BridgeNativeProofBackendV1::TronDpos,
         }
     }
@@ -84,6 +88,7 @@ impl SccpNativeSourceProofV1 {
         match self {
             Self::EthereumBeacon(proof) => proof.source_identity.lane.source,
             Self::BscParlia(proof) => proof.finality.anchor.network,
+            Self::SolanaAgave(proof) => proof.anchor.network,
             Self::TronDpos(proof) => proof.finality.anchor.network,
         }
     }
@@ -262,6 +267,8 @@ pub enum SccpNativeAdmissionErrorV1 {
     Ethereum(EthereumNativeSourceErrorV1),
     /// Native BNB Smart Chain verification failed.
     Bsc(BscNativeSourceError),
+    /// Native Solana testnet recursive verification failed.
+    Solana(SolanaNativeSourceErrorV1),
     /// Native TRON verification failed.
     Tron(TronNativeSourceError),
     /// A native verifier returned fields inconsistent with the admitted statement.
@@ -313,6 +320,7 @@ impl fmt::Display for SccpNativeAdmissionErrorV1 {
             Self::HashRoleCollision => formatter.write_str("zero or colliding SCCP hash roles"),
             Self::Ethereum(error) => write!(formatter, "native Ethereum proof failed: {error}"),
             Self::Bsc(error) => write!(formatter, "native BSC proof failed: {error:?}"),
+            Self::Solana(error) => write!(formatter, "native Solana proof failed: {error}"),
             Self::Tron(error) => write!(formatter, "native TRON proof failed: {error:?}"),
             Self::NormalizedResultMismatch(role) => {
                 write!(formatter, "native verifier returned mismatched {role}")
@@ -346,6 +354,7 @@ pub const fn sccp_native_backend_for_source_network_v1(
         SccpNetworkV1::BscMainnet | SccpNetworkV1::BscTestnet => {
             Some(BridgeNativeProofBackendV1::BscParlia)
         }
+        SccpNetworkV1::SolanaTestnet => Some(BridgeNativeProofBackendV1::SolanaAgave),
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => {
             Some(BridgeNativeProofBackendV1::TronDpos)
         }
@@ -415,6 +424,18 @@ fn validate_source_envelope_shape(
                 || proof.message_id != envelope.message_id
                 || proof.payload_hash != envelope.payload_hash
                 || proof.source_event_digest != envelope.source_event_digest
+            {
+                return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
+            }
+        }
+        SccpNativeSourceProofV1::SolanaAgave(proof) => {
+            if proof.statement.source_identity_hash != envelope.source_identity_hash
+                || proof.statement.lane_hash != lane_hash
+                || proof.statement.message_id != envelope.message_id
+                || proof.statement.payload_hash != envelope.payload_hash
+                || proof.statement.source_event_digest != envelope.source_event_digest
+                || proof.statement.rooted_slot != envelope.source_finality.height
+                || proof.statement.rooted_bank_hash != envelope.source_finality.block_hash
             {
                 return Err(SccpNativeAdmissionErrorV1::BackendMismatch);
             }
@@ -863,6 +884,42 @@ fn verify_tron_native_admission_v1(
     })
 }
 
+fn verify_solana_native_admission_v1(
+    context: &GovernedNativeAdmissionContextV1<'_>,
+    native: &SccpSolanaAgaveSourceProofV1,
+) -> Result<VerifiedNativeFinalityV1, SccpNativeAdmissionErrorV1> {
+    if native.anchor.checkpoint_slot != context.trust_anchor.checkpoint_height {
+        return Err(SccpNativeAdmissionErrorV1::TrustAnchorMismatch);
+    }
+    let proof = context.proof;
+    let validated = verify_sccp_solana_agave_source_v1(
+        native,
+        context.source_identity,
+        proof.source.source_identity_hash,
+        proof.source.trust_anchor.anchor_hash,
+        proof.source.message_id,
+        proof.source.payload_hash,
+        &proof.payload,
+    )
+    .map_err(SccpNativeAdmissionErrorV1::Solana)?;
+    if validated.source_identity_hash != proof.source.source_identity_hash
+        || validated.lane_hash != context.lane_hash
+        || validated.anchor_hash != proof.source.trust_anchor.anchor_hash
+        || validated.source_event_digest != proof.source.source_event_digest
+    {
+        return Err(SccpNativeAdmissionErrorV1::NormalizedResultMismatch(
+            "Solana statement",
+        ));
+    }
+    Ok(VerifiedNativeFinalityV1 {
+        source_finality: SccpNativeFinalityPointV1 {
+            height: validated.rooted_slot,
+            block_hash: validated.rooted_bank_hash,
+        },
+        anchor_interval_height: validated.rooted_slot,
+    })
+}
+
 /// Verify a complete native inbound proof against governed lane material.
 ///
 /// Every branch invokes its full protocol-native verifier. Success is returned
@@ -893,6 +950,9 @@ pub fn verify_sccp_native_inbound_message_proof_v1(
         }
         SccpNativeSourceProofV1::BscParlia(native) => {
             verify_bsc_native_admission_v1(&context, native)?
+        }
+        SccpNativeSourceProofV1::SolanaAgave(native) => {
+            verify_solana_native_admission_v1(&context, native)?
         }
         SccpNativeSourceProofV1::TronDpos(native) => {
             verify_tron_native_admission_v1(&context, native)?

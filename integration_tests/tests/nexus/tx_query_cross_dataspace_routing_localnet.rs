@@ -1722,12 +1722,16 @@ mod tests {
     #[test]
     fn versioned_signed_transaction_encoder_prefixes_v1_and_roundtrips_payload() {
         let chain_id: ChainId = "cross-dataspace-route-encoder".parse().expect("chain id");
-        let transaction = TransactionBuilder::new(chain_id, ALICE_ID.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "wrong ingress route envelope".to_owned(),
-            )])
-            .sign(ALICE_KEYPAIR.private_key());
+        let transaction = TransactionBuilder::new(
+            chain_id,
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "wrong ingress route envelope".to_owned(),
+        )])
+        .sign(ALICE_KEYPAIR.private_key());
         let adaptive_payload = norito::codec::encode_adaptive(&transaction);
 
         let encoded = encode_versioned_signed_transaction(&transaction);

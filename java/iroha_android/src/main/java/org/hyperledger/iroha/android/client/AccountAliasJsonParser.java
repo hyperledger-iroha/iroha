@@ -1,7 +1,10 @@
 package org.hyperledger.iroha.android.client;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 
 /** Minimal JSON parser for Torii account alias resolution responses. */
 public final class AccountAliasJsonParser {
@@ -11,11 +14,16 @@ public final class AccountAliasJsonParser {
   public static AccountAliasResolution parseResolution(final byte[] payload) {
     final Map<String, Object> root =
         expectObject(parse(payload, "account alias resolution"), "account alias resolution");
+    exactKeys(
+        root,
+        new HashSet<>(Arrays.asList("alias", "account_id", "index", "source")),
+        new HashSet<>(Arrays.asList("index", "source")),
+        "account alias resolution");
     return new AccountAliasResolution(
         requiredExactString(root.get("alias"), "account alias resolution.alias"),
         requiredExactString(root.get("account_id"), "account alias resolution.account_id"),
         root.containsKey("index")
-            ? asOptionalLong(root.get("index"), "account alias resolution.index")
+            ? asOptionalUInt64(root.get("index"), "account alias resolution.index")
             : null,
         optionalExactString(root.get("source"), "account alias resolution.source"));
   }
@@ -37,14 +45,6 @@ public final class AccountAliasJsonParser {
       throw new IllegalStateException(path + " must be a JSON object");
     }
     return (Map<String, Object>) value;
-  }
-
-  private static String requiredString(final Object value, final String path) {
-    final String string = optionalString(value);
-    if (string == null || string.trim().isEmpty()) {
-      throw new IllegalStateException(path + " must be a non-empty string");
-    }
-    return string.trim();
   }
 
   private static String requiredExactString(final Object value, final String path) {
@@ -69,16 +69,34 @@ public final class AccountAliasJsonParser {
     if (value == null) {
       return null;
     }
-    return value instanceof String ? (String) value : String.valueOf(value);
+    if (!(value instanceof String)) {
+      throw new IllegalStateException("account alias resolution string fields must be strings");
+    }
+    return (String) value;
   }
 
-  private static Long asOptionalLong(final Object value, final String path) {
+  private static java.math.BigInteger asOptionalUInt64(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    if (!(value instanceof Number number)) {
-      throw new IllegalStateException(path + " must be a number");
+    return AccountAliasUInt64.parse(value, path);
+  }
+
+  private static void exactKeys(
+      final Map<String, Object> root,
+      final Set<String> allowed,
+      final Set<String> optional,
+      final String path) {
+    final Set<String> unknown = new HashSet<>(root.keySet());
+    unknown.removeAll(allowed);
+    if (!unknown.isEmpty()) {
+      throw new IllegalStateException(path + " contains unknown or retired fields");
     }
-    return JsonNumbers.asLong(number, path);
+    final Set<String> missing = new HashSet<>(allowed);
+    missing.removeAll(optional);
+    missing.removeAll(root.keySet());
+    if (!missing.isEmpty()) {
+      throw new IllegalStateException(path + " is missing required fields");
+    }
   }
 }

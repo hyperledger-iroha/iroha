@@ -1,5 +1,5 @@
 /** Fixed byte length of the canonical IVM program header. */
-export const IVM_PROGRAM_HEADER_LENGTH: 17;
+export const IVM_PROGRAM_HEADER_LENGTH: 49;
 
 /** Default ledger limit for one complete deployed IVM artifact (4 MiB). */
 export const IVM_ARTIFACT_MAX_BYTES: 4194304;

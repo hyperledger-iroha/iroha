@@ -313,7 +313,7 @@ fn randomness_network_builder_with_params(params: SumeragiNposParameters) -> Net
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_block_cadence(Duration::from_millis(BLOCK_TIME_MS))
         .with_config_layer(|layer| {
             layer
@@ -841,7 +841,10 @@ fn epoch_and_position_from_height_with_length(height: u64, epoch_length: u64) ->
 }
 
 fn submit_progress_log(client: &Client, message: impl Into<String>) -> Result<()> {
-    client.submit(progress_log_instruction(message))?;
+    client.submit(
+        progress_log_instruction(message),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -1205,7 +1208,10 @@ fn submit_height_progress_log(
             continue;
         };
         let client = peer.client();
-        match client.submit(instruction.clone()) {
+        match client.submit(
+            instruction.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ) {
             Ok(_) => return Ok(true),
             Err(err) => errors.push(format!("peer {idx}: {err}")),
         }
@@ -1214,7 +1220,10 @@ fn submit_height_progress_log(
     let fallback_queue = fallback.get_status()?.queue_size;
     if fallback_queue <= HEIGHT_PROGRESS_QUEUE_FALLBACK_LIMIT {
         return fallback
-            .submit(instruction)
+            .submit(
+                instruction,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .map(|_| true)
             .map_err(Into::into);
     }

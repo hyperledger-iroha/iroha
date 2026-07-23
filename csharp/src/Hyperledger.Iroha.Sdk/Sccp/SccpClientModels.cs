@@ -5,6 +5,8 @@ using System.Text.Json.Serialization;
 using Hyperledger.Iroha.Address;
 using Hyperledger.Iroha.Crypto;
 using Hyperledger.Iroha.Norito;
+using Hyperledger.Iroha.Numeric;
+using Hyperledger.Iroha.Transactions;
 
 namespace Hyperledger.Iroha.Sccp;
 
@@ -43,11 +45,14 @@ public sealed class SccpBridgeProofSubmitRequest
     public SccpBridgeProofSubmitRequest(
         string authority,
         string destinationProofBase64,
+        FeePaymentIntent feePayment,
         string? signatureBase64 = null,
         string? transactionPayloadBase64 = null,
         ulong? creationTimeMs = null)
     {
         Authority = SccpSubmitValidation.Authority(authority);
+        ArgumentNullException.ThrowIfNull(feePayment);
+        FeePayment = feePayment;
         var destinationProof = SccpSubmitValidation.CanonicalNoritoBase64(
             destinationProofBase64,
             "destination_proof_b64",
@@ -67,11 +72,15 @@ public sealed class SccpBridgeProofSubmitRequest
                 transactionPayloadBase64,
                 creationTimeMs,
                 destinationProof,
-                expectedDestinationProof: true);
+                expectedDestinationProof: true,
+                expectedFeePayment: feePayment);
     }
 
     [JsonPropertyName("authority")]
     public string Authority { get; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; }
 
     [JsonPropertyName("signature_b64")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -95,11 +104,14 @@ public sealed class SccpBridgeMessageSubmitRequest
     public SccpBridgeMessageSubmitRequest(
         string authority,
         string nativeProofBase64,
+        FeePaymentIntent feePayment,
         string? signatureBase64 = null,
         string? transactionPayloadBase64 = null,
         ulong? creationTimeMs = null)
     {
         Authority = SccpSubmitValidation.Authority(authority);
+        ArgumentNullException.ThrowIfNull(feePayment);
+        FeePayment = feePayment;
         var nativeProof = SccpSubmitValidation.CanonicalNoritoBase64(
             nativeProofBase64,
             "native_proof_b64",
@@ -119,11 +131,15 @@ public sealed class SccpBridgeMessageSubmitRequest
                 transactionPayloadBase64,
                 creationTimeMs,
                 nativeProof,
-                expectedDestinationProof: false);
+                expectedDestinationProof: false,
+                expectedFeePayment: feePayment);
     }
 
     [JsonPropertyName("authority")]
     public string Authority { get; }
+
+    [JsonPropertyName("fee_payment")]
+    public FeePaymentIntent FeePayment { get; }
 
     [JsonPropertyName("signature_b64")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -151,7 +167,8 @@ public sealed record SccpBridgeResponseExpectation(
     string? Backend = null,
     string? RouteConfigurationHashHex = null,
     ulong? RangeStartHeight = null,
-    ulong? RangeEndHeight = null)
+    ulong? RangeEndHeight = null,
+    FeePaymentIntent? FeePayment = null)
 {
     public void Validate()
     {
@@ -241,14 +258,16 @@ public sealed record SccpBridgeSubmitResponse(
         string expectedAuthority,
         byte[] expectedProof,
         string? expectedTransactionPayloadBase64 = null,
-        string? expectedSignatureBase64 = null) =>
+        string? expectedSignatureBase64 = null,
+        FeePaymentIntent? expectedFeePayment = null) =>
         ParseCore(
             json,
             expectation,
             expectedAuthority,
             expectedProof,
             expectedTransactionPayloadBase64,
-            expectedSignatureBase64);
+            expectedSignatureBase64,
+            expectedFeePayment);
 
     private static SccpBridgeSubmitResponse ParseCore(
         ReadOnlyMemory<byte> json,
@@ -256,7 +275,8 @@ public sealed record SccpBridgeSubmitResponse(
         string? expectedAuthority,
         byte[]? expectedProof,
         string? expectedTransactionPayloadBase64 = null,
-        string? expectedSignatureBase64 = null)
+        string? expectedSignatureBase64 = null,
+        FeePaymentIntent? requestFeePayment = null)
     {
         using var document = SccpJson.Parse(json, "bridge submit response");
         var root = document.RootElement;
@@ -308,11 +328,25 @@ public sealed record SccpBridgeSubmitResponse(
         var requestStateKnown = expectedAuthority is not null;
         var requestWasDirect = expectedTransactionPayloadBase64 is not null
             && expectedSignatureBase64 is not null;
+        if (requestFeePayment is not null
+            && expectation?.FeePayment is not null
+            && !requestFeePayment.HasSamePayerAndGasBound(expectation.FeePayment))
+        {
+            throw new ArgumentException(
+                "SCCP request fee_payment contradicts the response expectation.");
+        }
+        var expectedFeePayment = requestFeePayment ?? expectation?.FeePayment;
         if ((expectedTransactionPayloadBase64 is null) != (expectedSignatureBase64 is null)
             || requestStateKnown && submitted != requestWasDirect)
         {
             throw new ArgumentException(
                 "SCCP response submission state contradicts the exact request signing state.");
+        }
+        if (submitted && requestFeePayment is null
+            && expectation?.FeePayment is not null && !requestWasDirect)
+        {
+            throw new ArgumentException(
+                "A fee-payment expectation requires the exact submitted transaction payload.");
         }
 
         if (submitted)
@@ -335,7 +369,8 @@ public sealed record SccpBridgeSubmitResponse(
                         start,
                         end,
                         expectedAuthority!,
-                        expectedProof);
+                        expectedProof,
+                        expectedFeePayment);
                 if (!string.Equals(txHash, expectedTransactionHash, StringComparison.Ordinal))
                 {
                     throw new ArgumentException(
@@ -367,7 +402,8 @@ public sealed record SccpBridgeSubmitResponse(
                 start,
                 end,
                 expectedAuthority,
-                expectedProof);
+                expectedProof,
+                expectedFeePayment);
             if (!signing.AsSpan().SequenceEqual(IrohaHash.Hash(payload)))
             {
                 throw new ArgumentException(
@@ -496,7 +532,8 @@ internal static class SccpSubmitValidation
             string? transactionPayloadBase64,
             ulong? creationTimeMs,
             byte[] expectedProof,
-            bool expectedDestinationProof)
+            bool expectedDestinationProof,
+            FeePaymentIntent expectedFeePayment)
     {
         if ((signatureBase64 is null) != (transactionPayloadBase64 is null))
         {
@@ -536,7 +573,8 @@ internal static class SccpSubmitValidation
             creationTimeMs.Value,
             authority,
             expectedProof,
-            expectedDestinationProof);
+            expectedDestinationProof,
+            expectedFeePayment);
         if (!Ed25519Signer.Verify(
                 IrohaHash.Hash(payload),
                 Convert.FromBase64String(signature),
@@ -575,7 +613,8 @@ internal static class SccpSubmitValidation
         ulong rangeStartHeight,
         ulong rangeEndHeight,
         string expectedAuthority,
-        byte[]? expectedProof)
+        byte[]? expectedProof,
+        FeePaymentIntent? expectedFeePayment = null)
     {
         var payload = CanonicalBase64(
             transactionPayloadBase64,
@@ -592,7 +631,8 @@ internal static class SccpSubmitValidation
             rangeStartHeight,
             rangeEndHeight,
             expectedAuthority,
-            expectedProof);
+            expectedProof,
+            expectedFeePayment);
 
         var address = AccountAddress.Parse(
             expectedAuthority,
@@ -621,7 +661,8 @@ internal static class SccpSubmitValidation
         ulong creationTimeMs,
         string expectedAuthority,
         byte[] expectedProof,
-        bool expectedDestinationProof)
+        bool expectedDestinationProof,
+        FeePaymentIntent expectedFeePayment)
     {
         var cursor = new CompactTransactionCursor(payload);
         var chain = cursor.TakeField("chain_id");
@@ -630,6 +671,7 @@ internal static class SccpSubmitValidation
         var executable = cursor.TakeField("executable");
         var timeToLive = cursor.TakeField("time_to_live_ms");
         var nonce = cursor.TakeField("nonce");
+        var feePayment = cursor.TakeField("fee_payment");
         var metadata = cursor.TakeField("metadata");
         if (!cursor.IsFinished
             || creation.Length != sizeof(ulong)
@@ -660,6 +702,7 @@ internal static class SccpSubmitValidation
 
         RequireAbsentOption(timeToLive, "time_to_live_ms");
         RequireAbsentOption(nonce, "nonce");
+        RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
     }
 
@@ -1005,7 +1048,8 @@ internal static class SccpSubmitValidation
         ulong rangeStartHeight,
         ulong rangeEndHeight,
         string? expectedAuthority,
-        byte[]? expectedProof)
+        byte[]? expectedProof,
+        FeePaymentIntent? expectedFeePayment = null)
     {
         var cursor = new CompactTransactionCursor(payload);
         var chain = cursor.TakeField("chain_id");
@@ -1014,6 +1058,7 @@ internal static class SccpSubmitValidation
         var executable = cursor.TakeField("executable");
         var timeToLive = cursor.TakeField("time_to_live_ms");
         var nonce = cursor.TakeField("nonce");
+        var feePayment = cursor.TakeField("fee_payment");
         var metadata = cursor.TakeField("metadata");
         if (!cursor.IsFinished
             || creation.Length != sizeof(ulong)
@@ -1046,6 +1091,7 @@ internal static class SccpSubmitValidation
             expectedProof);
         RequireAbsentOption(timeToLive, "time_to_live_ms");
         RequireAbsentOption(nonce, "nonce");
+        RequireCanonicalFeePayment(feePayment, expectedFeePayment);
         RequireCanonicalMetadata(metadata);
     }
 
@@ -1565,47 +1611,250 @@ internal static class SccpSubmitValidation
     {
         var cursor = new CompactTransactionCursor(payload);
         var count = cursor.TakeUInt64("metadata.count");
-        if (count > 1)
+        if (count != 0 || !cursor.IsFinished)
         {
-            throw new ArgumentException("SCCP transaction metadata may contain only gas_asset_id.");
+            throw new ArgumentException(
+                "SCCP transaction metadata must be empty; fee selection belongs in fee_payment.");
+        }
+    }
+
+    private static void RequireCanonicalFeePayment(
+        ReadOnlySpan<byte> payload,
+        FeePaymentIntent? expectedFeePayment = null)
+    {
+        var intent = new CompactTransactionCursor(payload);
+        var payer = intent.TakeUInt32("fee_payment.payer");
+        var value = new CompactTransactionCursor(intent.TakeField("fee_payment.value"));
+        if (!intent.IsFinished)
+        {
+            throw new ArgumentException("SCCP transaction fee_payment contains trailing bytes.");
         }
 
-        string? previousKey = null;
+        byte[]? sponsorController = null;
+        string? programName = null;
+        ulong? programRevision = null;
+        switch (payer)
+        {
+            case 0:
+                break;
+            case 1:
+            {
+                var program = new CompactTransactionCursor(
+                    value.TakeField("fee_payment.program_id"));
+                sponsorController = RequireCanonicalAuthority(
+                    program.TakeField("fee_payment.program_id.sponsor"));
+                programName = DecodeCompactString(
+                    program.TakeField("fee_payment.program_id.name"),
+                    "fee_payment.program_id.name");
+                if (!program.IsFinished
+                    || string.IsNullOrEmpty(programName)
+                    || !string.Equals(
+                        programName.Normalize(NormalizationForm.FormC),
+                        programName,
+                        StringComparison.Ordinal)
+                    || programName.Any(static character =>
+                        char.IsWhiteSpace(character)
+                        || char.IsControl(character)
+                        || character is '@' or '#' or '$' or '/'))
+                {
+                    throw new ArgumentException(
+                        "SCCP sponsor fee_payment program id is not canonical.");
+                }
+
+                programRevision = DecodeFramedUInt64(
+                    ref value,
+                    "fee_payment.program_revision");
+                if (programRevision == 0)
+                {
+                    throw new ArgumentException(
+                        "SCCP sponsor fee_payment program revision must be positive.");
+                }
+                break;
+            }
+            default:
+                throw new ArgumentException("SCCP transaction fee_payment payer is unknown.");
+        }
+
+        RequireCanonicalFeeChargeLimits(
+            value.TakeField("fee_payment.charge_limits"));
+        var gasLimit = DecodeOptionalPositiveUInt64(
+            value.TakeField("fee_payment.gas_limit"),
+            "fee_payment.gas_limit");
+        if (!value.IsFinished)
+        {
+            throw new ArgumentException("SCCP transaction fee_payment contains trailing bytes.");
+        }
+
+        if (expectedFeePayment is null)
+        {
+            return;
+        }
+
+        var selectionMatches = expectedFeePayment switch
+        {
+            AuthorityFeePaymentIntent => payer == 0
+                && gasLimit == expectedFeePayment.GasLimit,
+            SponsorFeePaymentIntent sponsor => payer == 1
+                && gasLimit == sponsor.GasLimit
+                && programRevision == sponsor.ProgramRevision
+                && string.Equals(programName, sponsor.ProgramId.Name, StringComparison.Ordinal)
+                && sponsorController is not null
+                && sponsorController.AsSpan().SequenceEqual(
+                    AccountAddress.Parse(
+                        sponsor.ProgramId.Sponsor,
+                        AccountAddress.DefaultChainDiscriminant)
+                    .ControllerBytes()),
+            _ => false,
+        };
+        if (!selectionMatches)
+        {
+            throw new ArgumentException(
+                "SCCP transaction fee_payment changed the expected payer, sponsor revision, or gas bound.");
+        }
+    }
+
+    private static void RequireCanonicalFeeChargeLimits(ReadOnlySpan<byte> payload)
+    {
+        var limits = new CompactTransactionCursor(payload);
+        var count = limits.TakeUInt64("fee_payment.charge_limits.count");
+        if (count > 2)
+        {
+            throw new ArgumentException(
+                "SCCP transaction fee_payment contains too many charge limits.");
+        }
+
+        var previousKind = -1;
         for (var index = 0UL; index < count; index++)
         {
-            var entry = new CompactTransactionCursor(cursor.TakeField("metadata.entry"));
-            var key = DecodeCompactString(entry.TakeField("metadata.key"), "metadata.key");
-            var jsonValue = new CompactTransactionCursor(entry.TakeField("metadata.value"));
-            var rawJson = DecodeCompactString(jsonValue.TakeField("metadata.value.json"), "metadata.value.json");
-            if (!entry.IsFinished
-                || !jsonValue.IsFinished
-                || key.Length == 0
-                || previousKey is not null && string.CompareOrdinal(previousKey, key) >= 0)
+            var limit = new CompactTransactionCursor(
+                limits.TakeField("fee_payment.charge_limits.item"));
+            var kindBytes = limit.TakeField("fee_payment.charge_limits.item.kind");
+            if (kindBytes.Length != sizeof(uint))
             {
-                throw new ArgumentException("Transaction metadata is not uniquely sorted and canonical.");
+                throw new ArgumentException("SCCP fee charge kind is malformed.");
             }
 
-            using var document = SccpJson.Parse(
-                StrictUtf8.GetBytes(rawJson),
-                "transaction metadata value");
-            var gasAssetId = document.RootElement.ValueKind == JsonValueKind.String
-                ? document.RootElement.GetString()
-                : null;
-            if (key != "gas_asset_id"
-                || string.IsNullOrEmpty(gasAssetId)
-                || gasAssetId.Any(static character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            var kind = BinaryPrimitives.ReadUInt32LittleEndian(kindBytes);
+            if (kind > 1 || checked((int)kind) <= previousKind)
             {
                 throw new ArgumentException(
-                    "SCCP transaction metadata must be the optional canonical gas_asset_id string.");
+                    "SCCP fee charge limits must be unique and ordered nexus before pipeline gas.");
             }
 
-            previousKey = key;
+            RequireCanonicalAssetDefinitionAddress(
+                limit.TakeField("fee_payment.charge_limits.item.asset_definition_id"));
+            RequireCanonicalPositiveQuantity(
+                limit.TakeField("fee_payment.charge_limits.item.max_amount"));
+            if (!limit.IsFinished)
+            {
+                throw new ArgumentException("SCCP fee charge limit contains trailing bytes.");
+            }
+
+            previousKind = checked((int)kind);
         }
 
-        if (!cursor.IsFinished)
+        if (!limits.IsFinished)
         {
-            throw new ArgumentException("Transaction metadata contains trailing bytes.");
+            throw new ArgumentException("SCCP fee charge limits contain trailing bytes.");
         }
+    }
+
+    private static void RequireCanonicalAssetDefinitionAddress(ReadOnlySpan<byte> payload)
+    {
+        var cursor = new CompactTransactionCursor(payload);
+        Span<byte> uuid = stackalloc byte[16];
+        for (var index = 0; index < uuid.Length; index++)
+        {
+            if (cursor.TakeCompactLength("fee_payment.asset_definition_id") != 1)
+            {
+                throw new ArgumentException(
+                    "SCCP fee asset definition address is not canonically framed.");
+            }
+            uuid[index] = cursor.TakeByte("fee_payment.asset_definition_id");
+        }
+
+        if (!cursor.IsFinished
+            || (uuid[6] >> 4) != 0x4
+            || (uuid[8] & 0xc0) != 0x80)
+        {
+            throw new ArgumentException("SCCP fee asset definition address is not canonical.");
+        }
+    }
+
+    private static void RequireCanonicalPositiveQuantity(ReadOnlySpan<byte> payload)
+    {
+        var quantity = new CompactTransactionCursor(payload);
+        var encodedMantissa = new CompactTransactionCursor(
+            quantity.TakeField("fee_payment.max_amount.mantissa"));
+        var mantissaLength = encodedMantissa.TakeUInt32("fee_payment.max_amount.mantissa.length");
+        if (mantissaLength is 0 or > 64)
+        {
+            throw new ArgumentException("SCCP fee maximum mantissa length is invalid.");
+        }
+
+        var mantissaBytes = encodedMantissa.TakeExact(
+            checked((int)mantissaLength),
+            "fee_payment.max_amount.mantissa");
+        var scaleBytes = quantity.TakeField("fee_payment.max_amount.scale");
+        if (!encodedMantissa.IsFinished
+            || scaleBytes.Length != sizeof(uint)
+            || !quantity.IsFinished)
+        {
+            throw new ArgumentException("SCCP fee maximum is malformed.");
+        }
+
+        var mantissa = new System.Numerics.BigInteger(
+            mantissaBytes,
+            isUnsigned: false,
+            isBigEndian: false);
+        var scale = BinaryPrimitives.ReadUInt32LittleEndian(scaleBytes);
+        if (mantissa.Sign <= 0 || scale > NumericV1.MaxScale)
+        {
+            throw new ArgumentException("SCCP fee maximum must be a positive canonical quantity.");
+        }
+
+        NumericV1.QuantityValue canonical;
+        try
+        {
+            canonical = NumericV1.QuantityValue.FromMantissa(mantissa, checked((int)scale));
+        }
+        catch (ArgumentException error)
+        {
+            throw new ArgumentException(
+                "SCCP fee maximum must be a positive canonical quantity.",
+                error);
+        }
+        if (canonical.Mantissa != mantissa || checked((uint)canonical.Scale) != scale)
+        {
+            throw new ArgumentException("SCCP fee maximum is not canonically normalized.");
+        }
+    }
+
+    private static ulong? DecodeOptionalPositiveUInt64(
+        ReadOnlySpan<byte> payload,
+        string field)
+    {
+        var option = new CompactTransactionCursor(payload);
+        var tag = option.TakeByte(field);
+        if (tag == 0)
+        {
+            if (!option.IsFinished)
+            {
+                throw new ArgumentException($"{field} None encoding contains trailing bytes.");
+            }
+            return null;
+        }
+        if (tag != 1)
+        {
+            throw new ArgumentException($"{field} option tag is unknown.");
+        }
+
+        var value = DecodeFramedUInt64(ref option, field);
+        if (value == 0 || !option.IsFinished)
+        {
+            throw new ArgumentException($"{field} must contain one positive UInt64.");
+        }
+        return value;
     }
 
     private static string DecodeCompactString(ReadOnlySpan<byte> payload, string field)

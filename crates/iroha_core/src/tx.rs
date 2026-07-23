@@ -35,9 +35,9 @@ use iroha_data_model::{
     isi::{
         runtime_upgrade::{ActivateRuntimeUpgrade, CancelRuntimeUpgrade, ProposeRuntimeUpgrade},
         smart_contract_code::{
-            ActivateContractInstance, DeactivateContractInstance, FinalizeSmartContractCodeUpload,
-            RegisterSmartContractBytes, RegisterSmartContractCode, RemoveSmartContractBytes,
-            UploadSmartContractCodeChunk,
+            ActivateContractInstance, CommitContractDeployment, DeactivateContractInstance,
+            FinalizeSmartContractCodeUpload, RegisterSmartContractBytes, RegisterSmartContractCode,
+            RemoveSmartContractBytes, UploadSmartContractCodeChunk,
         },
         zk,
     },
@@ -931,8 +931,8 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         let trigger = &register.object;
         return is_time_sensitive_executable(trigger.action().executable());
     }
-    any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
-        || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
+    any.is::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
+        || any.is::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
         || any.is::<iroha_data_model::isi::oracle::RecordTwitterBinding>()
         || any.is::<iroha_data_model::isi::social::ClaimTwitterFollowReward>()
         || any.is::<iroha_data_model::isi::social::SendToTwitter>()
@@ -959,6 +959,12 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
             instructions.iter().any(is_time_sensitive_instruction)
         }
         Executable::ContractCall(_) => true,
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => {
+                is_time_sensitive_instruction(instruction)
+            }
+            ExecutableBatchItem::ContractCall(_) => true,
+        }),
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
@@ -991,24 +997,41 @@ fn instruction_self_registers_authority(
     registration.clone().build(authority).id == *authority
 }
 
-pub(crate) fn allows_unregistered_authority(
-    executable: &Executable,
-    authority: &AccountId,
-) -> bool {
+/// Return whether the executable's first instruction registers its exact authority.
+///
+/// Self-registering transactions are the only single-signature transactions that may enter
+/// admission before their authority exists in world state. Keeping this recognition in Core lets
+/// pre-admission services, such as fee quoting, apply the same instruction-shape rule.
+#[must_use]
+pub fn executable_self_registers_authority(executable: &Executable, authority: &AccountId) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
             let Some((first, _rest)) = instructions.split_first() else {
                 return false;
             };
 
-            if instruction_self_registers_authority(first, authority) {
-                return true;
-            }
-
-            instructions_allow_multisig_envelope_authority(instructions)
+            instruction_self_registers_authority(first, authority)
         }
-        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_)
+        | Executable::Batch(_)
+        | Executable::IvmProved(_)
+        | Executable::Ivm(_) => false,
     }
+}
+
+/// Return whether admission may accept an authority that is absent from world state.
+///
+/// This includes exact first-instruction account self-registration and the existing multisig
+/// proposal envelope path, whose authorisation is established from multisig membership rather
+/// than a materialised authority account.
+#[must_use]
+pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
+    executable_self_registers_authority(executable, authority)
+        || matches!(
+            executable,
+            Executable::Instructions(instructions)
+                if instructions_allow_multisig_envelope_authority(instructions)
+        )
 }
 
 pub(crate) fn instructions_allow_multisig_envelope_authority(
@@ -1134,11 +1157,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
     world: &impl WorldReadOnly,
     block_height: u64,
 ) -> Result<(), TransactionRejectionReason> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-
-    for instruction in instructions {
+    for instruction in executable.explicit_instructions() {
         let any = instruction.as_any();
         if let Some(shield) = any.downcast_ref::<zk::Shield>() {
             validate_confidential_policy_for_action(
@@ -1155,7 +1174,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;
         } else if let Some(topup) =
-            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV2>()
+            any.downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
         {
             validate_confidential_policy_for_action(
                 world,
@@ -1164,7 +1183,7 @@ pub(crate) fn validate_confidential_policy_admission_for_world(
                 ConfidentialPolicyAdmissionAction::Transfer,
             )?;
         } else if let Some(redeem) =
-            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV2>()
+            any.downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>()
         {
             validate_confidential_policy_for_action(
                 world,
@@ -1832,7 +1851,11 @@ impl<'tx> AcceptedTransaction<'tx> {
             TransactionSignatureError::AlgorithmNotPermitted(_) => {
                 SignatureRejectionCode::AlgorithmNotPermitted
             }
-            TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
+            TransactionSignatureError::AuthorityKeyMismatch
+            | TransactionSignatureError::CryptoError(_) => SignatureRejectionCode::InvalidSignature,
+            TransactionSignatureError::InvalidFeePaymentIntent(_) => {
+                SignatureRejectionCode::MalformedSignature
+            }
             TransactionSignatureError::NoSignatures
             | TransactionSignatureError::MissingMultisigSignatures => {
                 SignatureRejectionCode::MissingSignatures
@@ -2041,9 +2064,8 @@ impl<'tx> AcceptedTransaction<'tx> {
         context: &'static str,
     ) -> Result<Numeric, TransactionRejectionReason> {
         value
-            .clone()
-            .checked_mul(Numeric::from(multiplier), NumericSpec::unconstrained())
-            .ok_or_else(|| {
+            .try_decimal_mul(&Numeric::from(multiplier))
+            .map_err(|_| {
                 TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
                     "{context} exceeds supported numeric bounds"
                 )))
@@ -2518,20 +2540,61 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::ContractCall(_) => {
-                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                iroha_data_model::transaction::require_transaction_gas_limit(
+                    tx.fee_payment_intent(),
+                )
+                .map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: err.to_string(),
+                    })
+                })?;
+            }
+            Executable::Batch(items) => {
+                if items.is_empty() {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "Transaction executable batch must not be empty".into(),
+                        },
+                    ));
+                }
+
+                let item_limit = limits.max_instructions().get();
+                let item_count = u64::try_from(items.len()).unwrap_or(u64::MAX);
+                if item_count > item_limit {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: format!(
+                                "Too many executable batch items, max number is {}, but got {}",
+                                limits.max_instructions(),
+                                items.len()
+                            ),
+                        },
+                    ));
+                }
+
+                if items
+                    .iter()
+                    .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_)))
+                {
+                    iroha_data_model::transaction::require_transaction_gas_limit(
+                        tx.fee_payment_intent(),
+                    )
                     .map_err(|err| {
                         AcceptTransactionFail::TransactionLimit(TransactionLimitError {
                             reason: err.to_string(),
                         })
                     })?;
+                }
             }
             Executable::IvmProved(proved) => {
-                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: err.to_string(),
-                        })
-                    })?;
+                iroha_data_model::transaction::require_transaction_gas_limit(
+                    tx.fee_payment_intent(),
+                )
+                .map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: err.to_string(),
+                    })
+                })?;
 
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
@@ -2608,12 +2671,14 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::Ivm(smart_contract) => {
-                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
-                    .map_err(|err| {
-                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                            reason: err.to_string(),
-                        })
-                    })?;
+                iroha_data_model::transaction::require_transaction_gas_limit(
+                    tx.fee_payment_intent(),
+                )
+                .map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: err.to_string(),
+                    })
+                })?;
 
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
@@ -3320,9 +3385,10 @@ impl StateBlock<'_> {
                 Executable::Instructions(instructions) => {
                     instructions_allow_multisig_envelope_authority(instructions)
                 }
-                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
-                    false
-                }
+                Executable::ContractCall(_)
+                | Executable::Batch(_)
+                | Executable::IvmProved(_)
+                | Executable::Ivm(_) => false,
             };
             if (has_multisig_state || has_multisig_metadata || has_multisig_controller)
                 && !allows_multisig_envelope_authority
@@ -3363,6 +3429,8 @@ impl StateBlock<'_> {
         state_transaction.current_lane_id = Some(routing_decision.lane_id);
         state_transaction.current_dataspace_id = Some(routing_decision.dataspace_id);
         state_transaction.world.current_dataspace_id = Some(routing_decision.dataspace_id);
+        crate::executor::validate_transaction_fee_admission(state_transaction, tx)
+            .map_err(TransactionRejectionReason::Validation)?;
         let lane_assignment = LaneAssignment {
             lane_id: routing_decision.lane_id,
             dataspace_id: routing_decision.dataspace_id,
@@ -3626,12 +3694,10 @@ impl StateBlock<'_> {
 
         match tx.as_ref().instructions() {
             Executable::ContractCall(call) => {
-                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
-                    .map_err(TransactionRejectionReason::Validation)?;
-                if gas_limit.is_none() {
+                if crate::executor::transaction_gas_limit(tx.as_ref()).is_none() {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(
-                            "missing gas_limit in transaction metadata".to_owned(),
+                            "missing gas limit in fee payment intent".to_owned(),
                         ),
                     ));
                 }
@@ -3658,12 +3724,10 @@ impl StateBlock<'_> {
                 )?;
             }
             Executable::Ivm(bytes) => {
-                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
-                    .map_err(TransactionRejectionReason::Validation)?;
-                if gas_limit.is_none() {
+                if crate::executor::transaction_gas_limit(tx.as_ref()).is_none() {
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(
-                            "missing gas_limit in transaction metadata".to_owned(),
+                            "missing gas limit in fee payment intent".to_owned(),
                         ),
                     ));
                 }
@@ -4327,10 +4391,7 @@ fn canonical_manifest_validators(
 }
 
 fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
-    let Executable::Instructions(instructions) = tx.instructions() else {
-        return false;
-    };
-    instructions.iter().any(|instruction| {
+    let contains_runtime_upgrade = |instruction: &InstructionBox| {
         instruction
             .as_any()
             .downcast_ref::<ProposeRuntimeUpgrade>()
@@ -4343,7 +4404,15 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
                 .as_any()
                 .downcast_ref::<CancelRuntimeUpgrade>()
                 .is_some()
-    })
+    };
+    match tx.instructions() {
+        Executable::Instructions(instructions) => instructions.iter().any(contains_runtime_upgrade),
+        Executable::Batch(items) => items.iter().any(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => contains_runtime_upgrade(instruction),
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
+        Executable::ContractCall(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+    }
 }
 
 fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bool {
@@ -4354,34 +4423,53 @@ fn tx_touches_manifest_protected_namespace_surface(tx: &SignedTransaction) -> bo
 
     let mut contract_targets_seen = false;
     let mut register_code_seen = false;
+    let inspect_instruction = |instruction: &InstructionBox| {
+        let is_contract_target = instruction
+            .as_any()
+            .downcast_ref::<ActivateContractInstance>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<CommitContractDeployment>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<DeactivateContractInstance>()
+                .is_some();
+        let is_code_registration = if is_contract_target {
+            false
+        } else {
+            let any = instruction.as_any();
+            any.is::<RegisterSmartContractCode>()
+                || any.is::<RegisterSmartContractBytes>()
+                || any.is::<UploadSmartContractCodeChunk>()
+                || any.is::<FinalizeSmartContractCodeUpload>()
+                || any.is::<RemoveSmartContractBytes>()
+        };
+        (is_contract_target, is_code_registration)
+    };
     match tx.instructions() {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                if instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                    .is_some()
-                    || instruction
-                        .as_any()
-                        .downcast_ref::<DeactivateContractInstance>()
-                        .is_some()
-                {
-                    contract_targets_seen = true;
-                } else {
-                    let any = instruction.as_any();
-                    if any.is::<RegisterSmartContractCode>()
-                        || any.is::<RegisterSmartContractBytes>()
-                        || any.is::<UploadSmartContractCodeChunk>()
-                        || any.is::<FinalizeSmartContractCodeUpload>()
-                        || any.is::<RemoveSmartContractBytes>()
-                    {
-                        register_code_seen = true;
-                    }
-                }
+                let (target, registration) = inspect_instruction(instruction);
+                contract_targets_seen |= target;
+                register_code_seen |= registration;
             }
         }
         Executable::ContractCall(_) => {
             contract_targets_seen = true;
+        }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        let (target, registration) = inspect_instruction(instruction);
+                        contract_targets_seen |= target;
+                        register_code_seen |= registration;
+                    }
+                    ExecutableBatchItem::ContractCall(_) => contract_targets_seen = true,
+                }
+            }
         }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
@@ -4463,18 +4551,29 @@ fn enforce_manifest_protected_namespaces(
 
     let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
+    let mut commit_deployment_count = 0_usize;
+    let mut activate_seen = false;
+    let mut deactivate_seen = false;
     match tx.instructions() {
         Executable::Instructions(instructions) => {
             for instruction in instructions {
-                if let Some(activate) = instruction
+                if let Some(commit) = instruction
+                    .as_any()
+                    .downcast_ref::<CommitContractDeployment>()
+                {
+                    commit_deployment_count += 1;
+                    contract_targets.insert(commit.contract_address().clone());
+                } else if let Some(activate) = instruction
                     .as_any()
                     .downcast_ref::<ActivateContractInstance>()
                 {
+                    activate_seen = true;
                     contract_targets.insert(activate.contract_address().clone());
                 } else if let Some(deactivate) = instruction
                     .as_any()
                     .downcast_ref::<DeactivateContractInstance>()
                 {
+                    deactivate_seen = true;
                     contract_targets.insert(deactivate.contract_address().clone());
                 } else {
                     let modifies_contract_code = {
@@ -4494,7 +4593,57 @@ fn enforce_manifest_protected_namespaces(
         Executable::ContractCall(call) => {
             contract_targets.insert(call.contract_address.clone());
         }
+        Executable::Batch(items) => {
+            for item in items {
+                match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        if let Some(commit) = instruction
+                            .as_any()
+                            .downcast_ref::<CommitContractDeployment>()
+                        {
+                            commit_deployment_count += 1;
+                            contract_targets.insert(commit.contract_address().clone());
+                        } else if let Some(activate) = instruction
+                            .as_any()
+                            .downcast_ref::<ActivateContractInstance>()
+                        {
+                            activate_seen = true;
+                            contract_targets.insert(activate.contract_address().clone());
+                        } else if let Some(deactivate) = instruction
+                            .as_any()
+                            .downcast_ref::<DeactivateContractInstance>(
+                        ) {
+                            deactivate_seen = true;
+                            contract_targets.insert(deactivate.contract_address().clone());
+                        } else {
+                            let any = instruction.as_any();
+                            if any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<UploadSmartContractCodeChunk>()
+                                || any.is::<FinalizeSmartContractCodeUpload>()
+                                || any.is::<RemoveSmartContractBytes>()
+                            {
+                                register_code_seen = true;
+                            }
+                        }
+                    }
+                    ExecutableBatchItem::ContractCall(call) => {
+                        contract_targets.insert(call.contract_address.clone());
+                    }
+                }
+            }
+        }
         Executable::Ivm(_) | Executable::IvmProved(_) => {}
+    }
+
+    if commit_deployment_count > 1
+        || (commit_deployment_count == 1 && (activate_seen || deactivate_seen))
+        || (activate_seen && deactivate_seen)
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "protected contract rotations must use exactly one `CommitContractDeployment` instruction and no legacy activate/deactivate pair",
+        ));
     }
 
     if let Some(contract_address) = metadata_governance_contract_address.clone() {
@@ -4507,10 +4656,19 @@ fn enforce_manifest_protected_namespaces(
 
     let contract_instr_seen =
         register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
+    let explicit_contract_instruction_seen =
+        register_code_seen || commit_deployment_count > 0 || activate_seen || deactivate_seen;
+    let has_directly_addressed_call = match tx.instructions() {
+        Executable::ContractCall(_) => true,
+        Executable::Batch(items) => items
+            .iter()
+            .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
+        Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+    };
 
     if contract_instr_seen
         && metadata_governance_contract_address.is_none()
-        && !matches!(tx.instructions(), Executable::ContractCall(_))
+        && (!has_directly_addressed_call || explicit_contract_instruction_seen)
     {
         return Err(reject_lane_policy(
             alias,
@@ -4618,23 +4776,7 @@ fn enforce_runtime_upgrade_hook(
 }
 
 fn contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        return instructions.iter().any(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<ProposeRuntimeUpgrade>()
-                .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<ActivateRuntimeUpgrade>()
-                    .is_some()
-                || instruction
-                    .as_any()
-                    .downcast_ref::<CancelRuntimeUpgrade>()
-                    .is_some()
-        });
-    }
-    false
+    tx_contains_runtime_upgrade_instruction(tx)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4717,8 +4859,9 @@ fn extract_lane_authority_domains(
     world: &impl WorldReadOnly,
     authority: &AccountId,
     lane_alias: &str,
+    now_ms: u64,
 ) -> Result<Vec<iroha_data_model::domain::DomainId>, TransactionRejectionReason> {
-    extract_directory_authority_domains(world, authority).map_err(|err| {
+    extract_directory_authority_domains(world, authority, now_ms).map_err(|err| {
         reject_lane_policy(
             lane_alias,
             format!("authority alias domain resolution failed: {err}"),
@@ -4727,17 +4870,20 @@ fn extract_lane_authority_domains(
 }
 
 fn publishes_only_space_directory_manifests(tx: &SignedTransaction) -> bool {
+    let is_publish = |instruction: &InstructionBox| {
+        instruction
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest>()
+            .is_some()
+    };
     match tx.instructions() {
         Executable::Instructions(instructions) if !instructions.is_empty() => {
-            instructions.iter().all(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<
-                        iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest,
-                    >()
-                    .is_some()
-            })
+            instructions.iter().all(is_publish)
         }
+        Executable::Batch(items) if !items.is_empty() => items.iter().all(|item| match item {
+            ExecutableBatchItem::Instruction(instruction) => is_publish(instruction),
+            ExecutableBatchItem::ContractCall(_) => false,
+        }),
         _ => false,
     }
 }
@@ -4764,7 +4910,10 @@ fn enforce_lane_policies(
         Executable::Instructions(instructions) => {
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_)
+        | Executable::Batch(_)
+        | Executable::IvmProved(_)
+        | Executable::Ivm(_) => false,
     };
 
     let mut runtime_upgrade_present = false;
@@ -4869,8 +5018,12 @@ fn enforce_lane_policies(
         && let Some(engine) = state_transaction.lane_compliance.as_ref()
     {
         let (uaid_value, capability_tags) = lane_identity;
-        let authority_domains =
-            extract_lane_authority_domains(&state_transaction.world, tx.authority(), &lane_alias)?;
+        let authority_domains = extract_lane_authority_domains(
+            &state_transaction.world,
+            tx.authority(),
+            &lane_alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )?;
         let ctx = LaneComplianceContext {
             lane_id,
             dataspace_id,
@@ -5757,6 +5910,7 @@ pub mod tests {
         runtime::RuntimeUpgradeManifest,
         transaction::{
             TransactionBuilder,
+            executable::ContractInvocation,
             signed::{MultisigSignature, MultisigSignatures},
         },
     };
@@ -5883,7 +6037,7 @@ pub mod tests {
             Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
                 asset_def_id,
                 authority_id,
-                10,
+                10_u128,
                 [7; 32],
                 iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
             ))]));
@@ -5906,7 +6060,7 @@ pub mod tests {
             Executable::Instructions(ConstVec::from(vec![InstructionBox::from(zk::Shield::new(
                 asset_def_id,
                 authority_id,
-                10,
+                10_u128,
                 [9; 32],
                 iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
             ))]));
@@ -6028,9 +6182,13 @@ pub mod tests {
             expiry_epoch: None,
             entries: Vec::new(),
         };
-        let tx = TransactionBuilder::new(chain, authority.clone())
-            .with_instructions([PublishSpaceDirectoryManifest { manifest }])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([PublishSpaceDirectoryManifest { manifest }])
+        .sign(keypair.private_key());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
@@ -6111,6 +6269,7 @@ pub mod tests {
             CHAIN_ID.clone(),
             GENESIS_ACCOUNT.id.clone(),
             &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(
             Level::DEBUG,
@@ -6177,7 +6336,11 @@ pub mod tests {
     fn multisig_authority_rejected_with_stable_code() {
         let chain: ChainId = "multisig-accept".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig".into())]);
         let tx = builder.sign(keypair.private_key());
 
@@ -6217,7 +6380,11 @@ pub mod tests {
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy.clone());
 
-        let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig ok".into())]);
         let tx = builder.sign(member_ed.private_key());
 
@@ -6253,7 +6420,11 @@ pub mod tests {
     fn multisig_authority_rejects_unknown_signer() {
         let chain: ChainId = "multisig-unknown".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder.with_instructions([Log::new(Level::INFO, "multisig".into())]);
         let tx = builder.sign(keypair.private_key());
 
@@ -6298,7 +6469,11 @@ pub mod tests {
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
 
-        let mut builder = TransactionBuilder::new(chain.clone(), authority.clone());
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder
             .with_instructions([Log::new(Level::INFO, "insufficient multisig weight".into())]);
         let mut tx = builder.sign(signer.private_key());
@@ -6365,12 +6540,16 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), multisig_id.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "direct multisig signer bypass".into(),
-            )])
-            .sign(multisig_key.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            multisig_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "direct multisig signer bypass".into(),
+        )])
+        .sign(multisig_key.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6483,12 +6662,16 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(
-                Level::INFO,
-                "multisig direct sign role fallback".into(),
-            )])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(
+            Level::INFO,
+            "multisig direct sign role fallback".into(),
+        )])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6568,13 +6751,17 @@ pub mod tests {
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
-        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
-            .with_instructions([InstructionBox::from(MultisigPropose::new(
-                multisig_id,
-                vec![registration.into()],
-                None,
-            ))])
-            .sign(signer1.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            signer1_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(MultisigPropose::new(
+            multisig_id,
+            vec![registration.into()],
+            None,
+        ))])
+        .sign(signer1.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6683,13 +6870,17 @@ pub mod tests {
         state.install_lane_manifests(&registry);
 
         let registration = Register::account(new_account_in_domain(&retail_id, &target_domain));
-        let tx = TransactionBuilder::new(chain.clone(), signer1_id.clone())
-            .with_instructions([InstructionBox::from(MultisigPropose::new(
-                multisig_id,
-                vec![registration.into()],
-                None,
-            ))])
-            .sign(signer1.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            signer1_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(MultisigPropose::new(
+            multisig_id,
+            vec![registration.into()],
+            None,
+        ))])
+        .sign(signer1.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6751,9 +6942,13 @@ pub mod tests {
         let registry = std::sync::Arc::new(LaneManifestRegistry::from_statuses(statuses));
         state.install_lane_manifests(&registry);
 
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
-            .sign(authority_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "retail transfer".into())])
+        .sign(authority_keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6780,9 +6975,13 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "regular".into())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "regular".into())])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6803,6 +7002,46 @@ pub mod tests {
     }
 
     #[test]
+    fn unregistered_authority_predicates_require_exact_first_self_registration() {
+        let (authority, _) = gen_account_in("wonderland");
+        let (other, _) = gen_account_in("wonderland");
+        let exact = Executable::Instructions(
+            vec![
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+                InstructionBox::from(Log::new(Level::INFO, "after registration".into())),
+            ]
+            .into(),
+        );
+        assert!(executable_self_registers_authority(&exact, &authority));
+        assert!(allows_unregistered_authority(&exact, &authority));
+
+        let registers_other = Executable::Instructions(
+            vec![InstructionBox::from(Register::account(Account::new(other)))].into(),
+        );
+        assert!(!executable_self_registers_authority(
+            &registers_other,
+            &authority
+        ));
+        assert!(!allows_unregistered_authority(&registers_other, &authority));
+
+        let registration_is_not_first = Executable::Instructions(
+            vec![
+                InstructionBox::from(Log::new(Level::INFO, "before registration".into())),
+                InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            ]
+            .into(),
+        );
+        assert!(!executable_self_registers_authority(
+            &registration_is_not_first,
+            &authority
+        ));
+        assert!(!allows_unregistered_authority(
+            &registration_is_not_first,
+            &authority
+        ));
+    }
+
+    #[test]
     fn missing_authority_self_register_allows_transaction() {
         let chain: ChainId = "missing-authority-self-register".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
@@ -6811,12 +7050,16 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([
-                InstructionBox::from(Register::account(Account::new(authority.clone()))),
-                InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
-            ])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            InstructionBox::from(Log::new(Level::INFO, "self-register".into())),
+        ])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6845,12 +7088,16 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([
-                InstructionBox::from(Register::account(Account::new(authority.clone()))),
-                InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
-            ])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::account(Account::new(authority.clone()))),
+            InstructionBox::from(Log::new(Level::INFO, "self-register-again".into())),
+        ])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6880,12 +7127,16 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), missing_authority.clone())
-            .with_instructions([MultisigApprove::new(
-                multisig_account.clone(),
-                instructions_hash,
-            )])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            missing_authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([MultisigApprove::new(
+            multisig_account.clone(),
+            instructions_hash,
+        )])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6913,9 +7164,13 @@ pub mod tests {
         let keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let tx = TransactionBuilder::new(chain.clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "single disallowed algorithm".into())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "single disallowed algorithm".into())])
+        .sign(keypair.private_key());
 
         let limits = TransactionParameters::default();
         let mut crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -6940,7 +7195,11 @@ pub mod tests {
         let policy = MultisigPolicy::new(1, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
 
-        let mut builder = TransactionBuilder::new(chain.clone(), authority);
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder.with_instructions([Log::new(
             Level::INFO,
             "multisig disallowed algorithm".into(),
@@ -6974,7 +7233,11 @@ pub mod tests {
         let policy = MultisigPolicy::new(2, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
 
-        let mut builder = TransactionBuilder::new(chain.clone(), authority);
+        let mut builder = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder = builder
             .with_instructions([Log::new(Level::INFO, "multisig insufficient weight".into())]);
         let tx = builder.sign_multisig(vec![member_a.private_key()]);
@@ -6998,9 +7261,13 @@ pub mod tests {
         let policy = MultisigPolicy::new(1, members).expect("policy");
         let authority = AccountId::new_multisig(policy);
 
-        let mut tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "multisig too many signatures".into())])
-            .sign_multisig(vec![signer.private_key()]);
+        let mut tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "multisig too many signatures".into())])
+        .sign_multisig(vec![signer.private_key()]);
 
         let payload = tx.payload().clone();
         let member_signature = checked_signature_of(signer.private_key(), &payload);
@@ -7038,9 +7305,13 @@ pub mod tests {
         let chain: ChainId = "checked-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "noop".into());
-        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
 
         let kura = Kura::blank_kura_for_testing();
@@ -7059,9 +7330,13 @@ pub mod tests {
     fn accepted_transaction_into_entrypoint_consumes_wrapped_entrypoint() {
         let chain: ChainId = "accepted-into-entrypoint-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "into-entrypoint".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "into-entrypoint".into())])
+        .sign(keypair.private_key());
         let expected = TransactionEntrypoint::External(signed.clone());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
 
@@ -7073,9 +7348,13 @@ pub mod tests {
         let chain: ChainId = "checked-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "commit".into());
-        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
 
         let kura = Kura::blank_kura_for_testing();
@@ -7131,9 +7410,13 @@ pub mod tests {
         let chain: ChainId = "accepted-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
         let instruction = Log::new(Level::INFO, "cache".into());
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
@@ -7173,18 +7456,26 @@ pub mod tests {
     fn single_ed25519_fast_path_requires_ed25519_key_and_signature_shape() {
         let chain: ChainId = "single-ed25519-fast-path-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain.clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "ed25519-fast-path".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "ed25519-fast-path".into())])
+        .sign(keypair.private_key());
 
         assert!(AcceptedTransaction::has_single_ed25519_signature(&signed));
         assert!(AcceptedTransaction::parsed_single_ed25519_key(&signed).is_some());
 
         let secp_keypair = checked_random_tx_keypair_with_algorithm(Algorithm::Secp256k1);
         let secp_authority = AccountId::new(secp_keypair.public_key().clone());
-        let secp_signed = TransactionBuilder::new(chain.clone(), secp_authority)
-            .with_instructions([Log::new(Level::INFO, "secp256k1-fast-path".into())])
-            .sign(secp_keypair.private_key());
+        let secp_signed = TransactionBuilder::new(
+            chain.clone(),
+            secp_authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "secp256k1-fast-path".into())])
+        .sign(secp_keypair.private_key());
 
         assert!(!AcceptedTransaction::has_single_ed25519_signature(
             &secp_signed
@@ -7207,9 +7498,13 @@ pub mod tests {
     fn borrowed_external_entrypoint_hash_matches_canonical_hash() {
         let chain: ChainId = "accepted-borrowed-entrypoint-hash-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "borrowed-hash".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "borrowed-hash".into())])
+        .sign(keypair.private_key());
         let versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
@@ -7229,9 +7524,13 @@ pub mod tests {
             .parse()
             .unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "signed-frame-hash".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "signed-frame-hash".into())])
+        .sign(keypair.private_key());
         let signed_bytes = norito::to_bytes(&signed).expect("signed transaction encodes");
 
         assert_eq!(
@@ -7267,13 +7566,17 @@ pub mod tests {
             slsa_attestation: Vec::new(),
             provenance: Vec::new(),
         };
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([ProposeRuntimeUpgradeProposal {
-                manifest,
-                window: None,
-                mode: Some(VotingMode::Plain),
-            }])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ProposeRuntimeUpgradeProposal {
+            manifest,
+            window: None,
+            mode: Some(VotingMode::Plain),
+        }])
+        .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
 
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -7284,9 +7587,13 @@ pub mod tests {
     fn accept_with_canonical_signed_bytes_reuses_payload_cache() {
         let chain: ChainId = "accepted-canonical-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain.clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "canonical-cache".into())])
+        .sign(keypair.private_key());
         let (signed_payload, signed_payload_flags) =
             AcceptedTransaction::canonical_signed_payload_with_flags(&signed);
         let signed_bytes = Arc::new(
@@ -7326,9 +7633,13 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_prepares_exact_length_from_payload() {
         let chain: ChainId = "decoded-versioned-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain.clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "versioned-cache".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "versioned-cache".into())])
+        .sign(keypair.private_key());
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
@@ -7391,17 +7702,21 @@ pub mod tests {
             DomainId::try_new("wonderland", "universal").expect("domain id"),
             "adaptivezk".parse().expect("asset name"),
         );
-        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([InstructionBox::from(
-                iroha_data_model::isi::zk::Shield::new(
-                    asset_def_id,
-                    authority,
-                    200_u128,
-                    [7; 32],
-                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
-                ),
-            )])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([InstructionBox::from(
+            iroha_data_model::isi::zk::Shield::new(
+                asset_def_id,
+                authority,
+                200_u128,
+                [7; 32],
+                iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+            ),
+        )])
+        .sign(keypair.private_key());
         let actual_payload_len = norito::codec::Encode::encode(&signed).len();
         let stale_exact_hint = norito::core::NoritoSerialize::encoded_len_exact(&signed)
             .expect("confidential signed transaction advertises an exact hint");
@@ -7447,9 +7762,13 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_owned_supports_ed25519_prechecked_accept() {
         let chain: ChainId = "decoded-versioned-owned-precheck-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain.clone(), authority)
-            .with_instructions([Log::new(Level::INFO, "versioned-owned-precheck".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "versioned-owned-precheck".into())])
+        .sign(keypair.private_key());
         let expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
@@ -7485,9 +7804,13 @@ pub mod tests {
     fn decoded_versioned_signed_transaction_rejects_malformed_payloads() {
         let chain: ChainId = "decoded-versioned-reject-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "versioned-reject".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "versioned-reject".into())])
+        .sign(keypair.private_key());
         let mut versioned =
             <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(&signed);
 
@@ -7505,9 +7828,13 @@ pub mod tests {
     fn accepted_transaction_entrypoint_encoded_lengths_match_norito_frames() {
         let chain: ChainId = "accepted-entrypoint-len-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "entrypoint-len".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "entrypoint-len".into())])
+        .sign(keypair.private_key());
         let signed_expected_len = norito::to_bytes(&signed)
             .expect("signed transaction encodes")
             .len();
@@ -7577,9 +7904,13 @@ pub mod tests {
             Json::from("cached"),
         );
 
-        let mut builder = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "signed-len".into())])
-            .with_metadata(metadata);
+        let mut builder = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "signed-len".into())])
+        .with_metadata(metadata);
         builder.set_nonce(NonZeroU32::new(7).expect("nonce"));
         builder.set_ttl(Duration::from_millis(5_000));
         let signed = builder.sign(keypair.private_key());
@@ -7609,10 +7940,14 @@ pub mod tests {
             Name::from_str("depth").expect("name"),
             Json::from_str_norito("[[[1]]]").expect("valid nested json"),
         );
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "prepared-depth".into())])
-            .with_metadata(metadata)
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "prepared-depth".into())])
+        .with_metadata(metadata)
+        .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
 
         ensure_metadata_depth_with_prepared(signed.metadata(), 4, Some(&prepared))
@@ -7629,9 +7964,13 @@ pub mod tests {
     fn gossip_signed_metadata_matches_canonical_preparation() {
         let chain: ChainId = "gossip-signed-metadata-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "gossip-metadata".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "gossip-metadata".into())])
+        .sign(keypair.private_key());
         let entrypoint = TransactionEntrypoint::External(signed.clone());
         let entrypoint_bytes =
             norito::to_bytes(&entrypoint).expect("entrypoint transaction encodes");
@@ -7666,9 +8005,13 @@ pub mod tests {
     fn signed_encoded_len_for_limit_uses_cached_canonical_bytes() {
         let chain: ChainId = "signed-len-cache-chain".parse().unwrap();
         let (authority, keypair) = gen_account_in("wonderland");
-        let signed = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "signed-len-cache".into())])
-            .sign(keypair.private_key());
+        let signed = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "signed-len-cache".into())])
+        .sign(keypair.private_key());
         let signed_bytes = Arc::new(norito::to_bytes(&signed).expect("signed transaction encodes"));
         let mut prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         prepared.encoded_len = usize::MAX;
@@ -7831,6 +8174,7 @@ pub mod tests {
             chain.clone(),
             authority.clone(),
             &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([Log::new(Level::INFO, "ttl ok".to_owned())])
         .with_metadata(Metadata::default());
@@ -7878,7 +8222,7 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-1".into(),
             owner: authority.clone(),
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
@@ -8062,7 +8406,7 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-2".into(),
             owner: authority,
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
@@ -8088,13 +8432,17 @@ pub mod tests {
         let ballot = iroha_data_model::isi::governance::CastPlainBallot {
             referendum_id: "ref-3".into(),
             owner: authority.clone(),
-            amount: 1,
+            amount: 1_u64.into(),
             duration_blocks: 1,
             direction: 0,
         };
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([ballot])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([ballot])
+        .sign(keypair.private_key());
         let status = crate::time::NetworkTimeStatus {
             now: std::time::SystemTime::UNIX_EPOCH,
             offset_ms: 0,
@@ -8136,9 +8484,13 @@ pub mod tests {
     fn nts_enforcement_skips_non_sensitive_transactions() {
         let (authority, keypair) = gen_account_in("wonderland");
         let chain: ChainId = "nts-skip".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "ok".into())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "ok".into())])
+        .sign(keypair.private_key());
         assert!(super::enforce_nts_health_for_time_sensitive(&tx).is_ok());
     }
 
@@ -8483,7 +8835,7 @@ pub mod tests {
     }
 
     #[test]
-    fn tx_rejected_when_gas_asset_required_but_missing() {
+    fn tx_rejected_when_pipeline_gas_charge_limit_is_required_but_missing() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
         use nonzero_ext::nonzero;
 
@@ -8499,13 +8851,16 @@ pub mod tests {
         pipeline.gas.accepted_assets = vec!["xor#domain".to_string()];
         state.set_pipeline(pipeline);
 
-        // Build minimal IVM program (HALT) without gas_asset_id metadata
+        // Bind an executable gas limit but omit the required PipelineGas charge limit.
         let program = minimal_ivm_program_with_max_cycles(1, 1_000);
         let chain: ChainId = "chain".parse().unwrap();
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(kp.private_key());
 
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -8698,18 +9053,8 @@ pub mod tests {
 
     const TEST_GAS_LIMIT: u64 = 1_000_000;
 
-    fn metadata_with_gas_limit(limit: u64) -> Metadata {
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata, limit);
-        metadata
-    }
-
-    fn insert_gas_limit(metadata: &mut Metadata, limit: u64) {
-        use iroha_data_model::name::Name;
-        use iroha_primitives::json::Json;
-
-        let key = Name::from_str("gas_limit").expect("static gas_limit key");
-        metadata.insert(key, Json::new(limit));
+    fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
+        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
     }
 
     #[test]
@@ -8730,10 +9075,13 @@ pub mod tests {
 
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(1);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -8758,10 +9106,13 @@ pub mod tests {
 
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program(3); // unsupported abi_version
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -8792,10 +9143,13 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         // abi_version=0 must be rejected in v1-only release
         let prog = minimal_ivm_program(0);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -8822,17 +9176,21 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
 
-        let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut metadata = Metadata::default();
         metadata.insert(
             (*CONTRACT_MANIFEST_METADATA_NAME).clone(),
             Json::from("not-a-contract-manifest"),
         );
-        let tx = TransactionBuilder::new(chain, authority_id)
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id,
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_ivm_program(1),
+        )))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -8880,10 +9238,13 @@ pub mod tests {
                 .expect("post-CNTR artifact suffix is in bounds"),
         );
 
-        let tx = TransactionBuilder::new(chain, authority_id)
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(stale)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id,
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(stale)))
+        .sign(kp.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -8961,15 +9322,19 @@ pub mod tests {
             provenance: None,
         }
         .signed(&kp);
-        let mut md = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9027,15 +9392,19 @@ pub mod tests {
             provenance: None,
         }
         .signed(&kp);
-        let mut md = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9082,15 +9451,19 @@ pub mod tests {
             provenance: None,
         }
         .signed(&kp);
-        let mut md = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9144,15 +9517,19 @@ pub mod tests {
             provenance: None,
         }
         .signed(&kp);
-        let mut md = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9230,15 +9607,19 @@ pub mod tests {
             provenance: None,
         }
         .signed(&kp);
-        let mut md = metadata_with_gas_limit(TEST_GAS_LIMIT);
+        let mut md = Metadata::default();
         md.insert(
             "contract_manifest".parse::<Name>().unwrap(),
             Json::new(manifest),
         );
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(md)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_metadata(md)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9274,10 +9655,13 @@ pub mod tests {
         // Program with max_cycles above default config bound; expect structured error
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 9_999_999);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9306,10 +9690,13 @@ pub mod tests {
         let mut block = state.block(header);
 
         let prog = minimal_ivm_program_with_max_cycles(1, 0);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9345,10 +9732,13 @@ pub mod tests {
         let mut block = state.block(header);
 
         let prog = minimal_ivm_program_with_max_cycles(1, fuel_limit + 1);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9386,10 +9776,13 @@ pub mod tests {
         let mut block = state.block(header);
 
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9428,10 +9821,13 @@ pub mod tests {
         let mut block = state.block(header);
 
         let prog = minimal_ivm_program_with_instruction_count(1, 1_000, 4);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9495,10 +9891,13 @@ pub mod tests {
             iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
         let mut block2 = state.block(header2);
         let chain: ChainId = "chain".parse().unwrap();
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
         let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);
@@ -9528,10 +9927,13 @@ pub mod tests {
 
         // Program issues an unmapped SCALL then HALT; admission should reject before the VM runs.
         let prog = minimal_ivm_program_with_syscall(1, syscall);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9570,10 +9972,13 @@ pub mod tests {
         ));
 
         let prog = minimal_ivm_program_with_syscallx(1, syscall);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -9599,9 +10004,13 @@ pub mod tests {
         let chain_id = ChainId::from("chain");
         let (authority_id, keypair) = gen_account_in("wonderland");
         let instruction = SetKeyValue::account(authority_id.clone(), "k".parse().unwrap(), "v");
-        let tx = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
         let mut invalid_tx = tx.clone();
         let mut signature_payload = invalid_tx.signature().payload().payload().to_vec();
         assert!(
@@ -9663,10 +10072,13 @@ pub mod tests {
 
         // Create a blob twice the allowed size (2 KiB) — content need not be a valid IVM header
         let oversize_blob = vec![0u8; 2048];
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(oversize_blob)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(oversize_blob)))
+        .sign(kp.private_key());
 
         // Admission must reject with a TransactionLimit error
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -9709,10 +10121,13 @@ pub mod tests {
         // Create a blob exactly at the allowed bytecode size.
         let at_limit_blob = minimal_ivm_program_with_literal_padding(1, BYTECODE_LIMIT as usize);
         assert_eq!(at_limit_blob.len(), BYTECODE_LIMIT as usize);
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(at_limit_blob)))
+        .sign(kp.private_key());
 
         // Admission should accept this transaction
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -9729,7 +10144,7 @@ pub mod tests {
     }
 
     #[test]
-    fn ivm_missing_gas_limit_rejected_at_admission() {
+    fn ivm_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
@@ -9737,20 +10152,26 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err =
             AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas_limit should be rejected");
+                .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
-                    limit.reason.contains("missing gas_limit"),
+                    limit
+                        .reason
+                        .contains("missing gas limit in fee payment intent"),
                     "unexpected reason: {}",
                     limit.reason
                 );
@@ -9760,39 +10181,34 @@ pub mod tests {
     }
 
     #[test]
-    fn ivm_zero_gas_limit_rejected_at_admission() {
-        use std::time::Duration;
-
+    fn legacy_gas_limit_metadata_is_rejected_before_admission() {
         use iroha_data_model::transaction::{Executable, TransactionBuilder};
 
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(0))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let mut metadata = Metadata::default();
+        metadata.insert("gas_limit".parse().unwrap(), Json::new(0_u64));
+        let error = TransactionBuilder::new(
+            chain,
+            authority_id,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .try_sign(kp.private_key())
+        .expect_err("retired gas-limit metadata must fail before admission");
 
-        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
-        let limits = TransactionParameters::default();
-        let err =
-            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("zero gas_limit should be rejected");
-
-        match err {
-            AcceptTransactionFail::TransactionLimit(limit) => {
-                assert!(
-                    limit.reason.contains("gas_limit must be positive"),
-                    "unexpected reason: {}",
-                    limit.reason
-                );
-            }
-            other => panic!("Expected TransactionLimit failure, got {other:?}"),
-        }
+        assert!(
+            error
+                .to_string()
+                .contains("legacy transaction metadata key `gas_limit`"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]
-    fn ivm_proved_missing_gas_limit_rejected_at_admission() {
+    fn ivm_proved_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
@@ -9800,25 +10216,31 @@ pub mod tests {
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
         let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: IvmBytecode::from_compiled(prog),
-                overlay: Vec::<InstructionBox>::new().into(),
-                events_commitment: Hash::new(b"events"),
-                gas_policy_commitment: Hash::new(b"gas"),
-            }))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: IvmBytecode::from_compiled(prog),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        }))
+        .sign(kp.private_key());
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err =
             AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas_limit should be rejected");
+                .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
-                    limit.reason.contains("missing gas_limit"),
+                    limit
+                        .reason
+                        .contains("missing gas limit in fee payment intent"),
                     "unexpected reason: {}",
                     limit.reason
                 );
@@ -9828,7 +10250,7 @@ pub mod tests {
     }
 
     #[test]
-    fn contract_call_missing_gas_limit_rejected_at_admission() {
+    fn contract_call_missing_gas_bound_rejected_at_admission() {
         use std::time::Duration;
 
         use iroha_data_model::transaction::{
@@ -9837,33 +10259,112 @@ pub mod tests {
 
         let chain: ChainId = "chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
-                    .parse()
-                    .expect("contract address"),
-                expected_code_hash: Hash::new(b"admission-contract-code"),
-                entrypoint: "call".to_owned(),
-                arguments: None,
-            }))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: Hash::new(b"admission-contract-code"),
+            entrypoint: "call".to_owned(),
+            arguments: None,
+        }))
+        .sign(kp.private_key());
 
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
         let limits = TransactionParameters::default();
         let err =
             AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
-                .expect_err("missing gas_limit should be rejected");
+                .expect_err("missing gas limit in fee payment intent should be rejected");
 
         match err {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
-                    limit.reason.contains("missing gas_limit"),
+                    limit
+                        .reason
+                        .contains("missing gas limit in fee payment intent"),
                     "unexpected reason: {}",
                     limit.reason
                 );
             }
             other => panic!("Expected TransactionLimit failure, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn mixed_batch_missing_gas_bound_rejected_at_admission() {
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let call = ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: Hash::new(b"batch-admission-contract-code"),
+            entrypoint: "call".to_owned(),
+            arguments: None,
+        };
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "before call".to_owned(),
+                ))),
+                ExecutableBatchItem::ContractCall(call),
+            ]
+            .into(),
+        ))
+        .sign(kp.private_key());
+
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect_err("mixed batch without a signed gas limit must be rejected");
+
+        assert!(matches!(
+            err,
+            AcceptTransactionFail::TransactionLimit(ref limit)
+                if limit.reason.contains("missing gas limit in fee payment intent")
+        ));
+    }
+
+    #[test]
+    fn empty_executable_batch_rejected_at_admission() {
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Batch(ConstVec::new_empty()))
+        .sign(kp.private_key());
+
+        let err = AcceptedTransaction::validate(
+            &tx,
+            &chain,
+            Duration::ZERO,
+            TransactionParameters::default(),
+            &iroha_config::parameters::actual::Crypto::default(),
+        )
+        .expect_err("empty executable batch must be rejected");
+
+        assert!(matches!(
+            err,
+            AcceptTransactionFail::TransactionLimit(ref limit)
+                if limit.reason.contains("must not be empty")
+        ));
     }
 
     #[test]
@@ -9879,10 +10380,14 @@ pub mod tests {
             Json::new("x".repeat(1024)),
         );
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "sized".to_string())])
-            .with_metadata(metadata)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sized".to_string())])
+        .with_metadata(metadata)
+        .sign(kp.private_key());
 
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
@@ -9921,10 +10426,14 @@ pub mod tests {
         let attachment = ProofAttachment::new_ref("halo2/ipa".into(), proof, vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "proof".to_string())])
-            .with_attachments(attachments)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "proof".to_string())])
+        .with_attachments(attachments)
+        .sign(kp.private_key());
 
         let limits = TransactionParameters::with_max_signatures(
             NonZeroU64::new(1).unwrap(),
@@ -10035,10 +10544,14 @@ pub mod tests {
         ];
 
         for (label, attachments, expected_reason) in cases {
-            let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-                .with_instructions([Log::new(Level::INFO, format!("proof-{label}"))])
-                .with_attachments(attachments)
-                .sign(kp.private_key());
+            let tx = TransactionBuilder::new(
+                chain.clone(),
+                authority_id.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(Level::INFO, format!("proof-{label}"))])
+            .with_attachments(attachments)
+            .sign(kp.private_key());
 
             let err = AcceptedTransaction::validate(
                 &tx,
@@ -10072,9 +10585,13 @@ pub mod tests {
         let chain: ChainId = "ttl-config-chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "ttl".into())])
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "ttl".into())])
+        .sign(kp.private_key());
 
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -10113,9 +10630,13 @@ pub mod tests {
         let chain: ChainId = "sequence-config-chain".parse().unwrap();
         let (authority_id, kp) = gen_account_in("wonderland");
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "seq".into())])
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "seq".into())])
+        .sign(kp.private_key());
 
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -10152,9 +10673,13 @@ pub mod tests {
         let (authority_id, kp) = gen_account_in("wonderland");
         let (other_id, _other_kp) = gen_account_in("underland");
 
-        let tx = TransactionBuilder::new(chain, authority_id)
-            .with_instructions([Log::new(Level::INFO, "sig".into())])
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sig".into())])
+        .sign(kp.private_key());
         let tampered = tx.with_authority(other_id);
 
         let err =
@@ -10191,9 +10716,14 @@ pub mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("true"));
 
-        let tx = TransactionBuilder::new_with_time_source(chain.clone(), authority, &time_source)
-            .with_metadata(metadata)
-            .sign(signer.private_key());
+        let tx = TransactionBuilder::new_with_time_source(
+            chain.clone(),
+            authority,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -10225,9 +10755,14 @@ pub mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(false));
 
-        let tx = TransactionBuilder::new_with_time_source(chain.clone(), authority, &time_source)
-            .with_metadata(metadata)
-            .sign(signer.private_key());
+        let tx = TransactionBuilder::new_with_time_source(
+            chain.clone(),
+            authority,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -10263,9 +10798,14 @@ pub mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new("nope"));
 
-        let tx = TransactionBuilder::new_with_time_source(chain.clone(), authority, &time_source)
-            .with_metadata(metadata)
-            .sign(signer.private_key());
+        let tx = TransactionBuilder::new_with_time_source(
+            chain.clone(),
+            authority,
+            &time_source,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .sign(signer.private_key());
         let tx_params = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
 
@@ -10302,10 +10842,14 @@ pub mod tests {
         let mut metadata = Metadata::default();
         metadata.insert(HEARTBEAT_METADATA_NAME.clone(), Json::new(true));
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .with_metadata(metadata)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .with_metadata(metadata)
+        .sign(kp.private_key());
 
         let limits = TransactionParameters::default();
         let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
@@ -10353,10 +10897,14 @@ pub mod tests {
             Json::from(0_u64),
         );
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "ttl".into())])
-            .with_metadata(metadata)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "ttl".into())])
+        .with_metadata(metadata)
+        .sign(kp.private_key());
 
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -10417,10 +10965,14 @@ pub mod tests {
             Json::from(5_u64),
         );
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "seq".into())])
-            .with_metadata(metadata)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "seq".into())])
+        .with_metadata(metadata)
+        .sign(kp.private_key());
 
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -10481,10 +11033,14 @@ pub mod tests {
             Json::from(6_u64),
         );
 
-        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
-            .with_instructions([Log::new(Level::INFO, "seq".into())])
-            .with_metadata(metadata)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "seq".into())])
+        .with_metadata(metadata)
+        .sign(kp.private_key());
 
         let default_limits = TransactionParameters::default();
         let limits = TransactionParameters::with_max_signatures(
@@ -10554,10 +11110,13 @@ pub mod tests {
         // Build program with max_cycles = 2000
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -10611,10 +11170,13 @@ pub mod tests {
         // Build program with max_cycles = 2000, below the bound
         let chain: ChainId = "chain".parse().unwrap();
         let prog = minimal_ivm_program_with_max_cycles(1, 2_000);
-        let tx = TransactionBuilder::new(chain, authority_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority_id.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog)))
+        .sign(kp.private_key());
 
         let mut ivm_cache = IvmCache::new();
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
@@ -10976,9 +11538,13 @@ pub mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(world, kura, query_handle, chain.clone());
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions(std::iter::empty::<InstructionBox>())
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(std::iter::empty::<InstructionBox>())
+        .sign(keypair.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
@@ -11031,10 +11597,14 @@ pub mod tests {
         );
         attachment2.lane_privacy = Some(proof2.clone());
 
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .with_attachments(ProofAttachmentList(vec![attachment1, attachment2]))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .with_attachments(ProofAttachmentList(vec![attachment1, attachment2]))
+        .sign(keypair.private_key());
 
         let collected_proofs = super::collect_lane_privacy_proofs(&tx);
         let ids: BTreeSet<_> = collected_proofs
@@ -11061,9 +11631,13 @@ pub mod tests {
         };
         let lane_alias = "gov";
 
-        let tx = TransactionBuilder::new(chain.clone(), primary_id.clone())
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .sign(primary_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            primary_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .sign(primary_keypair.private_key());
         match enforce_manifest_quorum(lane_alias, &rules, &tx) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
@@ -11079,10 +11653,14 @@ pub mod tests {
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
             Json::new(vec![secondary_id.to_string()]),
         );
-        let tx = TransactionBuilder::new(chain, primary_id)
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .with_metadata(metadata)
-            .sign(primary_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            primary_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .with_metadata(metadata)
+        .sign(primary_keypair.private_key());
         let result = enforce_manifest_quorum(lane_alias, &rules, &tx);
         assert!(result.is_ok(), "quorum satisfied should pass: {result:?}");
     }
@@ -11125,10 +11703,14 @@ pub mod tests {
             (*super::GOV_APPROVERS_METADATA_KEY).clone(),
             Json::new(vec![secondary_id.to_string(), secondary_id.to_string()]),
         );
-        let tx = TransactionBuilder::new(chain, primary_id)
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .with_metadata(metadata)
-            .sign(primary_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            primary_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .with_metadata(metadata)
+        .sign(primary_keypair.private_key());
 
         match enforce_manifest_quorum("gov", &rules, &tx) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
@@ -11161,9 +11743,13 @@ pub mod tests {
             contract_address,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([instruction])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(keypair.private_key());
 
         let world = World::default();
         let world_view = world.view();
@@ -11174,6 +11760,88 @@ pub mod tests {
                 assert!(
                     msg.contains("gov_contract_address"),
                     "expected gov_contract_address rejection, got {msg}"
+                );
+            }
+            other => panic!("expected NotPermitted rejection, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn manifest_protected_rotation_requires_atomic_commit_instruction() {
+        let chain: ChainId = "lane-protected-atomic-rotation".parse().unwrap();
+        let (authority, keypair) = gen_account_in("wonderland");
+        let mut rules = GovernanceRules::default();
+        rules
+            .protected_namespaces
+            .insert(Name::from_str("apps").expect("namespace"));
+
+        let old_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("old contract address");
+        let new_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("new contract address");
+        let code_hash = Hash::new(b"atomic protected rotation");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(new_address.to_string()),
+        );
+        let commit = CommitContractDeployment {
+            expected_deploy_nonce: 1,
+            contract_address: new_address.clone(),
+            code_hash,
+            contract_alias: "payments::universal".parse().expect("contract alias"),
+            lease_expiry_ms: None,
+            expected_previous_contract_address: Some(old_address.clone()),
+        };
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([commit])
+        .with_metadata(metadata.clone())
+        .sign(keypair.private_key());
+        let world = World::default();
+        let world_view = world.view();
+        super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
+            .expect("single atomic deployment commit should pass protected address validation");
+
+        let legacy = vec![
+            InstructionBox::from(DeactivateContractInstance {
+                contract_address: old_address,
+                reason: Some("legacy rotation".to_owned()),
+            }),
+            InstructionBox::from(ActivateContractInstance {
+                contract_address: new_address,
+                code_hash,
+            }),
+        ];
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(legacy)
+        .with_metadata(metadata)
+        .sign(keypair.private_key());
+        let error =
+            super::enforce_manifest_protected_namespaces("lane-0", &rules, &tx, &world_view)
+                .expect_err("legacy multi-instruction rotation must be rejected");
+        match error {
+            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message)) => {
+                assert!(
+                    message.contains("CommitContractDeployment"),
+                    "unexpected protected rotation rejection: {message}"
                 );
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
@@ -11235,10 +11903,14 @@ pub mod tests {
         let mut block = state.block(header);
         macro_rules! validate_instruction {
             ($instruction:expr, $metadata:expr) => {{
-                let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                    .with_instructions([$instruction])
-                    .with_metadata($metadata)
-                    .sign(keypair.private_key());
+                let tx = TransactionBuilder::new(
+                    chain.clone(),
+                    authority.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions([$instruction])
+                .with_metadata($metadata)
+                .sign(keypair.private_key());
                 let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
                 let mut ivm_cache = IvmCache::new();
                 block.validate_transaction(accepted, &mut ivm_cache).1
@@ -11447,10 +12119,13 @@ pub mod tests {
         ] {
             let syscall_u8 = u8::try_from(syscall).expect("contract-admin syscall fits SCALL");
             let program = minimal_ivm_program_with_syscall(1, syscall_u8);
-            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            )
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(keypair.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
             let mut ivm_cache = IvmCache::new();
             let (_hash, result) = block.validate_transaction(accepted, &mut ivm_cache);
@@ -11492,9 +12167,13 @@ pub mod tests {
         let instruction = iroha_data_model::isi::runtime_upgrade::ProposeRuntimeUpgrade {
             manifest_bytes: vec![0x01, 0x02],
         };
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions([instruction.clone()])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction.clone()])
+        .sign(keypair.private_key());
 
         let err = super::enforce_runtime_upgrade_hook("lane-0", &rules, &tx)
             .expect_err("missing metadata should reject");
@@ -11510,10 +12189,14 @@ pub mod tests {
 
         let mut metadata = Metadata::default();
         metadata.insert(Name::from_str("upgrade_id").expect("key"), Json::new("v1"));
-        let tx = TransactionBuilder::new(chain, authority)
-            .with_instructions([instruction])
-            .with_metadata(metadata)
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .with_metadata(metadata)
+        .sign(keypair.private_key());
         let ok = super::enforce_runtime_upgrade_hook("lane-0", &rules, &tx)
             .expect("runtime upgrade hook should allow");
         assert!(ok, "runtime upgrade hook should be applied");
@@ -11553,9 +12236,13 @@ pub mod tests {
             "lane compliance engine should be installed"
         );
 
-        let tx = TransactionBuilder::new(chain, authority.clone())
-            .with_instructions([Log::new(Level::INFO, "noop".into())])
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "noop".into())])
+        .sign(keypair.private_key());
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let stx = block.transaction();
@@ -11628,10 +12315,14 @@ pub mod tests {
             (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
             Json::new(contract_address.to_string()),
         );
-        let tx = TransactionBuilder::new(chain, authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain,
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(vec![0xCA])))
+        .sign(keypair.private_key());
 
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -11717,17 +12408,21 @@ pub mod tests {
 
         let mut selected = None;
         for attempt in 0_u64..256 {
-            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            let mut metadata = Metadata::default();
             metadata.insert(
                 Name::from_str("route_attempt").expect("static metadata key"),
                 Json::new(attempt),
             );
-            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                    minimal_ivm_program(1),
-                )))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let (catalog_only, live_plan) = {
                 let view = state.view();
@@ -11841,17 +12536,21 @@ pub mod tests {
 
         let mut selected = None;
         for attempt in 0_u64..256 {
-            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            let mut metadata = Metadata::default();
             metadata.insert(
                 Name::from_str("route_attempt").expect("static metadata key"),
                 Json::new(attempt),
             );
-            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                    minimal_ivm_program(1),
-                )))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
             let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx.clone()));
             let (enabled_plan, disabled_plan) = {
                 let mut nexus = state.nexus.write();
@@ -12111,17 +12810,21 @@ pub mod tests {
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
         let mut entrypoints = Vec::new();
         for attempt in [2_u64, 0] {
-            let mut metadata = metadata_with_gas_limit(TEST_GAS_LIMIT);
+            let mut metadata = Metadata::default();
             metadata.insert(
                 Name::from_str("lane_execution_attempt").expect("static metadata key"),
                 Json::new(attempt),
             );
-            let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                    minimal_ivm_program(1),
-                )))
-                .sign(keypair.private_key());
+            let tx = TransactionBuilder::new(
+                chain.clone(),
+                authority.clone(),
+                fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+            )
+            .with_metadata(metadata)
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+                minimal_ivm_program(1),
+            )))
+            .sign(keypair.private_key());
             entrypoints.push(TransactionEntrypoint::External(tx));
         }
         let expected_hashes = entrypoints
@@ -12172,12 +12875,15 @@ pub mod tests {
             public_key: keypair.public_key().clone(),
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_ivm_program(1),
+        )))
+        .sign(keypair.private_key());
         let mut artifact = lane_execution_input_artifact(
             TestLaneId::new(1),
             TestDataSpaceId::UNIVERSAL,
@@ -12212,12 +12918,15 @@ pub mod tests {
             public_key: keypair.public_key().clone(),
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_ivm_program(1),
+        )))
+        .sign(keypair.private_key());
         let artifact = lane_execution_input_artifact(
             TestLaneId::new(1),
             TestDataSpaceId::UNIVERSAL,
@@ -12251,12 +12960,15 @@ pub mod tests {
             public_key: keypair.public_key().clone(),
         };
         let state = state_with_guarded_base_and_open_elastic_lane(&chain, world);
-        let tx = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_ivm_program(1),
-            )))
-            .sign(keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_ivm_program(1),
+        )))
+        .sign(keypair.private_key());
         let artifact = lane_execution_input_artifact(
             TestLaneId::new(1),
             TestDataSpaceId::UNIVERSAL,
@@ -12975,9 +13687,13 @@ pub mod tests {
             let transaction = {
                 let instructions =
                     transfers_batched::<N_INSTRUCTIONS>(src, quantity_per_instruction, dest);
-                TransactionBuilder::new(CHAIN_ID.clone(), GENESIS_ACCOUNT.id.clone())
-                    .with_instructions(instructions)
-                    .sign(&GENESIS_ACCOUNT.key)
+                TransactionBuilder::new(
+                    CHAIN_ID.clone(),
+                    GENESIS_ACCOUNT.id.clone(),
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions(instructions)
+                .sign(&GENESIS_ACCOUNT.key)
             };
             self.transactions.push(transaction);
         }

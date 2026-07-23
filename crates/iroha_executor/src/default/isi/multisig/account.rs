@@ -445,7 +445,7 @@ mod tests {
     #[test]
     fn quorum_must_be_reachable() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let single = account(0, &domain);
+        let single = account(4, &domain);
         let mut signatories = BTreeMap::new();
         signatories.insert(single, 1);
 
@@ -465,7 +465,7 @@ mod tests {
     #[test]
     fn acyclic_graph_passes_validation() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let root = account(0, &domain);
+        let root = account(4, &domain);
         let child_a = account(1, &domain);
         let child_b = account(2, &domain);
         let leaf = account(3, &domain);
@@ -486,7 +486,7 @@ mod tests {
     #[test]
     fn cyclic_graph_is_rejected() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let root = account(0, &domain);
+        let root = account(4, &domain);
         let child = account(1, &domain);
 
         let mut graph: BTreeMap<AccountId, Vec<AccountId>> = BTreeMap::new();
@@ -506,7 +506,7 @@ mod tests {
     #[test]
     fn signatory_materialization_skips_multisig_subject() {
         let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-        let multisig_account = account(0, &domain);
+        let multisig_account = account(4, &domain);
         let signer_one = account(1, &domain);
         let signer_two = account(2, &domain);
         let spec = MultisigSpec::new(

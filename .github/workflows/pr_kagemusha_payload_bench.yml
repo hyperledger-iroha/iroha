@@ -4,15 +4,18 @@ on:
   pull_request:
     paths:
       - ".github/workflows/pr_kagemusha_payload_bench.yml"
+      - "Cargo.lock"
       - "ci/check_connect_norito_bridge_header.sh"
       - "ci/check_kagemusha_*.sh"
       - "crates/connect_norito_bridge/**"
       - "crates/iroha/src/client.rs"
       - "crates/iroha_core/src/zk/**"
-      - "crates/iroha_core/src/bin/kagemusha_recursive_spend_v3_bundle.rs"
+      - "crates/iroha_core/src/bin/kagemusha_recursive_spend_v4_bundle.rs"
       - "crates/iroha_core/src/smartcontracts/isi/offline.rs"
+      - "crates/iroha_core/src/smartcontracts/isi/offline/**"
       - "crates/iroha_core/examples/confidential_v2_vk_json.rs"
       - "crates/iroha_core/tests/swift_confidential_unshield_redeem.rs"
+      - "crates/iroha_kagami/**"
       - "crates/iroha_torii/Cargo.toml"
       - "crates/iroha_torii/src/lib.rs"
       - "crates/iroha_torii/src/openapi.rs"
@@ -75,6 +78,7 @@ on:
       - "IrohaSwift/Tests/IrohaSwiftTests/CanonicalRequestTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaRecursiveSpendV2Tests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/KagemushaScaledAmountTests.swift"
+      - "IrohaSwift/Tests/IrohaSwiftTests/OfflineDeviceAttestationABI20ParityTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ToriiKagemushaAPIModelsTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/IrohaSDKSigningAlgorithmTests.swift"
       - "IrohaSwift/Tests/IrohaSwiftTests/ConnectAsyncSequenceTests.swift"
@@ -354,6 +358,7 @@ on:
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineJournalTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/OfflineQrStreamTest.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/KagemushaRecursiveSpendProverTest.java"
+      - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/offline/RegisterOfflineDeviceAttestationTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/sccp/**"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigOfflineQueueTests.java"
       - "java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportOfflineQueueTests.java"
@@ -396,7 +401,7 @@ on:
       - "kotlin/offline-wallet-android/src/main/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStore.kt"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/sdk/offline/wallet/AndroidOfflineNoteSecureStoreInstrumentedTest.java"
       - "kotlin/offline-wallet-android/src/androidTest/java/org/hyperledger/iroha/android/offline/KagemushaDeviceLabArtifactExportTest.java"
-      - "kotlin/offline-wallet-lab-app/**"
+      - "kotlin/kagemusha-candidate-evidence-lab/**"
       - "kotlin/settings.gradle.kts"
       - "kotlin/gradle/libs.versions.toml"
       - "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/address/AccountIdLiteral.kt"
@@ -590,7 +595,10 @@ on:
       - "csharp/src/Hyperledger.Iroha.Sdk/Privacy/PrivacyNative.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/IdentifierReceiptJsonConverters.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiClient.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaClient.cs"
+      - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiKagemushaModels.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Torii/ToriiModels.cs"
+      - "csharp/tests/Hyperledger.Iroha.Sdk.Tests/KagemushaToriiTests.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/KagemushaInstructionArchiveInstruction.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionBuilder.cs"
       - "csharp/src/Hyperledger.Iroha.Sdk/Transactions/TransactionEncodingContext.cs"
@@ -617,11 +625,13 @@ on:
       - "javascript/iroha_js/src/crypto.browser.js"
       - "javascript/iroha_js/src/index.js"
       - "javascript/iroha_js/src/instructionBuilders.js"
+      - "javascript/iroha_js/src/kagemushaOffline.js"
       - "javascript/iroha_js/src/native.js"
       - "javascript/iroha_js/src/nexusApp.js"
       - "javascript/iroha_js/src/offlineCashLifecycle.js"
       - "javascript/iroha_js/src/privacyAlgorithms.js"
       - "javascript/iroha_js/src/toriiClient.js"
+      - "javascript/iroha_js/src/toriiBrowserClient.js"
       - "javascript/iroha_js/src/transaction.js"
       - "javascript/iroha_js/dist/address.js"
       - "javascript/iroha_js/dist/canonicalRequest.js"
@@ -638,11 +648,13 @@ on:
       - "javascript/iroha_js/dist/crypto.browser.js"
       - "javascript/iroha_js/dist/index.js"
       - "javascript/iroha_js/dist/instructionBuilders.js"
+      - "javascript/iroha_js/dist/kagemushaOffline.js"
       - "javascript/iroha_js/dist/native.js"
       - "javascript/iroha_js/dist/nexusApp.js"
       - "javascript/iroha_js/dist/offlineCashLifecycle.js"
       - "javascript/iroha_js/dist/privacyAlgorithms.js"
       - "javascript/iroha_js/dist/toriiClient.js"
+      - "javascript/iroha_js/dist/toriiBrowserClient.js"
       - "javascript/iroha_js/dist/transaction.js"
       - "javascript/iroha_js/index.d.ts"
       - "javascript/iroha_js/nexus-app.d.ts"
@@ -667,6 +679,7 @@ on:
       - "javascript/iroha_js/test/instructionBuilders.test.js"
       - "javascript/iroha_js/test/transactionBuilder.test.js"
       - "javascript/iroha_js/test/kagemushaRecursiveSpend.test.js"
+      - "javascript/iroha_js/test/kagemushaOfflineTorii.test.js"
       - "javascript/iroha_js/test/nexusAppClient.test.js"
       - "javascript/iroha_js/test/offlineCashLifecycle.test.js"
       - "javascript/iroha_js/test/offlineQrStream.test.js"
@@ -728,7 +741,15 @@ on:
       - "python/iroha_torii_client/tests/sccp_test.py"
       - "python/iroha_torii_client/tests/test_client.py"
       - "docs/portal/static/openapi/manifest.json"
-      - "crates/iroha_data_model/src/offline/**"
+      - "crates/iroha_crypto/**"
+      - "crates/iroha_data_model/src/**"
+      - "crates/iroha_data_model/Cargo.toml"
+      - "crates/iroha_data_model_derive/**"
+      - "crates/iroha_primitives/**"
+      - "crates/iroha_schema/**"
+      - "crates/iroha_zkp_halo2/**"
+      - "crates/norito/**"
+      - "crates/norito_derive/**"
       - "crates/iroha_torii/**"
       - "crates/iroha_torii_shared/**"
       - "IrohaSwift/**"
@@ -738,7 +759,14 @@ on:
       - "docs/source/offline_kagemusha*.md"
       - "docs/portal/static/openapi/torii.json"
       - "scripts/check_android_device_lab_slot.py"
+      - "scripts/check_mobile_sdk_artifacts.sh"
+      - "scripts/check_mobile_sdk_artifacts_test.sh"
+      - "scripts/build_kagemusha_candidate_android_native.sh"
+      - "scripts/run_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab.sh"
+      - "ci/check_kagemusha_candidate_android_lab_compile.sh"
       - "scripts/tests/check_android_device_lab_slot_test.py"
+      - "tools/kotlin-fixture-gen/**"
   workflow_dispatch:
 
 concurrency:
@@ -753,12 +781,20 @@ jobs:
     name: Exact API, bridge, SDK, and artifact inventory
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: python -m pip install -e python/iroha_torii_client pytest
       - run: ci/check_connect_norito_bridge_header.sh
       - run: ci/check_connect_norito_bridge_header.sh --self-test
+      - run: ci/check_kagemusha_production_readiness.sh candidate
+      - run: ci/check_kagemusha_production_readiness.sh candidate --self-test
+      - run: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh
+      - run: ci/check_kagemusha_recursive_spend_v4_sdk_contract.sh --self-test
+      - run: ci/check_kagemusha_candidate_android_lab.sh
       - run: ci/check_kagemusha_recursive_spend_policy.sh
       - run: ci/check_kagemusha_recursive_spend_policy.sh --self-test
       - run: python -m unittest scripts.tests.check_android_device_lab_slot_test
@@ -768,18 +804,75 @@ jobs:
     name: Typed lifecycle and Torii contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+      - run: cargo test -p iroha_data_model kagemusha_v4 --lib --tests
+      - run: cargo test -p iroha_core kagemusha_v4 --lib
+      - run: cargo test -p iroha_core sparse_confidential_subtree_roots_match_dense_reference --lib
+      - run: cargo test -p iroha_core next_zero_confidential_path_matches_padded_tree_path --lib
+      - run: cargo test -p iroha_core sequential_append_paths --lib
+      - run: cargo test -p iroha_core recursive_state_vector_is_exact_and_zero_padded --lib
+      - run: cargo test -p iroha_core output_membership --lib
+      - run: cargo test -p iroha_core v4_eq_frontier_copy_constraints --lib
+      - run: cargo test -p iroha_core v4_manifest_preserves_exact_little_endian_state_limbs --lib
+      - run: cargo test -p iroha_core v4_eq_and_ep_public_columns_share_the_v2_result_frontier_limb --lib
+      - run: cargo test -p iroha_core kagemusha_terminal_registry_v4 --lib
+      - run: cargo test -p iroha_kagami --bin kagami harden_private_tree
+      - run: cargo test -p iroha_kagami --bin kagami private_custody_readme_invokes_non_executable_scripts_through_bash
+      - run: cargo test -p iroha_kagami --bin kagami raw_npos_genesis_receives_the_chain_bound_localnet_epoch_seed
       - run: cargo test -p iroha_torii_shared offline_api --lib
-      - run: cargo test -p iroha_torii generated_spec_documents_direct_offline_dtos_and_operation_states
+      - run: cargo test -p iroha_torii generated_spec_documents_strict_typed_offline_request_schemas_and_states
       - run: cargo test -p iroha_torii generated_spec_offline
       - run: cargo test -p iroha_torii generated_spec_matches_offline_negotiation_and_operation_lifecycle
-      - run: cargo test -p connect_norito_bridge recursive_spend_v3_artifact --features privacy-production-enabled
+      - run: cargo test -p iroha_torii readiness_authenticates_exact_release_without_global_backend_flag
+      - run: cargo test -p iroha_torii v4_snapshot_admission_authenticates_exact_release_without_global_backend_flag
+      - run: cargo test -p connect_norito_bridge recursive_spend_v4
+      - run: cargo test -p connect_norito_bridge output_membership_local_carrier --lib
 
   swift:
     name: Swift lifecycle surface
     runs-on: macos-15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - run: ci/check_kagemusha_recursive_spend_swift_sdk.sh
+
+  kotlin-java:
+    name: Kotlin/JDK8 and mirrored Java Android
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-java@c1e323688fd81a25caa38c78aa6df2d33d3e20d9 # v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - run: ci/check_kagemusha_candidate_android_lab_compile.sh
+      - run: ./gradlew :core-jvm:test --console=plain
+        working-directory: kotlin
+      - run: ./gradlew test --console=plain
+        working-directory: java/iroha_android
+
+  csharp-torii:
+    name: C# ABI-20/V4 Torii DTOs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+      - run: ci/check_kagemusha_recursive_spend_csharp_sdk.sh
+
+  javascript-torii:
+    name: JavaScript ABI-20/V4 Torii DTOs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - run: npm ci --ignore-scripts
+        working-directory: javascript/iroha_js
+      - run: ci/check_kagemusha_recursive_spend_javascript_sdk.sh

@@ -270,6 +270,7 @@ impl ByteMerkleTree {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn reset_from(&mut self, other: &ByteMerkleTree) {
         self.chunk = other.chunk;
         self.zero_hash = other.zero_hash;
@@ -279,13 +280,23 @@ impl ByteMerkleTree {
         *self.cached.lock() = cached_copy;
     }
 
-    /// Restore selected leaves from an immutable template without cloning the
-    /// complete leaf vector or canonical tree.
+    /// Whether two trees have the same immutable leaf geometry.
+    pub(crate) fn has_same_shape(&self, other: &ByteMerkleTree) -> bool {
+        self.chunk == other.chunk && self.leaf_count() == other.leaf_count()
+    }
+
+    /// Byte width of one Merkle leaf.
+    pub(crate) fn chunk_size(&self) -> usize {
+        self.chunk
+    }
+
+    /// Restore selected leaves from a shape-compatible immutable template
+    /// without cloning the complete leaf vector or canonical tree.
     pub(crate) fn reset_leaves_from(&mut self, other: &ByteMerkleTree, indices: &[usize]) {
-        if self.chunk != other.chunk || self.leaf_count() != other.leaf_count() {
-            self.reset_from(other);
-            return;
-        }
+        assert!(
+            self.has_same_shape(other),
+            "Merkle template shape must be validated before dirty-leaf reset"
+        );
         if indices.is_empty() {
             return;
         }
@@ -845,6 +856,9 @@ mod tests {
     fn selected_leaf_reset_restores_template_without_tree_clone() {
         let template = ByteMerkleTree::from_bytes(&[0u8; 128], 32);
         let mut worker = template.clone();
+        assert!(worker.has_same_shape(&template));
+        assert_eq!(worker.chunk_size(), 32);
+        assert!(!worker.has_same_shape(&ByteMerkleTree::new(4, 16)));
         worker.update_leaf(1, &[0xAA; 32]);
         worker.update_leaf(3, &[0x55; 32]);
         assert_ne!(worker.root(), template.root());

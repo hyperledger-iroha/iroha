@@ -181,18 +181,18 @@ function readField(input, offset) {
 }
 
 function replacePayloadMetadata(payload, archive) {
-  return replacePayloadField(payload, 6, archive);
+  return replacePayloadField(payload, 7, archive);
 }
 
 function replacePayloadField(payload, fieldIndex, archive) {
   const fields = [];
   let offset = 0;
-  for (let index = 0; index < 7; index += 1) {
+  for (let index = 0; index < 8; index += 1) {
     const decoded = readField(payload, offset);
     fields.push(decoded.value);
     offset = decoded.next;
   }
-  assert.equal(offset, payload.length, "test payload must contain exactly seven fields");
+  assert.equal(offset, payload.length, "test payload must contain exactly eight fields");
   fields[fieldIndex] = archive;
   return struct(fields);
 }
@@ -280,6 +280,7 @@ function sampleInput(overrides = {}) {
     sourceAssetHoldingId: SOURCE_ASSET,
     quantity: "1.25",
     destinationAccountId: DESTINATION,
+    feePayment: { payer: "authority", chargeLimits: [] },
     metadata: { memo: "browser", nested: [true, null, { order: 2 }] },
     creationTimeMs: 1_700_000_000_000,
     ttlMs: 5_000,
@@ -297,6 +298,10 @@ function nativeBuild(input) {
     input.sourceAssetHoldingId ?? input.sourceAssetId,
     String(input.quantity),
     input.destinationAccountId,
+    JSON.stringify({
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    }),
     input.metadata == null
       ? null
       : typeof input.metadata === "string"
@@ -435,6 +440,83 @@ test("compact golden parser rejects duplicate keys and base64 aliases", () => {
       /(?:invalid|non-canonical) base64/,
     );
   }
+});
+
+test("browser payload binds canonical authority and sponsor fee payment intents", () => {
+  const chargeLimits = [
+    {
+      kind: "nexus",
+      assetDefinitionId: ASSET_DEFINITION,
+      maxAmount: "2.5",
+    },
+    {
+      kind: "pipelineGas",
+      assetDefinitionId: ASSET_DEFINITION,
+      maxAmount: "4",
+    },
+  ];
+  const authorityPayload = buildBrowserTransferPayload(
+    sampleInput({
+      feePayment: {
+        payer: "authority",
+        chargeLimits,
+        gasLimit: 50_000,
+      },
+    }),
+  );
+  assert.match(browserTransactionPayloadHashHex(authorityPayload), /^[0-9a-f]{64}$/u);
+
+  const sponsorPayload = buildBrowserTransferPayload(
+    sampleInput({
+      feePayment: {
+        payer: "sponsor",
+        programId: `${AUTHORITY}/retail/transfers`,
+        programRevision: 3,
+        chargeLimits,
+        gasLimit: 50_000,
+      },
+    }),
+  );
+  assert.notDeepEqual(sponsorPayload, authorityPayload);
+  assert.match(browserTransactionPayloadHashHex(sponsorPayload), /^[0-9a-f]{64}$/u);
+
+  expectCodecError(
+    () => buildBrowserTransferPayload(sampleInput({ feePayment: undefined })),
+    "invalid_input",
+  );
+  expectCodecError(
+    () =>
+      buildBrowserTransferPayload(
+        sampleInput({
+          feePayment: {
+            payer: "authority",
+            chargeLimits: [...chargeLimits].reverse(),
+          },
+        }),
+      ),
+    "invalid_fee_payment",
+  );
+  expectCodecError(
+    () =>
+      buildBrowserTransferPayload(
+        sampleInput({
+          feePayment: {
+            payer: "sponsor",
+            programId: `${AUTHORITY}/default`,
+            programRevision: 0,
+            chargeLimits,
+          },
+        }),
+      ),
+    "invalid_fee_payment",
+  );
+  expectCodecError(
+    () =>
+      buildBrowserTransferPayload(
+        sampleInput({ metadata: { fee_sponsor: AUTHORITY } }),
+      ),
+    "invalid_fee_payment",
+  );
 });
 
 test("browser builder rejects ambiguous, non-canonical, and hostile inputs", () => {

@@ -717,9 +717,7 @@ ledger projection that triggered the payment.
      --out-md docs/source/sorafs/reports/provider-alpha-apr-ledger.md \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   `scripts/telemetry/reserve_ledger_digest.py` converts the micro‑XOR values
-   into XOR, records whether underwriting thresholds were satisfied, and hashes
-   the execution timestamp. The helper now also captures the **transfer feed**
+   `scripts/telemetry/reserve_ledger_digest.py` validates canonical exact XOR strings without a micro-XOR projection, preserves all nine fractional digits and values wider than `u128`, records whether underwriting thresholds were satisfied, and hashes the execution timestamp. The helper now also captures the **transfer feed**
    (`transfers` block) so rent and reserve top-ups appear alongside the projected
    ledger deltas, and `instruction_count` proves the CLI emitted both transfers.
    The script accepts multiple `--ledger` paths (plus per-ledger `--label`

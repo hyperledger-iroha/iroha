@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Һылтанма метамағлүмәт сымдары пер-мәғлүмәттәр буфер иҫәбенә:
 - `settlement.buffer_account` — резервты тотҡан иҫәп (мәҫәлән, `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — баш бүлмәһе өсөн дебетланған активтар билдәләмәһе (ғәҙәттә `xor#sora`X).
-- `settlement.buffer_capacity_micro` — микро-XOR-ҙа конфигурацияланған ҡәҙерле (ун унарлы еп).
+- `settlement.buffer_capacity` — микро-XOR-ҙа конфигурацияланған ҡәҙерле (ун унарлы еп).
 
 Ҡайһы бер осраҡта был һыҙат өсөн буфер өҙөлә (телеметрия нуль ҡөҙрәткә/статусҡа тиклем төшә).## Конверсия торбаһы
 1. **Циталы:** `SettlementEngine::quote` конфигурацияланған эпсилон + волатильность маржаһы һәм стрижка ярус TWAP цитаталары, ҡайтарыу `SettlementReceipt` менән `xor_due` һәм `xor_after_haircut` плюс ваҡыт тамғаһы һәм шылтыратыусы-плюс `source_id`.【крос/съезд_маршрут/срк/хаҡ.rs. 1】【кәзит/съезд_маршрут/src/scrut.rct.rs:1】 .

@@ -78,33 +78,53 @@ fn overlay_parallel_workers_parity() {
 
     // Build a mixed set of instruction-only transactions to exercise overlay builder
     let txs: Vec<SignedTransaction> = vec![
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([SetKeyValue::account(
-                alice_id.clone(),
-                "k1".parse().unwrap(),
-                iroha_primitives::json::Json::new("v1"),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([SetKeyValue::domain(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "dk".parse().unwrap(),
-                iroha_primitives::json::Json::new(3u32),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
-        TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-            .with_instructions([Transfer::asset_quantity(
-                a_coin.clone(),
-                5_u32,
-                bob_id.clone(),
-            )])
-            .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::account(
+            alice_id.clone(),
+            "k1".parse().unwrap(),
+            iroha_primitives::json::Json::new("v1"),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([SetKeyValue::domain(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "dk".parse().unwrap(),
+            iroha_primitives::json::Json::new(3u32),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Mint::asset_quantity(7_u32, a_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Burn::asset_quantity(2_u32, b_coin.clone())])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
+        TransactionBuilder::new(
+            chain_id.clone(),
+            alice_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Transfer::asset_quantity(
+            a_coin.clone(),
+            5_u32,
+            bob_id.clone(),
+        )])
+        .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
     ];
 
     // Run with workers=0 (Rayon default) and workers=2

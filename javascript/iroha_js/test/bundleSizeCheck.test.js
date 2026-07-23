@@ -196,9 +196,17 @@ test("browser graph audit derives every explicit browser-conditioned package exp
   assert.deepEqual(listExplicitBrowserExports(pkg), [
     { target: "./dist/browser.js", subpaths: ["./browser"] },
     { target: "./dist/transactionCodec.js", subpaths: ["./transaction-codec"] },
+    {
+      target: "./dist/smartContractDeployment.js",
+      subpaths: ["./smart-contract-deployment"],
+    },
     { target: "./dist/normalizers.js", subpaths: ["./normalizers"] },
     { target: "./dist/blake2b.js", subpaths: ["./blake2b"] },
     { target: "./dist/ivmArtifact.js", subpaths: ["./ivm-artifact"] },
+    {
+      target: "./dist/ivmArtifactAdmissionWasm.js",
+      subpaths: ["./ivm-artifact-admission-wasm"],
+    },
     {
       target: "./dist/toriiBrowserClient.js",
       subpaths: ["./torii", "./torii-browser"],

@@ -60,8 +60,12 @@ fn make_transaction(
     nonce: usize,
     ttl: Duration,
 ) -> AcceptedTransaction<'static> {
-    let mut builder = TransactionBuilder::new(chain_id.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, format!("noop-{nonce}"))]);
+    let mut builder = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, format!("noop-{nonce}"))]);
     builder.set_ttl(ttl);
     let tx = builder.sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))

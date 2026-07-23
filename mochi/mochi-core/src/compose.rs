@@ -24,7 +24,7 @@ use iroha_data_model::{
         definition::{AssetDefinition, Mintable, NewAssetDefinition},
         id::{AssetDefinitionId, AssetId},
     },
-    domain::{Domain, DomainId},
+    domain::DomainId,
     isi::{
         Burn, Grant, InstructionBox, Mint, Register, Revoke, SetKeyValue, Transfer,
         sorafs::RegisterPinManifest, space_directory::PublishSpaceDirectoryManifest,
@@ -32,7 +32,7 @@ use iroha_data_model::{
     name::Name,
     nexus::AssetPermissionManifest,
     role::RoleId,
-    transaction::{Executable, SignedTransaction, TransactionBuilder},
+    transaction::{Executable, ExecutableBatchItem, SignedTransaction, TransactionBuilder},
 };
 use iroha_executor_data_model::isi::multisig::MultisigPropose;
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -49,8 +49,6 @@ pub enum InstructionPermission {
     BurnAsset,
     /// Transfer numeric assets between accounts.
     TransferAsset,
-    /// Register new domains.
-    RegisterDomain,
     /// Register new accounts.
     RegisterAccount,
     /// Register new asset definitions.
@@ -74,12 +72,11 @@ pub enum InstructionPermission {
 impl InstructionPermission {
     /// Return a static list containing every permission variant.
     #[must_use]
-    pub const fn all() -> [Self; 13] {
+    pub const fn all() -> [Self; 12] {
         [
             Self::MintAsset,
             Self::BurnAsset,
             Self::TransferAsset,
-            Self::RegisterDomain,
             Self::RegisterAccount,
             Self::RegisterAssetDefinition,
             Self::PublishSpaceDirectoryManifest,
@@ -99,7 +96,6 @@ impl InstructionPermission {
             Self::MintAsset => "mint assets",
             Self::BurnAsset => "burn assets",
             Self::TransferAsset => "transfer assets",
-            Self::RegisterDomain => "register domains",
             Self::RegisterAccount => "register accounts",
             Self::RegisterAssetDefinition => "register asset definitions",
             Self::PublishSpaceDirectoryManifest => "publish space directory manifests",
@@ -119,7 +115,6 @@ impl InstructionPermission {
             Self::MintAsset => "mint_asset",
             Self::BurnAsset => "burn_asset",
             Self::TransferAsset => "transfer_asset",
-            Self::RegisterDomain => "register_domain",
             Self::RegisterAccount => "register_account",
             Self::RegisterAssetDefinition => "register_asset_definition",
             Self::PublishSpaceDirectoryManifest => "publish_space_directory_manifest",
@@ -139,7 +134,6 @@ impl InstructionPermission {
             "mint_asset" => Some(Self::MintAsset),
             "burn_asset" => Some(Self::BurnAsset),
             "transfer_asset" => Some(Self::TransferAsset),
-            "register_domain" => Some(Self::RegisterDomain),
             "register_account" => Some(Self::RegisterAccount),
             "register_asset_definition" => Some(Self::RegisterAssetDefinition),
             "publish_space_directory_manifest" => Some(Self::PublishSpaceDirectoryManifest),
@@ -526,6 +520,16 @@ impl TransactionPreview {
                 .map(|instr| format!("{instr}"))
                 .collect(),
             Executable::Ivm(_) => vec!["IVM bytecode executable".to_owned()],
+            Executable::Batch(items) => items
+                .iter()
+                .map(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => format!("{instruction}"),
+                    ExecutableBatchItem::ContractCall(call) => format!(
+                        "Contract call {}::{}",
+                        call.contract_address, call.entrypoint
+                    ),
+                })
+                .collect(),
         };
         Self {
             signed,
@@ -608,8 +612,12 @@ pub fn compose_preview_with_options(
         .iter()
         .map(InstructionDraft::instruction)
         .collect::<Vec<_>>();
-    let mut builder = TransactionBuilder::new(chain, authority.account_id().clone())
-        .with_instructions(instructions);
+    let mut builder = TransactionBuilder::new(
+        chain,
+        authority.account_id().clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions);
     if let Some(creation_time) = options.creation_time() {
         builder.set_creation_time(creation_time);
     }
@@ -652,11 +660,6 @@ pub enum InstructionDraft {
         quantity: Quantity,
         /// Destination account receiving the asset.
         destination: AccountId,
-    },
-    /// Register a new domain.
-    RegisterDomain {
-        /// Identifier of the domain to register.
-        domain: DomainId,
     },
     /// Register a new account.
     RegisterAccount {
@@ -753,16 +756,6 @@ impl InstructionDraft {
             quantity,
             destination,
         })
-    }
-
-    /// Create a domain registration draft by parsing textual inputs.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`ComposeError`] if the domain identifier fails to parse.
-    pub fn register_domain_from_input(domain: &str) -> Result<Self, ComposeError> {
-        let domain = parse_domain_id(domain)?;
-        Ok(Self::RegisterDomain { domain })
     }
 
     /// Create an account registration draft by parsing textual inputs.
@@ -895,7 +888,6 @@ impl InstructionDraft {
             InstructionDraft::MintAsset { .. } => InstructionPermission::MintAsset,
             InstructionDraft::BurnAsset { .. } => InstructionPermission::BurnAsset,
             InstructionDraft::TransferAsset { .. } => InstructionPermission::TransferAsset,
-            InstructionDraft::RegisterDomain { .. } => InstructionPermission::RegisterDomain,
             InstructionDraft::RegisterAccount { .. } => InstructionPermission::RegisterAccount,
             InstructionDraft::RegisterAssetDefinition { .. } => {
                 InstructionPermission::RegisterAssetDefinition
@@ -930,9 +922,6 @@ impl InstructionDraft {
                 quantity,
                 destination,
             } => format!("Transfer {quantity} from {asset} to {destination}"),
-            InstructionDraft::RegisterDomain { domain } => {
-                format!("Register domain {domain}")
-            }
             InstructionDraft::RegisterAccount { account } => {
                 format!("Register account {account}")
             }
@@ -994,9 +983,6 @@ impl InstructionDraft {
                 destination,
             } => Transfer::asset_quantity(asset.clone(), quantity.clone(), destination.clone())
                 .into(),
-            InstructionDraft::RegisterDomain { domain } => {
-                Register::domain(Domain::new(domain.clone())).into()
-            }
             InstructionDraft::RegisterAccount { account } => {
                 Register::account(Account::new(account.clone())).into()
             }
@@ -1076,13 +1062,6 @@ impl InstructionDraft {
                     "destination".to_owned(),
                     Value::String(account_literal(destination)),
                 );
-            }
-            InstructionDraft::RegisterDomain { domain } => {
-                object.insert(
-                    "kind".to_owned(),
-                    Value::String("register_domain".to_owned()),
-                );
-                object.insert("domain".to_owned(), Value::String(domain.to_string()));
             }
             InstructionDraft::RegisterAccount { account } => {
                 object.insert(
@@ -1205,10 +1184,6 @@ impl InstructionDraft {
                 let quantity = extract_string(map, "quantity")?;
                 let destination = extract_string(map, "destination")?;
                 InstructionDraft::transfer_from_input(&asset, &quantity, &destination)
-            }
-            "register_domain" => {
-                let domain = extract_string(map, "domain")?;
-                InstructionDraft::register_domain_from_input(&domain)
             }
             "register_account" => {
                 let account = extract_string(map, "account")?;
@@ -1558,7 +1533,11 @@ pub fn drafts_from_json_str(input: &str) -> Result<Vec<InstructionDraft>, Compos
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, num::NonZeroU32, time::Duration};
+    use std::{
+        collections::BTreeMap,
+        num::{NonZeroU32, NonZeroU64},
+        time::Duration,
+    };
 
     use iroha_data_model::{
         account::{AccountAdmissionMode, admission::ImplicitAccountCreationFee},
@@ -1705,6 +1684,58 @@ mod tests {
     }
 
     #[test]
+    fn transaction_preview_preserves_mixed_batch_order() {
+        let first: InstructionBox = iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "before contract".to_owned(),
+        )
+        .into();
+        let last: InstructionBox = iroha_data_model::isi::Log::new(
+            iroha_data_model::Level::INFO,
+            "after contract".to_owned(),
+        )
+        .into();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &ALICE_ID,
+            1,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: iroha_crypto::Hash::prehashed([0x42; 32]),
+            entrypoint: "apply".to_owned(),
+            arguments: None,
+        };
+        let signed = TransactionBuilder::new(
+            ChainId::from("mixed-preview"),
+            ALICE_ID.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ),
+        )
+        .with_executable_batch(vec![
+            ExecutableBatchItem::from(first.clone()),
+            ExecutableBatchItem::from(invocation),
+            ExecutableBatchItem::from(last.clone()),
+        ])
+        .try_sign(ALICE_KEYPAIR.private_key())
+        .expect("sign mixed batch");
+
+        let preview = TransactionPreview::new(signed);
+        assert_eq!(
+            preview.instructions(),
+            [
+                format!("{first}"),
+                format!("Contract call {contract_address}::apply"),
+                format!("{last}"),
+            ]
+        );
+    }
+
+    #[test]
     fn development_signing_authorities_present() {
         let authorities = development_signing_authorities();
         assert!(
@@ -1720,15 +1751,16 @@ mod tests {
     }
 
     #[test]
-    fn register_domain_from_input_validates_identifier() {
-        let err = InstructionDraft::register_domain_from_input("invalid domain")
-            .expect_err("invalid domain id should error");
-        match err {
-            ComposeError::InvalidDomainId { domain, .. } => {
-                assert_eq!(domain, "invalid domain");
-            }
-            other => panic!("unexpected error variant: {other:?}"),
-        }
+    fn raw_domain_registration_draft_is_not_supported() {
+        let value = norito::json!({
+            "kind": "register_domain",
+            "domain": "side_garden.universal"
+        });
+        let err = InstructionDraft::from_json_value(&value)
+            .expect_err("raw domain registration must not be composed");
+        assert!(
+            matches!(err, ComposeError::InvalidRawDraft { ref reason } if reason.contains("unknown instruction kind"))
+        );
     }
 
     #[test]
@@ -1745,8 +1777,6 @@ mod tests {
         let burn = InstructionDraft::burn_from_input(&asset_id_str, "1").expect("burn draft");
         let transfer = InstructionDraft::transfer_from_input(&asset_id_str, "5", &account)
             .expect("transfer draft");
-        let register_domain =
-            InstructionDraft::register_domain_from_input(domain).expect("domain draft");
         let register_account =
             InstructionDraft::register_account_from_input(&account).expect("account draft");
         let register_definition = InstructionDraft::register_asset_definition_from_input(
@@ -1781,7 +1811,6 @@ mod tests {
             mint,
             burn,
             transfer,
-            register_domain,
             register_account,
             register_definition,
             space_manifest,
@@ -2021,14 +2050,14 @@ mod tests {
             .find(|auth| auth.label() == "Bob (dev)")
             .expect("Bob signer present");
 
-        let draft = InstructionDraft::register_domain_from_input("side_garden.universal")
-            .expect("domain draft");
+        let draft = InstructionDraft::register_account_from_input(&account_literal(&ALICE_ID))
+            .expect("account draft");
         let err = compose_preview_with_authority("chain", &[draft], bob)
-            .expect_err("Bob should not be allowed to register domains");
+            .expect_err("Bob should not be allowed to register accounts");
 
         match err {
             ComposeError::UnauthorizedInstruction { action, .. } => {
-                assert_eq!(action, InstructionPermission::RegisterDomain);
+                assert_eq!(action, InstructionPermission::RegisterAccount);
             }
             other => panic!("unexpected compose error: {other:?}"),
         }

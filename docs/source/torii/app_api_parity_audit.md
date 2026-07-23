@@ -76,25 +76,22 @@ val headers = CanonicalRequestSigner.buildHeaders(
 - Notes: Proof filter paths validated end-to-end; documentation updated under `docs/source/zk_app_api.md`.
 
 #### Contract lifecycle (`/v1/contracts/*`) — Covered
-- Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
+- Handlers: `handle_post_contract_call`,
   `handle_post_contract_call_multisig_propose`,
   `handle_post_contract_call_multisig_approve`,
   `handle_post_contract_view`,
-  `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `ContractCallDto`, `MultisigContractCallProposeDto`,
-  `MultisigContractCallApproveDto`, `ContractViewDto`
-  (`crates/iroha_torii/src/routing.rs:3124-3463`).
-- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`,
-  `contracts_call_integration.rs`, and related unit coverage for multisig/view handling.
+  `handle_get_contract_code_bytes`.
+- DTOs: `ContractCallDto`, `MultisigContractCallProposeDto`,
+  `MultisigContractCallApproveDto`, and `ContractViewDto`.
+- Router binding: `Torii::add_contracts_and_vk_routes`.
+- Tests: `contracts_call_integration.rs` and related unit coverage for signed
+  artifact reads, multisig, and view handling.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Public lifecycle is alias-first. `/v1/contracts/deploy` requires
-  `contract_alias`, returns a fresh immutable `contract_address`, and reusing
-  the alias performs an in-place `kaizen`/`改善`. Runtime calls are by-reference
-  `ContractCall` executions that accept exactly one of `contract_address` or
-  `contract_alias`; the older `/v1/contracts/instance*` server-side-signing
-  flow is no longer part of the public lifecycle surface.
+- Notes: Deployment is locally signed and enters through the standard native
+  transaction pipeline. Runtime calls are by-reference `ContractCall`
+  executions that accept exactly one of `contract_address` or
+  `contract_alias`; Torii exposes no server-side deployment or activation
+  shortcut.
 
 #### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

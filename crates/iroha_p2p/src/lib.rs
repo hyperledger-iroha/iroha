@@ -58,12 +58,50 @@ pub(crate) mod sampler {
 /// The main type to use for secure communication.
 pub type NetworkHandle<T> = network::NetworkBaseHandle<T, X25519Sha256, ChaCha20Poly1305>;
 
+#[cfg(test)]
 const P2P_ENCRYPTION_OVERHEAD_BYTES: usize =
     core::mem::size_of::<Nonce<ChaCha20Poly1305>>() + core::mem::size_of::<Tag<ChaCha20Poly1305>>();
+const P2P_FRAME_LENGTH_PREFIX_BYTES: usize = core::mem::size_of::<u32>();
 
-/// Return the maximum plaintext payload that fits inside an encrypted P2P frame.
+/// Largest encrypted P2P frame body representable by the on-wire length prefix.
+pub const MAX_WIRE_ENCRYPTED_FRAME_BYTES: usize = u32::MAX as usize;
+
+/// Largest encrypted P2P frame body accepted by the runtime configuration.
+///
+/// A stream frame is buffered contiguously as its four-byte length prefix plus
+/// its encrypted body. This architecture-independent ceiling keeps that whole
+/// allocation within `i32::MAX` bytes, so 32-bit and 64-bit validators accept
+/// the same configuration and frame geometry.
+pub const MAX_ENCRYPTED_FRAME_BYTES: usize = 2_147_483_643;
+
+/// Return the maximum plaintext payload that fits the default ChaCha20-Poly1305 frame.
 pub fn frame_plaintext_cap(max_frame_bytes: usize) -> usize {
-    max_frame_bytes.saturating_sub(P2P_ENCRYPTION_OVERHEAD_BYTES)
+    frame_plaintext_cap_for::<ChaCha20Poly1305>(max_frame_bytes)
+}
+
+/// Return the maximum plaintext payload that fits an encrypted frame for `E`.
+pub fn frame_plaintext_cap_for<E: aead::AeadCore>(max_frame_bytes: usize) -> usize {
+    let encryption_overhead = core::mem::size_of::<Nonce<E>>() + core::mem::size_of::<Tag<E>>();
+    max_frame_bytes
+        .min(MAX_ENCRYPTED_FRAME_BYTES)
+        .saturating_sub(encryption_overhead)
+}
+
+/// Return the outbound byte-queue charge for one plaintext frame.
+///
+/// The default P2P transport queues a four-byte encrypted-frame length prefix,
+/// a fixed nonce and authentication tag, and the encrypted plaintext bytes.
+/// Returns `None` when the complete stream-frame length is not representable.
+pub fn frame_queue_charge(plaintext_frame_bytes: usize) -> Option<usize> {
+    frame_queue_charge_for::<ChaCha20Poly1305>(plaintext_frame_bytes)
+}
+
+/// Return the stream-queue charge for one plaintext frame encrypted by `E`.
+pub fn frame_queue_charge_for<E: aead::AeadCore>(plaintext_frame_bytes: usize) -> Option<usize> {
+    let encryption_overhead = core::mem::size_of::<Nonce<E>>() + core::mem::size_of::<Tag<E>>();
+    plaintext_frame_bytes
+        .checked_add(encryption_overhead)?
+        .checked_add(P2P_FRAME_LENGTH_PREFIX_BYTES)
 }
 
 pub mod boilerplate {
@@ -123,16 +161,16 @@ pub enum Error {
     Addr(#[from] AddrParseError),
     /// Connection reset by peer in the middle of message transfer
     ConnectionResetByPeer,
-    /// Incoming frame exceeds configured maximum size
+    /// Encrypted P2P frame exceeds the runtime cap or stream `u32` wire-body limit
     FrameTooLarge,
     /// Outbound {priority} frame queue full ({queued_frames}/{max_frames} frames, {queued_bytes}/{max_bytes} bytes)
     #[allow(clippy::doc_markdown)]
     OutboundFrameQueueFull {
         /// Queue priority label.
         priority: &'static str,
-        /// Encrypted frame bytes already queued.
+        /// Stream wire bytes already queued (four-byte prefix plus encrypted body).
         queued_bytes: usize,
-        /// Maximum encrypted frame bytes allowed.
+        /// Maximum queued stream wire bytes allowed.
         max_bytes: usize,
         /// Encrypted frames already queued.
         queued_frames: usize,
@@ -141,6 +179,8 @@ pub enum Error {
     },
     /// Decrypted frame carried a malformed inner payload
     MalformedPayloadFrame,
+    /// Decrypted frame exceeded the cap selected from its raw inbound topic
+    InboundTopicCapExceeded,
     /// Handshake preface header invalid
     HandshakeBadPreface,
     /// Peer consensus handshake mismatch ({reason})
@@ -192,6 +232,36 @@ mod frame_tests {
     fn frame_plaintext_cap_saturates_when_too_small() {
         let cap = P2P_ENCRYPTION_OVERHEAD_BYTES.saturating_sub(1);
         assert_eq!(frame_plaintext_cap(cap), 0);
+    }
+
+    #[test]
+    fn frame_plaintext_cap_clamps_to_cross_platform_runtime_limit() {
+        assert_eq!(MAX_WIRE_ENCRYPTED_FRAME_BYTES, u32::MAX as usize);
+        assert_eq!(
+            MAX_ENCRYPTED_FRAME_BYTES + P2P_FRAME_LENGTH_PREFIX_BYTES,
+            i32::MAX as usize
+        );
+        assert_eq!(
+            frame_plaintext_cap(MAX_ENCRYPTED_FRAME_BYTES + 1),
+            MAX_ENCRYPTED_FRAME_BYTES - P2P_ENCRYPTION_OVERHEAD_BYTES
+        );
+        assert_eq!(
+            frame_plaintext_cap(usize::MAX),
+            MAX_ENCRYPTED_FRAME_BYTES - P2P_ENCRYPTION_OVERHEAD_BYTES
+        );
+    }
+
+    #[test]
+    fn frame_queue_charge_includes_encryption_and_length_prefix() {
+        assert_eq!(
+            frame_queue_charge(64),
+            Some(64 + P2P_ENCRYPTION_OVERHEAD_BYTES + P2P_FRAME_LENGTH_PREFIX_BYTES)
+        );
+        assert_eq!(frame_queue_charge(usize::MAX), None);
+        assert_eq!(
+            frame_queue_charge(MAX_ENCRYPTED_FRAME_BYTES - P2P_ENCRYPTION_OVERHEAD_BYTES),
+            Some(MAX_ENCRYPTED_FRAME_BYTES + P2P_FRAME_LENGTH_PREFIX_BYTES)
+        );
     }
 }
 

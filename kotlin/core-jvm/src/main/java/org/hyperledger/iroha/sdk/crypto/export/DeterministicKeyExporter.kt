@@ -17,6 +17,8 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.bouncycastle.crypto.generators.Argon2BytesGenerator
+import org.bouncycastle.crypto.params.Argon2Parameters
 import org.hyperledger.iroha.sdk.crypto.MlDsaKeyMaterial
 import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
 import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
@@ -326,26 +328,15 @@ object DeterministicKeyExporter {
         val passphraseBytes = encodeUtf8(passphrase)
         val kdfOutput = ByteArray(AES_KEY_LENGTH_BYTES)
         try {
-            val paramsClass = Class.forName("org.bouncycastle.crypto.params.Argon2Parameters")
-            val builderClass =
-                Class.forName("org.bouncycastle.crypto.params.Argon2Parameters\$Builder")
-            val argon2id = paramsClass.getField("ARGON2_id").getInt(null)
-            val builder = builderClass.getConstructor(Int::class.javaPrimitiveType)
-                .newInstance(argon2id)
-            builderClass.getMethod("withSalt", ByteArray::class.java).invoke(builder, kdfSalt)
-            builderClass.getMethod("withParallelism", Int::class.javaPrimitiveType)
-                .invoke(builder, DEFAULT_ARGON2_PARALLELISM)
-            builderClass.getMethod("withIterations", Int::class.javaPrimitiveType)
-                .invoke(builder, iterations)
-            builderClass.getMethod("withMemoryAsKB", Int::class.javaPrimitiveType)
-                .invoke(builder, DEFAULT_ARGON2_MEMORY_KIB)
-            val params = builderClass.getMethod("build").invoke(builder)
-            val generatorClass =
-                Class.forName("org.bouncycastle.crypto.generators.Argon2BytesGenerator")
-            val generator = generatorClass.getConstructor().newInstance()
-            generatorClass.getMethod("init", paramsClass).invoke(generator, params)
-            generatorClass.getMethod("generateBytes", ByteArray::class.java, ByteArray::class.java)
-                .invoke(generator, passphraseBytes, kdfOutput)
+            val params = Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
+                .withSalt(kdfSalt)
+                .withParallelism(DEFAULT_ARGON2_PARALLELISM)
+                .withIterations(iterations)
+                .withMemoryAsKB(DEFAULT_ARGON2_MEMORY_KIB)
+                .build()
+            val generator = Argon2BytesGenerator()
+            generator.init(params)
+            generator.generateBytes(passphraseBytes, kdfOutput)
             val derived = hkdf(
                 kdfOutput,
                 sha256(hkdfSaltDomain(), aliasBytes),
@@ -354,8 +345,8 @@ object DeterministicKeyExporter {
             )
             kdfOutput.fill(0)
             return derived
-        } catch (ex: ReflectiveOperationException) {
-            throw KeyExportException("Argon2id derivation unavailable", ex)
+        } catch (ex: RuntimeException) {
+            throw KeyExportException("Argon2id derivation failed", ex)
         } catch (ex: LinkageError) {
             throw KeyExportException("Argon2id derivation unavailable", ex)
         } finally {

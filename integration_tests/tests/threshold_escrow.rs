@@ -1,7 +1,10 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! End-to-end coverage for the canonical threshold escrow Kotodama sample.
 
-use std::time::{Duration, Instant};
+use std::{
+    num::NonZeroU64,
+    time::{Duration, Instant},
+};
 
 use base64::Engine as _;
 use eyre::{Result, eyre};
@@ -130,62 +133,22 @@ async fn wait_for_tx_terminal_status(
 
 async fn deploy_threshold_escrow(
     client: &Client,
-    http: &reqwest::Client,
+    _http: &reqwest::Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
-    let baseline = client.get_status()?.txs_approved;
-    let code_b64 = base64::engine::general_purpose::STANDARD
-        .encode(load_sample_ivm("threshold_escrow").as_ref());
+    let artifact = load_sample_ivm("threshold_escrow");
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "threshold_escrow",
         None,
         "universal",
     )
     .expect("threshold escrow alias");
-    let deploy = tokio::task::spawn_blocking({
+    let (contract_address, _, _) = tokio::task::spawn_blocking({
         let client = client.clone();
-        let contract_alias = contract_alias.clone();
-        move || {
-            client.post_contract_deploy_json(
-                &ALICE_ID.clone(),
-                ALICE_KEYPAIR.private_key(),
-                &code_b64,
-                &contract_alias,
-                None,
-            )
-        }
+        move || super::contracts::deploy_contract_locally_signed(&client, &artifact, contract_alias)
     })
     .await
     .expect("deploy threshold escrow task")?;
-
-    if let Some(tx_hash_hex) = deploy
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-    {
-        let observed = wait_for_tx_terminal_status(
-            http,
-            &client.torii_url,
-            tx_hash_hex,
-            TX_TIMEOUT,
-            "deploy threshold escrow",
-        )
-        .await?;
-        if observed.0 != "Applied" {
-            return Err(eyre!(
-                "deploy threshold escrow: expected `Applied`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
-                observed.0,
-                observed.1,
-            ));
-        }
-    } else {
-        wait_for_approved_txs(client, baseline, TX_TIMEOUT, "deploy threshold escrow").await?;
-    }
-
-    deploy
-        .get("contract_address")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("deploy response missing contract_address: {deploy:?}"))?
-        .parse()
-        .map_err(|err| eyre!("invalid contract address in deploy response: {err}"))
+    Ok(contract_address)
 }
 
 async fn call_contract_expect_status(
@@ -257,7 +220,13 @@ async fn submit_contract_call_json(
         if let Some(payload) = payload {
             body.insert("payload".into(), payload.clone());
         }
-        body.insert("gas_limit".into(), CONTRACT_GAS_LIMIT.into());
+        body.insert(
+            "fee_payment".into(),
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(CONTRACT_GAS_LIMIT),
+            ))?,
+        );
 
         let response = http
             .post(url.clone())
@@ -504,7 +473,12 @@ async fn setup_ledger_for_sample(
     );
     tokio::task::spawn_blocking({
         let client = client.clone();
-        move || client.submit_all_blocking(instructions)
+        move || {
+            client.submit_all_blocking(
+                instructions,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
     })
     .await
     .expect("setup ledger task")?;
@@ -519,9 +493,13 @@ async fn setup_ledger_for_sample(
                 },
                 ALICE_ID.clone(),
             );
-            let tx = TransactionBuilder::new(client.chain.clone(), BOB_ID.clone())
-                .with_instructions([grant_transfer])
-                .sign(BOB_KEYPAIR.private_key());
+            let tx = TransactionBuilder::new(
+                client.chain.clone(),
+                BOB_ID.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([grant_transfer])
+            .sign(BOB_KEYPAIR.private_key());
             client.submit_transaction_blocking(&tx)
         }
     })

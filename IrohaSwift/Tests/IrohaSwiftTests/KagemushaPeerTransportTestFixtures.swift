@@ -4,14 +4,35 @@ import Foundation
 
 enum KagemushaPeerTransportTestFixtures {
     static func receiveRequest(seed: UInt8 = 0x41) throws
+        -> KagemushaRecipientReceiveOfferV2
+    {
+        let exact = try rustFixtureData("offline_recipient_receive_offer_v2.hex")
+        if seed == 0x41 {
+            return try KagemushaRecipientReceiveOfferV2(noritoArchive: exact)
+        }
+        let request = try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(
+            rustFixtureData("offline_recipient_payment_request_v2.hex")
+        )
+        return try KagemushaRecipientReceiveOfferV2(
+            request: request,
+            lineageArchive: rustFixtureData(
+                "offline_recipient_registration_lineage_v2.hex"
+            ),
+            publisherCheckpointEnvelope: Data(repeating: seed, count: 2_048)
+        )
+    }
+
+    static func paymentRequest(seed: UInt8 = 0x41) throws
         -> KagemushaRecipientPaymentRequest
     {
-        let signingKey = try Curve25519.Signing.PrivateKey(
+        let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(seed)
         )
-        let publicKey = signingKey.publicKey.rawRepresentation
+        let publicKey = try KagemushaDevicePublicKeyV2(
+            sec1Bytes: signingKey.publicKey.x963Representation
+        )
         let recipient = try AccountAddress
-            .fromAccount(publicKey: publicKey)
+            .fromAccount(publicKey: fixed32(seed))
             .toI105(networkPrefix: 0x02F1)
         let amount = try KagemushaScaledAmount(atomicUnits: "125", scale: 2)
         let note = try KagemushaSpendableNoteDescriptor(
@@ -26,86 +47,144 @@ enum KagemushaPeerTransportTestFixtures {
             assetDefinitionID: note.assetDefinitionID,
             amount: amount,
             recipient: recipient,
-            recipientKeyReference: try KagemushaPublicKey(payload: publicKey)
-                .receiverKeyReference(),
+            recipientKeyReference: fixed32(seed &+ 3),
             receiverDeviceID: "ios-transport-fixture",
-            receiverPublicKey: try KagemushaPublicKey(payload: publicKey),
+            receiverPublicKey: publicKey,
             requestID: fixed32(seed &+ 4),
             issuedAtMilliseconds: 1_800_000_000_000,
             expiresAtMilliseconds: 1_800_000_060_000,
             recipientOutput: note,
             senderOutputProverMaterial: Data([seed, seed &+ 1, seed &+ 2])
         )
-        let signature: Data
-        switch seed {
-        case 0x41:
-            guard let fixed = Data(hexString:
-                "b02f4e16a5210252298e3f0a071f1c9aab15843f80ff613906c498b769098d49"
-                    + "cf050fef288216885ded44c34ee354a1a0ea4f2a8c4777944e319bd7dbfd4a07"
-            ) else {
-                throw KagemushaRecursiveSpendError.invalidField("transportFixture.signatureHex")
-            }
-            signature = fixed
-        case 0x61:
-            guard let fixed = Data(hexString:
-                "fe54090f6d88f3d045abe40c4276ef3979a5835063dfa598b03e9b51fa196fee"
-                    + "e7e50035a630995d2be17c420c2eecdfa226c5f90a62ce07cd75858909553b0b"
-            ) else {
-                throw KagemushaRecursiveSpendError.invalidField("transportFixture.signatureHex")
-            }
-            signature = fixed
-        default:
-            throw KagemushaRecursiveSpendError.invalidField("transportFixture.seed")
+        let payloadArchive = try KagemushaRecursiveSpendCodecs
+            .encodeRecipientRequestPayload(payload)
+        let signature = try signingKey.signature(for: payloadArchive)
+        let deviceSignature = try KagemushaDeviceSignatureV2(
+            derBytes: signature.derRepresentation
+        )
+        guard let payloadBytes = noritoDecodeFrame(payloadArchive)?.payload else {
+            throw KagemushaRecursiveSpendError.invalidArchive("transportFixture.requestPayload")
         }
-        return try payload.signed(signature: signature)
+        var requestWriter = CompactNoritoWriter()
+        requestWriter.writeBytes(payloadBytes)
+        requestWriter.writeField(deviceSignature.rawBytes)
+        let requestArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.recipientRequestWireName,
+            payload: requestWriter.data
+        )
+        return try KagemushaRecipientPaymentRequest(
+            payload: payload,
+            signature: deviceSignature,
+            archive: requestArchive
+        )
     }
 
     static func payment(
         request: KagemushaRecipientPaymentRequest
     ) throws
-        -> KagemushaRecursiveSpendPeerPayment
+        -> KagemushaRecursiveSpendPeerPaymentV4
     {
-        let requestDigest = try request.verified(
-            atMilliseconds: 1_800_000_000_500
-        ).digest
-        guard let expectedDigest = Data(hexString:
+        let requestDigest = Data(SHA256.hash(data: request.archive))
+        guard let fixtureDigest = Data(hexString:
             "6e62171fc4d85584f96aa4c5b49c2633e66cea2719a361ae9cdf96251c41b608"
         ) else {
             throw KagemushaRecursiveSpendError.invalidField("transportFixture.digestHex")
         }
-        guard requestDigest == expectedDigest else {
-            throw KagemushaRecursiveSpendError.invalidField("transportFixture.requestDigest")
-        }
-        guard let archive = Data(hexString: canonicalRecipientBundleArchiveHex) else {
+        guard let archive = Data(hexString: canonicalRecipientBundleArchiveHex),
+              var legacyBundlePayload = noritoDecodeFrame(archive)?.payload,
+              let digestRange = legacyBundlePayload.range(of: fixtureDigest),
+              legacyBundlePayload[digestRange.upperBound...].range(of: fixtureDigest) == nil else {
             throw KagemushaRecursiveSpendError.invalidField("transportFixture.bundleHex")
         }
-        let finalRoot = fixed32(0x44)
-        let bundle = try KagemushaRecursiveSpendBundle(noritoArchive: archive)
-        let payment = try KagemushaRecursiveSpendPeerPayment.create(
-            recipientBundle: bundle,
-            recipientMembershipWitness: membershipWitness(root: finalRoot)
+        legacyBundlePayload.replaceSubrange(digestRange, with: requestDigest)
+        let bundleArchiveV4 = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.bundleWireNameV4,
+            payload: legacyBundlePayload
         )
-        return try KagemushaRecursiveSpendPeerPayment.decode(payment.archive)
+        let bundleV4 = try KagemushaRecursiveSpendBundleV4(
+            noritoArchive: bundleArchiveV4
+        )
+        let witness = try membershipWitness(root: fixed32(0x44))
+        let localWitnessArchive = try KagemushaRecursiveSpendCodecs
+            .encodeMembershipWitness(witness)
+        guard let witnessPayload = noritoDecodeFrame(localWitnessArchive)?.payload else {
+            throw KagemushaRecursiveSpendError.invalidArchive("transportFixture.witnessFrame")
+        }
+        var paymentWriter = CompactNoritoWriter()
+        paymentWriter.writeField(legacyBundlePayload)
+        paymentWriter.writeField(witnessPayload)
+        let provenancePayload = Data([0x01])
+        let provenanceArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.topUpProvenanceWireNameV4,
+            payload: provenancePayload
+        )
+        paymentWriter.writeField(provenancePayload)
+        let paymentArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.peerPaymentWireNameV4,
+            payload: paymentWriter.data
+        )
+        return KagemushaRecursiveSpendPeerPaymentV4(
+            recipientBundle: bundleV4,
+            recipientMembershipWitness: witness,
+            topUpProvenance: try KagemushaRecursiveSpendTopUpProvenanceV4(
+                noritoArchive: provenanceArchive
+            ),
+            noritoArchive: paymentArchive
+        )
     }
 
     static func acknowledgement(
         request: KagemushaRecipientPaymentRequest,
-        payment: KagemushaRecursiveSpendPeerPayment,
+        payment: KagemushaRecursiveSpendPeerPaymentV4,
         receiverSigningSeed: UInt8 = 0x41
     ) throws -> KagemushaReceiverAcknowledgement {
-        let payload = try KagemushaReceiverAcknowledgement.prepare(
-            request: request,
-            payment: payment,
-            acceptedAtMilliseconds: 1_800_000_001_000
+        let requestDigest = Data(SHA256.hash(data: request.archive))
+        let acceptedAtMilliseconds: UInt64 = 1_800_000_001_000
+        var payloadWriter = CompactNoritoWriter()
+        payloadWriter.writeField(fixed32(0x54))
+        payloadWriter.writeField(requestDigest)
+        payloadWriter.writeField(Data(SHA256.hash(data: payment.recipientBundle.noritoArchive)))
+        payloadWriter.writeField(request.payload.recipientOutput.noteCommitment)
+        payloadWriter.writeField(CompactNorito.encodeUInt64(acceptedAtMilliseconds))
+        payloadWriter.writeField(CompactNorito.encodeString(request.payload.receiverDeviceID))
+        payloadWriter.writeField(request.payload.recipientKeyReference)
+        payloadWriter.writeField(request.payload.receiverPublicKey.sec1Bytes)
+        let payloadArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.acknowledgementPayloadWireName,
+            payload: payloadWriter.data
         )
-        let signingKey = try Curve25519.Signing.PrivateKey(
+        let payload = try KagemushaReceiverAcknowledgementPayload(
+            operationID: fixed32(0x54),
+            recipientRequestDigest: requestDigest,
+            paymentBundleDigest: Data(SHA256.hash(data: payment.recipientBundle.noritoArchive)),
+            recipientCommitment: request.payload.recipientOutput.noteCommitment,
+            acceptedAtMilliseconds: acceptedAtMilliseconds,
+            receiverDeviceID: request.payload.receiverDeviceID,
+            receiverKeyReference: request.payload.recipientKeyReference,
+            receiverPublicKey: request.payload.receiverPublicKey,
+            archive: payloadArchive
+        )
+        let signingKey = try P256.Signing.PrivateKey(
             rawRepresentation: fixed32(receiverSigningSeed)
         )
-        return try KagemushaReceiverAcknowledgement.create(
+        let signature = try signingKey.signature(for: payloadArchive)
+        let deviceSignature = try KagemushaDeviceSignatureV2(
+            derBytes: signature.derRepresentation
+        )
+        guard let payloadBytes = noritoDecodeFrame(payloadArchive)?.payload else {
+            throw KagemushaRecursiveSpendError.invalidArchive("transportFixture.ackPayloadFrame")
+        }
+        var acknowledgementWriter = CompactNoritoWriter()
+        acknowledgementWriter.writeField(payloadBytes)
+        acknowledgementWriter.writeField(deviceSignature.rawBytes)
+        let acknowledgementArchive = KagemushaRecursiveSpend.frameArchive(
+            schema: KagemushaRecursiveSpend.acknowledgementWireName,
+            payload: acknowledgementWriter.data
+        )
+        return try KagemushaReceiverAcknowledgement(
             payload: payload,
-            signature: try signingKey.signature(for: payload.signingBytes()),
-            request: request,
-            payment: payment
+            signature: deviceSignature,
+            archive: acknowledgementArchive
         )
     }
 
@@ -118,6 +197,24 @@ enum KagemushaPeerTransportTestFixtures {
 
     static func fixed32(_ byte: UInt8) -> Data {
         Data(repeating: byte == 0 ? 1 : byte, count: 32)
+    }
+
+    private static func rustFixtureData(_ name: String) throws -> Data {
+        var root = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        for _ in 0..<3 { root.deleteLastPathComponent() }
+        let url = root
+            .appendingPathComponent("crates/connect_norito_bridge/tests/fixtures")
+            .appendingPathComponent(name)
+        let text = try String(contentsOf: url, encoding: .utf8)
+        let compact = text.unicodeScalars.filter {
+            !CharacterSet.whitespacesAndNewlines.contains($0)
+        }.map(String.init).joined()
+        guard let bytes = Data(hexString: compact) else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "transportFixture.\(name)"
+            )
+        }
+        return bytes
     }
 
     private static func membershipWitness(
@@ -143,10 +240,10 @@ enum KagemushaPeerTransportTestFixtures {
         )
     }
 
-    /// Rust-generated canonical bundle whose peer-split transition is bound to
-    /// the deterministic default receiver request above. The one-byte proof is
-    /// deliberately opaque but satisfies the public structural contract; no
-    /// test bypasses the native bundle-validation gate.
+    /// Rust-generated canonical bundle template. `payment(request:)` rebinds
+    /// its peer-split request digest and reframes the opaque bundle payload as
+    /// ABI-21 solely for transport-state-machine tests. Proof acceptance stays
+    /// covered by the native bridge tests; this fixture never enters a wallet.
     private static let canonicalRecipientBundleArchiveHex = [
         "4e5254300000dd08ef107254cbcf59c74170bd235bac005503000000000000698b08642ee59045020000000000000000b305",
         "1b1a1973776966742d6b6167656d757368612d7472616e73706f727420010101020103010401050106014701080189010a01",

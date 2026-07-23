@@ -22,9 +22,9 @@ use sorafs_manifest::{
     ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1,
     ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol,
-    chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
-    compute_envelope_digest, compute_proposal_digest, verify_advert_against_record,
-    verify_revocation_signatures,
+    XorQuantity, chunker_registry, compute_advert_body_digest,
+    compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
+    verify_advert_against_record, verify_revocation_signatures,
 };
 
 #[cfg(unix)]
@@ -134,7 +134,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         provider_id,
         stake_pool_id,
         advert_key,
-        stake_amount: 5_000,
+        stake_amount: XorQuantity::try_from_micro(5_000).expect("fixture stake is representable"),
         attested_at: 1_700_000_000,
         expires_at: 1_700_003_600,
     })?;
@@ -178,7 +178,7 @@ fn generate_fixtures(out_dir: &Path) -> Result<FixtureSummary, Box<dyn std::erro
         provider_id,
         stake_pool_id,
         advert_key,
-        stake_amount: 7_000,
+        stake_amount: XorQuantity::try_from_micro(7_000).expect("fixture stake is representable"),
         attested_at: 1_700_000_000,
         expires_at: 1_700_007_200,
     })?;
@@ -320,7 +320,7 @@ struct ProposalParams<'a> {
     provider_id: [u8; 32],
     stake_pool_id: [u8; 32],
     advert_key: [u8; 32],
-    stake_amount: u128,
+    stake_amount: XorQuantity,
     attested_at: u64,
     expires_at: u64,
 }
@@ -441,7 +441,7 @@ fn build_advert(
         provider_id: proposal.provider_id,
         profile_id: proposal.profile_id.clone(),
         profile_aliases: proposal.profile_aliases.clone(),
-        stake: proposal.stake,
+        stake: proposal.stake.clone(),
         qos: QosHints {
             availability: AvailabilityTier::Hot,
             max_retrieval_latency_ms: max_latency_ms,
@@ -1051,19 +1051,19 @@ mod tests {
 
         assert_eq!(
             hex_lower(summary.proposal_v1_digest),
-            "8d052d49cac188be4fa2ce7c60f24c706a3839441070fa5a3cfdb1189ecfecc1"
+            "65ce8b32017a665c413844ad0c6ee725a2e7ca83820e9bc0d45f5fec3e8aef64"
         );
         assert_eq!(
             hex_lower(summary.envelope_v1_digest),
-            "65b2bfdfe16f559cc01795ec99ad0c16c3f2d29e642ea729cfa78ee4114ab2c9"
+            "5401f0d026142e83241decbe120c6d5219fd5314f1aba4a7d829dab3d6941d4b"
         );
         assert_eq!(
             hex_lower(summary.renewal_envelope_digest),
-            "87283d3bd48286b434beb8dec673b9169528c02296423cdd2b357a517d88dc47"
+            "14c4e80d9134e260c91590fd98edb6593682bd25e7375745863dbe37c8e8f10e"
         );
         assert_eq!(
             hex_lower(summary.revocation_digest),
-            "441911ea40c3c5ebade081cc7501fe3f3c18c9cce3ddb04c8885fdf52d14827b"
+            "c848c9205487cc40236c25926c69991420959f0794637a7e5d2a0c0b057b745b"
         );
 
         let generated_names: BTreeSet<String> = fs::read_dir(&dir_path)

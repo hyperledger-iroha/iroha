@@ -38,6 +38,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
 };
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::{Decode, Encode},
@@ -531,7 +532,7 @@ pub struct SoracloudRuntimeServicePlan {
     /// Remaining prepaid runtime balance estimated at snapshot build time.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
-    pub remaining_runtime_balance_nanos: Option<u64>,
+    pub remaining_runtime_balance: Option<Quantity>,
     /// Number of committed service config entries projected into runtime materialization.
     pub config_entry_count: u32,
     /// Number of committed service secret entries projected into runtime materialization.
@@ -1693,7 +1694,9 @@ mod tests {
                 aad_digest: Hash::new(b"aad"),
             },
             pricing_policy: iroha_data_model::soracloud::SoraUploadedModelPricingPolicyV1 {
-                storage_xor_nanos: 1,
+                storage_price: "0.000000001"
+                    .parse()
+                    .expect("canonical uploaded-model storage price"),
             },
             decryption_policy_ref: "policy/v1".to_owned(),
         }
@@ -1759,7 +1762,7 @@ mod tests {
                         DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),
-                    base_fee_nanos: 10_000,
+                    base_fee: "0.00001".parse().expect("base fee"),
                     lease_term_ms: 60_000,
                     window_started_at_ms: 1,
                     window_expires_at_ms: 60_001,
@@ -1780,12 +1783,12 @@ mod tests {
                     status: SoraHfSharedLeaseMemberStatusV1::Active,
                     joined_at_ms: 1,
                     updated_at_ms: 1,
-                    total_paid_nanos: 10_000,
-                    total_refunded_nanos: 0,
-                    last_charge_nanos: 10_000,
-                    total_compute_paid_nanos: 5_000,
-                    total_compute_refunded_nanos: 0,
-                    last_compute_charge_nanos: 5_000,
+                    total_paid: "0.00001".parse().expect("total paid"),
+                    total_refunded: Quantity::zero(),
+                    last_charge: "0.00001".parse().expect("last charge"),
+                    total_compute_paid: "0.000005".parse().expect("total compute paid"),
+                    total_compute_refunded: Quantity::zero(),
+                    last_compute_charge: "0.000005".parse().expect("last compute charge"),
                     service_bindings: std::collections::BTreeSet::from([
                         service_name_string.clone()
                     ]),
@@ -1818,7 +1821,7 @@ mod tests {
                     status: SoraHfPlacementHostStatusV1::Warm,
                     host_class: "gpu.large".to_owned(),
                 }],
-                total_reservation_fee_nanos: 5_000,
+                total_reservation_fee: "0.000005".parse().expect("total reservation fee"),
                 last_rebalance_at_ms: 1,
                 last_error: None,
             },

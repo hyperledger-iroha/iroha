@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validate SwiftPM manifest behaviour with and without the Norito bridge present.
+# Validate that SwiftPM accepts the complete bridge and rejects a missing bridge.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -8,7 +8,7 @@ BRIDGE_DIR="${REPO_ROOT}/dist/NoritoBridge.xcframework"
 REPORT_DIR="${SWIFT_SPM_REPORT_DIR:-${REPO_ROOT}/artifacts/swift_spm_validation}"
 SUMMARY_PATH="${SWIFT_SPM_SUMMARY:-${REPORT_DIR}/summary.json}"
 WITH_BRIDGE_LOG="${SWIFT_SPM_WITH_BRIDGE_LOG:-${REPORT_DIR}/with_bridge.log}"
-MISSING_BRIDGE_LOG="${SWIFT_SPM_MISSING_BRIDGE_LOG:-${REPORT_DIR}/missing_bridge_fallback.log}"
+MISSING_BRIDGE_LOG="${SWIFT_SPM_MISSING_BRIDGE_LOG:-${REPORT_DIR}/missing_bridge_required.log}"
 MODULE_CACHE="${SWIFT_SPM_MODULE_CACHE:-${REPORT_DIR}/modulecache}"
 WITH_BRIDGE_SCRATCH="${SWIFT_SPM_WITH_BRIDGE_SCRATCH:-${REPORT_DIR}/scratch_with_bridge}"
 MISSING_BRIDGE_SCRATCH="${SWIFT_SPM_MISSING_BRIDGE_SCRATCH:-${REPORT_DIR}/scratch_missing_bridge}"
@@ -17,10 +17,10 @@ write_summary() {
   local status="$1"
   local with_rc="$2"
   local missing_rc="$3"
-  local fallback_warning="$4"
+  local required_error="$4"
   mkdir -p "$(dirname "${SUMMARY_PATH}")"
   cat >"${SUMMARY_PATH}" <<EOF
-{"status":"${status}","with_bridge":{"rc":${with_rc},"log":"${WITH_BRIDGE_LOG}"},"missing_bridge_fallback":{"rc":${missing_rc},"expected":"pass","warning_present":${fallback_warning},"log":"${MISSING_BRIDGE_LOG}"},"bridge_present":$( [[ -d "${BRIDGE_DIR}" ]] && echo true || echo false ),"package_dir":"${PACKAGE_DIR}"}
+{"status":"${status}","with_bridge":{"rc":${with_rc},"expected":"pass","log":"${WITH_BRIDGE_LOG}"},"missing_bridge":{"rc":${missing_rc},"expected":"reject","required_error_present":${required_error},"log":"${MISSING_BRIDGE_LOG}"},"bridge_present":$( [[ -d "${BRIDGE_DIR}" ]] && echo true || echo false ),"package_dir":"${PACKAGE_DIR}"}
 EOF
 }
 
@@ -66,15 +66,15 @@ set -e
 BRIDGE_STASH="${BRIDGE_DIR}.spmcheck.$RANDOM.$$"
 mv "${BRIDGE_DIR}" "${BRIDGE_STASH}"
 
-echo "[swift-spm] building with bridge missing (expect Swift-only fallback warning)"
+echo "[swift-spm] resolving with bridge missing (expect mandatory-bridge rejection)"
 set +e
 swift build --package-path "${PACKAGE_DIR}" --configuration debug --manifest-cache none --scratch-path "${MISSING_BRIDGE_SCRATCH}" 2>&1 | tee "${MISSING_BRIDGE_LOG}"
 MISSING_RC=${PIPESTATUS[0]}
 set -e
 
-FALLBACK_WARNING=false
-if grep -q "continuing with Swift-only fallback" "${MISSING_BRIDGE_LOG}"; then
-  FALLBACK_WARNING=true
+REQUIRED_ERROR=false
+if grep -q "NoritoBridge.xcframework is required" "${MISSING_BRIDGE_LOG}"; then
+  REQUIRED_ERROR=true
 fi
 
 restore_bridge
@@ -83,14 +83,14 @@ OVERALL_STATUS="passed"
 if [[ ${WITH_RC} -ne 0 ]]; then
   OVERALL_STATUS="failed"
 fi
-if [[ ${MISSING_RC} -ne 0 ]]; then
+if [[ ${MISSING_RC} -eq 0 ]]; then
   OVERALL_STATUS="failed"
 fi
-if [[ "${FALLBACK_WARNING}" != "true" ]]; then
+if [[ "${REQUIRED_ERROR}" != "true" ]]; then
   OVERALL_STATUS="failed"
 fi
 
-write_summary "${OVERALL_STATUS}" "${WITH_RC}" "${MISSING_RC}" "${FALLBACK_WARNING}"
+write_summary "${OVERALL_STATUS}" "${WITH_RC}" "${MISSING_RC}" "${REQUIRED_ERROR}"
 
 if [[ "${OVERALL_STATUS}" != "passed" ]]; then
   echo "[swift-spm] failure detected (see ${SUMMARY_PATH})" >&2

@@ -304,9 +304,25 @@ pub const SYSCALL_REGISTER_SMART_CONTRACT_BYTES: u32 = 0x46;
 pub const SYSCALL_ACTIVATE_CONTRACT_INSTANCE: u32 = 0x47;
 
 /// Zero-knowledge mode helpers.
+/// Commit two opaque typed private numeric inputs without truncating either
+/// projection or the compressed Pedersen point.
+///
+/// Args: r10 = private `&Int|&Decimal|&Quantity` value,
+/// r11 = private `&Int|&Decimal|&Quantity` blinding input.
+/// Ret: r10 = public `&Int` containing the complete 48-byte compressed point.
+pub const SYSCALL_PRIVATE_NUMERIC_VALCOM: u32 = 0xF8;
 pub const SYSCALL_GET_ACCOUNT_BALANCE: u32 = 0xF9;
+/// Retired invocation-local scalar nullifier helper.
+///
+/// This number is deliberately absent from ABI V1 and deployable artifacts
+/// must receive `UnknownSyscall`. The constant remains only so legacy raw-host
+/// tests can prove fail-closed policy enforcement.
 pub const SYSCALL_USE_NULLIFIER: u32 = 0xFB;
 pub const SYSCALL_VERIFY_SIGNATURE: u32 = 0xFC;
+/// Retrieve one bounded typed private numeric input in ZK mode.
+///
+/// Args: r10 = input index, r11 = [`crate::private_input::PrivateInputKindV1`] tag.
+/// Ret: r10 = opaque private `&Int|&Decimal|&Quantity` HEAP TLV.
 pub const SYSCALL_GET_PRIVATE_INPUT: u32 = 0xFD;
 pub const SYSCALL_COMMIT_OUTPUT: u32 = 0xFE;
 
@@ -947,7 +963,6 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_ZK_VOTE_VERIFY_BALLOT
             | SYSCALL_ZK_VOTE_VERIFY_TALLY
             | SYSCALL_ZK_VERIFY_BATCH
-            | SYSCALL_USE_NULLIFIER
             | SYSCALL_AXT_BEGIN
             | SYSCALL_AXT_TOUCH
             | SYSCALL_AXT_COMMIT
@@ -1002,6 +1017,7 @@ pub const fn registered_syscall_access(number: u32) -> Option<SyscallAccess> {
             | SYSCALL_GROW_HEAP
             | SYSCALL_GET_PUBLIC_INPUT
             | SYSCALL_GET_PRIVATE_INPUT
+            | SYSCALL_PRIVATE_NUMERIC_VALCOM
             | SYSCALL_VERIFY_SIGNATURE
             | SYSCALL_INPUT_PUBLISH_TLV
             | SYSCALL_SM3_HASH
@@ -1118,6 +1134,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_GROW_HEAP,
             SYSCALL_GET_PUBLIC_INPUT,
             SYSCALL_GET_PRIVATE_INPUT,
+            SYSCALL_PRIVATE_NUMERIC_VALCOM,
             SYSCALL_COMMIT_OUTPUT,
             SYSCALL_VERIFY_SIGNATURE,
             // Hardware / helpers
@@ -1390,7 +1407,6 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         // ZK extras
         v.extend_from_slice(&[
             SYSCALL_GET_ACCOUNT_BALANCE,
-            SYSCALL_USE_NULLIFIER,
             SYSCALL_GET_REGISTER_MERKLE_COMPACT,
         ]);
         // Debug helper
@@ -1420,6 +1436,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_GROW_HEAP => "GROW_HEAP",
         SYSCALL_GET_PUBLIC_INPUT => "GET_PUBLIC_INPUT",
         SYSCALL_GET_PRIVATE_INPUT => "GET_PRIVATE_INPUT",
+        SYSCALL_PRIVATE_NUMERIC_VALCOM => "PRIVATE_NUMERIC_VALCOM",
         SYSCALL_COMMIT_OUTPUT => "COMMIT_OUTPUT",
         SYSCALL_VERIFY_SIGNATURE => "VERIFY_SIGNATURE",
         SYSCALL_INPUT_PUBLISH_TLV => "INPUT_PUBLISH_TLV",
@@ -1664,7 +1681,6 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE => "SORACLOUD_READ_SECRET_ENVELOPE",
         // ZK extras
         SYSCALL_GET_ACCOUNT_BALANCE => "GET_ACCOUNT_BALANCE",
-        SYSCALL_USE_NULLIFIER => "USE_NULLIFIER",
         SYSCALL_GET_REGISTER_MERKLE_COMPACT => "GET_REGISTER_MERKLE_COMPACT",
         // Debug helper
         SYSCALL_DEBUG_PRINT => "DEBUG_PRINT",
@@ -1761,7 +1777,7 @@ pub fn render_abi_hashes_markdown_table() -> String {
 }
 
 const ABI_V1_SURFACE_DOMAIN: &[u8] = b"IVM_ABI_V1_FULL_SURFACE\0";
-const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 6;
+const ABI_SURFACE_DESCRIPTOR_FORMAT_VERSION: u16 = 7;
 const PROGRAM_HEADER_LAYOUT_V1: &str = "49-bytes:magic[4]=IVM\\0;version_major:u8;version_minor:u8;mode:u8;vector_length:u8;max_cycles:u64le;abi_version:u8;abi_hash[32]=SHA-256(canonical-ABI-descriptor-for-abi_version);abi-hash-validated-before-prefix-or-instruction-decode";
 const NUMERIC_MANTISSA_BITS_V1: u16 = 512;
 const DECIMAL_MAX_SCALE_V1: u8 = 28;
@@ -1907,6 +1923,38 @@ struct AbiNumericSurface {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiPrivateInputKindSurface {
+    name: &'static str,
+    tag: u64,
+    pointer_type_id: u16,
+    payload_schema: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AbiPrivateInputSurface {
+    abi_version: u16,
+    record_name: &'static str,
+    record_schema_hash: [u8; 16],
+    record_layout: &'static str,
+    kind_discriminant_layout: &'static str,
+    kinds: Vec<AbiPrivateInputKindSurface>,
+    max_inputs: u64,
+    max_record_bytes: u64,
+    max_transport_bytes: u64,
+    transport_validation: &'static str,
+    runtime_validation: &'static str,
+    projection_domain: &'static [u8],
+    projection_layout: &'static str,
+    valcom_domain: &'static [u8],
+    valcom_h_dst: &'static [u8],
+    valcom_h_message: &'static [u8],
+    valcom_h_compressed: [u8; 48],
+    valcom_scalar_derivation: &'static str,
+    valcom_result: &'static str,
+    privacy_rule: &'static str,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct AbiIndexedLiteralSurface {
     opcode: u8,
     mnemonic: &'static str,
@@ -2029,6 +2077,7 @@ struct AbiSurface {
     query_page: AbiQueryPageSurface,
     entrypoint: AbiEntrypointSurface,
     numeric: AbiNumericSurface,
+    private_input: AbiPrivateInputSurface,
     indexed_literals: Vec<AbiIndexedLiteralSurface>,
     generic_program: AbiGenericProgramSurface,
     durable_state: AbiDurableStateSurface,
@@ -2732,6 +2781,54 @@ fn semantic_abi_surface_v1() -> Result<
     ))
 }
 
+fn private_input_surface_v1() -> Result<AbiPrivateInputSurface, AbiSurfaceError> {
+    use crate::private_input::{
+        MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
+        MAX_PRIVATE_INPUTS_V1, PRIVATE_INPUT_ABI_VERSION_V1, PRIVATE_INPUT_RECORD_NAME_V1,
+        PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1, PRIVATE_NUMERIC_VALCOM_DOMAIN_V1,
+        PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1, PRIVATE_NUMERIC_VALCOM_H_DST_V1,
+        PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1, PrivateInputKindV1, PrivateInputRecordV1,
+    };
+
+    let kind = |value: PrivateInputKindV1, name: &'static str, payload_schema: &'static str| {
+        AbiPrivateInputKindSurface {
+            name,
+            tag: value.tag(),
+            pointer_type_id: value.pointer_type() as u16,
+            payload_schema,
+        }
+    };
+    Ok(AbiPrivateInputSurface {
+        abi_version: PRIVATE_INPUT_ABI_VERSION_V1,
+        record_name: PRIVATE_INPUT_RECORD_NAME_V1,
+        record_schema_hash: <PrivateInputRecordV1 as norito::NoritoSerialize>::schema_hash(),
+        record_layout: "canonical-Norito-v1-frame;PrivateInputRecordV1{kind:explicit-u32-codec-index,payload:Vec<u8>};payload-is-one-complete-canonical-schema-bound-numeric-frame",
+        kind_discriminant_layout: "u32-little-endian-codec-index;Int=0;Decimal=1;Quantity=2;register-request-tag-is-the-same-numeric-value",
+        kinds: vec![
+            kind(PrivateInputKindV1::Int, "int", "IntValueV1"),
+            kind(PrivateInputKindV1::Decimal, "decimal", "DecimalValueV1"),
+            kind(PrivateInputKindV1::Quantity, "quantity", "QuantityValueV1"),
+        ],
+        max_inputs: u64::try_from(MAX_PRIVATE_INPUTS_V1)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_record_bytes: u64::try_from(MAX_PRIVATE_INPUT_RECORD_BYTES_V1)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        max_transport_bytes: u64::try_from(MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1)
+            .map_err(|_| AbiSurfaceError::SurfaceTooLarge)?,
+        transport_validation: "reject-over-count-then-scan-in-order-for-per-record-and-checked-aggregate-byte-bounds-before-host-retention;bounded-malformed-records-decode-only-after-runtime-debit",
+        runtime_validation: "fixed-maximum-quote;debit-before-decode-or-allocation;selected-record-bound;canonical-outer-Norito-reencode-equality;exact-requested-kind;numeric-frame-bound-decode-and-reencode-equality;then-opaque-private-HEAP-TLV-allocation",
+        projection_domain: PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1,
+        projection_layout: "IrohaHash(domain||u16le(abi-version)||u64le(kind-tag)||u64le(complete-envelope-bytes)||complete-canonical-numeric-TLV-envelope);projection-remains-private",
+        valcom_domain: PRIVATE_NUMERIC_VALCOM_DOMAIN_V1,
+        valcom_h_dst: PRIVATE_NUMERIC_VALCOM_H_DST_V1,
+        valcom_h_message: PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1,
+        valcom_h_compressed: PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1,
+        valcom_scalar_derivation: "for-role-in-{value=0,blind=1}:IrohaHash(valcom-domain||u16le(abi-version)||u8(role)||private-projection),interpreted-little-endian-and-reduced-modulo-BLS12-381-scalar-order-by-exactly-two-unconditional-constant-time-conditional-subtract-rounds;no-secret-dependent-division-loop-or-branch;no-u64-truncation",
+        valcom_result: "full-48-byte-compressed-BLS12-381-G1-Pedersen-point-reinterpreted-as-nonnegative-little-endian-Kotodama-int-TLV;runtime-H-is-the-ABI-bound-fixed-compressed-subgroup-point;test-derivation-is-hash_to_curve(message,dst,empty-augmentation)-and-must-equal-that-fixed-point;only-final-result-is-public",
+        privacy_rule: "Secret<int|decimal|quantity>-only-source-operands;same-private-visibility;opaque-input-TLV-bytes-cannot-be-loaded-by-guest;no-public-return-log-state-key-state-value-host-write-or-control-flow-before-full-width-valcom",
+    })
+}
+
 fn collect_abi_syscall_surface(
     syscalls: &[u32],
     docs: &[SyscallDoc],
@@ -3213,6 +3310,34 @@ fn encode_abi_surface(surface: &AbiSurface) -> Result<Vec<u8>, AbiSurfaceError> 
             },
         )
     })?;
+    descriptor.record("private_input", |private| {
+        let surface = &surface.private_input;
+        private.u16("abi_version", surface.abi_version)?;
+        private.text("record_name", surface.record_name)?;
+        private.field("record_schema_hash", &surface.record_schema_hash)?;
+        private.text("record_layout", surface.record_layout)?;
+        private.text("kind_discriminant_layout", surface.kind_discriminant_layout)?;
+        private.sequence("kinds", &surface.kinds, |kind_record, kind| {
+            kind_record.text("name", kind.name)?;
+            kind_record.u64("tag", kind.tag)?;
+            kind_record.u16("pointer_type_id", kind.pointer_type_id)?;
+            kind_record.text("payload_schema", kind.payload_schema)
+        })?;
+        private.u64("max_inputs", surface.max_inputs)?;
+        private.u64("max_record_bytes", surface.max_record_bytes)?;
+        private.u64("max_transport_bytes", surface.max_transport_bytes)?;
+        private.text("transport_validation", surface.transport_validation)?;
+        private.text("runtime_validation", surface.runtime_validation)?;
+        private.field("projection_domain", surface.projection_domain)?;
+        private.text("projection_layout", surface.projection_layout)?;
+        private.field("valcom_domain", surface.valcom_domain)?;
+        private.field("valcom_h_dst", surface.valcom_h_dst)?;
+        private.field("valcom_h_message", surface.valcom_h_message)?;
+        private.field("valcom_h_compressed", &surface.valcom_h_compressed)?;
+        private.text("valcom_scalar_derivation", surface.valcom_scalar_derivation)?;
+        private.text("valcom_result", surface.valcom_result)?;
+        private.text("privacy_rule", surface.privacy_rule)
+    })?;
     Ok(descriptor.finish())
 }
 
@@ -3528,6 +3653,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         .collect::<Vec<_>>();
     pointer_type_ids.sort_unstable();
     let (core_query_projections, query_page, entrypoint, numeric) = semantic_abi_surface_v1()?;
+    let private_input = private_input_surface_v1()?;
     let indexed_literals = vec![
         AbiIndexedLiteralSurface {
             opcode: crate::instruction::wide::memory::LDLIT,
@@ -3606,6 +3732,7 @@ fn collect_abi_surface(policy: crate::SyscallPolicy) -> Result<AbiSurface, AbiSu
         query_page,
         entrypoint,
         numeric,
+        private_input,
         indexed_literals,
         generic_program,
         durable_state,
@@ -3641,7 +3768,10 @@ fn abi_surface_descriptor(policy: crate::SyscallPolicy) -> Result<&'static [u8],
 /// typed core-query entity tags, projections, and page semantics; recursive
 /// entrypoint `List`, `Int`, `Decimal`, and `Quantity` kinds; and canonical
 /// numeric domains, exact arithmetic/conversion/wrapping rules, JSON grammar,
-/// fault ordering, frame schema/layout, error-precedence, and rounding rules.
+/// fault ordering, frame schema/layout, error-precedence, and rounding rules;
+/// and the bounded typed private-input record, nominal kind tags, projection
+/// domains, full-width commitment derivation, independent generator, and
+/// declassification rule.
 /// Gas prices and staged-metering phase tags remain bound independently by the
 /// gas-schedule hash. A malformed compiled registry
 /// returns a diagnostic sentinel with an invalid Iroha-hash marker; release
@@ -3943,6 +4073,62 @@ mod tests {
         });
         assert_surface_mutation_changes_hash(|changed| {
             let _ = changed.pointer_type_ids.pop();
+        });
+    }
+
+    #[test]
+    fn abi_hash_binds_typed_private_input_and_full_width_commitment_semantics() {
+        use crate::private_input::{
+            MAX_PRIVATE_INPUT_RECORD_BYTES_V1, MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1,
+            MAX_PRIVATE_INPUTS_V1, PRIVATE_INPUT_ABI_VERSION_V1,
+            PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1, PRIVATE_NUMERIC_VALCOM_DOMAIN_V1,
+            PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1, PRIVATE_NUMERIC_VALCOM_H_DST_V1,
+            PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1,
+        };
+
+        let private = canonical_surface().private_input;
+        assert_eq!(private.abi_version, PRIVATE_INPUT_ABI_VERSION_V1);
+        assert_eq!(private.kinds.len(), 3);
+        assert_eq!(private.kinds[0].name, "int");
+        assert_eq!(private.kinds[1].name, "decimal");
+        assert_eq!(private.kinds[2].name, "quantity");
+        assert_eq!(private.max_inputs, MAX_PRIVATE_INPUTS_V1 as u64);
+        assert_eq!(
+            private.max_record_bytes,
+            MAX_PRIVATE_INPUT_RECORD_BYTES_V1 as u64
+        );
+        assert_eq!(
+            private.max_transport_bytes,
+            MAX_PRIVATE_INPUT_TRANSPORT_BYTES_V1 as u64
+        );
+        assert_eq!(
+            private.projection_domain,
+            PRIVATE_NUMERIC_PROJECTION_DOMAIN_V1
+        );
+        assert_eq!(private.valcom_domain, PRIVATE_NUMERIC_VALCOM_DOMAIN_V1);
+        assert_eq!(private.valcom_h_dst, PRIVATE_NUMERIC_VALCOM_H_DST_V1);
+        assert_eq!(
+            private.valcom_h_message,
+            PRIVATE_NUMERIC_VALCOM_H_MESSAGE_V1
+        );
+        assert_eq!(
+            private.valcom_h_compressed,
+            PRIVATE_NUMERIC_VALCOM_H_COMPRESSED_V1
+        );
+
+        assert_surface_mutation_changes_hash(|changed| changed.private_input.abi_version += 1);
+        assert_surface_mutation_changes_hash(|changed| changed.private_input.kinds[0].tag ^= 1);
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.private_input.projection_domain = b"mutated-private-domain";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.private_input.valcom_h_message = b"known-generator-relation";
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.private_input.valcom_h_compressed[0] ^= 1;
+        });
+        assert_surface_mutation_changes_hash(|changed| {
+            changed.private_input.valcom_result = "truncated-u64";
         });
     }
 

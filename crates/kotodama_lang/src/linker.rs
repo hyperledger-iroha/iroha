@@ -16,9 +16,12 @@ use std::{
 use iroha_crypto::Hash;
 
 use crate::{
-    ast::{Block, Expr, Item, Program, SourceUnitKind, Statement},
+    ast::{Item, Program, SourceUnitKind},
     builtins::{Builtin, BuiltinSurface},
-    diagnostic::DiagnosticBundle,
+    diagnostic::{
+        Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourceSpan,
+        phase_for_semantic_failure,
+    },
     semantic::{
         self, ExprKind, FunctionSignature, Type, TypedBlock, TypedExpr, TypedItem, TypedProgram,
         TypedStatement,
@@ -205,51 +208,7 @@ pub enum SourceGraphError {
 
 impl fmt::Display for SourceGraphError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Self::Link(error) = self {
-            return error.fmt(formatter);
-        }
-        write!(formatter, "[{}] ", self.diagnostic_code())?;
-        match self {
-            Self::Budget {
-                sources,
-                source_bytes,
-                max_sources,
-                max_source_bytes,
-            } => write!(
-                formatter,
-                "Kotodama module graph contains {sources} sources/{source_bytes} bytes; V1 permits at most {max_sources} sources/{max_source_bytes} bytes"
-            ),
-            Self::Parse {
-                source,
-                diagnostics,
-            } => write!(
-                formatter,
-                "Kotodama parse error in `{source}`: {}",
-                diagnostics.render_human()
-            ),
-            Self::Resolve {
-                source,
-                diagnostics,
-            } => write!(
-                formatter,
-                "Kotodama resolution error in `{source}`: {}",
-                diagnostics.render_human()
-            ),
-            Self::InvalidSourcePath {
-                scope,
-                source,
-                reason,
-            } => write!(
-                formatter,
-                "Kotodama source path `{}` in `{scope}` is invalid: {reason}",
-                source.escape_debug()
-            ),
-            Self::DuplicateSource { scope, source } => write!(
-                formatter,
-                "Kotodama package `{scope}` contains duplicate logical source `{source}`"
-            ),
-            Self::Link(_) => unreachable!("linked failures return before source-graph formatting"),
-        }
+        formatter.write_str(&self.clone().into_diagnostics().render_human())
     }
 }
 
@@ -271,6 +230,47 @@ impl SourceGraphError {
             Self::InvalidSourcePath { .. } => "E_INVALID_SOURCE_PATH",
             Self::DuplicateSource { .. } => "E_DUPLICATE_SOURCE",
             Self::Link(error) => error.diagnostic_code(),
+        }
+    }
+
+    /// Convert parsing, resolution, metadata, and typed-link failures into one
+    /// canonical bundle suitable for human, JSON, or SARIF rendering.
+    pub fn into_diagnostics(self) -> DiagnosticBundle {
+        match self {
+            Self::Budget {
+                sources,
+                source_bytes,
+                max_sources,
+                max_source_bytes,
+            } => DiagnosticBundle::single(Diagnostic::error(
+                "E_PACKAGE_BUDGET",
+                DiagnosticPhase::Parse,
+                format!(
+                    "Kotodama module graph contains {sources} sources/{source_bytes} bytes; V1 permits at most {max_sources} sources/{max_source_bytes} bytes"
+                ),
+                None,
+            )),
+            Self::Parse { diagnostics, .. } | Self::Resolve { diagnostics, .. } => diagnostics,
+            Self::InvalidSourcePath {
+                scope,
+                source,
+                reason,
+            } => DiagnosticBundle::single(Diagnostic::error(
+                "E_INVALID_SOURCE_PATH",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "Kotodama source path `{}` in `{scope}` is invalid: {reason}",
+                    source.escape_debug()
+                ),
+                None,
+            )),
+            Self::DuplicateSource { scope, source } => DiagnosticBundle::single(Diagnostic::error(
+                "E_DUPLICATE_SOURCE",
+                DiagnosticPhase::Resolve,
+                format!("Kotodama package `{scope}` contains duplicate logical source `{source}`"),
+                None,
+            )),
+            Self::Link(error) => error.into_diagnostics(),
         }
     }
 }
@@ -438,6 +438,20 @@ impl ModuleBuildGraph {
         Ok(source_package_graph_fingerprint(request, &names))
     }
 
+    /// Parse editor/project sources through the same content-addressed cache
+    /// later consumed by typed graph linking.
+    pub(crate) fn parse_project_sources(
+        &self,
+        sources: &[SourceModuleUnit],
+    ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
+        let keys = sources
+            .iter()
+            .map(|source| format!("project\0{}", source.source_name))
+            .collect::<Vec<_>>();
+        let source_ids = stable_source_ids(&keys);
+        self.parse_sources_with_ids(sources, &source_ids)
+    }
+
     /// Parse, resolve, and type-check one complete locked source graph.
     pub fn link(
         &self,
@@ -452,8 +466,13 @@ impl ModuleBuildGraph {
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let mut sources = Vec::new();
         sources.push(request.root.clone());
+        let mut package_identities = vec![None];
         for package in &request.packages {
             sources.extend(package.modules.iter().cloned());
+            package_identities.extend(std::iter::repeat_n(
+                Some(package.identity.clone()),
+                package.modules.len(),
+            ));
         }
         let source_keys = std::iter::once(format!("root\0{}", request.root.source_name))
             .chain(request.packages.iter().flat_map(|package| {
@@ -464,41 +483,64 @@ impl ModuleBuildGraph {
             }))
             .collect::<Vec<_>>();
         let source_ids = stable_source_ids(&source_keys);
-        let programs = self
-            .parse_sources_with_ids(&sources, &source_ids)?
+        let parsed =
+            self.parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?;
+        let mut programs = Vec::with_capacity(parsed.len());
+        let mut resolve_diagnostics = Vec::new();
+        for (index, ((program, source), source_id)) in parsed
             .into_iter()
             .zip(&sources)
             .zip(source_ids.iter().copied())
             .enumerate()
-            .map(|(index, ((program, source), source_id))| {
-                let imports = if index == 0 {
-                    &request.imports
-                } else {
-                    let mut offset = 1_usize;
-                    let mut selected = None;
-                    for package in &request.packages {
-                        let end = offset.saturating_add(package.modules.len());
-                        if (offset..end).contains(&index) {
-                            selected = Some(&package.imports);
-                            break;
-                        }
-                        offset = end;
+        {
+            let imports = if index == 0 {
+                &request.imports
+            } else {
+                let mut offset = 1_usize;
+                let mut selected = None;
+                for package in &request.packages {
+                    let end = offset.saturating_add(package.modules.len());
+                    if (offset..end).contains(&index) {
+                        selected = Some(&package.imports);
+                        break;
                     }
-                    selected.expect("every non-root source belongs to a package")
-                };
-                let imports = imports
-                    .iter()
-                    .map(|binding| (binding.alias.clone(), ()))
-                    .collect::<BTreeMap<_, _>>();
-                let file = SourceFile::new(source_id, source.source_name.as_str(), &source.source);
-                crate::resolved::resolve_with_imports(program, &file, &imports).map_err(
-                    |diagnostics| SourceGraphError::Resolve {
-                        source: source.source_name.clone(),
-                        diagnostics,
-                    },
-                )
-            })
-            .collect::<Result<Vec<_>, _>>()?;
+                    offset = end;
+                }
+                selected.expect("every non-root source belongs to a package")
+            };
+            let imports = imports
+                .iter()
+                .map(|binding| (binding.alias.clone(), ()))
+                .collect::<BTreeMap<_, _>>();
+            let file = package_identities[index].as_ref().map_or_else(
+                || SourceFile::new(source_id, source.source_name.as_str(), &source.source),
+                |package| {
+                    SourceFile::new_in_package(
+                        source_id,
+                        package.as_str(),
+                        source.source_name.as_str(),
+                        &source.source,
+                    )
+                },
+            );
+            match crate::resolved::resolve_with_imports(program, &file, &imports) {
+                Ok(program) => programs.push(Some(program)),
+                Err(diagnostics) => {
+                    resolve_diagnostics.extend(diagnostics.diagnostics);
+                    programs.push(None);
+                }
+            }
+        }
+        if !resolve_diagnostics.is_empty() {
+            return Err(SourceGraphError::Resolve {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
+            });
+        }
+        let programs = programs
+            .into_iter()
+            .map(|program| program.expect("resolution failures returned before typed linking"))
+            .collect::<Vec<_>>();
         let mut programs = programs.into_iter();
         let root = ModuleUnit {
             source_name: request.root.source_name,
@@ -575,12 +617,20 @@ impl ModuleBuildGraph {
             })
             .collect::<Vec<_>>();
         let source_ids = stable_source_ids(&source_keys);
+        let package_identities = packages
+            .iter()
+            .flat_map(|package| {
+                std::iter::repeat_n(Some(package.identity.clone()), package.modules.len())
+            })
+            .collect::<Vec<_>>();
         let mut parsed = self
-            .parse_sources_with_ids(&sources, &source_ids)?
+            .parse_sources_with_ids_scoped(&sources, &source_ids, &package_identities)?
             .into_iter();
         let mut source_ids = source_ids.into_iter();
+        let mut package_identities = package_identities.into_iter();
 
         let mut resolved_packages = Vec::with_capacity(packages.len());
+        let mut resolve_diagnostics = Vec::new();
         for package in packages {
             let imports = package
                 .imports
@@ -595,20 +645,23 @@ impl ModuleBuildGraph {
                 let source_id = source_ids
                     .next()
                     .expect("every package source has one stable source id");
-                let file = SourceFile::new(
+                let package_identity = package_identities
+                    .next()
+                    .flatten()
+                    .expect("every reusable module has one package identity");
+                let file = SourceFile::new_in_package(
                     source_id,
+                    package_identity,
                     module.source_name.as_str(),
                     module.source.as_str(),
                 );
-                let program = crate::resolved::resolve_with_imports(program, &file, &imports)
-                    .map_err(|diagnostics| SourceGraphError::Resolve {
-                        source: module.source_name.clone(),
-                        diagnostics,
-                    })?;
-                modules.push(ModuleUnit {
-                    source_name: module.source_name,
-                    program,
-                });
+                match crate::resolved::resolve_with_imports(program, &file, &imports) {
+                    Ok(program) => modules.push(ModuleUnit {
+                        source_name: module.source_name,
+                        program,
+                    }),
+                    Err(diagnostics) => resolve_diagnostics.extend(diagnostics.diagnostics),
+                }
             }
             resolved_packages.push(PackageUnit {
                 identity: package.identity,
@@ -619,6 +672,13 @@ impl ModuleBuildGraph {
         }
         debug_assert!(parsed.next().is_none());
         debug_assert!(source_ids.next().is_none());
+        debug_assert!(package_identities.next().is_none());
+        if !resolve_diagnostics.is_empty() {
+            return Err(SourceGraphError::Resolve {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(resolve_diagnostics),
+            });
+        }
 
         TypedLinker::new(options).validate_package_graph(resolved_packages, &local_identity)?;
         Ok(ValidatedSourcePackageGraph {
@@ -644,18 +704,41 @@ impl ModuleBuildGraph {
         sources: &[SourceModuleUnit],
         source_ids: &[SourceId],
     ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
-        self.parse_sources_with_digest(sources, source_ids, |source| {
+        let package_identities = vec![None; sources.len()];
+        self.parse_sources_with_ids_scoped(sources, source_ids, &package_identities)
+    }
+
+    fn parse_sources_with_ids_scoped(
+        &self,
+        sources: &[SourceModuleUnit],
+        source_ids: &[SourceId],
+        package_identities: &[Option<String>],
+    ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
+        self.parse_sources_with_digest_scoped(sources, source_ids, package_identities, |source| {
             Hash::new_from_chunks(&[b"kotodama-module-source-v1\0", source.as_bytes()]).to_string()
         })
     }
 
+    #[cfg(test)]
     fn parse_sources_with_digest(
         &self,
         sources: &[SourceModuleUnit],
         source_ids: &[SourceId],
         digest: impl Fn(&str) -> String,
     ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
+        let package_identities = vec![None; sources.len()];
+        self.parse_sources_with_digest_scoped(sources, source_ids, &package_identities, digest)
+    }
+
+    fn parse_sources_with_digest_scoped(
+        &self,
+        sources: &[SourceModuleUnit],
+        source_ids: &[SourceId],
+        package_identities: &[Option<String>],
+        digest: impl Fn(&str) -> String,
+    ) -> Result<Vec<SpannedProgram>, SourceGraphError> {
         debug_assert_eq!(sources.len(), source_ids.len());
+        debug_assert_eq!(sources.len(), package_identities.len());
         struct UniqueSource {
             digest: String,
             source: String,
@@ -707,6 +790,7 @@ impl ModuleBuildGraph {
         let jobs = std::thread::available_parallelism()
             .map_or(1, std::num::NonZeroUsize::get)
             .max(1);
+        let mut parse_diagnostics = Vec::new();
         for chunk in pending.chunks(jobs) {
             let parsed = std::thread::scope(|scope| {
                 let handles = chunk
@@ -724,11 +808,7 @@ impl ModuleBuildGraph {
                             );
                             let result =
                                 crate::parser::parse_source_spanned(&file, FrontendBudget::v1())
-                                    .map(|(program, _)| program)
-                                    .map_err(|diagnostics| SourceGraphError::Parse {
-                                        source: item.source_name.clone(),
-                                        diagnostics,
-                                    });
+                                    .map(|(program, _)| program);
                             (*index, result)
                         })
                     })
@@ -742,11 +822,31 @@ impl ModuleBuildGraph {
                     })
                     .collect::<Vec<_>>()
             });
-            // Join order follows deterministic source order, so multiple parser
-            // failures always report the same first source.
+            // Join order follows deterministic source order. Keep every
+            // independent file failure rather than making thread timing or the
+            // first malformed module hide the rest of the project diagnostics.
             for (index, result) in parsed {
-                unique[index].program = Some(result?);
+                match result {
+                    Ok(program) => unique[index].program = Some(program),
+                    Err(bundle) => {
+                        for member in unique[index].members.iter().copied() {
+                            let mut bundle = bundle.clone();
+                            remap_diagnostic_bundle_owner(
+                                &mut bundle,
+                                package_identities[member].as_deref(),
+                                &sources[member].source_name,
+                            );
+                            parse_diagnostics.extend(bundle.diagnostics);
+                        }
+                    }
+                }
             }
+        }
+        if !parse_diagnostics.is_empty() {
+            return Err(SourceGraphError::Parse {
+                source: "<project>".to_owned(),
+                diagnostics: DiagnosticBundle::new(parse_diagnostics),
+            });
         }
 
         {
@@ -777,6 +877,28 @@ impl ModuleBuildGraph {
             .into_iter()
             .map(|program| program.expect("every source belongs to a unique group"))
             .collect())
+    }
+}
+
+fn remap_diagnostic_bundle_owner(
+    bundle: &mut DiagnosticBundle,
+    package_identity: Option<&str>,
+    source_name: &str,
+) {
+    let remap = |span: &mut SourceSpan| {
+        span.package_identity = package_identity.map(str::to_owned);
+        span.source = Some(source_name.to_owned());
+    };
+    for diagnostic in &mut bundle.diagnostics {
+        if let Some(primary) = &mut diagnostic.primary_span {
+            remap(primary);
+        }
+        for label in &mut diagnostic.labels {
+            remap(&mut label.span);
+        }
+        if let Some(fix) = &mut diagnostic.fix {
+            remap(&mut fix.span);
+        }
     }
 }
 
@@ -1284,18 +1406,16 @@ pub enum LinkError {
     },
     /// Parsing succeeded but type/effect analysis rejected one unit or the link.
     Semantic {
-        /// Diagnostic source or linked-program label.
-        source: String,
-        /// Stable semantic diagnostic code propagated without parsing prose.
-        diagnostic_code: &'static str,
-        /// Semantic failure message.
-        message: String,
+        /// Complete canonical diagnostics, including all semantic failures and spans.
+        diagnostics: DiagnosticBundle,
     },
+    /// Name/export validation produced one or more structured link diagnostics.
+    Diagnostics(DiagnosticBundle),
 }
 
 impl LinkError {
     /// Return the stable code for this typed-link failure.
-    pub const fn diagnostic_code(&self) -> &'static str {
+    pub fn diagnostic_code(&self) -> &str {
         match self {
             Self::RootMustBeSeiyaku { .. } => "E_ROOT_MUST_BE_SEIYAKU",
             Self::DependencyMustBeModule { .. } => "E_DEPENDENCY_MUST_BE_MODULE",
@@ -1317,140 +1437,125 @@ impl LinkError {
             Self::InvalidModuleItem { .. } => "E_INVALID_MODULE_ITEM",
             Self::DuplicateErrorCode { .. } => "E_DUPLICATE_ERROR_CODE",
             Self::DuplicateMessage { .. } => "E_DUPLICATE_MESSAGE",
-            Self::Semantic {
-                diagnostic_code, ..
-            } => diagnostic_code,
+            Self::Semantic { diagnostics } | Self::Diagnostics(diagnostics) => diagnostics
+                .diagnostics
+                .first()
+                .map_or("K2099", |diagnostic| diagnostic.code.as_str()),
+        }
+    }
+
+    /// Convert every typed-link failure into the canonical diagnostic schema.
+    pub fn into_diagnostics(self) -> DiagnosticBundle {
+        let diagnostic = |code, message| {
+            DiagnosticBundle::single(Diagnostic::error(
+                code,
+                DiagnosticPhase::Resolve,
+                message,
+                None,
+            ))
+        };
+        match self {
+            Self::RootMustBeSeiyaku { source } => diagnostic(
+                "E_ROOT_MUST_BE_SEIYAKU",
+                format!("deployable root `{source}` must declare exactly one `seiyaku`/`誓約`"),
+            ),
+            Self::DependencyMustBeModule { source } => diagnostic(
+                "E_DEPENDENCY_MUST_BE_MODULE",
+                format!("dependency `{source}` must declare exactly one module"),
+            ),
+            Self::DuplicatePackage { package } => diagnostic(
+                "E_DUPLICATE_PACKAGE",
+                format!("duplicate locked package `{package}`"),
+            ),
+            Self::EmptyPackage { package } => diagnostic(
+                "E_EMPTY_PACKAGE",
+                format!("package `{package}` contains no Kotodama modules"),
+            ),
+            Self::DuplicateModule { package, module } => diagnostic(
+                "E_DUPLICATE_MODULE",
+                format!("package `{package}` declares module `{module}` more than once"),
+            ),
+            Self::DuplicateImport { scope, alias } => diagnostic(
+                "E_DUPLICATE_IMPORT",
+                format!("scope `{scope}` imports alias `{alias}` more than once"),
+            ),
+            Self::ReservedImport { scope, alias } => diagnostic(
+                "E_RESERVED_IMPORT",
+                format!(
+                    "scope `{scope}` cannot import compiler-owned capability namespace `{alias}`"
+                ),
+            ),
+            Self::DuplicateSymbol { source, symbol } => diagnostic(
+                "E_DUPLICATE_DECLARATION",
+                format!("source `{source}` declares symbol `{symbol}` more than once"),
+            ),
+            Self::UnknownPackage { scope, package } => diagnostic(
+                "E_UNKNOWN_PACKAGE",
+                format!("scope `{scope}` imports unknown locked package `{package}`"),
+            ),
+            Self::PackageImportCycle { cycle } => diagnostic(
+                "E_PACKAGE_IMPORT_CYCLE",
+                format!(
+                    "locked package import cycle is not permitted: {}",
+                    cycle.join(" -> ")
+                ),
+            ),
+            Self::UnknownAlias { source, alias } => diagnostic(
+                "E_UNKNOWN_IMPORT_ALIAS",
+                format!("source `{source}` uses unknown import alias `{alias}`"),
+            ),
+            Self::UnexportedSymbol {
+                source,
+                alias,
+                symbol,
+            } => diagnostic(
+                "E_UNEXPORTED_SYMBOL",
+                format!("source `{source}` cannot call unexported symbol `{alias}::{symbol}`"),
+            ),
+            Self::MissingExport { package, symbol } => diagnostic(
+                "E_MISSING_EXPORT",
+                format!("package `{package}` exports missing function `{symbol}`"),
+            ),
+            Self::AmbiguousExport { package, symbol } => diagnostic(
+                "E_AMBIGUOUS_EXPORT",
+                format!(
+                    "package `{package}` exports ambiguous function `{symbol}` from multiple modules"
+                ),
+            ),
+            Self::WildcardImport { source } => diagnostic(
+                "E_WILDCARD_IMPORT",
+                format!(
+                    "source `{source}` uses a wildcard import; Kotodama V1 requires explicit symbols"
+                ),
+            ),
+            Self::InvalidIdentifier { context, name } => diagnostic(
+                "E_INVALID_IDENTIFIER",
+                format!("invalid Kotodama V1 identifier `{name}` in {context}"),
+            ),
+            Self::ReservedSymbol { source, symbol } => diagnostic(
+                "E_RESERVED_DECLARATION",
+                format!("source `{source}` declares reserved symbol `{symbol}`"),
+            ),
+            Self::InvalidModuleItem { source, item } => diagnostic(
+                "E_INVALID_MODULE_ITEM",
+                format!("module `{source}` contains deployable-only {item}"),
+            ),
+            Self::DuplicateErrorCode { code } => diagnostic(
+                "E_DUPLICATE_ERROR_CODE",
+                format!("linked modules assign duplicate seiyaku error code {code}"),
+            ),
+            Self::DuplicateMessage { key } => diagnostic(
+                "E_DUPLICATE_MESSAGE",
+                format!("linked modules define duplicate messages key `{key}`"),
+            ),
+            Self::Semantic { diagnostics } | Self::Diagnostics(diagnostics) => diagnostics,
         }
     }
 }
 
 impl fmt::Display for LinkError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "[{}] ", self.diagnostic_code())?;
-        match self {
-            Self::RootMustBeSeiyaku { source } => {
-                write!(
-                    formatter,
-                    "deployable root `{source}` must declare exactly one `seiyaku`/`誓約`"
-                )
-            }
-            Self::DependencyMustBeModule { source } => {
-                write!(
-                    formatter,
-                    "dependency `{source}` must declare exactly one module"
-                )
-            }
-            Self::DuplicatePackage { package } => {
-                write!(formatter, "duplicate locked package `{package}`")
-            }
-            Self::EmptyPackage { package } => {
-                write!(
-                    formatter,
-                    "package `{package}` contains no Kotodama modules"
-                )
-            }
-            Self::DuplicateModule { package, module } => {
-                write!(
-                    formatter,
-                    "package `{package}` declares module `{module}` more than once"
-                )
-            }
-            Self::DuplicateImport { scope, alias } => {
-                write!(
-                    formatter,
-                    "scope `{scope}` imports alias `{alias}` more than once"
-                )
-            }
-            Self::ReservedImport { scope, alias } => write!(
-                formatter,
-                "scope `{scope}` cannot import compiler-owned capability namespace `{alias}`"
-            ),
-            Self::DuplicateSymbol { source, symbol } => {
-                write!(
-                    formatter,
-                    "source `{source}` declares symbol `{symbol}` more than once"
-                )
-            }
-            Self::UnknownPackage { scope, package } => {
-                write!(
-                    formatter,
-                    "scope `{scope}` imports unknown locked package `{package}`"
-                )
-            }
-            Self::PackageImportCycle { cycle } => write!(
-                formatter,
-                "locked package import cycle is not permitted: {}",
-                cycle.join(" -> ")
-            ),
-            Self::UnknownAlias { source, alias } => {
-                write!(
-                    formatter,
-                    "source `{source}` uses unknown import alias `{alias}`"
-                )
-            }
-            Self::UnexportedSymbol {
-                source,
-                alias,
-                symbol,
-            } => write!(
-                formatter,
-                "source `{source}` cannot call unexported symbol `{alias}::{symbol}`"
-            ),
-            Self::MissingExport { package, symbol } => {
-                write!(
-                    formatter,
-                    "package `{package}` exports missing function `{symbol}`"
-                )
-            }
-            Self::AmbiguousExport { package, symbol } => write!(
-                formatter,
-                "package `{package}` exports ambiguous function `{symbol}` from multiple modules"
-            ),
-            Self::WildcardImport { source } => {
-                write!(
-                    formatter,
-                    "source `{source}` uses a wildcard import; Kotodama V1 requires explicit symbols"
-                )
-            }
-            Self::InvalidIdentifier { context, name } => {
-                write!(
-                    formatter,
-                    "invalid Kotodama V1 identifier `{name}` in {context}"
-                )
-            }
-            Self::ReservedSymbol { source, symbol } => {
-                write!(
-                    formatter,
-                    "source `{source}` declares reserved symbol `{symbol}`"
-                )
-            }
-            Self::InvalidModuleItem { source, item } => {
-                write!(
-                    formatter,
-                    "module `{source}` contains deployable-only {item}"
-                )
-            }
-            Self::DuplicateErrorCode { code } => {
-                write!(
-                    formatter,
-                    "linked modules assign duplicate seiyaku error code {code}"
-                )
-            }
-            Self::DuplicateMessage { key } => {
-                write!(
-                    formatter,
-                    "linked modules define duplicate messages key `{key}`"
-                )
-            }
-            Self::Semantic {
-                source, message, ..
-            } => {
-                write!(
-                    formatter,
-                    "Kotodama analysis failed for `{source}`: {message}"
-                )
-            }
-        }
+        formatter.write_str(&self.clone().into_diagnostics().render_human())
     }
 }
 
@@ -1486,7 +1591,22 @@ impl TypedLinker {
             .collect::<HashMap<_, _>>();
         let root_imports = resolve_imports("root", &request.imports, &package_indexes)?;
 
-        validate_imported_calls(&request.root, &root_imports, &resolved_packages)?;
+        let mut import_diagnostics =
+            imported_call_diagnostics(&request.root, &root_imports, &resolved_packages);
+        for package in &resolved_packages {
+            for module in &package.modules {
+                import_diagnostics.extend(imported_call_diagnostics(
+                    module.source,
+                    &package.imports,
+                    &resolved_packages,
+                ));
+            }
+        }
+        if !import_diagnostics.is_empty() {
+            return Err(LinkError::Diagnostics(DiagnosticBundle::new(
+                import_diagnostics,
+            )));
+        }
         let root_external = external_signatures(&root_imports, &resolved_packages);
         let semantic = semantic::SemanticContext::with_capabilities(
             self.options.zk_enabled,
@@ -1494,11 +1614,7 @@ impl TypedLinker {
         );
         let mut root = semantic
             .analyze_resolved_with_external_functions(&request.root.program, &root_external)
-            .map_err(|error| LinkError::Semantic {
-                source: request.root.source_name.clone(),
-                diagnostic_code: error.code,
-                message: error.message,
-            })?;
+            .map_err(|failures| semantic_link_error(&request.root, failures))?;
         let root_external_names = external_linked_names(&root_imports, &resolved_packages);
         rename_program_calls(&mut root, &BTreeMap::new(), &root_external_names);
         link_resolved_packages(self.options, &resolved_packages, Some(root))
@@ -1525,6 +1641,19 @@ impl TypedLinker {
             });
         }
         let resolved_packages = resolve_packages(self.options, &mut packages)?;
+        let import_diagnostics = resolved_packages
+            .iter()
+            .flat_map(|package| {
+                package.modules.iter().flat_map(|module| {
+                    imported_call_diagnostics(module.source, &package.imports, &resolved_packages)
+                })
+            })
+            .collect::<Vec<_>>();
+        if !import_diagnostics.is_empty() {
+            return Err(LinkError::Diagnostics(DiagnosticBundle::new(
+                import_diagnostics,
+            )));
+        }
         link_resolved_packages(self.options, &resolved_packages, None).map(|_| ())
     }
 }
@@ -1550,13 +1679,37 @@ struct ResolvedPackage<'request> {
     exports: BTreeMap<String, ResolvedExport>,
 }
 
+fn semantic_link_error(module: &ModuleUnit, failures: semantic::SemanticFailures) -> LinkError {
+    LinkError::Semantic {
+        diagnostics: crate::semantic_diagnostics::from_semantic_failures(
+            failures,
+            Some(&module.source_name),
+            Some(module.program.source_file()),
+            Some(&module.program),
+        ),
+    }
+}
+
+fn function_declaration_span(module: &ResolvedModule<'_>, name: &str) -> Option<SourceSpan> {
+    module
+        .source
+        .program
+        .symbols()
+        .find(|symbol| {
+            symbol.kind == crate::resolved::ResolvedSymbolKind::Function && symbol.name == name
+        })
+        .and_then(|symbol| module.source.program.source_span(symbol.source))
+}
+
 fn validate_linker_options(options: LinkerOptions) -> Result<(), LinkError> {
     if options.include_tests != options.test_builtins_enabled {
         return Err(LinkError::Semantic {
-            source: "linker options".to_owned(),
-            diagnostic_code: "E_TEST_ONLY_PRODUCTION",
-            message: "include_tests and test_builtins_enabled must select one explicit compiler test mode together"
-                .to_owned(),
+            diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                "E_TEST_ONLY_PRODUCTION",
+                DiagnosticPhase::Semantic,
+                "include_tests and test_builtins_enabled must select one explicit compiler test mode together",
+                None,
+            )),
         });
     }
     Ok(())
@@ -1619,6 +1772,7 @@ fn resolve_packages<'request>(
         .collect::<Vec<_>>();
     validate_acyclic_package_imports(&package_identities, &resolved_imports)?;
     let mut resolved_packages = Vec::with_capacity(packages.len());
+    let mut export_diagnostics = Vec::new();
     for (package_index, (package, imports)) in packages.iter().zip(resolved_imports).enumerate() {
         let mut modules = Vec::with_capacity(package.modules.len());
         for (module_index, module) in package.modules.iter().enumerate() {
@@ -1627,12 +1781,8 @@ fn resolve_packages<'request>(
                 options.test_builtins_enabled,
             );
             let mut signatures = semantic
-                .resolve_resolved_function_signatures(&module.program)
-                .map_err(|error| LinkError::Semantic {
-                    source: module.source_name.clone(),
-                    diagnostic_code: error.code,
-                    message: error.message,
-                })?;
+                .resolve_resolved_function_signatures_all(&module.program)
+                .map_err(|failures| semantic_link_error(module, failures))?;
             let local_structs = module
                 .ast()
                 .items
@@ -1673,32 +1823,56 @@ fn resolve_packages<'request>(
             let candidates = modules
                 .iter()
                 .filter_map(|module| {
-                    module
-                        .signatures
-                        .get(export)
-                        .map(|signature| ResolvedExport {
-                            linked_name: module
-                                .linked_names
-                                .get(export)
-                                .expect("every signature receives a linked name")
-                                .clone(),
-                            signature: signature.clone(),
-                        })
+                    module.signatures.get(export).map(|signature| {
+                        (
+                            module,
+                            ResolvedExport {
+                                linked_name: module
+                                    .linked_names
+                                    .get(export)
+                                    .expect("every signature receives a linked name")
+                                    .clone(),
+                                signature: signature.clone(),
+                            },
+                        )
+                    })
                 })
                 .collect::<Vec<_>>();
             let resolved = match candidates.as_slice() {
                 [] => {
-                    return Err(LinkError::MissingExport {
-                        package: package.identity.clone(),
-                        symbol: export.clone(),
-                    });
+                    export_diagnostics.push(Diagnostic::error(
+                        "E_MISSING_EXPORT",
+                        DiagnosticPhase::Resolve,
+                        format!(
+                            "package `{}` exports missing function `{export}`",
+                            package.identity
+                        ),
+                        None,
+                    ));
+                    continue;
                 }
-                [resolved] => resolved.clone(),
+                [(_, resolved)] => resolved.clone(),
                 _ => {
-                    return Err(LinkError::AmbiguousExport {
-                        package: package.identity.clone(),
-                        symbol: export.clone(),
-                    });
+                    let mut spans = candidates
+                        .iter()
+                        .filter_map(|(module, _)| function_declaration_span(module, export));
+                    let primary_span = spans.next();
+                    let mut diagnostic = Diagnostic::error(
+                        "E_AMBIGUOUS_EXPORT",
+                        DiagnosticPhase::Resolve,
+                        format!(
+                            "package `{}` exports ambiguous function `{export}` from multiple modules",
+                            package.identity
+                        ),
+                        primary_span,
+                    );
+                    diagnostic.labels.extend(spans.map(|span| DiagnosticLabel {
+                        span,
+                        message:
+                            "another exported function with this name is declared here".to_owned(),
+                    }));
+                    export_diagnostics.push(diagnostic);
+                    continue;
                 }
             };
             exports.insert(export.clone(), resolved);
@@ -1710,7 +1884,13 @@ fn resolve_packages<'request>(
             exports,
         });
     }
-    Ok(resolved_packages)
+    if export_diagnostics.is_empty() {
+        Ok(resolved_packages)
+    } else {
+        Err(LinkError::Diagnostics(DiagnosticBundle::new(
+            export_diagnostics,
+        )))
+    }
 }
 
 fn validate_acyclic_package_imports(
@@ -1790,18 +1970,13 @@ fn link_resolved_packages(
         let external = external_signatures(&package.imports, packages);
         let external_names = external_linked_names(&package.imports, packages);
         for (module_index, module) in package.modules.iter().enumerate() {
-            validate_imported_calls(module.source, &package.imports, packages)?;
             let semantic = semantic::SemanticContext::with_capabilities(
                 options.zk_enabled,
                 options.test_builtins_enabled,
             );
             let mut typed = semantic
                 .analyze_resolved_with_external_functions(&module.source.program, &external)
-                .map_err(|error| LinkError::Semantic {
-                    source: module.source.source_name.clone(),
-                    diagnostic_code: error.code,
-                    message: error.message,
-                })?;
+                .map_err(|failures| semantic_link_error(module.source, failures))?;
             qualify_typed_program(&mut typed, &module.local_structs, &module.type_prefix);
             rename_program_calls(&mut typed, &module.linked_names, &external_names);
 
@@ -1826,12 +2001,15 @@ fn link_resolved_packages(
                 for (id, node) in std::mem::take(&mut typed.hir_nodes) {
                     if program.hir_nodes.insert(id, node).is_some() {
                         return Err(LinkError::Semantic {
-                            source: module.source.source_name.clone(),
-                            diagnostic_code: "E_INTERNAL_RESOLUTION",
-                            message: format!(
-                                "typed module graph reused HIR identity {}:{}",
-                                id.source.0, id.local.0
-                            ),
+                            diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                                "E_INTERNAL_RESOLUTION",
+                                DiagnosticPhase::Resolve,
+                                format!(
+                                    "typed module graph reused HIR identity {}:{}",
+                                    id.source.0, id.local.0
+                                ),
+                                None,
+                            )),
                         });
                     }
                 }
@@ -1841,14 +2019,17 @@ fn link_resolved_packages(
                         && previous != source_file
                     {
                         return Err(LinkError::Semantic {
-                            source: source_file.name().to_owned(),
-                            diagnostic_code: "E_INTERNAL_RESOLUTION",
-                            message: format!(
-                                "compiler assigned SourceId {} to both `{}` and `{}`",
-                                source_id.0,
-                                previous.name(),
-                                source_file.name()
-                            ),
+                            diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                                "E_INTERNAL_RESOLUTION",
+                                DiagnosticPhase::Resolve,
+                                format!(
+                                    "compiler assigned SourceId {} to both `{}` and `{}`",
+                                    source_id.0,
+                                    previous.name(),
+                                    source_file.name()
+                                ),
+                                None,
+                            )),
                         });
                     }
                 }
@@ -1865,15 +2046,21 @@ fn link_resolved_packages(
     }
 
     let linked = linked.ok_or_else(|| LinkError::Semantic {
-        source: "package graph".to_owned(),
-        diagnostic_code: "E_EMPTY_PACKAGE_GRAPH",
-        message: "package graph contains no typed modules".to_owned(),
+        diagnostics: DiagnosticBundle::single(Diagnostic::error(
+            "E_EMPTY_PACKAGE_GRAPH",
+            DiagnosticPhase::Resolve,
+            "package graph contains no typed modules",
+            None,
+        )),
     })?;
     semantic::validate_linked_program(&linked, options.zk_enabled).map_err(|error| {
         LinkError::Semantic {
-            source: "linked program".to_owned(),
-            diagnostic_code: error.code,
-            message: error.message,
+            diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                error.code,
+                phase_for_semantic_failure(error.code),
+                error.message,
+                None,
+            )),
         }
     })?;
     Ok(linked)
@@ -1921,9 +2108,9 @@ fn resolve_imports(
 /// cannot accept an alias that will only fail later during seiyaku linking.
 pub fn is_reserved_import_alias(alias: &str) -> bool {
     semantic::is_reserved_source_declaration(alias, false)
-        || Builtin::ALL.iter().any(|builtin| {
+        || Builtin::registry().any(|(builtin, spec)| {
             matches!(
-                builtin.spec().surface,
+                spec.surface,
                 BuiltinSurface::Function | BuiltinSurface::FunctionOrMethod
             ) && builtin
                 .source_name()
@@ -2012,11 +2199,13 @@ fn validate_module_items(module: &ModuleUnit) -> Result<(), LinkError> {
         let invalid = match item {
             Item::State(_) => Some("state declaration"),
             Item::Trigger(_) => Some("trigger declaration"),
-            Item::Function(function)
-                if function.modifiers.kind != crate::ast::FunctionKind::Private =>
-            {
-                Some("entrypoint declaration")
-            }
+            Item::Function(function) => match function.modifiers.kind {
+                crate::ast::FunctionKind::Private => None,
+                crate::ast::FunctionKind::Kotoage => Some("kotoage declaration"),
+                crate::ast::FunctionKind::View => Some("view fn declaration"),
+                crate::ast::FunctionKind::Hajimari => Some("hajimari declaration"),
+                crate::ast::FunctionKind::Kaizen => Some("kaizen declaration"),
+            },
             _ => None,
         };
         if let Some(item) = invalid {
@@ -2029,233 +2218,57 @@ fn validate_module_items(module: &ModuleUnit) -> Result<(), LinkError> {
     Ok(())
 }
 
-fn validate_imported_calls(
+fn imported_call_diagnostics(
     module: &ModuleUnit,
     imports: &BTreeMap<String, usize>,
     packages: &[ResolvedPackage<'_>],
-) -> Result<(), LinkError> {
-    let mut calls = Vec::new();
-    for item in &module.ast().items {
-        match item {
-            Item::Function(function) => collect_block_calls(&function.body, &mut calls),
-            Item::Const(constant) => collect_expr_calls(&constant.value, &mut calls),
-            Item::Trigger(trigger) => {
-                for metadata in &trigger.metadata {
-                    collect_expr_calls(&metadata.value, &mut calls);
-                }
-            }
-            Item::Struct(_) | Item::ErrorEnum(_) | Item::State(_) => {}
-        }
-    }
-    for call in calls {
-        if Builtin::from_source_name(call).is_some() || !call.contains("::") {
+) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    for call in module.program.calls() {
+        if call.target != crate::resolved::ResolvedCallTarget::External {
             continue;
         }
-        let mut parts = call.split("::");
+        let mut parts = call.name.split("::");
         let alias = parts.next().expect("split always has a first item");
         let symbol = parts.next();
         if alias == "*" || symbol == Some("*") || parts.next().is_some() {
-            return Err(LinkError::WildcardImport {
-                source: module.source_name.clone(),
-            });
+            diagnostics.push(Diagnostic::error(
+                "E_WILDCARD_IMPORT",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "source `{}` uses a wildcard import; Kotodama V1 requires explicit symbols",
+                    module.source_name
+                ),
+                module.program.source_span(call.name_source),
+            ));
+            continue;
         }
         let symbol = symbol.unwrap_or_default();
-        let package_index = imports
-            .get(alias)
-            .copied()
-            .ok_or_else(|| LinkError::UnknownAlias {
-                source: module.source_name.clone(),
-                alias: alias.to_owned(),
-            })?;
+        let Some(package_index) = imports.get(alias).copied() else {
+            diagnostics.push(Diagnostic::error(
+                "E_UNKNOWN_IMPORT_ALIAS",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "source `{}` uses unknown import alias `{alias}`",
+                    module.source_name
+                ),
+                module.program.source_span(call.name_source),
+            ));
+            continue;
+        };
         if !packages[package_index].exports.contains_key(symbol) {
-            return Err(LinkError::UnexportedSymbol {
-                source: module.source_name.clone(),
-                alias: alias.to_owned(),
-                symbol: symbol.to_owned(),
-            });
+            diagnostics.push(Diagnostic::error(
+                "E_UNEXPORTED_SYMBOL",
+                DiagnosticPhase::Resolve,
+                format!(
+                    "source `{}` cannot call unexported symbol `{alias}::{symbol}`",
+                    module.source_name
+                ),
+                module.program.source_span(call.name_source),
+            ));
         }
     }
-    Ok(())
-}
-
-fn collect_block_calls<'source>(block: &'source Block, calls: &mut Vec<&'source str>) {
-    for statement in &block.statements {
-        collect_statement_calls(statement, calls);
-    }
-    if let Some(tail) = &block.tail {
-        collect_expr_calls(tail, calls);
-    }
-}
-
-fn collect_statement_calls<'source>(statement: &'source Statement, calls: &mut Vec<&'source str>) {
-    match statement.kind() {
-        Statement::Source { .. } | Statement::Resolved { .. } => {
-            unreachable!("kind() strips provenance wrappers")
-        }
-        Statement::Let { value, .. } | Statement::Assign { value, .. } | Statement::Expr(value) => {
-            collect_expr_calls(value, calls);
-        }
-        Statement::AssignExpr { target, value, .. } => {
-            collect_expr_calls(target, calls);
-            collect_expr_calls(value, calls);
-        }
-        Statement::Return(Some(value)) => collect_expr_calls(value, calls),
-        Statement::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => {
-            collect_expr_calls(cond, calls);
-            collect_block_calls(then_branch, calls);
-            if let Some(branch) = else_branch {
-                collect_block_calls(branch, calls);
-            }
-        }
-        Statement::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_expr_calls(value, calls);
-            collect_block_calls(then_branch, calls);
-            if let Some(branch) = else_branch {
-                collect_block_calls(branch, calls);
-            }
-        }
-        Statement::While { cond, body } => {
-            collect_expr_calls(cond, calls);
-            collect_block_calls(body, calls);
-        }
-        Statement::For {
-            init,
-            cond,
-            step,
-            body,
-            ..
-        } => {
-            if let Some(init) = init {
-                collect_statement_calls(init, calls);
-            }
-            if let Some(cond) = cond {
-                collect_expr_calls(cond, calls);
-            }
-            if let Some(step) = step {
-                collect_statement_calls(step, calls);
-            }
-            collect_block_calls(body, calls);
-        }
-        Statement::ForEachMap { map, body, .. } => {
-            collect_expr_calls(map, calls);
-            collect_block_calls(body, calls);
-        }
-        Statement::Return(None) | Statement::Break | Statement::Continue => {}
-    }
-}
-
-fn collect_expr_calls<'source>(expr: &'source Expr, calls: &mut Vec<&'source str>) {
-    match expr {
-        Expr::Source { expression, .. } | Expr::Resolved { expression, .. } => {
-            collect_expr_calls(expression, calls);
-        }
-        Expr::Call { name, args, .. } => {
-            calls.push(name);
-            for arg in args {
-                collect_expr_calls(arg, calls);
-            }
-        }
-        Expr::Binary { left, right, .. } => {
-            collect_expr_calls(left, calls);
-            collect_expr_calls(right, calls);
-        }
-        Expr::Unary { expr, .. }
-        | Expr::OptionSome(expr)
-        | Expr::ResultOk(expr)
-        | Expr::ResultErr(expr)
-        | Expr::Propagate(expr) => collect_expr_calls(expr, calls),
-        Expr::Conditional {
-            cond,
-            then_expr,
-            else_expr,
-        } => {
-            collect_expr_calls(cond, calls);
-            collect_expr_calls(then_expr, calls);
-            collect_expr_calls(else_expr, calls);
-        }
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-        } => {
-            collect_expr_calls(condition, calls);
-            collect_block_calls(then_branch, calls);
-            if let Some(branch) = else_branch {
-                collect_block_calls(branch, calls);
-            }
-        }
-        Expr::IfLet {
-            value,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            collect_expr_calls(value, calls);
-            collect_block_calls(then_branch, calls);
-            if let Some(branch) = else_branch {
-                collect_block_calls(branch, calls);
-            }
-        }
-        Expr::Match { value, arms } => {
-            collect_expr_calls(value, calls);
-            for arm in arms {
-                collect_block_calls(&arm.body, calls);
-            }
-        }
-        Expr::Member { object, .. } => collect_expr_calls(object, calls),
-        Expr::Index { target, index } => {
-            collect_expr_calls(target, calls);
-            collect_expr_calls(index, calls);
-        }
-        Expr::Tuple(items) | Expr::List(items) => {
-            for item in items {
-                collect_expr_calls(item, calls);
-            }
-        }
-        Expr::JsonObject(entries) => {
-            for entry in entries {
-                collect_expr_calls(&entry.value, calls);
-            }
-        }
-        Expr::JsonArray(elements) => {
-            for element in elements {
-                collect_expr_calls(element, calls);
-            }
-        }
-        Expr::ListComprehension {
-            expression,
-            source,
-            condition,
-            ..
-        } => {
-            collect_expr_calls(source, calls);
-            collect_expr_calls(expression, calls);
-            if let Some(condition) = condition {
-                collect_expr_calls(condition, calls);
-            }
-        }
-        Expr::StructLiteral { fields, .. } => {
-            for field in fields {
-                collect_expr_calls(&field.value, calls);
-            }
-        }
-        Expr::Bool(_)
-        | Expr::IntLiteral(_)
-        | Expr::DecimalLiteral(_)
-        | Expr::OptionNone
-        | Expr::String(_)
-        | Expr::Bytes(_)
-        | Expr::Ident(_) => {}
-    }
+    diagnostics
 }
 
 fn qualify_signature(
@@ -2731,13 +2744,105 @@ fn rename_expr_calls(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ast::Statement;
+
+    #[test]
+    fn every_fixed_linker_diagnostic_is_explainable_as_resolve() {
+        let errors = [
+            LinkError::RootMustBeSeiyaku {
+                source: "root.ko".to_owned(),
+            },
+            LinkError::DependencyMustBeModule {
+                source: "dependency.ko".to_owned(),
+            },
+            LinkError::DuplicatePackage {
+                package: "pkg".to_owned(),
+            },
+            LinkError::EmptyPackage {
+                package: "pkg".to_owned(),
+            },
+            LinkError::DuplicateModule {
+                package: "pkg".to_owned(),
+                module: "Math".to_owned(),
+            },
+            LinkError::DuplicateImport {
+                scope: "root".to_owned(),
+                alias: "math".to_owned(),
+            },
+            LinkError::ReservedImport {
+                scope: "root".to_owned(),
+                alias: "state".to_owned(),
+            },
+            LinkError::DuplicateSymbol {
+                source: "module.ko".to_owned(),
+                symbol: "value".to_owned(),
+            },
+            LinkError::UnknownPackage {
+                scope: "root".to_owned(),
+                package: "missing".to_owned(),
+            },
+            LinkError::PackageImportCycle {
+                cycle: vec!["a".to_owned(), "b".to_owned(), "a".to_owned()],
+            },
+            LinkError::UnknownAlias {
+                source: "root.ko".to_owned(),
+                alias: "missing".to_owned(),
+            },
+            LinkError::UnexportedSymbol {
+                source: "root.ko".to_owned(),
+                alias: "math".to_owned(),
+                symbol: "hidden".to_owned(),
+            },
+            LinkError::MissingExport {
+                package: "pkg".to_owned(),
+                symbol: "missing".to_owned(),
+            },
+            LinkError::AmbiguousExport {
+                package: "pkg".to_owned(),
+                symbol: "value".to_owned(),
+            },
+            LinkError::WildcardImport {
+                source: "root.ko".to_owned(),
+            },
+            LinkError::InvalidIdentifier {
+                context: "module".to_owned(),
+                name: "not-valid".to_owned(),
+            },
+            LinkError::ReservedSymbol {
+                source: "module.ko".to_owned(),
+                symbol: "state".to_owned(),
+            },
+            LinkError::InvalidModuleItem {
+                source: "module.ko".to_owned(),
+                item: "state declaration".to_owned(),
+            },
+            LinkError::DuplicateErrorCode { code: 7 },
+            LinkError::DuplicateMessage {
+                key: "errors.failed".to_owned(),
+            },
+        ];
+
+        for error in errors {
+            let code = error.diagnostic_code();
+            let explanation = crate::diagnostic::diagnostic_explanation(code)
+                .unwrap_or_else(|| panic!("{code} must work with `koto explain`"));
+            assert_eq!(
+                explanation.phase,
+                crate::diagnostic::DiagnosticPhase::Resolve,
+                "{code}",
+            );
+        }
+    }
 
     #[test]
     fn source_graph_preserves_semantic_code_independently_of_localized_message() {
         let error = SourceGraphError::from(LinkError::Semantic {
-            source: "localized.ko".to_owned(),
-            diagnostic_code: "E_LIST_CAPACITY",
-            message: "la capacité dépasse la limite".to_owned(),
+            diagnostics: DiagnosticBundle::single(Diagnostic::error(
+                "E_LIST_CAPACITY",
+                DiagnosticPhase::Semantic,
+                "la capacité dépasse la limite",
+                None,
+            )),
         });
         assert_eq!(error.diagnostic_code(), "E_LIST_CAPACITY");
         assert!(error.to_string().contains("[E_LIST_CAPACITY]"));
@@ -2778,6 +2883,10 @@ mod tests {
             program: crate::resolved::resolve_with_imports(program, &file, &imports)
                 .expect("resolve linker fixture"),
         }
+    }
+
+    fn source_slice(source: &str, range: crate::source::TextRange) -> Option<&str> {
+        source.get(usize::try_from(range.start).ok()?..usize::try_from(range.end).ok()?)
     }
 
     fn package(modules: Vec<ModuleUnit>, exports: &[&str]) -> PackageUnit {
@@ -2901,14 +3010,15 @@ mod tests {
                 dependency(),
             ))
             .expect_err("an imported repeated-type signature must remain named-only");
-        assert!(matches!(
-            positional,
-            LinkError::Semantic {
-                ref source,
-                diagnostic_code: "E_NAMED_ARGUMENTS_REQUIRED",
-                ..
-            } if source == "app.ko"
-        ));
+        assert_eq!(positional.diagnostic_code(), "E_NAMED_ARGUMENTS_REQUIRED");
+        let positional = positional.into_diagnostics();
+        assert_eq!(
+            positional.diagnostics[0]
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.source.as_deref()),
+            Some("app.ko"),
+        );
 
         let linked = TypedLinker::default()
             .link(request(
@@ -2938,6 +3048,7 @@ mod tests {
 
     #[test]
     fn rejects_unexported_and_unknown_calls() {
+        let unexported_source = "seiyaku App { view fn run() -> int { return arith::hidden(); } }";
         let dependency = package(
             vec![source(
                 "math.ko",
@@ -2946,22 +3057,24 @@ mod tests {
             &[],
         );
         let unexported = TypedLinker::default()
-            .link(request(
-                source(
-                    "app.ko",
-                    "seiyaku App { view fn run() -> int { return arith::hidden(); } }",
-                ),
-                dependency,
-            ))
+            .link(request(source("app.ko", unexported_source), dependency))
             .expect_err("unexported function must fail");
-        assert!(matches!(unexported, LinkError::UnexportedSymbol { .. }));
+        assert_eq!(unexported.diagnostic_code(), "E_UNEXPORTED_SYMBOL");
+        let unexported = unexported.into_diagnostics();
+        let unexported_span = unexported.diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.byte_range)
+            .expect("unexported call keeps its resolver name range");
+        assert_eq!(
+            source_slice(unexported_source, unexported_span),
+            Some("arith::hidden")
+        );
 
+        let unknown_source = "seiyaku App { view fn run() -> int { return other::add(); } }";
         let unknown = TypedLinker::default()
             .link(request(
-                source(
-                    "app.ko",
-                    "seiyaku App { view fn run() -> int { return other::add(); } }",
-                ),
+                source("app.ko", unknown_source),
                 package(
                     vec![source(
                         "math.ko",
@@ -2971,7 +3084,157 @@ mod tests {
                 ),
             ))
             .expect_err("unknown alias must fail");
-        assert!(matches!(unknown, LinkError::UnknownAlias { .. }));
+        assert_eq!(unknown.diagnostic_code(), "E_UNKNOWN_IMPORT_ALIAS");
+        let unknown = unknown.into_diagnostics();
+        let unknown_span = unknown.diagnostics[0]
+            .primary_span
+            .as_ref()
+            .and_then(|span| span.byte_range)
+            .expect("unknown alias keeps its resolver name range");
+        assert_eq!(
+            source_slice(unknown_source, unknown_span),
+            Some("other::add")
+        );
+    }
+
+    #[test]
+    fn imported_call_failures_are_multi_error_spanned_and_renderer_equivalent() {
+        let root_source = "seiyaku App { view fn run() -> int { return arith::hidden() + arith::also_hidden(); } }";
+        let error = TypedLinker::default()
+            .link(request(
+                source("app.ko", root_source),
+                package(
+                    vec![source(
+                        "math.ko",
+                        "module Math { fn hidden() -> int { return 1; } fn also_hidden() -> int { return 2; } }",
+                    )],
+                    &[],
+                ),
+            ))
+            .expect_err("every unexported imported call must be reported");
+        let diagnostics = error.into_diagnostics();
+        assert_eq!(diagnostics.diagnostics.len(), 2);
+        let spellings = diagnostics
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                assert_eq!(diagnostic.code, "E_UNEXPORTED_SYMBOL");
+                assert_eq!(diagnostic.phase, DiagnosticPhase::Resolve);
+                let span = diagnostic
+                    .primary_span
+                    .as_ref()
+                    .expect("import diagnostic span");
+                assert_eq!(span.source.as_deref(), Some("app.ko"));
+                source_slice(
+                    root_source,
+                    span.byte_range.expect("import diagnostic byte range"),
+                )
+                .expect("resolver span slices source")
+                .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spellings,
+            vec!["arith::hidden".to_owned(), "arith::also_hidden".to_owned()]
+        );
+
+        let human = diagnostics.render_human();
+        assert_eq!(human.matches("error[E_UNEXPORTED_SYMBOL]").count(), 2);
+        let json: norito::json::Value =
+            norito::json::from_str(&diagnostics.render_json().expect("link JSON diagnostics"))
+                .expect("parse link JSON diagnostics");
+        let sarif: norito::json::Value =
+            norito::json::from_str(&diagnostics.render_sarif().expect("link SARIF diagnostics"))
+                .expect("parse link SARIF diagnostics");
+        let canonical = json.as_array().expect("canonical diagnostic array");
+        let results = sarif
+            .pointer("/runs/0/results")
+            .and_then(norito::json::Value::as_array)
+            .expect("SARIF results");
+        assert_eq!(canonical.len(), results.len());
+        for (canonical, result) in canonical.iter().zip(results) {
+            assert_eq!(result.pointer("/properties/kotodama"), Some(canonical),);
+        }
+    }
+
+    #[test]
+    fn source_graph_unknown_calls_retain_every_exact_resolver_span() {
+        let root_source =
+            "seiyaku App { view fn run() -> int { return missing() + also_missing(); } }";
+        let error = ModuleBuildGraph::default()
+            .link(
+                SourceLinkRequest {
+                    root: SourceModuleUnit {
+                        source_name: "app.ko".to_owned(),
+                        source: root_source.to_owned(),
+                    },
+                    imports: Vec::new(),
+                    packages: Vec::new(),
+                },
+                LinkerOptions::default(),
+            )
+            .expect_err("unknown calls must fail in resolved HIR");
+        assert!(matches!(&error, SourceGraphError::Resolve { .. }));
+        let diagnostics = error.into_diagnostics();
+        let spellings = diagnostics
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "K2002")
+            .map(|diagnostic| {
+                let range = diagnostic
+                    .primary_span
+                    .as_ref()
+                    .and_then(|span| span.byte_range)
+                    .expect("unknown call name range");
+                source_slice(root_source, range)
+                    .expect("unknown call range slices source")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spellings,
+            vec!["missing".to_owned(), "also_missing".to_owned()]
+        );
+    }
+
+    #[test]
+    fn source_graph_unknown_import_aliases_retain_every_exact_resolved_call_span() {
+        let root_source =
+            "seiyaku App { view fn run() -> int { return missing::one() + other::two(); } }";
+        let error = ModuleBuildGraph::default()
+            .link(
+                SourceLinkRequest {
+                    root: SourceModuleUnit {
+                        source_name: "app.ko".to_owned(),
+                        source: root_source.to_owned(),
+                    },
+                    imports: Vec::new(),
+                    packages: Vec::new(),
+                },
+                LinkerOptions::default(),
+            )
+            .expect_err("unknown import aliases must fail in the typed linker");
+        assert!(matches!(&error, SourceGraphError::Link(_)));
+        let diagnostics = error.into_diagnostics();
+        let spellings = diagnostics
+            .diagnostics
+            .iter()
+            .map(|diagnostic| {
+                assert_eq!(diagnostic.code, "E_UNKNOWN_IMPORT_ALIAS");
+                let range = diagnostic
+                    .primary_span
+                    .as_ref()
+                    .and_then(|span| span.byte_range)
+                    .expect("unknown alias call-name range");
+                source_slice(root_source, range)
+                    .expect("unknown alias range slices source")
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            spellings,
+            vec!["missing::one".to_owned(), "other::two".to_owned()]
+        );
     }
 
     #[test]
@@ -3026,7 +3289,21 @@ mod tests {
                 ),
             ))
             .expect_err("ambiguous export must fail");
-        assert!(matches!(error, LinkError::AmbiguousExport { .. }));
+        assert_eq!(error.diagnostic_code(), "E_AMBIGUOUS_EXPORT");
+        let diagnostics = error.into_diagnostics();
+        let diagnostic = diagnostics
+            .diagnostics
+            .first()
+            .expect("ambiguous export diagnostic");
+        assert_eq!(
+            diagnostic
+                .primary_span
+                .as_ref()
+                .and_then(|span| span.source.as_deref()),
+            Some("a.ko")
+        );
+        assert_eq!(diagnostic.labels.len(), 1);
+        assert_eq!(diagnostic.labels[0].span.source.as_deref(), Some("b.ko"));
     }
 
     #[test]
@@ -3260,12 +3537,15 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("a changed export signature must invalidate its dependent");
-        assert!(
-            matches!(
-                error,
-                SourceGraphError::Link(LinkError::Semantic { ref source, .. })
-                    if source == "derived.ko"
-            ),
+        assert_eq!(
+            error
+                .clone()
+                .into_diagnostics()
+                .diagnostics
+                .first()
+                .and_then(|diagnostic| diagnostic.primary_span.as_ref())
+                .and_then(|span| span.source.as_deref()),
+            Some("derived.ko"),
             "{error:?}",
         );
         assert_eq!(
@@ -3278,6 +3558,61 @@ mod tests {
             3,
             "cached parsing must never suppress dependent semantic validation",
         );
+    }
+
+    #[test]
+    fn source_graph_accumulates_independent_parse_and_resolution_failures() {
+        let request = |root_source: &str, module_source: &str| SourceLinkRequest {
+            root: SourceModuleUnit {
+                source_name: "app.ko".to_owned(),
+                source: root_source.to_owned(),
+            },
+            imports: Vec::new(),
+            packages: vec![SourcePackageUnit {
+                identity: "example/math@1.0.0".to_owned(),
+                modules: vec![SourceModuleUnit {
+                    source_name: "src/lib.ko".to_owned(),
+                    source: module_source.to_owned(),
+                }],
+                exports: BTreeSet::new(),
+                imports: Vec::new(),
+            }],
+        };
+
+        let parse = ModuleBuildGraph::default()
+            .link(
+                request("seiyaku App { € }", "module Math { £ }"),
+                LinkerOptions::default(),
+            )
+            .expect_err("both malformed sources must fail parsing")
+            .into_diagnostics();
+        let parse_owners = parse
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .map(|span| (span.package_identity.as_deref(), span.source.as_deref()))
+            .collect::<BTreeSet<_>>();
+        assert!(parse_owners.contains(&(None, Some("app.ko"))));
+        assert!(parse_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
+
+        let resolved = ModuleBuildGraph::default()
+            .link(
+                request(
+                    "seiyaku App { view fn value() -> int { return missing_root; } }",
+                    "module Math { fn value() -> int { return missing_module; } }",
+                ),
+                LinkerOptions::default(),
+            )
+            .expect_err("both unknown values must fail resolution")
+            .into_diagnostics();
+        let resolved_owners = resolved
+            .diagnostics
+            .iter()
+            .filter_map(|diagnostic| diagnostic.primary_span.as_ref())
+            .map(|span| (span.package_identity.as_deref(), span.source.as_deref()))
+            .collect::<BTreeSet<_>>();
+        assert!(resolved_owners.contains(&(None, Some("app.ko"))));
+        assert!(resolved_owners.contains(&(Some("example/math@1.0.0"), Some("src/lib.ko"))));
     }
 
     #[test]
@@ -3620,22 +3955,17 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("missing export must fail");
-        assert!(
-            matches!(
-                missing,
-                SourceGraphError::Link(LinkError::MissingExport { ref symbol, .. })
-                    if symbol == "missing"
-            ),
-            "{missing:?}"
-        );
+        assert_eq!(missing.diagnostic_code(), "E_MISSING_EXPORT", "{missing:?}");
 
+        let first_source = "module A { fn quote() -> int { return 1; } }";
+        let second_source = "module B { fn quote() -> int { return 2; } }";
         let ambiguous = graph
             .validate_package(
                 SourcePackageGraphRequest {
                     package: publish_package(
                         vec![
-                            source_module("a.ko", "module A { fn quote() -> int { return 1; } }"),
-                            source_module("b.ko", "module B { fn quote() -> int { return 2; } }"),
+                            source_module("a.ko", first_source),
+                            source_module("b.ko", second_source),
                         ],
                         &["quote"],
                     ),
@@ -3644,13 +3974,36 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("ambiguous export must fail");
-        assert!(
-            matches!(
-                ambiguous,
-                SourceGraphError::Link(LinkError::AmbiguousExport { ref symbol, .. })
-                    if symbol == "quote"
-            ),
+        assert_eq!(
+            ambiguous.diagnostic_code(),
+            "E_AMBIGUOUS_EXPORT",
             "{ambiguous:?}"
+        );
+        let diagnostics = ambiguous.into_diagnostics();
+        let diagnostic = &diagnostics.diagnostics[0];
+        let primary = diagnostic
+            .primary_span
+            .as_ref()
+            .expect("ambiguous export has a primary declaration");
+        assert_eq!(primary.source.as_deref(), Some("a.ko"));
+        assert_eq!(
+            source_slice(
+                first_source,
+                primary.byte_range.expect("primary export byte range")
+            ),
+            Some("quote")
+        );
+        assert_eq!(diagnostic.labels.len(), 1);
+        assert_eq!(diagnostic.labels[0].span.source.as_deref(), Some("b.ko"));
+        assert_eq!(
+            source_slice(
+                second_source,
+                diagnostic.labels[0]
+                    .span
+                    .byte_range
+                    .expect("related export byte range")
+            ),
+            Some("quote")
         );
     }
 
@@ -3672,11 +4025,11 @@ mod tests {
                     LinkerOptions::default(),
                 )
                 .expect_err("invalid typed module must fail");
-            assert!(matches!(
-                error,
-                SourceGraphError::Resolve { .. }
-                    | SourceGraphError::Link(LinkError::Semantic { .. })
-            ));
+            assert!(
+                matches!(error, SourceGraphError::Resolve { .. })
+                    || error.diagnostic_code() == "K2003",
+                "{error:?}"
+            );
         }
     }
 
@@ -3773,13 +4126,7 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("test-only function cannot satisfy production export");
-        assert!(matches!(
-            test_only,
-            SourceGraphError::Link(LinkError::Semantic {
-                diagnostic_code: "E_TEST_ONLY_PRODUCTION",
-                ..
-            })
-        ));
+        assert_eq!(test_only.diagnostic_code(), "E_TEST_ONLY_PRODUCTION");
     }
 
     #[test]
@@ -3814,14 +4161,7 @@ mod tests {
                 LinkerOptions::default(),
             )
             .expect_err("hidden dependency call must fail");
-        assert!(
-            matches!(
-                error,
-                SourceGraphError::Link(LinkError::UnexportedSymbol { ref symbol, .. })
-                    if symbol == "hidden"
-            ),
-            "{error:?}"
-        );
+        assert_eq!(error.diagnostic_code(), "E_UNEXPORTED_SYMBOL", "{error:?}");
     }
 
     #[test]

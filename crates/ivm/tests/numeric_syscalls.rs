@@ -221,7 +221,9 @@ where
         .checked_add(staged)
         .expect("bounded staged test budget");
     let mut probe = |gas: u64| {
-        probe_vm.reset_from_runtime_template(&template);
+        probe_vm
+            .reset_from_runtime_template(&template)
+            .expect("numeric probe template geometry must match");
         probe_vm.set_gas_limit(gas);
         let original_result_register = probe_vm.register(10);
         match probe_vm.run() {
@@ -828,6 +830,104 @@ fn actual_staged_contexts_match_the_normative_gas_identity_and_width_boundaries(
                 .charged(),
             expected,
             "syscall={syscall:#x}",
+        );
+    }
+}
+
+#[test]
+fn both_signs_have_exact_gas_at_every_logical_limb_transition() {
+    fn add_zero_gas(value: &BigInt, expected_mantissa_bytes: usize) -> (u64, u64) {
+        let value_envelope = ivm::numeric_tlv::encode_int(value).expect("boundary envelope");
+        let zero_envelope = ivm::numeric_tlv::encode_int(&BigInt::zero()).expect("zero envelope");
+
+        // 39 pointer-envelope bytes + 40 frame-header bytes + 4 length bytes.
+        assert_eq!(value_envelope.len(), 83 + expected_mantissa_bytes);
+        assert_eq!(zero_envelope.len(), 83);
+
+        let mut vm = vm_for(syscalls::SYSCALL_INT_ADD, u64::MAX);
+        let value_pointer = vm
+            .alloc_host_tlv(&value_envelope)
+            .expect("install boundary value");
+        let zero_pointer = vm.alloc_host_tlv(&zero_envelope).expect("install zero");
+        vm.set_register(10, value_pointer);
+        vm.set_register(11, zero_pointer);
+        vm.set_register(14, NUMERIC_FAILURE_TRAP);
+        vm.run().expect("boundary add-zero operation");
+        assert_eq!(result_int(&vm), *value);
+
+        let context = vm
+            .last_staged_syscall_context()
+            .expect("completed boundary context");
+        assert_eq!(context.completion(), Some(SyscallCompletion::Success));
+        (
+            context.charged(),
+            context.phase_charge(SyscallMeteringPhase::Arithmetic),
+        )
+    }
+
+    for lower_limbs in 1_u64..8 {
+        let boundary_byte = usize::try_from(8 * lower_limbs).expect("bounded byte index");
+        let mantissa_bytes = boundary_byte + 1;
+
+        // +(2^(64L) - 1) and +2^(64L) straddle the work boundary while both
+        // occupy the same minimal signed payload width.
+        let mut positive_before_bytes = vec![0xff; mantissa_bytes];
+        positive_before_bytes[boundary_byte] = 0;
+        let mut positive_after_bytes = vec![0; mantissa_bytes];
+        positive_after_bytes[boundary_byte] = 1;
+
+        // -(2^(64L) - 1) and -2^(64L) are the matching negative fixtures.
+        let mut negative_before_bytes = vec![0; mantissa_bytes];
+        negative_before_bytes[0] = 1;
+        negative_before_bytes[boundary_byte] = 0xff;
+        let mut negative_after_bytes = vec![0; mantissa_bytes];
+        negative_after_bytes[boundary_byte] = 0xff;
+
+        let mut sign_totals = [(0_u64, 0_u64); 2];
+        for (sign_index, (sign, before_bytes, after_bytes)) in [
+            ("positive", positive_before_bytes, positive_after_bytes),
+            ("negative", negative_before_bytes, negative_after_bytes),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let before = BigInt::from_twos_bytes(&before_bytes).expect("canonical lower fixture");
+            let after = BigInt::from_twos_bytes(&after_bytes).expect("canonical upper fixture");
+            assert_eq!(
+                before.bit_len(),
+                usize::try_from(64 * lower_limbs).unwrap(),
+                "{sign} lower fixture",
+            );
+            assert_eq!(
+                after.bit_len(),
+                usize::try_from(64 * lower_limbs + 1).unwrap(),
+                "{sign} upper fixture",
+            );
+
+            let (before_total, before_arithmetic) = add_zero_gas(&before, mantissa_bytes);
+            let (after_total, after_arithmetic) = add_zero_gas(&after, mantissa_bytes);
+
+            // Independently expanded checked-add work is `3L + 2`, charged
+            // at four gas per limb. At this equal-byte-width transition, the
+            // one extra work limb is therefore the only changing term.
+            assert_eq!(before_arithmetic, 12 * lower_limbs + 8, "{sign}");
+            assert_eq!(after_arithmetic, 12 * (lower_limbs + 1) + 8, "{sign}",);
+            assert_eq!(after_arithmetic - before_arithmetic, 12, "{sign}");
+
+            // For b = 8L + 1 encoded mantissa bytes, independently summing
+            // entry, transport/authentication, validation, arithmetic, and
+            // output serialization gives these complete staged-call totals.
+            assert_eq!(before_total, 882 + 64 * lower_limbs, "{sign}");
+            assert_eq!(after_total, 894 + 64 * lower_limbs, "{sign}");
+            assert_eq!(after_total - before_total, 12, "{sign}");
+            sign_totals[sign_index] = (before_total, after_total);
+        }
+
+        assert_eq!(
+            sign_totals[0],
+            sign_totals[1],
+            "gas at the {lower_limbs}-to-{} limb boundary must be sign-independent",
+            lower_limbs + 1,
         );
     }
 }

@@ -11,6 +11,7 @@ MODE="${1:-}"
 SELF_TESTS=(
   --self-test-bad-abi
   --self-test-missing-header-symbol
+  --self-test-forbidden-v3-alias
   --self-test-bad-capability-signature
   --self-test-bad-proof-signature
   --self-test-bad-artifact-signature
@@ -22,6 +23,7 @@ SELF_TESTS=(
   --self-test-bad-capability-rust-signature
   --self-test-missing-swift-symbol
   --self-test-bad-deallocator-signature
+  --self-test-bad-secret-deallocator-signature
   --self-test-missing-rust-symbol
   --self-test-missing-privacy-header-symbol
   --self-test-bad-privacy-signature
@@ -59,31 +61,61 @@ KAGEMUSHA_EXPORTS = {
     "connect_norito_kagemusha_recipient_payment_request_create_v2",
     "connect_norito_kagemusha_recipient_payment_request_signing_bytes_v2",
     "connect_norito_kagemusha_recipient_payment_request_verify_v2",
-    "connect_norito_kagemusha_recursive_spend_append_v2",
-    "connect_norito_kagemusha_recursive_spend_artifact_begin_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3",
-    "connect_norito_kagemusha_recursive_spend_artifact_write_v3",
-    "connect_norito_kagemusha_recursive_spend_build_split_intent_v2",
-    "connect_norito_kagemusha_recursive_spend_bundle_summary_v2",
-    "connect_norito_kagemusha_recursive_spend_capabilities_v1",
-    "connect_norito_kagemusha_recursive_spend_init_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v2",
-    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v2",
-    "connect_norito_kagemusha_recursive_spend_redeem_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v2",
-    "connect_norito_kagemusha_recursive_spend_topup_v2",
-    "connect_norito_kagemusha_recursive_spend_verify_v2",
+    "connect_norito_kagemusha_recipient_lineage_query_create_v2",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v1",
+    "connect_norito_kagemusha_recipient_registration_lineage_verify_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_create_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_project_v2",
+    "connect_norito_kagemusha_recipient_receive_offer_verify_v2",
+    "connect_norito_kagemusha_output_membership_frontier_build_v4",
+    "connect_norito_kagemusha_output_membership_paths_derive_v4",
+    "connect_norito_kagemusha_recursive_spend_append_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_begin_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_cancel_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_finalize_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_install_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4",
+    "connect_norito_kagemusha_recursive_spend_artifact_write_v4",
+    "connect_norito_kagemusha_recursive_spend_bundle_summary_v4",
+    "connect_norito_kagemusha_recursive_spend_branch_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_capabilities_v4",
+    "connect_norito_kagemusha_recursive_spend_init_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_split_change_prepare_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_from_split_v4",
+    "connect_norito_kagemusha_recursive_spend_peer_payment_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_redeem_v4",
+    "connect_norito_kagemusha_recursive_spend_redemption_change_prepare_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_finalize_request_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_build_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_provenance_validate_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_unsigned_payload_digest_v4",
+    "connect_norito_kagemusha_recursive_spend_topup_v4",
+    "connect_norito_kagemusha_recursive_spend_verify_v4",
     "connect_norito_kagemusha_request_authorization_create_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_hardware_v2",
+    "connect_norito_kagemusha_request_authorization_finalize_ios_app_attest_v2",
     "connect_norito_kagemusha_request_authorization_signing_bytes_v2",
-    "connect_norito_kagemusha_topup_finality_verify_v2",
-    "connect_norito_kagemusha_topup_shield_build_unsigned_v2",
+    "connect_norito_kagemusha_topup_finality_verify_v4",
+    "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
+    "connect_norito_kagemusha_secret_free_buffer",
+}
+KAGEMUSHA_CANDIDATE_LAB_EXPORTS = {
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_accepted_identity_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_append_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_begin_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_cancel_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_finalize_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_install_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_is_installed_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_set_uninstall_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_artifact_write_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_init_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_redeem_v4",
+    "connect_norito_kagemusha_recursive_spend_candidate_lab_verify_v4",
 }
 
 required_privacy_ffi = (
@@ -204,11 +236,46 @@ def require_signature_parity(names: set[str]) -> None:
                 f"rust={rust_value}, c={c_value}"
             )
 
+def rust_parameter_names(name: str) -> list[str]:
+    match = re.search(
+        rf'pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+{re.escape(name)}\s*'
+        rf'\((.*?)\)\s*(?:->\s*[^\s{{]+)?\s*{{',
+        rust,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse Rust FFI parameters: {name}")
+    return [parameter.split(":", 1)[0].strip() for parameter in split_parameters(match.group(1))]
+
+def c_parameter_names(name: str) -> list[str]:
+    match = re.search(
+        rf'(?:int32_t|uint32_t|void)\s+{re.escape(name)}\s*\((.*?)\)\s*;',
+        header,
+        re.S,
+    )
+    if match is None:
+        raise SystemExit(f"cannot parse C FFI parameters: {name}")
+    names = []
+    for parameter in split_parameters(match.group(1)):
+        parsed = re.search(r'([A-Za-z_][A-Za-z0-9_]*)\s*$', parameter)
+        if parsed is None:
+            raise SystemExit(f"cannot parse C FFI parameter name for {name}: {parameter}")
+        names.append(parsed.group(1))
+    return names
+
 rust_kagemusha = rust_exports("connect_norito_kagemusha_")
 header_kagemusha = header_exports("connect_norito_kagemusha_")
 swift_kagemusha = set(re.findall(r'"(connect_norito_kagemusha_[a-z0-9_]+)"', swift))
-exact("Rust Kagemusha", KAGEMUSHA_EXPORTS, rust_kagemusha)
-exact("C header Kagemusha", KAGEMUSHA_EXPORTS, header_kagemusha)
+exact(
+    "Rust Kagemusha",
+    KAGEMUSHA_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
+    rust_kagemusha,
+)
+exact(
+    "C header Kagemusha",
+    KAGEMUSHA_EXPORTS | KAGEMUSHA_CANDIDATE_LAB_EXPORTS,
+    header_kagemusha,
+)
 exact("Rust privacy", PRIVACY_EXPORTS, rust_exports("iroha_privacy_"))
 exact("C header privacy", PRIVACY_EXPORTS, header_exports("iroha_privacy_"))
 
@@ -249,23 +316,77 @@ rust_detached = rust_exports("connect_norito_detached_transaction_") | rust_expo
 header_detached = header_exports("connect_norito_detached_transaction_") | header_exports("connect_norito_canonical_json_")
 exact("Rust detached transaction", DETACHED_EXPORTS, rust_detached)
 exact("C header detached transaction", DETACHED_EXPORTS, header_detached)
+
+signer_name = re.compile(
+    r"^connect_norito_encode_[a-z0-9_]+_signed_transaction(?:_alg)?$"
+)
+rust_transaction_signers = {
+    name for name in rust_exports("connect_norito_encode_") if signer_name.fullmatch(name)
+}
+header_transaction_signers = {
+    name for name in header_exports("connect_norito_encode_") if signer_name.fullmatch(name)
+}
+if len(rust_transaction_signers) != 34:
+    raise SystemExit(
+        "Rust transaction signer inventory must contain exactly 17 base/algorithm pairs: "
+        f"found {len(rust_transaction_signers)}"
+    )
+exact("C header transaction signer", rust_transaction_signers, header_transaction_signers)
+base_transaction_signers = {
+    name for name in rust_transaction_signers if not name.endswith("_alg")
+}
+expected_transaction_signers = base_transaction_signers | {
+    f"{name}_alg" for name in base_transaction_signers
+}
+exact("Rust transaction signer algorithm pairing", expected_transaction_signers, rust_transaction_signers)
+for name in sorted(rust_transaction_signers):
+    rust_names = rust_parameter_names(name)
+    header_names = c_parameter_names(name)
+    rust_fee_index = rust_names.index("fee_payment_json_ptr")
+    header_fee_index = header_names.index("fee_payment_json")
+    if rust_names[rust_fee_index:rust_fee_index + 4] != [
+        "fee_payment_json_ptr",
+        "fee_payment_json_len",
+        "private_key_ptr",
+        "private_key_len",
+    ]:
+        raise SystemExit(
+            f"Rust signer {name} must require fee payment immediately before its private key"
+        )
+    if header_names[header_fee_index:header_fee_index + 4] != [
+        "fee_payment_json",
+        "fee_payment_json_len",
+        "private_key",
+        "private_key_len",
+    ]:
+        raise SystemExit(
+            f"C signer {name} must require fee payment immediately before its private key"
+        )
 require_signature_parity(
     KAGEMUSHA_EXPORTS
+    | KAGEMUSHA_CANDIDATE_LAB_EXPORTS
     | PRIVACY_EXPORTS
     | SORAFS_REFERENCE_EXPORTS
     | DETACHED_EXPORTS
+    | rust_transaction_signers
     | {"connect_norito_bridge_abi_version", "connect_norito_free"}
 )
 
 abi = re.search(r"CONNECT_NORITO_BRIDGE_ABI_VERSION\s*:\s*u32\s*=\s*([0-9]+)\s*;", rust)
-if abi is None or abi.group(1) != "19":
-    raise SystemExit("connect_norito bridge ABI must be exactly 19")
+if abi is None or abi.group(1) != "21":
+    raise SystemExit("connect_norito bridge ABI must be exactly 21")
 if re.search(r'pub\s+unsafe\s+extern\s+"C"\s+fn\s+connect_norito_bridge_abi_version\s*\(', rust) is None:
     raise SystemExit("Rust bridge ABI export is missing")
 if re.search(r"uint32_t\s+connect_norito_bridge_abi_version\s*\(\s*void\s*\)\s*;", header) is None:
     raise SystemExit("C bridge ABI declaration is missing")
 if re.search(r"void\s+connect_norito_free\s*\(\s*uint8_t\s*\*\s*ptr\s*\)\s*;", header) is None:
     raise SystemExit("C bridge deallocator declaration is missing")
+if re.search(
+    r"void\s+connect_norito_kagemusha_secret_free_buffer\s*"
+    r"\(\s*uint8_t\s*\*\s*ptr\s*\)\s*;",
+    header,
+) is None:
+    raise SystemExit("C Kagemusha secret deallocator declaration is missing")
 if '#include "connect_norito_bridge.h"' not in umbrella:
     raise SystemExit("NoritoBridge.h must include connect_norito_bridge.h")
 
@@ -282,15 +403,19 @@ swift_proof_exports = swift_array("requiredProofSymbols")
 swift_protocol_exports = swift_array("requiredProtocolSymbols")
 if swift_proof_exports & swift_protocol_exports:
     raise SystemExit("Swift proof and protocol symbol inventories must be disjoint")
-if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != 30:
-    raise SystemExit("Swift ABI-19 inventory must contain 4 proof and 30 protocol symbols")
+expected_protocol_count = len(KAGEMUSHA_EXPORTS) - 4
+if len(swift_proof_exports) != 4 or len(swift_protocol_exports) != expected_protocol_count:
+    raise SystemExit(
+        "Swift ABI-21 inventory must contain 4 proof and "
+        f"{expected_protocol_count} protocol symbols"
+    )
 swift_exports = swift_proof_exports | swift_protocol_exports
 exact("Swift Kagemusha", KAGEMUSHA_EXPORTS, swift_exports)
 if re.search(r"requiredNativeSymbols\s*=\s*requiredProofSymbols\s*\+\s*requiredProtocolSymbols", swift) is None:
     raise SystemExit("Swift requiredNativeSymbols must combine the exact proof and protocol inventories")
 
 print(
-    "bridge header contract passed: ABI 19, "
+    "bridge header contract passed: ABI 21, "
     f"{len(KAGEMUSHA_EXPORTS)} Kagemusha exports, "
     f"{len(PRIVACY_EXPORTS)} privacy exports, "
     f"{len(SORAFS_REFERENCE_EXPORTS)} SoraFS exports, and "
@@ -384,36 +509,41 @@ if [[ "${MODE}" == --self-test-* ]]; then
   case "${MODE}" in
     --self-test-bad-abi)
       replace_once "${tmp_rust}" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;" \
-        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 18;"
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 21;" \
+        "const CONNECT_NORITO_BRIDGE_ABI_VERSION: u32 = 19;"
       ;;
     --self-test-missing-header-symbol)
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_recursive_spend_redeem_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_redeem_v2"
+        "connect_norito_kagemusha_recursive_spend_redeem_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_redeem_v4"
+      ;;
+    --self-test-forbidden-v3-alias)
+      replace_once "${tmp_header}" \
+        "connect_norito_kagemusha_recursive_spend_init_v4" \
+        "connect_norito_kagemusha_recursive_spend_init_v3"
       ;;
     --self-test-bad-capability-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*)uint8_t\*\*' \
+        '(connect_norito_kagemusha_recursive_spend_capabilities_v4\s*\(\s*)uint8_t\*\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-proof-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_init_v2\s*\(\s*)const uint8_t\*' \
+        '(connect_norito_kagemusha_recursive_spend_init_v4\s*\(\s*)const uint8_t\*' \
         '\g<1>uint8_t*'
       ;;
     --self-test-bad-artifact-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_recursive_spend_artifact_begin_v3\s*\([^;]*?)uint64_t\* out_handle' \
+        '(connect_norito_kagemusha_recursive_spend_artifact_begin_v4\s*\([^;]*?)uint64_t\* out_handle' \
         '\g<1>uint32_t* out_handle'
       ;;
     --self-test-missing-export-pair)
       replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_recursive_spend_bundle_summary_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
+        "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
       replace_once "${tmp_header}" \
-        "connect_norito_kagemusha_recursive_spend_bundle_summary_v2" \
-        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v2"
+        "connect_norito_kagemusha_recursive_spend_bundle_summary_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_bundle_summary_v4"
       ;;
     --self-test-missing-protocol-export)
       replace_once "${tmp_rust}" \
@@ -425,8 +555,8 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-receiver-key-signature)
       replace_regex_once "${tmp_header}" \
-        '(connect_norito_kagemusha_receiver_key_reference_v2\s*\(\s*)uint8_t algorithm' \
-        '\g<1>uint32_t algorithm'
+        '(connect_norito_kagemusha_receiver_key_reference_v2\s*\([^;]*?)unsigned long public_key_len' \
+        '\g<1>uint32_t public_key_len'
       ;;
     --self-test-bad-verification-time-signature)
       replace_regex_once "${tmp_header}" \
@@ -440,23 +570,28 @@ if [[ "${MODE}" == --self-test-* ]]; then
       ;;
     --self-test-bad-capability-rust-signature)
       replace_regex_once "${tmp_rust}" \
-        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v1\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
+        '(fn connect_norito_kagemusha_recursive_spend_capabilities_v4\s*\(\s*out_capabilities_ptr:\s*)\*mut \*mut c_uchar' \
         '\g<1>*mut c_uchar'
       ;;
     --self-test-missing-swift-symbol)
       replace_once "${tmp_swift}" \
-        '"connect_norito_kagemusha_topup_shield_build_unsigned_v2"' \
-        '"removed_connect_norito_kagemusha_topup_shield_build_unsigned_v2"'
+        '"connect_norito_kagemusha_topup_shield_build_unsigned_v4"' \
+        '"removed_connect_norito_kagemusha_topup_shield_build_unsigned_v4"'
       ;;
     --self-test-bad-deallocator-signature)
       replace_once "${tmp_header}" \
         "void connect_norito_free(uint8_t* ptr);" \
         "void connect_norito_free(const uint8_t* ptr);"
       ;;
+    --self-test-bad-secret-deallocator-signature)
+      replace_once "${tmp_header}" \
+        "void connect_norito_kagemusha_secret_free_buffer(uint8_t* ptr);" \
+        "void connect_norito_kagemusha_secret_free_buffer(const uint8_t* ptr);"
+      ;;
     --self-test-missing-rust-symbol)
       replace_once "${tmp_rust}" \
-        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3" \
-        "removed_connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v3"
+        "connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4" \
+        "removed_connect_norito_kagemusha_recursive_spend_artifact_set_uninstall_v4"
       ;;
     --self-test-missing-privacy-header-symbol)
       replace_once "${tmp_header}" \

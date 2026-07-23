@@ -32,7 +32,7 @@ fn plain_ballot_conviction_applies() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     state.set_gov(gov_cfg);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut sblock = state.block(header);
@@ -60,7 +60,7 @@ fn plain_ballot_conviction_applies() {
     let instr = CastPlainBallot {
         referendum_id: "ref-conviction".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks,
         direction: 0,
     };

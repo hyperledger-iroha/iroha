@@ -343,7 +343,18 @@ export function buildBindingCommand({
     throw new Error('binding path is required');
   }
   const resolvedManifest = resolveLocalPath(manifestJson);
-  const args = ['xtask', 'soradns-verify-binding', '--binding', resolvedBinding];
+  const args = [
+    'run',
+    '--locked',
+    '-p',
+    'xtask',
+    '--bin',
+    'xtask',
+    '--',
+    'soradns-verify-binding',
+    '--binding',
+    resolvedBinding,
+  ];
   if (alias) {
     args.push('--alias', alias);
   }
@@ -368,7 +379,7 @@ export function buildBindingCommand({
 }
 
 /**
- * Verify a gateway binding using cargo xtask.
+ * Verify a gateway binding using the locked workspace xtask binary.
  *
  * @param {object} options
  * @returns {Promise<{command: string, stdout: string, stderr: string}>}

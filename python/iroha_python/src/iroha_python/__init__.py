@@ -110,11 +110,13 @@ from .client import (
     SumeragiPrfStatus,
     SumeragiV2BlockSubject,
     SumeragiStatusSnapshot,
+    SumeragiV2LivenessStatus,
     SumeragiV2StatusPhase,
     SumeragiV2BodyState,
     SumeragiV2GlobalPhase,
     SumeragiV2HeightContextId,
     SumeragiV2ConsensusRound,
+    SumeragiV2ExecutionCommitment,
     SumeragiV2QuorumCertificateRef,
     SumeragiV2TimeoutCertificateRef,
     SumeragiLaneSettlementReceipt,
@@ -627,11 +629,13 @@ _BASE_EXPORTS = [
     "SumeragiPrfStatus",
     "SumeragiV2BlockSubject",
     "SumeragiStatusSnapshot",
+    "SumeragiV2LivenessStatus",
     "SumeragiV2StatusPhase",
     "SumeragiV2BodyState",
     "SumeragiV2GlobalPhase",
     "SumeragiV2HeightContextId",
     "SumeragiV2ConsensusRound",
+    "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
     "SumeragiLaneSettlementReceipt",
@@ -956,8 +960,12 @@ _BASE_EXPORTS = [
 ]
 
 _CRYPTO_EXPORTS: List[str] = [
+    "ContractCall",
+    "TransactionExecutableEntry",
     "TransactionConfig",
     "TransactionDraft",
+    "authority_fee_payment",
+    "sponsor_fee_payment",
     "NexusAppClient",
     "NexusAppConfig",
     "NexusAppError",
@@ -1119,7 +1127,14 @@ _CRYPTO_EXPORTS: List[str] = [
 ]
 
 try:
-    from .tx import TransactionConfig, TransactionDraft
+    from .tx import (
+        ContractCall,
+        TransactionConfig,
+        TransactionDraft,
+        TransactionExecutableEntry,
+        authority_fee_payment,
+        sponsor_fee_payment,
+    )
     from .nexus_app import (
         NexusAppClient,
         NexusAppConfig,

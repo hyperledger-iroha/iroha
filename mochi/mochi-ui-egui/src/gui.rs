@@ -1305,7 +1305,6 @@ enum ComposerInstructionKind {
     MintAsset,
     BurnAsset,
     TransferAsset,
-    RegisterDomain,
     RegisterAccount,
     RegisterAssetDefinition,
     PublishSpaceDirectoryManifest,
@@ -1322,7 +1321,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::MintAsset => "Mint asset",
             ComposerInstructionKind::BurnAsset => "Burn asset",
             ComposerInstructionKind::TransferAsset => "Transfer asset",
-            ComposerInstructionKind::RegisterDomain => "Register domain",
             ComposerInstructionKind::RegisterAccount => "Register account",
             ComposerInstructionKind::RegisterAssetDefinition => "Register asset definition",
             ComposerInstructionKind::PublishSpaceDirectoryManifest => {
@@ -1341,7 +1339,6 @@ impl ComposerInstructionKind {
             ComposerInstructionKind::MintAsset => InstructionPermission::MintAsset,
             ComposerInstructionKind::BurnAsset => InstructionPermission::BurnAsset,
             ComposerInstructionKind::TransferAsset => InstructionPermission::TransferAsset,
-            ComposerInstructionKind::RegisterDomain => InstructionPermission::RegisterDomain,
             ComposerInstructionKind::RegisterAccount => InstructionPermission::RegisterAccount,
             ComposerInstructionKind::RegisterAssetDefinition => {
                 InstructionPermission::RegisterAssetDefinition
@@ -1369,14 +1366,11 @@ enum ComposerTemplate {
     BurnRoseFromSigner,
     TransferRoseToTeammate,
     TransferRoseImplicitReceive,
-    RegisterDomainSideGarden,
     RegisterAccountForDomain,
     RegisterAssetDefinitionLily,
     SpaceDirectoryAxtTouch,
     SpaceDirectoryAmxHandle,
     PinManifestSample,
-    GrantCanRegisterDomain,
-    RevokeCanRegisterDomain,
     AdmissionPolicyImplicitReceive,
     AdmissionPolicyExplicitOnly,
     MultisigProposeSample,
@@ -1401,14 +1395,11 @@ impl ComposerTemplate {
             ComposerTemplate::BurnRoseFromSigner => "Burn rose sample",
             ComposerTemplate::TransferRoseToTeammate => "Transfer rose sample",
             ComposerTemplate::TransferRoseImplicitReceive => "Implicit receive sample",
-            ComposerTemplate::RegisterDomainSideGarden => "Register domain sample",
             ComposerTemplate::RegisterAccountForDomain => "Register account sample",
             ComposerTemplate::RegisterAssetDefinitionLily => "Register asset def. sample",
             ComposerTemplate::SpaceDirectoryAxtTouch => "AXT touch manifest",
             ComposerTemplate::SpaceDirectoryAmxHandle => "AMX handle manifest",
             ComposerTemplate::PinManifestSample => "Pin manifest sample",
-            ComposerTemplate::GrantCanRegisterDomain => "Grant registrar role",
-            ComposerTemplate::RevokeCanRegisterDomain => "Revoke registrar role",
             ComposerTemplate::AdmissionPolicyImplicitReceive => "Implicit receive policy",
             ComposerTemplate::AdmissionPolicyExplicitOnly => "Explicit-only policy",
             ComposerTemplate::MultisigProposeSample => "Multisig propose sample",
@@ -1432,9 +1423,6 @@ impl ComposerTemplate {
             ComposerTemplate::TransferRoseImplicitReceive => {
                 "Prefill a transfer that targets a new account to demo implicit receive."
             }
-            ComposerTemplate::RegisterDomainSideGarden => {
-                "Suggest registering the sample `side_garden` domain."
-            }
             ComposerTemplate::RegisterAccountForDomain => {
                 "Suggest registering `carol` in the selected signer's domain."
             }
@@ -1449,12 +1437,6 @@ impl ComposerTemplate {
             }
             ComposerTemplate::PinManifestSample => {
                 "Prefill a sample SoraFS pin manifest registration."
-            }
-            ComposerTemplate::GrantCanRegisterDomain => {
-                "Grant a sample registrar role (`can_register_domain`) to another signer."
-            }
-            ComposerTemplate::RevokeCanRegisterDomain => {
-                "Revoke the registrar role from the sample teammate account."
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 "Prefill an implicit-receive policy with caps, fee, and default role."
@@ -1478,7 +1460,6 @@ impl ComposerTemplate {
             ComposerTemplate::TransferRoseToTeammate,
             ComposerTemplate::TransferRoseImplicitReceive,
         ];
-        const REGISTER_DOMAIN: &[ComposerTemplate] = &[ComposerTemplate::RegisterDomainSideGarden];
         const REGISTER_ACCOUNT: &[ComposerTemplate] = &[ComposerTemplate::RegisterAccountForDomain];
         const REGISTER_ASSET_DEF: &[ComposerTemplate] =
             &[ComposerTemplate::RegisterAssetDefinitionLily];
@@ -1487,8 +1468,8 @@ impl ComposerTemplate {
             ComposerTemplate::SpaceDirectoryAmxHandle,
         ];
         const PIN_MANIFEST: &[ComposerTemplate] = &[ComposerTemplate::PinManifestSample];
-        const GRANT_ROLE: &[ComposerTemplate] = &[ComposerTemplate::GrantCanRegisterDomain];
-        const REVOKE_ROLE: &[ComposerTemplate] = &[ComposerTemplate::RevokeCanRegisterDomain];
+        const GRANT_ROLE: &[ComposerTemplate] = &[];
+        const REVOKE_ROLE: &[ComposerTemplate] = &[];
         const ADMISSION_POLICY: &[ComposerTemplate] = &[
             ComposerTemplate::AdmissionPolicyImplicitReceive,
             ComposerTemplate::AdmissionPolicyExplicitOnly,
@@ -1499,7 +1480,6 @@ impl ComposerTemplate {
             ComposerInstructionKind::MintAsset => MINT,
             ComposerInstructionKind::BurnAsset => BURN,
             ComposerInstructionKind::TransferAsset => TRANSFER,
-            ComposerInstructionKind::RegisterDomain => REGISTER_DOMAIN,
             ComposerInstructionKind::RegisterAccount => REGISTER_ACCOUNT,
             ComposerInstructionKind::RegisterAssetDefinition => REGISTER_ASSET_DEF,
             ComposerInstructionKind::PublishSpaceDirectoryManifest => SPACE_DIRECTORY,
@@ -1610,11 +1590,6 @@ impl ComposerTemplate {
                 app.composer_destination_account = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
                 app.last_info = Some("Loaded implicit receive transfer template.".to_owned());
             }
-            ComposerTemplate::RegisterDomainSideGarden => {
-                app.composer_instruction_kind = ComposerInstructionKind::RegisterDomain;
-                app.composer_domain_id = "side_garden".to_owned();
-                app.last_info = Some("Loaded domain registration template.".to_owned());
-            }
             ComposerTemplate::RegisterAccountForDomain => {
                 app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
                 app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
@@ -1649,40 +1624,6 @@ impl ComposerTemplate {
                     draft_fixture_payload(COMPOSER_DRAFT_PIN_MANIFEST, "request");
                 app.composer_space_directory_manifest_json.clear();
                 app.last_info = Some("Loaded pin manifest template.".to_owned());
-            }
-            ComposerTemplate::GrantCanRegisterDomain => {
-                app.composer_instruction_kind = ComposerInstructionKind::GrantRole;
-                app.composer_role_id = "can_register_domain".to_owned();
-                let recipient = signers
-                    .iter()
-                    .find(|candidate| {
-                        Some(candidate.account_id()) != signer.map(SigningAuthority::account_id)
-                    })
-                    .or_else(|| development_signing_authorities().get(1))
-                    .unwrap_or_else(|| {
-                        development_signing_authorities()
-                            .first()
-                            .expect("development authorities must not be empty")
-                    });
-                app.composer_role_account = account_literal(recipient.account_id());
-                app.last_info = Some("Loaded role grant template.".to_owned());
-            }
-            ComposerTemplate::RevokeCanRegisterDomain => {
-                app.composer_instruction_kind = ComposerInstructionKind::RevokeRole;
-                app.composer_role_id = "can_register_domain".to_owned();
-                let recipient = signers
-                    .iter()
-                    .find(|candidate| {
-                        Some(candidate.account_id()) != signer.map(SigningAuthority::account_id)
-                    })
-                    .or_else(|| development_signing_authorities().get(1))
-                    .unwrap_or_else(|| {
-                        development_signing_authorities()
-                            .first()
-                            .expect("development authorities must not be empty")
-                    });
-                app.composer_role_account = account_literal(recipient.account_id());
-                app.last_info = Some("Loaded role revoke template.".to_owned());
             }
             ComposerTemplate::AdmissionPolicyImplicitReceive => {
                 app.composer_instruction_kind = ComposerInstructionKind::AccountAdmissionPolicy;
@@ -2313,7 +2254,6 @@ struct MochiApp {
     composer_nonce_value: u32,
     composer_selected_signer: Option<usize>,
     composer_destination_account: String,
-    composer_domain_id: String,
     composer_account_id: String,
     composer_asset_definition_id: String,
     composer_asset_definition_mintable: Mintable,
@@ -2575,7 +2515,6 @@ impl MochiApp {
             composer_nonce_value: 1,
             composer_selected_signer: None,
             composer_destination_account: String::new(),
-            composer_domain_id: String::new(),
             composer_account_id: String::new(),
             composer_asset_definition_id: String::new(),
             composer_asset_definition_mintable: Mintable::Infinitely,
@@ -6097,12 +6036,16 @@ impl MochiApp {
     ) -> Option<LanePathPreview> {
         let peer = supervisor.peers().first()?;
         let peer_alias = peer.alias().to_owned();
-        let storage_root = supervisor.paths().peer_dir(&peer_alias).join("storage");
+        let kura_root = supervisor
+            .paths()
+            .peer_dir(&peer_alias)
+            .join("storage")
+            .join("kura");
         let slug = lane_slug(alias, lane_id);
-        let blocks_dir = storage_root
+        let blocks_dir = kura_root
             .join("blocks")
             .join(format!("lane_{lane_id:03}_{slug}"));
-        let merge_log = storage_root
+        let merge_log = kura_root
             .join("merge_ledger")
             .join(format!("lane_{lane_id:03}_{slug}_merge.log"));
         Some(LanePathPreview {
@@ -6132,7 +6075,7 @@ impl MochiApp {
             .and_then(|supervisor| supervisor.peers().first())
             .map(|peer| peer.alias().to_owned())
             .unwrap_or_else(|| "peer0".to_owned());
-        let storage_root = paths.peer_dir(&peer_alias).join("storage");
+        let kura_root = paths.peer_dir(&peer_alias).join("storage").join("kura");
 
         let mut aliases = BTreeMap::new();
         let mut max_index: Option<u32> = None;
@@ -6179,10 +6122,10 @@ impl MochiApp {
             .into_iter()
             .map(|(lane_id, alias)| {
                 let slug = lane_slug(&alias, lane_id);
-                let blocks_dir = storage_root
+                let blocks_dir = kura_root
                     .join("blocks")
                     .join(format!("lane_{lane_id:03}_{slug}"));
-                let merge_log = storage_root
+                let merge_log = kura_root
                     .join("merge_ledger")
                     .join(format!("lane_{lane_id:03}_{slug}_merge.log"));
                 LanePathPreview {
@@ -6249,18 +6192,13 @@ impl MochiApp {
             return Err(error);
         }
 
-        // The replacement is now final. Stop every process before deleting its
-        // lane files so no live Kura handle can race the reset.
-        supervisor
-            .stop_all()
-            .map_err(|err| format!("Failed to stop peers after lifecycle finality: {err}"))?;
-        supervisor
-            .reset_lane_storage(lane_id)
-            .map_err(|err| format!("Failed to reset finalized lane storage: {err}"))?;
-        if was_running {
+        // The signed retire/add replacement owns the lane incarnation and its
+        // authenticated storage geometry. Never delete bound Kura paths after
+        // finality; doing so makes the next authenticated open fail closed.
+        if !was_running {
             supervisor
-                .start_all()
-                .map_err(|err| format!("Failed to restart peers after lane reset: {err}"))?;
+                .stop_all()
+                .map_err(|err| format!("Failed to restore the stopped network state: {err}"))?;
         }
         Ok(())
     }
@@ -6715,7 +6653,7 @@ impl MochiApp {
                             egui::Button::new("Reset lane"),
                         )
                         .on_hover_text(if lane_reset_available {
-                            "Wipe lane storage and re-apply the lane catalog"
+                            "Apply a signed retire/add lifecycle replacement"
                         } else {
                             "No Nexus lane catalog configured"
                         });
@@ -7236,10 +7174,10 @@ impl MochiApp {
                     .open(&mut open)
                     .show(ctx, |ui| {
                         ui.label(
-                            "Reset a single Nexus lane by wiping its storage and reapplying the lane catalog.",
+                            "Reset a single Nexus lane with a signed retire/add lifecycle replacement.",
                         );
                         ui.small(
-                            "Peers may restart briefly; Torii must be reachable to apply the lifecycle plan.",
+                            "Kura manages the authenticated storage incarnation; Torii must be reachable to apply the plan.",
                         );
                         ui.add_space(8.0);
                         if candidates.is_empty() {
@@ -10464,11 +10402,10 @@ impl MochiApp {
     }
 
     fn render_composer_build_step(&mut self, ui: &mut egui::Ui, supervisor: &Supervisor) {
-        const COMMON_KINDS: [ComposerInstructionKind; 6] = [
+        const COMMON_KINDS: [ComposerInstructionKind; 5] = [
             ComposerInstructionKind::MintAsset,
             ComposerInstructionKind::BurnAsset,
             ComposerInstructionKind::TransferAsset,
-            ComposerInstructionKind::RegisterDomain,
             ComposerInstructionKind::RegisterAccount,
             ComposerInstructionKind::RegisterAssetDefinition,
         ];
@@ -10564,16 +10501,6 @@ impl MochiApp {
             ui.small(
                 "Implicit receives follow the domain admission policy (caps, fees, default role).",
             );
-        }
-
-        if matches!(
-            self.composer_instruction_kind,
-            ComposerInstructionKind::RegisterDomain
-        ) {
-            ui.horizontal(|ui| {
-                ui.label("Domain ID");
-                ui.text_edit_singleline(&mut self.composer_domain_id);
-            });
         }
 
         if matches!(
@@ -11252,15 +11179,6 @@ impl MochiApp {
                     return;
                 }
                 InstructionDraft::transfer_from_input(&asset, &quantity, &destination)
-            }
-            ComposerInstructionKind::RegisterDomain => {
-                let domain = self.composer_domain_id.trim().to_owned();
-                self.composer_domain_id = domain.clone();
-                if domain.is_empty() {
-                    self.composer_error = Some("Domain identifier is required.".to_owned());
-                    return;
-                }
-                InstructionDraft::register_domain_from_input(&domain)
             }
             ComposerInstructionKind::RegisterAccount => {
                 let account = self.composer_account_id.trim().to_owned();
@@ -12186,7 +12104,7 @@ fn compose_launch_recipe(
     readiness_smoke: bool,
 ) -> String {
     let mut parts = vec![
-        "cargo run -p mochi-ui -- sandbox serve".to_owned(),
+        "cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve".to_owned(),
         format!("--profile {}", shell_quote(profile)),
     ];
     if !workspace_root.trim().is_empty() {
@@ -13352,8 +13270,8 @@ mod tests {
                 SumeragiLaneGovernance, SumeragiRuntimeUpgradeHook,
             },
             consensus_v2::{
-                HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState, SumeragiV2Status,
-                SumeragiV2StatusPhase,
+                ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+                SumeragiV2HeightContextStatus, SumeragiV2Status, SumeragiV2StatusPhase,
             },
         },
         da::commitment::DaProofScheme,
@@ -13442,7 +13360,9 @@ mod tests {
             true,
             false,
         );
-        assert!(recipe.starts_with("cargo run -p mochi-ui -- sandbox serve"));
+        assert!(
+            recipe.starts_with("cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve")
+        );
         assert!(recipe.contains("--profile single-peer"));
         assert!(recipe.contains("--workspace-root '/tmp/mochi data'"));
         assert!(recipe.contains("--chain-id mochi-local"));
@@ -13888,6 +13808,8 @@ mod tests {
         let preview = &previews[0];
         let blocks = preview.blocks_dir.to_string_lossy();
         let merge = preview.merge_log.to_string_lossy();
+        assert!(blocks.contains("storage/kura/blocks"));
+        assert!(merge.contains("storage/kura/merge_ledger"));
         assert!(blocks.contains("lane_000_core_lane"));
         assert!(merge.contains("lane_000_core_lane_merge.log"));
     }
@@ -14197,10 +14119,17 @@ mod tests {
                 "snapshot directory should exist for {}",
                 peer.alias()
             );
-            let mut entries = fs::read_dir(&snapshot_dir).expect("snapshot dir entries");
+            let entries = fs::read_dir(&snapshot_dir)
+                .expect("snapshot dir entries")
+                .map(|entry| entry.expect("snapshot entry").file_name())
+                .collect::<Vec<_>>();
+            assert_eq!(entries, vec!["generations"]);
             assert!(
-                entries.next().is_none(),
-                "snapshot directory should remain empty for {}",
+                fs::read_dir(snapshot_dir.join("generations"))
+                    .expect("snapshot generations")
+                    .next()
+                    .is_none(),
+                "snapshot generations should remain empty for {}",
                 peer.alias()
             );
         }
@@ -14325,6 +14254,19 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 9,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
         }
     }
 
@@ -15341,10 +15283,10 @@ mod tests {
             lane_incarnation: Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(0),
             tx_count: 1,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -15455,9 +15397,9 @@ mod tests {
     #[test]
     fn add_instruction_respects_signer_permissions() {
         let mut app = MochiApp::default();
-        app.composer_instruction_kind = ComposerInstructionKind::RegisterDomain;
-        app.composer_domain_id = "side_garden".to_owned();
-        // Bob is the second development signer and lacks register-domain permission.
+        app.composer_instruction_kind = ComposerInstructionKind::RegisterAccount;
+        app.composer_account_id = sample_account_id(SAMPLE_OTHER_PUBLIC_KEY);
+        // Bob is the second development signer and lacks register-account permission.
         app.composer_selected_signer = Some(1);
         app.add_instruction_to_batch(None);
         assert!(
@@ -15466,7 +15408,7 @@ mod tests {
         );
         let message = app.composer_error.as_deref().unwrap_or_default().to_owned();
         assert!(
-            message.contains("cannot register domains"),
+            message.contains("cannot register accounts"),
             "expected permission error, got `{message}`"
         );
     }

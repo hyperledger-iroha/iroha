@@ -149,6 +149,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer:
                 iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -458,7 +459,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             sorafs_por: iroha_config::parameters::actual::SorafsPor::default(),
             sorafs_appeal_finance_settlement:
                 iroha_config::parameters::actual::SorafsAppealFinanceSettlement::default(),
-            onboarding: None,
+            account_onboarding: None,
             faucet: None,
             kagemusha_commands: None,
         },
@@ -867,10 +868,11 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
                 iroha_config::parameters::defaults::governance::citizenship_asset_id()
                 .parse()
                 .expect("valid default citizenship asset id"),
-            citizenship_bond_amount: iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+            citizenship_bond_amount:
+                iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
             citizenship_escrow_account:
                 iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
-            min_bond_amount: 150,
+            min_bond_amount: 150_u64.into(),
             bond_escrow_account:
                 iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
             slash_receiver_account:
@@ -936,7 +938,7 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             parliament_term_blocks:
                 iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
             parliament_min_stake:
-                iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
+                iroha_config::parameters::defaults::governance::parliament_min_stake(),
             parliament_eligibility_asset_id:
                 iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()

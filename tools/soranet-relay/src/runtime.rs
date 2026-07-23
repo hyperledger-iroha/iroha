@@ -50,7 +50,7 @@ use iroha_data_model::{
         },
     },
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
@@ -693,7 +693,7 @@ struct VpnVoucherDebtWindow {
     observed_egress_bytes: u64,
     vouched_ingress_bytes: u64,
     vouched_egress_bytes: u64,
-    vouched_earned_fee_nanos: u64,
+    vouched_earned_fee: Quantity,
     highest_sequence: u64,
     has_voucher: bool,
 }
@@ -705,13 +705,13 @@ impl VpnVoucherDebtWindow {
             quote_id: helper_ticket.quote_id,
             relay_id: helper_ticket.relay_id,
             metering_public_key: helper_ticket.metering_public_key.clone(),
-            tariff: helper_ticket.tariff,
+            tariff: helper_ticket.tariff.clone(),
             max_unvouched_bytes,
             observed_ingress_bytes: 0,
             observed_egress_bytes: 0,
             vouched_ingress_bytes: 0,
             vouched_egress_bytes: 0,
-            vouched_earned_fee_nanos: 0,
+            vouched_earned_fee: Quantity::zero(),
             highest_sequence: 0,
             has_voucher: false,
         }
@@ -770,13 +770,17 @@ impl VpnVoucherDebtWindow {
                 "voucher counters must be cumulative".to_string(),
             ));
         }
-        if envelope.earned_fee_nanos < self.vouched_earned_fee_nanos {
+        if envelope.earned_fee < self.vouched_earned_fee {
             return Err(VpnBackendBridgeError::UsageVoucher(
                 "voucher earned fee must be cumulative".to_string(),
             ));
         }
-        let earned_fee_nanos = self.tariff.earned_fee_nanos(body);
-        if envelope.earned_fee_nanos != earned_fee_nanos {
+        let earned_fee = self.tariff.earned_fee(body).map_err(|error| {
+            VpnBackendBridgeError::UsageVoucher(format!(
+                "voucher tariff arithmetic failed: {error}"
+            ))
+        })?;
+        if envelope.earned_fee != earned_fee {
             return Err(VpnBackendBridgeError::UsageVoucher(
                 "voucher earned fee does not match helper ticket tariff".to_string(),
             ));
@@ -786,11 +790,11 @@ impl VpnVoucherDebtWindow {
         self.highest_sequence = body.sequence;
         self.vouched_ingress_bytes = body.ingress_bytes;
         self.vouched_egress_bytes = body.egress_bytes;
-        self.vouched_earned_fee_nanos = earned_fee_nanos;
+        self.vouched_earned_fee = earned_fee.clone();
         self.ensure_within_window()?;
         Ok(VpnUsageVoucherEnvelopeV1 {
             voucher: voucher.clone(),
-            earned_fee_nanos,
+            earned_fee,
         })
     }
 
@@ -862,7 +866,7 @@ struct VpnSettlementSpoolRecord {
     session_id_hex: String,
     quote_id_hex: String,
     payment_tx_hash_hex: String,
-    earned_fee_nanos: u64,
+    earned_fee: Quantity,
     torii_receipt_path: String,
     submit_receipt_request: VpnSettlementSubmitRequestArtifact,
 }
@@ -891,7 +895,7 @@ fn vpn_settlement_spool_record(
         session_id_hex: hex::encode(artifact.receipt.session_id),
         quote_id_hex: lease_id_hex.clone(),
         payment_tx_hash_hex: hex::encode(artifact.receipt.payment_tx_hash),
-        earned_fee_nanos: artifact.earned_fee_nanos,
+        earned_fee: artifact.earned_fee.clone(),
         torii_receipt_path: "/v1/vpn/receipts".to_owned(),
         submit_receipt_request: VpnSettlementSubmitRequestArtifact {
             relay_receipt_hex,
@@ -2469,7 +2473,7 @@ impl RelayRuntime {
             let settlement_artifact = vpn_session.settlement_artifact();
             let receipt = settlement_artifact
                 .as_ref()
-                .map(|artifact| artifact.receipt)
+                .map(|artifact| artifact.receipt.clone())
                 .unwrap_or_else(|| vpn_session.receipt());
             metrics.record_vpn_receipt(&receipt);
             if let Some(spool_dir) = resources
@@ -4584,6 +4588,7 @@ mod tests {
             },
         },
     };
+    use iroha_primitives::numeric::Numeric;
     use norito::{codec::Encode, decode_from_bytes, to_bytes};
     use rand::{SeedableRng, rngs::StdRng};
     use soranet_pq::{MlDsaSuite, generate_mldsa_keypair_from_os as generate_mldsa_keypair};
@@ -4645,12 +4650,17 @@ mod tests {
             .expect("derive VPN metering fixture key")
     }
 
+    fn quantity_nanos(value: u64) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u64 nano-XOR test value fits Quantity")
+    }
+
     fn sample_vpn_tariff() -> VpnTariffV1 {
         VpnTariffV1 {
-            lease_fee_nanos: 10_000,
-            active_fee_nanos_per_minute: 3_180,
-            ingress_fee_nanos_per_mib: 1_000,
-            egress_fee_nanos_per_mib: 2_000,
+            lease_fee: quantity_nanos(10_000),
+            active_fee_per_minute: quantity_nanos(3_180),
+            ingress_fee_per_mib: quantity_nanos(1_000),
+            egress_fee_per_mib: quantity_nanos(2_000),
         }
     }
 
@@ -4941,7 +4951,10 @@ mod tests {
         };
         let voucher = signed_usage_voucher(&wrong_key_pair, body);
         let envelope = VpnUsageVoucherEnvelopeV1 {
-            earned_fee_nanos: helper_ticket.tariff.earned_fee_nanos(&voucher.body),
+            earned_fee: helper_ticket
+                .tariff
+                .earned_fee(&voucher.body)
+                .expect("bounded fixture fee"),
             voucher,
         };
         let mut window = VpnVoucherDebtWindow::new(&helper_ticket, 64);
@@ -4969,7 +4982,7 @@ mod tests {
         let voucher = signed_usage_voucher(&key_pair, body);
         let envelope = VpnUsageVoucherEnvelopeV1 {
             voucher,
-            earned_fee_nanos: 55,
+            earned_fee: quantity_nanos(55),
         };
         let mut payload = Vec::from(VPN_USAGE_VOUCHER_CONTROL_MAGIC.as_slice());
         payload.extend_from_slice(&envelope.encode());
@@ -4986,7 +4999,7 @@ mod tests {
         lower_fee_body.egress_bytes = 21;
         let lower_fee_envelope = VpnUsageVoucherEnvelopeV1 {
             voucher: signed_usage_voucher(&key_pair, lower_fee_body),
-            earned_fee_nanos: 54,
+            earned_fee: quantity_nanos(54),
         };
         let lower_fee_error = window
             .accept_envelope(&lower_fee_envelope)
@@ -5002,7 +5015,7 @@ mod tests {
         let receipt = handle.receipt();
 
         assert_eq!(receipt.highest_voucher_sequence, 7);
-        assert_eq!(receipt.earned_fee_nanos, 55);
+        assert_eq!(receipt.earned_fee, quantity_nanos(55));
         assert_eq!(receipt.client_voucher_hash, envelope.voucher.hash());
 
         let artifact = handle
@@ -5026,7 +5039,12 @@ mod tests {
             record.payment_tx_hash_hex,
             hex::encode(helper_ticket.payment_tx_hash)
         );
-        assert_eq!(record.earned_fee_nanos, 55);
+        assert_eq!(record.earned_fee, quantity_nanos(55));
+        assert!(
+            String::from_utf8(encoded)
+                .expect("settlement artifact is UTF-8 JSON")
+                .contains("\"earned_fee\": \"0.000000055\"")
+        );
         assert_eq!(
             record.submit_receipt_request.relay_receipt_hex,
             hex::encode(artifact.receipt.encode())

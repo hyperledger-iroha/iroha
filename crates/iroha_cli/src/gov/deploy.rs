@@ -464,6 +464,9 @@ mod tests {
                 Executable::IvmProved(_) => {
                     eyre::bail!("unexpected proved IVM submission in test context")
                 }
+                Executable::Batch(_) => {
+                    eyre::bail!("unexpected mixed executable batch submission in test context")
+                }
             }
         }
     }

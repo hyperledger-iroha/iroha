@@ -48,7 +48,7 @@ use iroha_core::da::proof_policy_bundle;
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey};
 use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_test_network::{
-    NetworkBuilder, ensure_domain_registration_lease_for_network,
+    NetworkBuilder, dataspace_setup_instruction, domain_setup_instruction_in_dataspace,
     genesis_factory_with_post_topology, init_instruction_registry,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
@@ -1092,12 +1092,22 @@ async fn mixed_dataspace_native_amx_routes_and_commits_with_receipts() -> Result
             DomainId::try_new("merchant", "acme").expect("merchant domain");
         let treasury_domain =
             DomainId::try_new("bankvault", "bank").expect("bank vault domain");
-        ensure_domain_registration_lease_for_network(&network, &merchant_domain)?;
-        ensure_domain_registration_lease_for_network(&network, &treasury_domain)?;
+        let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
+        let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
         let transaction = submitter.build_transaction(
             [
-                InstructionBox::from(Register::domain(Domain::new(merchant_domain))),
-                InstructionBox::from(Register::domain(Domain::new(treasury_domain))),
+                dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
+                dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
+                domain_setup_instruction_in_dataspace(
+                    &merchant_domain,
+                    acme_dataspace,
+                    &submitter.account,
+                )?,
+                domain_setup_instruction_in_dataspace(
+                    &treasury_domain,
+                    bank_dataspace,
+                    &submitter.account,
+                )?,
             ],
             Metadata::default(),
         );
@@ -1171,12 +1181,22 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
             DomainId::try_new("journalmerchant", "acme").expect("merchant domain");
         let treasury_domain =
             DomainId::try_new("journalbankvault", "bank").expect("bank vault domain");
-        ensure_domain_registration_lease_for_network(&network, &merchant_domain)?;
-        ensure_domain_registration_lease_for_network(&network, &treasury_domain)?;
+        let acme_dataspace = DataSpaceId::new(ACME_DATASPACE);
+        let bank_dataspace = DataSpaceId::new(BANK_DATASPACE);
         let transaction = submitter.build_transaction(
             [
-                InstructionBox::from(Register::domain(Domain::new(merchant_domain))),
-                InstructionBox::from(Register::domain(Domain::new(treasury_domain))),
+                dataspace_setup_instruction("acme", acme_dataspace, &submitter.account)?,
+                dataspace_setup_instruction("bank", bank_dataspace, &submitter.account)?,
+                domain_setup_instruction_in_dataspace(
+                    &merchant_domain,
+                    acme_dataspace,
+                    &submitter.account,
+                )?,
+                domain_setup_instruction_in_dataspace(
+                    &treasury_domain,
+                    bank_dataspace,
+                    &submitter.account,
+                )?,
             ],
             Metadata::default(),
         );

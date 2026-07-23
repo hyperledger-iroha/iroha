@@ -73,17 +73,27 @@ class ZkMerklePathEntry(
 
 /** Response body emitted by `POST /v1/zk/merkle-path`. */
 class ZkMerklePathResponse(
+    @JvmField val evaluatedBlockHeight: Long,
+    evaluatedBlockHash: String,
     root: String,
     @JvmField val frontierLen: Int,
     @JvmField val treeDepth: Int,
     nextZeroPath: ZkMerklePathEntry?,
     paths: List<ZkMerklePathEntry>,
 ) {
+    @JvmField val evaluatedBlockHash: String = ZkRootsResponse.normalizeRootHex(
+        evaluatedBlockHash,
+        "evaluated_block_hash",
+    )
     @JvmField val root: String = ZkRootsResponse.normalizeRootHex(root, "root")
     private val normalizedNextZeroPath: ZkMerklePathEntry? = nextZeroPath
     private val normalizedPaths: List<ZkMerklePathEntry> = paths.toList()
 
     init {
+        require(evaluatedBlockHeight >= 0) { "evaluated_block_height must be non-negative" }
+        require((evaluatedBlockHeight == 0L) == (this.evaluatedBlockHash == "0".repeat(64))) {
+            "the zero block hash is reserved for evaluated_block_height=0"
+        }
         require(frontierLen >= 0) { "frontier_len must be non-negative" }
         require(treeDepth >= 0) { "tree_depth must be non-negative" }
         normalizedNextZeroPath?.let { path ->
@@ -106,6 +116,22 @@ class ZkMerklePathResponse(
     val paths: List<ZkMerklePathEntry> get() = normalizedPaths.toList()
     val nextZeroPath: ZkMerklePathEntry? get() = normalizedNextZeroPath
     fun rootBytes(): ByteArray = ZkRootsResponse.decodeHex32(root, "root")
+    fun evaluatedBlockHashBytes(): ByteArray =
+        ZkRootsResponse.decodeHex32(evaluatedBlockHash, "evaluated_block_hash")
+
+    fun requireEvaluatedSnapshot(
+        expectedHeight: Long,
+        expectedBlockHash: ByteArray,
+    ): ZkMerklePathResponse {
+        require(expectedHeight == evaluatedBlockHeight) { "Merkle witness height does not match readiness" }
+        require(expectedBlockHash.contentEquals(evaluatedBlockHashBytes())) {
+            "Merkle witness block hash does not match readiness"
+        }
+        return this
+    }
+
+    fun requireSameSnapshot(roots: ZkRootsResponse): ZkMerklePathResponse =
+        requireEvaluatedSnapshot(roots.evaluatedBlockHeight, roots.evaluatedBlockHashBytes())
 
     fun requireNextZeroPath(): ZkMerklePathEntry =
         requireNotNull(normalizedNextZeroPath) { "Torii response does not contain next_zero_path" }
@@ -129,6 +155,11 @@ class ZkMerklePathResponse(
                 parseEntry(value, "paths[$index]")
             }
             return ZkMerklePathResponse(
+                ZkRootsResponse.jsonUnsignedLong(
+                    root["evaluated_block_height"],
+                    "evaluated_block_height",
+                ),
+                jsonString(root["evaluated_block_hash"], "evaluated_block_hash"),
                 rootHex,
                 jsonInt(root["frontier_len"], "frontier_len"),
                 jsonInt(root["tree_depth"], "tree_depth"),

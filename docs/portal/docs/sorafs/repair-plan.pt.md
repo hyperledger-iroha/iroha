@@ -34,7 +34,7 @@ A política de escalonamento é proveniente de `governance.sorafs_repair_escalat
 | `minimum_voters` | 3 | Número mínimo de eleitores distintos necessários para resolver uma decisão. |
 | `dispute_window_secs` | 86400 | Tempo após a escalada antes da finalização dos votos (segundos). |
 | `appeal_window_secs` | 604800 | Tempo após a aprovação durante o qual as apelações são aceitas (segundos). |
-| `max_penalty_nano` | 1.000.000.000 | Penalidade de barra máxima permitida para escalonamentos de reparo (nano-XOR). |
+| `max_penalty` | 1.000.000.000 | Penalidade de barra máxima permitida para escalonamentos de reparo (nano-XOR). |
 
-- As propostas geradas pelo agendador são limitadas a `max_penalty_nano`; as submissões do auditor acima do limite são rejeitadas.
+- As propostas geradas pelo agendador são limitadas a `max_penalty`; as submissões do auditor acima do limite são rejeitadas.
 - Os registros de votação são armazenados em `repair_state.to` com ordenação determinística (classificação `voter_id`) para que todos os nós obtenham o mesmo carimbo de data/hora de decisão e resultado.

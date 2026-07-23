@@ -47,6 +47,10 @@ test("computeIvmArtifactHashes rejects ambiguous or malformed binary inputs", ()
     /Uint8Array, ArrayBuffer, or ArrayBuffer view/,
   );
   assert.throws(
+    () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 17)),
+    /at least the 49-byte program header/,
+  );
+  assert.throws(
     () => computeIvmArtifactHashes(ARTIFACT.subarray(0, 48)),
     /at least the 49-byte program header/,
   );

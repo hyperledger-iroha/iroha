@@ -84,6 +84,8 @@ generated `README.md` into the output directory.
 - Guided disposable devnet flow
 - Prompts for peer count, profile, consensus mode, ports, sample assets, and
   output directory
+- Defaults the output to the canonical OS temporary directory so owner-only
+  custody checks do not traverse platform temporary-directory symlinks
 - Writes genesis, signed genesis, per-peer configs, `client.toml`, `start.sh`,
   `stop.sh`, and a generated guide
 - Generated stop scripts validate pidfiles against the expected peer config
@@ -97,6 +99,13 @@ generated `README.md` into the output directory.
 
 `kagami localnet`
 - Bare-metal local network generator
+- Requires at least four peers so generated networks use a representative
+  DA/RBC topology
+- Protects validator/client configs and runtime signer/token sidecars with
+  owner-only permissions and emits a bundle-wide `.gitignore`
+- Fresh-custody bundles keep directories and lifecycle scripts at `0700`, all
+  other files at `0600`, and lifecycle scripts enforce `umask 077` for new
+  logs, pidfiles, and runtime state
 - Defaults to `permissioned` unless a Sora profile or perf preset requires
   `npos`
 - `--sora-profile nexus` enforces public-dataspace rules and requires `npos`

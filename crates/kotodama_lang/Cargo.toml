@@ -12,9 +12,10 @@ documentation = "https://docs.rs/kotodama_lang"
 base64 = { workspace = true }
 hex = { workspace = true }
 indexmap = "2.12.0"
-iroha_crypto = { path = "../iroha_crypto", features = ["rayon", "sm"] }
+iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["std", "json"] }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "json", "governance"] }
 iroha_i18n = { path = "../iroha_i18n" }
 iroha_primitives = { path = "../iroha_primitives", default-features = false }
 ivm_abi = { path = "../ivm_abi" }
 norito = { path = "../norito" }
+strum = { workspace = true, features = ["derive"] }

@@ -16,6 +16,8 @@ import org.bouncycastle.crypto.digests.KeccakDigest
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.norito.CRC64
@@ -34,33 +36,64 @@ class SccpClientExactTest {
     private val otherAuthority = AccountAddress
         .fromAccount(ByteArray(32) { 0x12 }, "ed25519")
         .toI105(SccpV1.TAIRA_I105_DISCRIMINANT_V1)
+    private val bridgeFeePayment = FeePaymentIntent.authority(emptyList())
 
     @Test
     fun submitDtosExposeOnlyClosedArtifactFields() {
         val artifact = canonicalArtifact()
         val nativeArtifact = canonicalNativeArtifact()
-        val proof = SccpDestinationProofSubmitRequest(authority, artifact)
-        assertEquals(setOf("authority", "destination_proof_b64"), proof.toJsonMap().keys)
+        val proof = destinationRequest(authority, artifact)
+        assertEquals(
+            setOf("authority", "fee_payment", "destination_proof_b64"),
+            proof.toJsonMap().keys,
+        )
         HttpClientTransport.preflightSccpBridgeSubmitJson(
             proof.toJsonBytes(),
             "/v1/bridge/proofs/submit",
         )
 
-        val message = SccpNativeMessageSubmitRequest(authority, nativeArtifact)
-        assertEquals(setOf("authority", "native_proof_b64"), message.toJsonMap().keys)
+        val message = messageRequest(authority, nativeArtifact)
+        assertEquals(
+            setOf("authority", "fee_payment", "native_proof_b64"),
+            message.toJsonMap().keys,
+        )
         HttpClientTransport.preflightSccpBridgeSubmitJson(
             message.toJsonBytes(),
             "/v1/bridge/messages",
         )
 
         val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
-            TransactionPayload(authority = authority, creationTimeMs = 7),
+            TransactionPayload(
+                authority = authority,
+                creationTimeMs = 7,
+                executable = Executable.instructions(emptyList()),
+                feePayment = FeePaymentIntent.authority(emptyList()),
+            ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
+        val gasBoundTransaction = Base64.getEncoder().encodeToString(
+            NoritoJavaCodecAdapter().encodeTransaction(
+                TransactionPayload(
+                    authority = authority,
+                    creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
+                    feePayment = FeePaymentIntent.authority(emptyList(), 9),
+                ),
+            ),
+        )
+        assertFailsWith<IllegalArgumentException> {
+            destinationRequest(
+                authority,
+                artifact,
+                signatureB64 = Base64.getEncoder().encodeToString(ByteArray(64) { 1 }),
+                transactionPayloadB64 = gasBoundTransaction,
+                creationTimeMs = 7,
+            )
+        }
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
         val genericSignature = Base64.getEncoder().encodeToString(ByteArray(65) { 1 })
         assertEquals(genericSignature, normalizeOptionalSignature(genericSignature))
-        val signed = SccpDestinationProofSubmitRequest(
+        val signed = destinationRequest(
             authority = authority,
             destinationProofB64 = artifact,
             signatureB64 = signature,
@@ -69,7 +102,7 @@ class SccpClientExactTest {
         )
         assertEquals(
             setOf(
-                "authority", "destination_proof_b64", "signature_b64",
+                "authority", "fee_payment", "destination_proof_b64", "signature_b64",
                 "transaction_payload_b64", "creation_time_ms",
             ),
             signed.toJsonMap().keys,
@@ -78,7 +111,7 @@ class SccpClientExactTest {
             signed.toJsonBytes(),
             "/v1/bridge/proofs/submit",
         )
-        val signedMessage = SccpNativeMessageSubmitRequest(
+        val signedMessage = messageRequest(
             authority = authority,
             nativeProofB64 = nativeArtifact,
             signatureB64 = signature,
@@ -87,7 +120,7 @@ class SccpClientExactTest {
         )
         assertEquals(
             setOf(
-                "authority", "native_proof_b64", "signature_b64",
+                "authority", "fee_payment", "native_proof_b64", "signature_b64",
                 "transaction_payload_b64", "creation_time_ms",
             ),
             signedMessage.toJsonMap().keys,
@@ -144,8 +177,8 @@ class SccpClientExactTest {
         val nativeArtifact = canonicalNativeArtifact()
         assertEquals(369, SccpV1.TAIRA_I105_DISCRIMINANT_V1)
         assertEquals(369, AccountAddress.detectI105Discriminant(tairaAuthority))
-        SccpDestinationProofSubmitRequest(tairaAuthority, artifact)
-        SccpNativeMessageSubmitRequest(tairaAuthority, nativeArtifact)
+        destinationRequest(tairaAuthority, artifact)
+        messageRequest(tairaAuthority, nativeArtifact)
 
         val checksumMutation = tairaAuthority.dropLast(1) +
             if (tairaAuthority.last() == '1') "2" else "1"
@@ -159,10 +192,10 @@ class SccpClientExactTest {
         )
         for ((label, invalidAuthority) in invalidAuthorities) {
             assertFailsWith<IllegalArgumentException>(label) {
-                SccpDestinationProofSubmitRequest(invalidAuthority, artifact)
+                destinationRequest(invalidAuthority, artifact)
             }
             assertFailsWith<IllegalArgumentException>(label) {
-                SccpNativeMessageSubmitRequest(invalidAuthority, nativeArtifact)
+                messageRequest(invalidAuthority, nativeArtifact)
             }
             assertFailsWith<IllegalArgumentException>(label) {
                 HttpClientTransport.preflightSccpBridgeSubmitJson(
@@ -247,7 +280,12 @@ class SccpClientExactTest {
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
         val transaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter().encodeTransaction(
-                TransactionPayload(authority = authority, creationTimeMs = 7),
+                TransactionPayload(
+                    authority = authority,
+                    creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
+                    feePayment = FeePaymentIntent.authority(emptyList()),
+                ),
             ),
         )
         for (body in listOf(
@@ -295,47 +333,52 @@ class SccpClientExactTest {
         val canonical = canonicalArtifactBytes(SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME)
         val encoded = Base64.getEncoder().encodeToString(canonical)
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest("alice", encoded)
+            destinationRequest("alice", encoded)
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(authority, encoded.trimEnd('='))
+            destinationRequest(authority, encoded.trimEnd('='))
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(authority, " $encoded")
+            destinationRequest(authority, " $encoded")
         }
         val corrupted = canonical.copyOf().also { it[it.lastIndex] = (it.last() + 1).toByte() }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 Base64.getEncoder().encodeToString(corrupted),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 Base64.getEncoder().encodeToString(canonical + 0),
             )
         }
         val zeroSchema = canonical.copyOf().also { it.fill(0, 6, 22) }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 Base64.getEncoder().encodeToString(zeroSchema),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(authority, encoded, creationTimeMs = 0)
+            destinationRequest(authority, encoded, creationTimeMs = 0)
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(authority, encoded, signatureB64 = "AQ==")
+            destinationRequest(authority, encoded, signatureB64 = "AQ==")
         }
         val signature = Base64.getEncoder().encodeToString(ByteArray(64) { 1 })
         val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
-            TransactionPayload(authority = authority, creationTimeMs = 7),
+            TransactionPayload(
+                authority = authority,
+                creationTimeMs = 7,
+                executable = Executable.instructions(emptyList()),
+                feePayment = FeePaymentIntent.authority(emptyList()),
+            ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = signature,
@@ -343,7 +386,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 transactionPayloadB64 = transaction,
@@ -351,7 +394,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = signature,
@@ -359,7 +402,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = signature,
@@ -369,11 +412,16 @@ class SccpClientExactTest {
         }
         val wrongAuthorityTransaction = Base64.getEncoder().encodeToString(
             NoritoJavaCodecAdapter().encodeTransaction(
-                TransactionPayload(authority = otherAuthority, creationTimeMs = 7),
+                TransactionPayload(
+                    authority = otherAuthority,
+                    creationTimeMs = 7,
+                    executable = Executable.instructions(emptyList()),
+                    feePayment = FeePaymentIntent.authority(emptyList()),
+                ),
             ),
         )
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = signature,
@@ -382,7 +430,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = Base64.getEncoder().encodeToString(ByteArray(64)),
@@ -391,7 +439,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 encoded,
                 signatureB64 = Base64.getEncoder().encodeToString(
@@ -402,18 +450,18 @@ class SccpClientExactTest {
             )
         }
         val native = canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME)
-        SccpNativeMessageSubmitRequest(authority, Base64.getEncoder().encodeToString(native))
+        messageRequest(authority, Base64.getEncoder().encodeToString(native))
         assertFailsWith<IllegalArgumentException> {
-            SccpNativeMessageSubmitRequest(authority, encoded)
+            messageRequest(authority, encoded)
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 Base64.getEncoder().encodeToString(native),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpNativeMessageSubmitRequest(
+            messageRequest(
                 authority,
                 Base64.getEncoder().encodeToString(
                     canonicalArtifactBytes(SCCP_NATIVE_INBOUND_PROOF_SCHEMA_NAME, 8),
@@ -421,7 +469,7 @@ class SccpClientExactTest {
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            SccpDestinationProofSubmitRequest(
+            destinationRequest(
                 authority,
                 Base64.getEncoder().encodeToString(
                     canonicalArtifactBytes(SCCP_DESTINATION_ARTIFACT_SCHEMA_NAME, 8),
@@ -638,6 +686,36 @@ class SccpClientExactTest {
             SccpJsonParser.parseCapabilities(jsonBytes(driftedRegistryLimits))
         }
     }
+
+    private fun destinationRequest(
+        authority: String,
+        destinationProofB64: String,
+        signatureB64: String? = null,
+        transactionPayloadB64: String? = null,
+        creationTimeMs: Long? = null,
+    ): SccpDestinationProofSubmitRequest = SccpDestinationProofSubmitRequest(
+        authority,
+        destinationProofB64,
+        bridgeFeePayment,
+        signatureB64,
+        transactionPayloadB64,
+        creationTimeMs,
+    )
+
+    private fun messageRequest(
+        authority: String,
+        nativeProofB64: String,
+        signatureB64: String? = null,
+        transactionPayloadB64: String? = null,
+        creationTimeMs: Long? = null,
+    ): SccpNativeMessageSubmitRequest = SccpNativeMessageSubmitRequest(
+        authority,
+        nativeProofB64,
+        bridgeFeePayment,
+        signatureB64,
+        transactionPayloadB64,
+        creationTimeMs,
+    )
 
     @Test
     fun registryValidatesElevenSignalKeySemanticPolicyAndExactFamilies() {
@@ -1275,7 +1353,11 @@ class SccpClientExactTest {
     @Test
     fun detachedSigningResponseAcceptsBothClosedBackendsAndRejectsCrossFamilyLabels() {
         val transactionBytes = NoritoJavaCodecAdapter().encodeTransaction(
-            TransactionPayload(creationTimeMs = 10),
+            TransactionPayload(
+                creationTimeMs = 10,
+                executable = Executable.instructions(emptyList()),
+                feePayment = FeePaymentIntent.authority(emptyList()),
+            ),
         )
         val transaction = Base64.getEncoder().encodeToString(transactionBytes)
         val signing = Base64.getEncoder().encodeToString(IrohaHash.prehash(transactionBytes))

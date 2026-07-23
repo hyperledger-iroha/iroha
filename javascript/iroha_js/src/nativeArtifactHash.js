@@ -6,6 +6,14 @@ const MACH_O_64_HEADER_BYTES = 32;
 const LC_SEGMENT_64 = 0x19;
 const LC_CODE_SIGNATURE = 0x1d;
 const MAX_LOAD_COMMANDS = 4096;
+const PE_DOS_HEADER_BYTES = 64;
+const PE_SIGNATURE_BYTES = Buffer.from([0x50, 0x45, 0x00, 0x00]);
+const PE_COFF_HEADER_BYTES = 20;
+const PE_OPTIONAL_MAGIC_32 = 0x10b;
+const PE_OPTIONAL_MAGIC_64 = 0x20b;
+const PE_CHECKSUM_OFFSET = 64;
+const PE_CERTIFICATE_DIRECTORY_INDEX = 4;
+const PE_CERTIFICATE_ALIGNMENT = 8;
 
 function fail(message) {
   throw new TypeError(`invalid signed Mach-O native binding: ${message}`);
@@ -13,6 +21,24 @@ function fail(message) {
 
 function readU32(bytes, offset, label) {
   if (offset < 0 || offset + 4 > bytes.length) fail(`${label} is out of bounds`);
+  return bytes.readUInt32LE(offset);
+}
+
+function failPE(message) {
+  throw new TypeError(`invalid Authenticode PE native binding: ${message}`);
+}
+
+function readPeU16(bytes, offset, limit, label) {
+  if (offset < 0 || offset + 2 > limit || offset + 2 > bytes.length) {
+    failPE(`${label} is out of bounds`);
+  }
+  return bytes.readUInt16LE(offset);
+}
+
+function readPeU32(bytes, offset, limit, label) {
+  if (offset < 0 || offset + 4 > limit || offset + 4 > bytes.length) {
+    failPE(`${label} is out of bounds`);
+  }
   return bytes.readUInt32LE(offset);
 }
 
@@ -120,5 +146,135 @@ export function machOSigningIndependentSHA256(bytes) {
   normalized.fill(0, linkeditSegment + 32, linkeditSegment + 40);
   normalized.fill(0, linkeditSegment + 48, linkeditSegment + 56);
   normalized.fill(0, codeSignatureCommand + 12, codeSignatureCommand + 16);
+  return createHash("sha256").update(normalized).digest("hex");
+}
+
+/**
+ * Return a signing-identity-independent SHA-256 for one PE/COFF image, or
+ * `null` when `bytes` is not that file format.
+ *
+ * `unsignedSize` is the exact byte length recorded before Authenticode
+ * signing. Signing may change only the PE checksum, the certificate-table
+ * directory entry, up to seven zero alignment bytes after `unsignedSize`, and
+ * one final non-empty WIN_CERTIFICATE table. A caller that accepts this digest
+ * must still validate Authenticode with the operating system before loading
+ * the image.
+ */
+export function peSigningIndependentSHA256(
+  bytes,
+  unsignedSize = bytes?.length,
+  { requireSigned = false } = {},
+) {
+  if (!Buffer.isBuffer(bytes)) {
+    throw new TypeError("native artifact bytes must be a Buffer");
+  }
+  if (bytes.length < 2 || bytes[0] !== 0x4d || bytes[1] !== 0x5a) {
+    return null;
+  }
+  if (bytes.length < PE_DOS_HEADER_BYTES) failPE("DOS header is truncated");
+  if (
+    !Number.isSafeInteger(unsignedSize) ||
+    unsignedSize < PE_DOS_HEADER_BYTES ||
+    unsignedSize > bytes.length
+  ) {
+    failPE("unsigned byte length is outside the file bounds");
+  }
+  if (typeof requireSigned !== "boolean") {
+    throw new TypeError("requireSigned must be a boolean");
+  }
+
+  const peOffset = readPeU32(bytes, 0x3c, unsignedSize, "PE header offset");
+  if (
+    peOffset < PE_DOS_HEADER_BYTES ||
+    peOffset + PE_SIGNATURE_BYTES.length + PE_COFF_HEADER_BYTES > unsignedSize
+  ) {
+    failPE("PE/COFF header is out of bounds");
+  }
+  if (!bytes.subarray(peOffset, peOffset + 4).equals(PE_SIGNATURE_BYTES)) {
+    failPE("PE signature is missing");
+  }
+
+  const coffOffset = peOffset + PE_SIGNATURE_BYTES.length;
+  const optionalBytes = readPeU16(
+    bytes,
+    coffOffset + 16,
+    unsignedSize,
+    "optional-header byte length",
+  );
+  const optionalOffset = coffOffset + PE_COFF_HEADER_BYTES;
+  const optionalEnd = optionalOffset + optionalBytes;
+  if (optionalBytes === 0 || optionalEnd > unsignedSize) {
+    failPE("optional header is out of bounds");
+  }
+  const magic = readPeU16(bytes, optionalOffset, optionalEnd, "optional-header magic");
+  let directoryCountOffset;
+  let directoryOffset;
+  if (magic === PE_OPTIONAL_MAGIC_32) {
+    directoryCountOffset = optionalOffset + 92;
+    directoryOffset = optionalOffset + 96;
+  } else if (magic === PE_OPTIONAL_MAGIC_64) {
+    directoryCountOffset = optionalOffset + 108;
+    directoryOffset = optionalOffset + 112;
+  } else {
+    failPE("optional-header magic is unsupported");
+  }
+  const directoryCount = readPeU32(
+    bytes,
+    directoryCountOffset,
+    optionalEnd,
+    "data-directory count",
+  );
+  if (directoryCount <= PE_CERTIFICATE_DIRECTORY_INDEX) {
+    failPE("certificate-table directory is absent");
+  }
+  const certificateDirectory =
+    directoryOffset + PE_CERTIFICATE_DIRECTORY_INDEX * 8;
+  const certificateOffset = readPeU32(
+    bytes,
+    certificateDirectory,
+    optionalEnd,
+    "certificate-table file offset",
+  );
+  const certificateBytes = readPeU32(
+    bytes,
+    certificateDirectory + 4,
+    optionalEnd,
+    "certificate-table byte length",
+  );
+  const checksumOffset = optionalOffset + PE_CHECKSUM_OFFSET;
+  readPeU32(bytes, checksumOffset, optionalEnd, "PE checksum");
+
+  if (certificateOffset === 0 || certificateBytes === 0) {
+    if (
+      certificateOffset !== 0 ||
+      certificateBytes !== 0 ||
+      unsignedSize !== bytes.length
+    ) {
+      failPE("unsigned certificate-table layout is inconsistent");
+    }
+    if (requireSigned) failPE("Authenticode certificate table is absent");
+  } else {
+    if (
+      certificateOffset % PE_CERTIFICATE_ALIGNMENT !== 0 ||
+      certificateBytes < 8 ||
+      certificateBytes % PE_CERTIFICATE_ALIGNMENT !== 0 ||
+      certificateOffset < unsignedSize ||
+      certificateOffset - unsignedSize >= PE_CERTIFICATE_ALIGNMENT ||
+      certificateOffset + certificateBytes !== bytes.length
+    ) {
+      failPE("certificate table is not the final aligned file region");
+    }
+    if (
+      !bytes
+        .subarray(unsignedSize, certificateOffset)
+        .every((byte) => byte === 0)
+    ) {
+      failPE("certificate alignment padding is non-zero");
+    }
+  }
+
+  const normalized = Buffer.from(bytes.subarray(0, unsignedSize));
+  normalized.fill(0, checksumOffset, checksumOffset + 4);
+  normalized.fill(0, certificateDirectory, certificateDirectory + 8);
   return createHash("sha256").update(normalized).digest("hex");
 }

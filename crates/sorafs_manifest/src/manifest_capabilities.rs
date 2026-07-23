@@ -209,7 +209,8 @@ mod tests {
             profile_aliases: Some(vec!["sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 1,
+                stake_amount: crate::deal::XorQuantity::try_from_micro(1)
+                    .expect("fixture stake is representable"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,

@@ -46,7 +46,10 @@ fn find_roles() -> Result<()> {
         .map(|role_id| Register::role(Role::new(role_id, ALICE_ID.clone())))
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(register_roles),
+        test_client.submit_all_blocking(
+            register_roles,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ),
         stringify!(find_roles),
     )?
     .is_none()
@@ -104,7 +107,10 @@ fn find_role_ids() -> Result<()> {
         .map(|role_id| Register::role(Role::new(role_id, ALICE_ID.clone())))
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(register_roles),
+        test_client.submit_all_blocking(
+            register_roles,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ),
         stringify!(find_role_ids),
     )?
     .is_none()
@@ -145,7 +151,10 @@ fn find_role_by_id() -> Result<()> {
     // Registering role
     let register_role = Register::role(new_role.clone());
     if sandbox::handle_result(
-        test_client.submit_blocking(register_role),
+        test_client.submit_blocking(
+            register_role,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ),
         stringify!(find_role_by_id),
     )?
     .is_none()
@@ -216,7 +225,10 @@ fn find_roles_by_account_id() -> Result<()> {
         })
         .collect::<Vec<_>>();
     if sandbox::handle_result(
-        test_client.submit_all_blocking(register_roles),
+        test_client.submit_all_blocking(
+            register_roles,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        ),
         stringify!(find_roles_by_account_id),
     )?
     .is_none()

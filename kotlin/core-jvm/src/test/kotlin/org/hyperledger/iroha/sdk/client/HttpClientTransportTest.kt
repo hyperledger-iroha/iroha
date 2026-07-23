@@ -1,5 +1,6 @@
 package org.hyperledger.iroha.sdk.client
 
+import java.math.BigInteger
 import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
@@ -11,18 +12,27 @@ import java.security.Signature
 import java.util.Base64
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionException
+import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
+import org.bouncycastle.crypto.signers.Ed25519Signer
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.address.AssetDefinitionIdEncoder
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.alias.*
 import org.hyperledger.iroha.sdk.client.transport.TransportRequest
 import org.hyperledger.iroha.sdk.client.transport.TransportResponse
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
+import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeeSponsorProgramId
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.nexus.UaidPortfolioQuery
@@ -33,6 +43,9 @@ import org.hyperledger.iroha.sdk.tx.SignedTransactionHasher
 import org.hyperledger.iroha.sdk.tx.norito.NoritoJavaCodecAdapter
 
 class HttpClientTransportTest {
+    private fun testFeePayment(gasLimit: Long? = null): FeePaymentIntent =
+        FeePaymentIntent.authority(emptyList(), gasLimit)
+
     private fun testMultisigAccountId(): String =
         AccountAddress.fromAccount(ByteArray(32) { 0x37.toByte() }, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -877,116 +890,6 @@ class HttpClientTransportTest {
         }
     }
 
-    @Test
-    fun deployContractPostsAliasFirstPayloadAndParsesResponse() {
-        val executor = StubResponseExecutor(
-            statusCode = 200,
-            body = """
-                {
-                  "ok": true,
-                  "bundle_name": "single-contract-deploy",
-                  "bundle_digest": "mock-bundle-digest",
-                  "chain_fingerprint": "mock-chain@height-0",
-                  "dry_run": false,
-                  "completed_stages": ["plan", "deploy"],
-                  "failure_point": null,
-                  "contracts": [
-                    {
-                      "name": "router::universal",
-                      "contract_alias": "router::universal",
-                      "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                      "previous_contract_address": null,
-                      "kaizen": false,
-                      "dataspace": "router",
-                      "deploy_nonce": 7,
-                      "tx_hash_hex": "${"11".repeat(32)}",
-                      "pipeline_status": {
-                        "hash": "${"11".repeat(32)}",
-                        "status": {"kind": "Queued"},
-                        "summary": "Queued",
-                        "diagnostics": [],
-                        "scope": "local",
-                        "resolved_from": "queue"
-                      },
-                      "code_hash_hex": "${"22".repeat(32)}",
-                      "abi_hash_hex": "${"33".repeat(32)}",
-                      "status": "submitted"
-                    }
-                  ],
-                  "hajimari_calls": [
-                    {
-                      "id": "initialize",
-                      "contract_alias": "router::universal",
-                      "entrypoint": "initialize",
-                      "tx_hash_hex": "${"12".repeat(32)}",
-                      "pipeline_status": {
-                        "hash": "${"12".repeat(32)}",
-                        "status": {"kind": "Queued"},
-                        "summary": "Queued",
-                        "diagnostics": [],
-                        "scope": "local",
-                        "resolved_from": "queue"
-                      },
-                      "status": "submitted"
-                    }
-                  ],
-                  "assertions": []
-                }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
-        )
-        val transport = HttpClientTransport.withExecutor(
-            executor = executor,
-            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
-        )
-
-        val response = transport.deployContract(
-            authority = "alice",
-            privateKey = "privkey",
-            codeB64 = "AQID",
-            contractAlias = "router::universal",
-        ).join()
-
-        assertTrue(response.isPresent)
-        val parsed = response.get()
-        assertTrue(parsed.ok)
-        assertFalse(parsed.contracts.first().kaizen)
-        assertEquals("mock-bundle-digest", parsed.bundleDigest)
-        assertEquals("router::universal", parsed.contracts.first().contractAlias)
-        assertEquals("router", parsed.contracts.first().dataspace)
-        assertEquals(7L, parsed.contracts.first().deployNonce)
-        assertEquals("11".repeat(32), parsed.contracts.first().txHashHex)
-        assertEquals("local", parsed.contracts.first().pipelineStatus?.get("scope"))
-        assertEquals("queue", parsed.hajimariCalls.first().pipelineStatus?.get("resolved_from"))
-
-        val request = executor.lastRequest
-        assertNotNull(request)
-        assertEquals("POST", request.method)
-        assertEquals("https://torii.example/api/v1/contracts/deploy", request.uri.toString())
-        @Suppress("UNCHECKED_CAST")
-        val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
-        assertEquals("alice", payload["authority"])
-        assertEquals("privkey", payload["private_key"])
-        assertEquals("AQID", payload["code_b64"])
-        assertEquals("router::universal", payload["contract_alias"])
-        assertFalse(payload.containsKey("lease_expiry_ms"))
-    }
-
-    @Test
-    fun deployContractResponseRejectsRetiredInitCallsField() {
-        val error = assertFailsWith<IllegalStateException> {
-            ContractJsonParser.parseDeployResponse(
-                """
-                    {
-                      "contracts": [],
-                      "init_calls": [],
-                      "assertions": []
-                    }
-                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
-            )
-        }
-
-        assertTrue(error.message?.contains("hajimari_calls must be an array") == true)
-    }
 
     @Test
     fun callContractPostsSelectorPayloadAndParsesResponse() {
@@ -1030,8 +933,10 @@ class HttpClientTransportTest {
                     "entrypoint_hash_hex": "${"77".repeat(32)}",
                     "gas_limit": 5000,
                     "gas_used": 17,
-                    "gas_asset_id": "xor#sora",
-                    "fee_sponsor": "alice",
+                    "fee_payment": {
+                      "payer": "authority",
+                      "value": {"charge_limits": [], "gas_limit": 5000}
+                    },
                     "payload_digest_hex": "${"88".repeat(32)}"
                   }
                 }
@@ -1045,11 +950,10 @@ class HttpClientTransportTest {
         val response = transport.callContract(
             authority = "alice",
             privateKey = "privkey",
-            gasLimit = 5_000L,
+            feePayment = testFeePayment(5_000L),
             contractAlias = "router::universal",
             entrypoint = "contribute",
             payload = linkedMapOf("buyer" to "alice", "payment_amount" to 1L),
-            gasAssetId = "xor#sora",
         ).join()
 
         assertTrue(response.ok)
@@ -1061,6 +965,7 @@ class HttpClientTransportTest {
         assertEquals("local", response.pipelineStatus?.get("scope"))
         assertEquals("contract_call", response.operationReceipt.operationKind)
         assertEquals(5_000L, response.operationReceipt.gasLimit)
+        assertEquals(5_000L, response.operationReceipt.feePayment?.gasLimit)
         assertEquals("88".repeat(32), response.operationReceipt.payloadDigestHex)
         assertEquals("AQID", response.transactionScaffoldB64)
         assertEquals("BAUG", response.signedTransactionB64)
@@ -1076,9 +981,14 @@ class HttpClientTransportTest {
         assertEquals("privkey", payload["private_key"])
         assertEquals("router::universal", payload["contract_alias"])
         assertFalse(payload.containsKey("contract_address"))
-        assertEquals(5000L, (payload["gas_limit"] as Number).toLong())
         assertEquals("contribute", payload["entrypoint"])
-        assertEquals("xor#sora", payload["gas_asset_id"])
+        assertFalse(payload.containsKey("gas_limit"))
+        assertFalse(payload.containsKey("gas_asset_id"))
+        @Suppress("UNCHECKED_CAST")
+        val feePayment = payload["fee_payment"] as Map<String, Any?>
+        @Suppress("UNCHECKED_CAST")
+        val feeValue = feePayment["value"] as Map<String, Any?>
+        assertEquals(5_000L, (feeValue["gas_limit"] as Number).toLong())
         @Suppress("UNCHECKED_CAST")
         val args = payload["payload"] as Map<String, Any?>
         assertEquals("alice", args["buyer"])
@@ -1096,15 +1006,18 @@ class HttpClientTransportTest {
         assertTrue(Regex("(?:[0-9a-f]{2})+").matches(string(record, "norito_hex")))
 
         val boundary = obj(fixture, "torii_boundary")
+        val boundaryFeePayment = FeePaymentJson.parse(
+            boundary["fee_payment"],
+            "torii_boundary.fee_payment",
+        )
         val request = HttpClientTransport.buildContractCallPayload(
             authority = string(boundary, "authority"),
             privateKey = "fixture-private-key",
-            gasLimit = (boundary["gas_limit"] as Number).toLong(),
+            feePayment = boundaryFeePayment,
             contractAddress = null,
             contractAlias = string(boundary, "contract_alias"),
             entrypoint = string(boundary, "entrypoint"),
             payload = boundary["payload"],
-            gasAssetId = null,
         )
 
         assertEquals(string(boundary, "authority"), request["authority"])
@@ -1113,7 +1026,7 @@ class HttpClientTransportTest {
         assertFalse(request.containsKey("contract_address"))
         assertEquals(string(boundary, "entrypoint"), request["entrypoint"])
         assertEquals(boundary["payload"], request["payload"])
-        assertEquals((boundary["gas_limit"] as Number).toLong(), request["gas_limit"])
+        assertEquals(boundaryFeePayment.toJsonMap(), request["fee_payment"])
         assertFalse(request.containsKey("argument_record"))
         assertFalse(request.containsKey("argument_record_norito_hex"))
     }
@@ -1146,11 +1059,11 @@ class HttpClientTransportTest {
 
         val response = transport.proposeMultisig(
             MultisigProposeRequest(
+                feePayment = testFeePayment(),
                 multisigAccountAlias = "cbdc@banka",
                 signerAccountId = "alice",
                 instructions = listOf(instructionBytes),
                 creationTimeMs = 123,
-                feeSponsor = "fee-sponsor",
                 memo = "QR invoice 42",
                 validationFeePolicyVersion = 7,
                 validationFeePolicyHash = "AB".repeat(32),
@@ -1173,7 +1086,10 @@ class HttpClientTransportTest {
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("cbdc@banka", payload["multisig_account_alias"])
         assertEquals("alice", payload["signer_account_id"])
-        assertEquals("fee-sponsor", payload["fee_sponsor"])
+        assertFalse(payload.containsKey("fee_sponsor"))
+        @Suppress("UNCHECKED_CAST")
+        val feePayment = payload["fee_payment"] as Map<String, Any?>
+        assertEquals("authority", feePayment["payer"])
         assertEquals("QR invoice 42", payload["memo"])
         assertEquals(123L, (payload["creation_time_ms"] as Number).toLong())
         assertEquals("7", payload["validation_fee_policy_version"])
@@ -1190,6 +1106,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(byteArrayOf()),
@@ -1204,6 +1121,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountId = "aid:multisig",
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
@@ -1214,6 +1132,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
                 )
@@ -1224,6 +1143,7 @@ class HttpClientTransportTest {
             assertFailsWith<IllegalArgumentException> {
                 HttpClientTransport.buildMultisigProposePayload(
                     MultisigProposeRequest(
+                        feePayment = testFeePayment(),
                         multisigAccountAlias = "cbdc@banka",
                         signerAccountId = "alice",
                         instructions = listOf(instruction),
@@ -1235,6 +1155,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1245,6 +1166,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1255,6 +1177,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1265,6 +1188,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1275,6 +1199,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1285,6 +1210,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1297,6 +1223,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1307,6 +1234,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1319,6 +1247,7 @@ class HttpClientTransportTest {
         assertFailsWith<IllegalArgumentException> {
             HttpClientTransport.buildMultisigProposePayload(
                 MultisigProposeRequest(
+                    feePayment = testFeePayment(),
                     multisigAccountAlias = "cbdc@banka",
                     signerAccountId = "alice",
                     instructions = listOf(instruction),
@@ -1432,7 +1361,7 @@ class HttpClientTransportTest {
             transport.callContract(
                 authority = "alice",
                 privateKey = "privkey",
-                gasLimit = 5_000L,
+                feePayment = testFeePayment(5_000L),
                 contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
                 contractAlias = "router::universal",
                 entrypoint = "contribute",
@@ -1449,28 +1378,18 @@ class HttpClientTransportTest {
                 HttpClientTransport.buildContractCallPayload(
                     authority = "alice",
                     privateKey = "privkey",
-                    gasLimit = 1,
+                    feePayment = testFeePayment(1),
                     contractAddress = null,
                     contractAlias = "router::universal",
                     entrypoint = entrypoint,
                     payload = null,
-                    gasAssetId = null,
                 )
             }
             assertTrue(error.message?.contains("entrypoint") == true)
         }
         for (gasLimit in listOf(0L, -1L)) {
             val error = assertFailsWith<IllegalArgumentException> {
-                HttpClientTransport.buildContractCallPayload(
-                    authority = "alice",
-                    privateKey = "privkey",
-                    gasLimit = gasLimit,
-                    contractAddress = null,
-                    contractAlias = "router::universal",
-                    entrypoint = "contribute",
-                    payload = null,
-                    gasAssetId = null,
-                )
+                testFeePayment(gasLimit)
             }
             assertTrue(error.message?.contains("positive") == true)
         }
@@ -1515,7 +1434,9 @@ class HttpClientTransportTest {
             config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
         )
 
-        val response = transport.getGovernanceContract(contractAddress).join()
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_100L, "governance-read")
+        val response = transport.getGovernanceContract(contractAddress, auth).join()
 
         assertTrue(response.found)
         assertEquals(contractAddress, response.contractAddress)
@@ -1877,13 +1798,12 @@ class HttpClientTransportTest {
 
     @Test
     fun getVpnProfileDeserializesNativeLeaseFields() {
-        val executor = StubResponseExecutor(
-            statusCode = 200,
-            body = """
+        val responseJson =
+            """
                 {
                   "available": true,
                   "relay_endpoint": "/dns/relay.example/udp/9443/quic",
-                  "supported_exit_classes": ["standard", "low-latency"],
+                  "supported_exit_classes": ["standard", "low-latency", "high-security"],
                   "default_exit_class": "standard",
                   "lease_secs": 600,
                   "dns_push_interval_secs": 60,
@@ -1892,18 +1812,21 @@ class HttpClientTransportTest {
                   "excluded_routes": ["10.0.0.0/8"],
                   "dns_servers": ["1.1.1.1"],
                   "tunnel_addresses": ["10.208.0.2/32"],
-                  "mtu_bytes": 1024,
+                  "mtu_bytes": 1280,
                   "display_billing_label": "standard XOR",
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "sorauEscrow",
                   "operator_account_id": "sorauOperator",
-                  "lease_fee_nanos": 1000000,
+                  "lease_fee": "1000000.25",
                   "settlement_grace_secs": 120,
                   "flow_label_bits": 24,
                   "padding_budget_ms": 15,
                   "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
                 }
-            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            """.trimIndent()
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = responseJson.toByteArray(StandardCharsets.UTF_8),
         )
         val transport = HttpClientTransport.withExecutor(
             executor = executor,
@@ -1916,11 +1839,31 @@ class HttpClientTransportTest {
         assertEquals("xor#universal.universal", profile.feeAssetId)
         assertEquals("sorauEscrow", profile.escrowAccountId)
         assertEquals("sorauOperator", profile.operatorAccountId)
-        assertEquals(1_000_000L, profile.leaseFeeNanos)
+        assertEquals("1000000.25", profile.leaseFee)
+        assertEquals(60L, profile.dnsPushIntervalSecs)
         assertEquals(120L, profile.settlementGraceSecs)
         assertEquals("ab".repeat(32), profile.relayTlsSpkiSha256Hex)
         assertEquals("GET", executor.lastRequest.method)
         assertEquals("https://torii.example/v1/vpn/profile", executor.lastRequest.uri.toString())
+
+        val belowMinimum = responseJson.replace("\"dns_push_interval_secs\": 60", "\"dns_push_interval_secs\": 29")
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseProfile(belowMinimum.toByteArray(StandardCharsets.UTF_8))
+        }
+        val missing = responseJson.lineSequence()
+            .filterNot { it.contains("\"dns_push_interval_secs\"") }
+            .joinToString("\n")
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseProfile(missing.toByteArray(StandardCharsets.UTF_8))
+        }
+        val unknown = responseJson.replaceFirst("{", "{\"unexpected\":true,")
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseProfile(unknown.toByteArray(StandardCharsets.UTF_8))
+        }
+        val uppercaseTlsPin = responseJson.replace("ab".repeat(32), "AB".repeat(32))
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseProfile(uppercaseTlsPin.toByteArray(StandardCharsets.UTF_8))
+        }
     }
 
     @Test
@@ -1958,6 +1901,195 @@ class HttpClientTransportTest {
         assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
         assertEquals("vpn-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
         assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "vpn-nonce-1")
+    }
+
+    @Test
+    fun quoteFeesSignsExactUnsignedPayloadAndPreservesPayer() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "intent": {
+                    "payer": "authority",
+                    "value": {"charge_limits": [], "gas_limit": 9000}
+                  },
+                  "observation": {"schedule_revision": 4},
+                  "components": [],
+                  "capacities": [],
+                  "decision": {"accepted": true}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_020L, "fee-quote-1")
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val unsignedPayload = linkedMapOf<String, Any?>(
+            "chain" to "test-chain",
+            "authority" to "alice",
+            "fee_payment" to testFeePayment(9_000L).toJsonMap(),
+        )
+
+        val quote = transport.quoteFees(unsignedPayload, auth).join()
+
+        assertIs<FeePaymentIntent.Authority>(quote.intent)
+        assertEquals(9_000L, quote.intent.gasLimit)
+        assertEquals(4L, (quote.observation["schedule_revision"] as Number).toLong())
+        assertEquals("POST", executor.lastRequest.method)
+        assertEquals("https://torii.example/api/v1/fees/quote", executor.lastRequest.uri.toString())
+        @Suppress("UNCHECKED_CAST")
+        val request = JsonParser.parse(readBody(executor.lastRequest)) as Map<String, Any?>
+        assertEquals(unsignedPayload, request["payload"])
+        assertCanonicalSignature(executor.lastRequest, keyPair.public, 1_700_000_000_020L, "fee-quote-1")
+
+        val requestCount = executor.requestCount
+        assertFailsWith<IllegalArgumentException> {
+            transport.quoteFees(unsignedPayload, ToriiCanonicalRequestAuth("bob", keyPair.private))
+        }
+        assertEquals(requestCount, executor.requestCount)
+    }
+
+    @Test
+    fun quoteFeesRejectsPayerRevisionAndGasSubstitution() {
+        val sponsor = testMultisigAccountId()
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private)
+        val sponsorIntent = FeePaymentIntent.sponsor(
+            FeeSponsorProgramId(sponsor, "wallet_fx"),
+            3,
+            emptyList(),
+            9_000L,
+        )
+
+        fun assertRejected(requested: FeePaymentIntent, responseIntent: String) {
+            val executor = StubResponseExecutor(
+                statusCode = 200,
+                body = """
+                    {
+                      "intent": $responseIntent,
+                      "observation": {},
+                      "components": [],
+                      "capacities": [],
+                      "decision": {}
+                    }
+                """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+            )
+            val transport = HttpClientTransport.withExecutor(
+                executor = executor,
+                config = ClientConfig.builder()
+                    .setBaseUri(URI.create("https://torii.example"))
+                    .build(),
+            )
+            val error = assertFailsWith<java.util.concurrent.CompletionException> {
+                transport.quoteFees(
+                    linkedMapOf(
+                        "authority" to "alice",
+                        "fee_payment" to requested.toJsonMap(),
+                    ),
+                    auth,
+                ).join()
+            }
+            assertIs<IllegalArgumentException>(error.cause)
+        }
+
+        assertRejected(
+            testFeePayment(9_000L),
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":9001}}""",
+        )
+        assertRejected(
+            sponsorIntent,
+            """{"payer":"authority","value":{"charge_limits":[],"gas_limit":9000}}""",
+        )
+        assertRejected(
+            sponsorIntent,
+            """{"payer":"sponsor","value":{"program_id":{"sponsor":"$sponsor","name":"wallet_fx"},"program_revision":4,"charge_limits":[],"gas_limit":9000}}""",
+        )
+    }
+
+    @Test
+    fun getFeeSponsorProgramSignsExactSelectorAndParsesLifecycle() {
+        val sponsor = testMultisigAccountId()
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "id": {"sponsor": "$sponsor", "name": "wallet_fx"},
+                  "lifecycle": {"state": "active", "value": null},
+                  "active_revision": 3,
+                  "staged_revision": 4,
+                  "scheduled_activation": {"revision": 4, "activate_at_height": 100}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_700_000_000_021L,
+            "fee-program-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example/api"))
+                .build(),
+        )
+
+        val program = transport.getFeeSponsorProgram(
+            FeeSponsorProgramId(sponsor, "wallet_fx"),
+            auth,
+        ).join()
+
+        assertEquals(sponsor, program.id.sponsor)
+        assertEquals("wallet_fx", program.id.name)
+        assertEquals(FeeSponsorProgramLifecycle.ACTIVE, program.lifecycle)
+        assertEquals(3L, program.activeRevision)
+        assertEquals(4L, program.stagedRevision)
+        assertEquals(4L, program.scheduledActivation?.revision)
+        assertEquals(100L, program.scheduledActivation?.activateAtHeight)
+        assertEquals("POST", executor.lastRequest.method)
+        assertEquals(
+            "https://torii.example/api/v1/fee-sponsor-programs/by-id",
+            executor.lastRequest.uri.toString(),
+        )
+        assertEquals("""{"program_id":"$sponsor/wallet_fx"}""", readBody(executor.lastRequest))
+        assertCanonicalSignature(
+            executor.lastRequest,
+            keyPair.public,
+            1_700_000_000_021L,
+            "fee-program-1",
+        )
+    }
+
+    @Test
+    fun getFeeSponsorProgramRejectsSubstitutedResponseId() {
+        val sponsor = testMultisigAccountId()
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "id": {"sponsor": "$sponsor", "name": "other"},
+                  "lifecycle": {"state": "active", "value": null}
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder()
+                .setBaseUri(URI.create("https://torii.example"))
+                .build(),
+        )
+
+        val error = assertFailsWith<java.util.concurrent.CompletionException> {
+            transport.getFeeSponsorProgram(
+                FeeSponsorProgramId(sponsor, "wallet_fx"),
+                ToriiCanonicalRequestAuth("alice", keyPair.private),
+            ).join()
+        }
+        assertIs<IllegalArgumentException>(error.cause)
     }
 
     @Test
@@ -2029,13 +2161,14 @@ class HttpClientTransportTest {
 
         assertEquals(sessionId, session.sessionId)
         assertEquals(vpnHelperTicketHex(), session.helperTicketHex)
+        assertEquals(1_328, session.helperTicketHex.length)
         assertTrue(fetched.isPresent)
         assertEquals(sessionId, fetched.get().quoteId)
         assertTrue(deleted.isPresent)
         assertEquals("disconnected", deleted.get().status)
         assertEquals("settled", submitted.status)
-        assertEquals(750_000L, submitted.earnedFeeNanos)
-        assertEquals(250_000L, submitted.refundedFeeNanos)
+        assertEquals("750000.125", submitted.earnedFee)
+        assertEquals("250000.125", submitted.refundedFee)
         assertEquals("iroha_data_model::isi::vpn::SettleVpnLease", submitted.settleLeaseInstruction?.wireId)
         assertEquals(1L, receipts.total)
         assertEquals(sessionId, receipts.items.first().leaseIdHex)
@@ -2046,6 +2179,203 @@ class HttpClientTransportTest {
         assertEquals("DELETE", executor.requests[2].method)
         assertEquals("""{"client_voucher_hex":"beef","lease_id_hex":"$sessionId","relay_receipt_hex":"cafe"}""", readBody(executor.requests[3]))
         assertEquals("https://torii.example/v1/vpn/receipts", executor.requests[4].uri.toString())
+    }
+
+    @Test
+    fun vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
+        val sessionId = "33".repeat(32)
+        val paymentTxHash = "44".repeat(32)
+        val valid = vpnHelperTicketHex()
+        val invalidValues = listOf(
+            "0x$valid",
+            valid.uppercase(),
+            valid.dropLast(2),
+        )
+
+        invalidValues.forEach { invalid ->
+            val payload = vpnSessionJson(sessionId, paymentTxHash).replace(valid, invalid)
+            assertFailsWith<IllegalStateException> {
+                VpnJsonParser.parseSession(payload.toByteArray(StandardCharsets.UTF_8))
+            }
+        }
+    }
+
+    @Test
+    fun vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
+        val identifier = "ab".repeat(32)
+        val paymentTxHash = "cd".repeat(32)
+        val meteringKey = "ef".repeat(32)
+        fun bytes(value: String): ByteArray = value.toByteArray(StandardCharsets.UTF_8)
+
+        val quote = vpnQuoteJson(identifier, meteringKey)
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(bytes(quote.replace("\"quote_id\": \"$identifier\"", "\"quote_id\": \"0x$identifier\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(bytes(quote.replace("aa".repeat(16), "AA".repeat(16))))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(bytes(quote.replaceFirst("{", "{\"unexpected\":true,")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseQuote(
+                bytes(quote.replaceFirst("\"payload_hex\": \"cafe\"", "\"payload_hex\": \"cafe\", \"unexpected\": true")),
+            )
+        }
+
+        val session = vpnSessionJson(identifier, paymentTxHash)
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(bytes(session.replace("\"session_id\": \"$identifier\"", "\"session_id\": \"${identifier.uppercase()}\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(bytes(session.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(bytes(session.replaceFirst("{", "{\"unexpected\":true,")))
+        }
+
+        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"lease_id_hex\": \"$identifier\"", "\"lease_id_hex\": \"${identifier.uppercase()}\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(bytes(receipt.replace("\"payment_tx_hash\": \"$paymentTxHash\"", "\"payment_tx_hash\": \"0x$paymentTxHash\"")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(bytes(receipt.replaceFirst("{", "{\"unexpected\":true,")))
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceiptList(bytes("""{"items":[$receipt],"total":1,"unexpected":true}"""))
+        }
+    }
+
+    @Test
+    fun vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
+        val identifier = "ab".repeat(32)
+        val paymentTxHash = "cd".repeat(32)
+        val meteringKey = "ef".repeat(32)
+        val profile = vpnProfileJson()
+        val quote = vpnQuoteJson(identifier, meteringKey)
+        val session = vpnSessionJson(identifier, paymentTxHash)
+        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        val receiptList = """{"items":[$receipt],"total":1}"""
+
+        @Suppress("UNCHECKED_CAST")
+        fun jsonObject(json: String): MutableMap<String, Any?> =
+            (JsonParser.parse(json) as Map<String, Any?>).toMutableMap()
+
+        fun mutated(json: String, field: String, value: Any?): ByteArray {
+            val root = jsonObject(json)
+            root[field] = value
+            return JsonEncoder.encode(root).toByteArray(StandardCharsets.UTF_8)
+        }
+
+        fun missing(json: String, field: String): ByteArray {
+            val root = jsonObject(json)
+            root.remove(field)
+            return JsonEncoder.encode(root).toByteArray(StandardCharsets.UTF_8)
+        }
+
+        val missingCases = listOf(
+            { VpnJsonParser.parseProfile(missing(profile, "relay_tls_spki_sha256_hex")) },
+            { VpnJsonParser.parseQuote(missing(quote, "open_lease_instruction")) },
+            { VpnJsonParser.parseQuote(missing(quote, "tx_instructions")) },
+            { VpnJsonParser.parseSession(missing(session, "route_pushes")) },
+            { VpnJsonParser.parseReceipt(missing(receipt, "settle_lease_instruction")) },
+            { VpnJsonParser.parseReceiptList(missing(receiptList, "items")) },
+        )
+        missingCases.forEach { decode -> assertFailsWith<IllegalStateException> { decode() } }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(mutated(session, "route_pushes", null))
+        }
+
+        val profileViolations = listOf(
+            "supported_exit_classes" to listOf("standard", "low-latency"),
+            "supported_exit_classes" to listOf("standard", "standard", "high-security"),
+            "default_exit_class" to "unsupported",
+            "lease_secs" to 0,
+            "lease_secs" to 4_294_967_296L,
+            "mtu_bytes" to 1_279,
+            "settlement_grace_secs" to 0,
+            "flow_label_bits" to 23,
+            "padding_budget_ms" to 0,
+        )
+        profileViolations.forEach { (field, value) ->
+            assertFailsWith<IllegalStateException> {
+                VpnJsonParser.parseProfile(mutated(profile, field, value))
+            }
+        }
+
+        val instruction = jsonObject(quote)["open_lease_instruction"]
+        listOf(emptyList<Any>(), listOf(instruction, instruction)).forEach { instructions ->
+            assertFailsWith<IllegalStateException> {
+                VpnJsonParser.parseQuote(mutated(quote, "tx_instructions", instructions))
+            }
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseSession(mutated(session, "status", "settled"))
+        }
+        listOf("status" to "active", "receipt_source" to "operator").forEach { (field, value) ->
+            assertFailsWith<IllegalStateException> {
+                VpnJsonParser.parseReceipt(mutated(receipt, field, value))
+            }
+        }
+        val receiptInstruction = mapOf("wire_id" to "SettleVpnLease", "payload_hex" to "abcd")
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceipt(
+                mutated(receipt, "tx_instructions", listOf(receiptInstruction, receiptInstruction)),
+            )
+        }
+
+        val receiptObject = jsonObject(receipt)
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceiptList(
+                mutated(receiptList, "items", List(25) { receiptObject }),
+            )
+        }
+        assertFailsWith<IllegalStateException> {
+            VpnJsonParser.parseReceiptList(mutated(receiptList, "total", 25))
+        }
+    }
+
+    @Test
+    fun vpnRoutesRejectWrongSuccessfulStatusCodes() {
+        val identifier = "33".repeat(32)
+        val paymentTxHash = "44".repeat(32)
+        val meteringKey = "55".repeat(32)
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth("alice", keyPair.private, 1_700_000_000_050L, "vpn-status-nonce")
+        val config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build()
+
+        fun assertRejected(status: Int, body: String, call: (HttpClientTransport) -> Unit) {
+            val transport = HttpClientTransport.withExecutor(
+                executor = StubResponseExecutor(status, body.toByteArray(StandardCharsets.UTF_8)),
+                config = config,
+            )
+            val error = assertFailsWith<java.util.concurrent.CompletionException> { call(transport) }
+            assertTrue(error.cause?.message?.contains("status $status") == true)
+        }
+
+        assertRejected(201, vpnProfileJson()) { it.getVpnProfile().join() }
+        assertRejected(200, vpnQuoteJson(identifier, meteringKey)) {
+            it.createVpnQuote(VpnQuoteCreateRequest("standard", "0x$meteringKey"), auth).join()
+        }
+        assertRejected(200, vpnSessionJson(identifier, paymentTxHash)) {
+            it.createVpnSession(VpnSessionCreateRequest("standard", identifier, "0x$paymentTxHash", meteringKey), auth).join()
+        }
+        assertRejected(201, vpnSessionJson(identifier, paymentTxHash)) {
+            it.getVpnSession(identifier, auth).join()
+        }
+        assertRejected(201, vpnReceiptJson(identifier, paymentTxHash, settled = false)) {
+            it.deleteVpnSession(identifier, auth).join()
+        }
+        assertRejected(200, vpnReceiptJson(identifier, paymentTxHash, settled = true)) {
+            it.submitVpnReceipt(VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x$identifier"), auth).join()
+        }
+        val receipt = vpnReceiptJson(identifier, paymentTxHash, settled = true)
+        assertRejected(201, """{"items":[$receipt],"total":1}""") {
+            it.listVpnReceipts(auth).join()
+        }
     }
 
     @Test
@@ -2215,7 +2545,7 @@ class HttpClientTransportTest {
         val parsed = response.get()
         assertEquals("alice@universal", parsed.alias)
         assertEquals("aid:alice-123", parsed.accountId)
-        assertEquals(42L, parsed.index)
+        assertEquals(BigInteger.valueOf(42), parsed.index)
         assertEquals("directory", parsed.source)
 
         val request = executor.lastRequest
@@ -2226,6 +2556,473 @@ class HttpClientTransportTest {
         val payload = JsonParser.parse(readBody(request)) as Map<String, Any?>
         assertEquals("alice@universal", payload["alias"])
         assertEquals(1, payload.size)
+    }
+
+    @Test
+    fun resolveRestrictedAccountAliasUsesCanonicalAuthentication() {
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = """
+                {
+                  "alias": "merchant@private",
+                  "account_id": "aid:merchant-123",
+                  "source": "world_state"
+                }
+            """.trimIndent().toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            "alice",
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-resolve-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.resolveAccountAlias("merchant@private", auth).join()
+
+        assertTrue(response.isPresent)
+        assertEquals("aid:merchant-123", response.get().accountId)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("alice", request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        assertEquals("1700000000000", request.headers[CanonicalRequestSigner.HEADER_TIMESTAMP_MS]?.first())
+        assertEquals("alias-resolve-nonce-1", request.headers[CanonicalRequestSigner.HEADER_NONCE]?.first())
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-resolve-nonce-1")
+    }
+
+    @Test
+    fun aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan() {
+        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val asset = AssetDefinitionIdEncoder.encodeFromBytes(assetBytes)
+        val alias = ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L)
+        val guard = AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L)
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(
+                alias,
+                authority,
+                AccountProvisionV1.CREATE,
+                AccountAliasRoleV1.PRIMARY,
+            ),
+        )
+        val requestBody = AliasSetupPlanRequestV1(
+            listOf(EnsureAlias(intent, AliasLeaseAcquisitionV1(1), guard)),
+        )
+        val planBody = AliasTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            listOf(
+                AliasPlanResourceV1(
+                    intent,
+                    AliasPlanDispositionV1.CREATE,
+                    AliasLeaseQuoteV1(
+                        AliasTargetV1.AccountAlias(alias),
+                        1,
+                        "3",
+                        guard,
+                        1_800_000_000_000L,
+                        1_800_000_100_000L,
+                        1_800_000_200_000L,
+                    ),
+                    0,
+                ),
+            ),
+            listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(0x4e, 0x52, 0x54, 0x30))),
+            listOf(AliasAssetTotalV1(asset, "3")),
+            emptyList(),
+            emptyList(),
+            1_700_000_100_000L,
+        )
+        val responsePlan = AliasTransactionPlanV1(planBody, "03".repeat(32))
+        val executor = StubResponseExecutor(
+            statusCode = 200,
+            body = JsonEncoder.encode(responsePlan.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            authority,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-plan-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor = executor,
+            config = ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val plan = transport.planAliasSetup(requestBody, auth).join()
+
+        assertEquals(authority, plan.body.authority)
+        assertEquals(AliasPlanDispositionV1.CREATE, plan.body.resources.single().disposition)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("POST", request.method)
+        assertEquals("https://torii.example/api/v1/aliases/setup/plan", request.uri.toString())
+        assertEquals(authority, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        @Suppress("UNCHECKED_CAST")
+        val sent = JsonParser.parse(readBody(request)) as Map<String, Any?>
+        assertEquals(1L, sent["schema_version"])
+        assertEquals(1, (sent["intents"] as List<*>).size)
+        assertFalse(sent.containsKey("private_key"))
+        assertFalse(sent.containsKey("payment_proof"))
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-plan-nonce-1")
+    }
+
+    @Test
+    fun lifecyclePlanningAndSponsoredOnboardingUseOnlySafePlannerRoutes() {
+        val authority = AccountAddress.fromAccount(ByteArray(32) { 0x41 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val targetAccount = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val asset = AssetDefinitionIdEncoder.encodeFromBytes(assetBytes)
+        val alias = ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L)
+        val target = AliasTargetV1.AccountAlias(alias)
+        val guard = AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L)
+        val renewal = RenewAliasLease(target, 1_800_000_000_000L, 1_900_000_000_000L, guard)
+        val renewalRequest = AliasLeaseRenewPlanRequestV1(renewal)
+        val lifecycleBody = AliasLifecycleTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            renewalRequest.operation,
+            AliasLifecyclePlanDispositionV1.APPLY,
+            AliasFramedInstructionV1(RenewAliasLease.WIRE_ID, byteArrayOf(1, 2, 3)),
+            AliasLeaseQuoteV1(
+                target,
+                1,
+                "3",
+                guard,
+                1_900_000_000_000L,
+                1_900_000_100_000L,
+                1_900_000_200_000L,
+            ),
+            listOf(AliasAssetTotalV1(asset, "3")),
+            emptyList(),
+            emptyList(),
+            guard.validUntilMs,
+        )
+        val lifecyclePlan = AliasLifecycleTransactionPlanV1(lifecycleBody, "03".repeat(32))
+        val lifecycleExecutor = StubResponseExecutor(
+            200,
+            JsonEncoder.encode(lifecyclePlan.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            authority,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-lifecycle-nonce-1",
+        )
+        val lifecycleTransport = HttpClientTransport.withExecutor(
+            lifecycleExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        lifecycleTransport.planAliasLeaseRenewal(renewalRequest, auth).join()
+
+        val lifecycleHttpRequest = assertNotNull(lifecycleExecutor.lastRequest)
+        assertEquals(
+            "https://torii.example/api/v1/aliases/lease/renew/plan",
+            lifecycleHttpRequest.uri.toString(),
+        )
+        assertEquals(authority, lifecycleHttpRequest.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.first())
+        val lifecycleJson = readBody(lifecycleHttpRequest)
+        assertFalse(lifecycleJson.contains("private_key"))
+        assertFalse(lifecycleJson.contains("payment_proof"))
+        assertCanonicalSignature(
+            lifecycleHttpRequest,
+            keyPair.public,
+            1_700_000_000_000L,
+            "alias-lifecycle-nonce-1",
+        )
+
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(alias, targetAccount, AccountProvisionV1.CREATE, AccountAliasRoleV1.PRIMARY),
+        )
+        val onboardingRequest = AccountOnboardingPlanRequestV1(
+            alias.canonicalName.canonicalText(),
+            targetAccount,
+        )
+        val onboardingSigner = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
+        val onboardingAuthority = AccountAddress.fromAccount(
+            onboardingSigner.generatePublicKey().encoded,
+            "ed25519",
+        ).toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val onboardingBody = AccountOnboardingPlanBodyV1(
+            1,
+            onboardingRequest,
+            onboardingAuthority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            AliasPlanResourceV1(intent, AliasPlanDispositionV1.CREATE, null, 0),
+            AliasLeaseAcquisitionV1(1),
+            guard,
+            listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(4, 5, 6))),
+            null,
+            guard.validUntilMs,
+        )
+        val receipt = signedOnboardingReceipt(onboardingBody, onboardingSigner)
+        val onboardingExecutor = StubResponseExecutor(
+            200,
+            JsonEncoder.encode(receipt.toJsonMap()).toByteArray(StandardCharsets.UTF_8),
+        )
+        val onboardingTransport = HttpClientTransport.withExecutor(
+            onboardingExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val token = "onboarding-token-value-1234567890abcd"
+
+        onboardingTransport.planSponsoredAccountOnboarding(
+            onboardingRequest,
+            token,
+            onboardingAuthority,
+        ).join()
+
+        val onboardingHttpRequest = assertNotNull(onboardingExecutor.lastRequest)
+        assertEquals("https://torii.example/api/v1/accounts/onboard/plan", onboardingHttpRequest.uri.toString())
+        assertEquals(token, onboardingHttpRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+        val onboardingJson = readBody(onboardingHttpRequest)
+        assertFalse(onboardingJson.contains(token))
+        assertFalse(onboardingJson.contains("private_key"))
+        assertFalse(onboardingJson.contains("payment_proof"))
+
+        val applyExecutor = StubResponseExecutor(
+            200,
+            """{"account_id":"$targetAccount","alias":"merchant@banka.paynet","status":"Unchanged","disposition":{"kind":"no_op","value":null}}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val applyTransport = HttpClientTransport.withExecutor(
+            applyExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val applyResponse = applyTransport.applySponsoredAccountOnboarding(
+            receipt,
+            token,
+            onboardingAuthority,
+        ).join()
+        assertEquals(AccountOnboardingStatusV1.UNCHANGED, applyResponse.status)
+        val applyHttpRequest = assertNotNull(applyExecutor.lastRequest)
+        assertEquals("https://torii.example/api/v1/accounts/onboard", applyHttpRequest.uri.toString())
+        assertEquals(token, applyHttpRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+        val applyJson = readBody(applyHttpRequest)
+        assertTrue(applyJson.contains("\"receipt\""))
+        assertFalse(applyJson.contains(token))
+        assertFalse(applyJson.contains("private_key"))
+
+        val readinessExecutor = StubResponseExecutor(
+            200,
+            """{"version":1,"status":{"status":"ready","value":null},"diagnostics":[]}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val readinessTransport = HttpClientTransport.withExecutor(
+            readinessExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+        val readiness = readinessTransport.getAccountOnboardingReadiness(token).join()
+        assertEquals(AliasSetupStatusV1.READY, readiness.status)
+        val readinessRequest = assertNotNull(readinessExecutor.lastRequest)
+        assertEquals("GET", readinessRequest.method)
+        assertEquals(
+            "https://torii.example/api/v1/accounts/onboarding/readiness",
+            readinessRequest.uri.toString(),
+        )
+        assertTrue(readinessRequest.body.isEmpty())
+        assertEquals(token, readinessRequest.headers["X-Iroha-Onboarding-Token"]?.single())
+    }
+
+    @Test
+    fun sponsoredOnboardingApplyBindsReceiptStatusHashAndDisposition() {
+        val fixture = onboardingFixture(AliasPlanDispositionV1.CREATE)
+        val token = "onboarding-token-value-1234567890abcd"
+        val hash = "ab".repeat(32)
+        val queuedBody = onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            hash,
+            AccountOnboardingStatusV1.QUEUED,
+            AliasPlanDispositionV1.CREATE,
+        )
+        val applied = HttpClientTransport.withExecutor(
+            StubResponseExecutor(202, queuedBody),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        ).applySponsoredAccountOnboarding(
+            fixture.receipt,
+            token,
+            fixture.authority,
+        ).join()
+        assertEquals(AccountOnboardingStatusV1.QUEUED, applied.status)
+        assertEquals(hash, applied.transactionHashHex)
+
+        val unchangedBody = onboardingApplyResponse(
+            fixture.accountId,
+            fixture.alias,
+            null,
+            AccountOnboardingStatusV1.UNCHANGED,
+            AliasPlanDispositionV1.NO_OP,
+        )
+        val invalidResponses = listOf(
+            200 to queuedBody,
+            201 to queuedBody,
+            202 to unchangedBody,
+            200 to onboardingApplyResponse(
+                AccountAddress.fromAccount(ByteArray(32) { 0x43.toByte() }, "ed25519")
+                    .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT),
+                fixture.alias,
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasPlanDispositionV1.NO_OP,
+            ),
+            200 to onboardingApplyResponse(
+                fixture.accountId,
+                "substituted@paynet",
+                null,
+                AccountOnboardingStatusV1.UNCHANGED,
+                AliasPlanDispositionV1.NO_OP,
+            ),
+            202 to onboardingApplyResponse(
+                fixture.accountId,
+                fixture.alias,
+                hash,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasPlanDispositionV1.REPAIR,
+            ),
+            202 to onboardingApplyResponse(
+                fixture.accountId,
+                fixture.alias,
+                null,
+                AccountOnboardingStatusV1.QUEUED,
+                AliasPlanDispositionV1.CREATE,
+            ),
+        )
+        invalidResponses.forEach { (statusCode, responseBody) ->
+            val failure = assertFailsWith<CompletionException> {
+                HttpClientTransport.withExecutor(
+                    StubResponseExecutor(statusCode, responseBody),
+                    ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+                ).applySponsoredAccountOnboarding(
+                    fixture.receipt,
+                    token,
+                    fixture.authority,
+                ).join()
+            }
+            assertTrue(failure.cause is IllegalArgumentException)
+        }
+
+        val noOpFixture = onboardingFixture(AliasPlanDispositionV1.NO_OP)
+        val invalidTransition = assertFailsWith<CompletionException> {
+            HttpClientTransport.withExecutor(
+                StubResponseExecutor(
+                    202,
+                    onboardingApplyResponse(
+                        noOpFixture.accountId,
+                        noOpFixture.alias,
+                        hash,
+                        AccountOnboardingStatusV1.QUEUED,
+                        AliasPlanDispositionV1.CREATE,
+                    ),
+                ),
+                ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+            ).applySponsoredAccountOnboarding(
+                noOpFixture.receipt,
+                token,
+                noOpFixture.authority,
+            ).join()
+        }
+        assertTrue(invalidTransition.cause is IllegalArgumentException)
+    }
+
+    @Test
+    fun typedRestrictedAliasListsSendCanonicalRequestHeaders() {
+        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val executor = StubResponseExecutor(
+            200,
+            """{"account_id":"$account","total":1,"items":[{"alias":"merchant@banka.paynet","dataspace":"paynet","domain":"banka","is_primary":true}],"source":"on_chain"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair()
+        val auth = ToriiCanonicalRequestAuth(
+            account,
+            keyPair.private,
+            1_700_000_000_000L,
+            "alias-list-nonce-1",
+        )
+        val transport = HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build(),
+        )
+
+        val response = transport.listAccountAliases(
+            AccountAliasesByAccountRequest(account, "paynet", "banka"),
+            auth,
+        ).join()
+
+        assertTrue(response.isPresent)
+        assertEquals("merchant@banka.paynet", response.get().items.single().alias)
+        val request = assertNotNull(executor.lastRequest)
+        assertEquals("https://torii.example/api/v1/aliases/by-account", request.uri.toString())
+        assertEquals(account, request.headers[CanonicalRequestSigner.HEADER_ACCOUNT]?.single())
+        assertCanonicalSignature(request, keyPair.public, 1_700_000_000_000L, "alias-list-nonce-1")
+    }
+
+    @Test
+    fun typedAliasReadsRejectSubstitutedSelectors() {
+        val account = AccountAddress.fromAccount(ByteArray(32) { 0x45 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val otherAccount = AccountAddress.fromAccount(ByteArray(32) { 0x46 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+
+        val indexExecutor = StubResponseExecutor(
+            200,
+            """{"index":8,"alias":"merchant@paynet","account_id":"$account"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val indexTransport = HttpClientTransport.withExecutor(
+            indexExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            indexTransport.resolveAccountAliasIndex(BigInteger.valueOf(7)).join()
+        }
+
+        val accountExecutor = StubResponseExecutor(
+            200,
+            """{"account_id":"$otherAccount","total":0,"items":[]}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val accountTransport = HttpClientTransport.withExecutor(
+            accountExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            accountTransport.listAccountAliases(AccountAliasesByAccountRequest(account)).join()
+        }
+
+        val aliasExecutor = StubResponseExecutor(
+            200,
+            """{"alias":"other@paynet","account_id":"$account"}"""
+                .toByteArray(StandardCharsets.UTF_8),
+        )
+        val aliasTransport = HttpClientTransport.withExecutor(
+            aliasExecutor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build(),
+        )
+        assertFailsWith<CompletionException> {
+            aliasTransport.resolveAccountAlias("merchant@paynet").join()
+        }
     }
 
     @Test
@@ -2529,6 +3326,33 @@ class HttpClientTransportTest {
         assertTrue(verifier.verify(signature))
     }
 
+    private fun vpnProfileJson(): String =
+        """
+            {
+              "available": true,
+              "relay_endpoint": "/dns/relay.example/udp/9443/quic",
+              "supported_exit_classes": ["standard", "low-latency", "high-security"],
+              "default_exit_class": "standard",
+              "lease_secs": 600,
+              "dns_push_interval_secs": 60,
+              "meter_family": "soranet.vpn.standard",
+              "route_pushes": ["0.0.0.0/0"],
+              "excluded_routes": ["10.0.0.0/8"],
+              "dns_servers": ["1.1.1.1"],
+              "tunnel_addresses": ["10.208.0.2/32"],
+              "mtu_bytes": 1280,
+              "display_billing_label": "standard XOR",
+              "fee_asset_id": "xor#universal.universal",
+              "escrow_account_id": "sorauEscrow",
+              "operator_account_id": "sorauOperator",
+              "lease_fee": "1000000.25",
+              "settlement_grace_secs": 120,
+              "flow_label_bits": 24,
+              "padding_budget_ms": 15,
+              "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}"
+            }
+        """.trimIndent()
+
     private fun vpnQuoteJson(quoteId: String, meteringKey: String): String =
         """
             {
@@ -2544,12 +3368,12 @@ class HttpClientTransportTest {
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauEscrow",
               "operator_account_id": "sorauOperator",
-              "lease_fee_nanos": 1000000,
+              "lease_fee": "1000000.25",
               "route_pushes": ["0.0.0.0/0"],
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],
               "tunnel_addresses": ["10.208.0.2/32"],
-              "mtu_bytes": 1024,
+              "mtu_bytes": 1280,
               "meter_family": "soranet.vpn.standard",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
@@ -2568,7 +3392,7 @@ class HttpClientTransportTest {
             }
         """.trimIndent()
 
-    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(248)
+    private fun vpnHelperTicketHex(): String = "5356504e48543100" + "00".repeat(656)
 
     private fun vpnSessionJson(sessionId: String, paymentTxHash: String): String =
         """
@@ -2587,7 +3411,7 @@ class HttpClientTransportTest {
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauEscrow",
               "operator_account_id": "sorauOperator",
-              "lease_fee_nanos": 1000000,
+              "lease_fee": "1000000.25",
               "flow_label_bits": 24,
               "padding_budget_ms": 15,
               "relay_tls_spki_sha256_hex": "${"ab".repeat(32)}",
@@ -2595,7 +3419,7 @@ class HttpClientTransportTest {
               "excluded_routes": [],
               "dns_servers": ["1.1.1.1"],
               "tunnel_addresses": ["10.208.0.2/32"],
-              "mtu_bytes": 1024,
+              "mtu_bytes": 1280,
               "helper_ticket_hex": "${vpnHelperTicketHex()}",
               "bytes_in": 0,
               "bytes_out": 0,
@@ -2606,8 +3430,8 @@ class HttpClientTransportTest {
     private fun vpnReceiptJson(sessionId: String, paymentTxHash: String, settled: Boolean): String {
         val status = if (settled) "settled" else "disconnected"
         val source = if (settled) "relay" else "torii"
-        val earned = if (settled) 750_000L else 0L
-        val refunded = if (settled) 250_000L else 1_000_000L
+        val earned = if (settled) "750000.125" else "0"
+        val refunded = if (settled) "250000.125" else "1000000.25"
         val settle = if (settled) {
             """,
               "settle_lease_instruction": {
@@ -2644,9 +3468,9 @@ class HttpClientTransportTest {
               "fee_asset_id": "xor#universal.universal",
               "escrow_account_id": "sorauEscrow",
               "operator_account_id": "sorauOperator",
-              "lease_fee_nanos": 1000000,
-              "earned_fee_nanos": $earned,
-              "refunded_fee_nanos": $refunded,
+              "lease_fee": "1000000.25",
+              "earned_fee": "$earned",
+              "refunded_fee": "$refunded",
               "lease_id_hex": "$sessionId"$settle
             }
         """.trimIndent()
@@ -2761,8 +3585,10 @@ class HttpClientTransportTest {
             TransactionPayload(
                 chainId = String.format("%08x", seed),
                 creationTimeMs = 1_700_000_000_000L + seed,
+                executable = Executable.instructions(emptyList()),
                 timeToLiveMs = 5_000L,
                 nonce = seed + 1,
+                feePayment = testFeePayment(),
                 metadata = mapOf("note" to JsonValue.string("tx-$seed")),
             ),
         )
@@ -2861,6 +3687,99 @@ class HttpClientTransportTest {
 
     private fun hex(bytes: ByteArray): String =
         bytes.joinToString(separator = "") { "%02X".format(it.toInt() and 0xFF) }
+
+    private fun signedOnboardingReceipt(
+        body: AccountOnboardingPlanBodyV1,
+        privateKey: Ed25519PrivateKeyParameters,
+    ): AccountOnboardingPlanReceiptV1 {
+        val hash = AccountOnboardingReceiptVerifier.canonicalHash(body)
+        val signer = Ed25519Signer()
+        signer.init(true, privateKey)
+        signer.update(hash, 0, hash.size)
+        return AccountOnboardingPlanReceiptV1(body, hex(hash), hex(signer.generateSignature()))
+    }
+
+    private fun onboardingFixture(disposition: AliasPlanDispositionV1): OnboardingFixture {
+        val signer = Ed25519PrivateKeyParameters(ByteArray(32) { 0x53.toByte() }, 0)
+        val authority = AccountAddress.fromAccount(signer.generatePublicKey().encoded, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val accountId = AccountAddress.fromAccount(ByteArray(32) { 0x42 }, "ed25519")
+            .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
+        val alias = ResolvedAccountAliasV1(
+            AccountAliasName.parse("merchant@banka.paynet"),
+            7L,
+        )
+        val intent = AliasIntentV1.AccountAlias(
+            AliasAccountIntentV1(
+                alias,
+                accountId,
+                AccountProvisionV1.CREATE,
+                AccountAliasRoleV1.PRIMARY,
+            ),
+        )
+        val assetBytes = ByteArray(16) { it.toByte() }.also {
+            it[6] = 0x46
+            it[8] = 0x88.toByte()
+        }
+        val guard = AliasQuoteGuardV1(
+            3,
+            AssetDefinitionIdEncoder.encodeFromBytes(assetBytes),
+            "5",
+            1_700_000_100_000L,
+        )
+        val body = AccountOnboardingPlanBodyV1(
+            1,
+            AccountOnboardingPlanRequestV1(alias.canonicalName.canonicalText(), accountId),
+            authority,
+            "test-chain",
+            AliasPlanAnchorV1(9, "01".repeat(32)),
+            AliasPlanResourceV1(
+                intent,
+                disposition,
+                null,
+                if (disposition == AliasPlanDispositionV1.NO_OP) null else 0,
+            ),
+            AliasLeaseAcquisitionV1(1),
+            guard,
+            if (disposition == AliasPlanDispositionV1.NO_OP) {
+                emptyList()
+            } else {
+                listOf(AliasFramedInstructionV1(EnsureAlias.WIRE_ID, byteArrayOf(4, 5, 6)))
+            },
+            null,
+            guard.validUntilMs,
+        )
+        return OnboardingFixture(
+            signedOnboardingReceipt(body, signer),
+            authority,
+            accountId,
+            alias.canonicalName.canonicalText(),
+        )
+    }
+
+    private fun onboardingApplyResponse(
+        accountId: String,
+        alias: String,
+        transactionHashHex: String?,
+        status: AccountOnboardingStatusV1,
+        disposition: AliasPlanDispositionV1,
+    ): ByteArray {
+        val response = linkedMapOf<String, Any?>(
+            "account_id" to accountId,
+            "alias" to alias,
+            "status" to status.wireValue,
+            "disposition" to disposition.toJsonMap(),
+        )
+        if (transactionHashHex != null) response["tx_hash_hex"] = transactionHashHex
+        return JsonEncoder.encode(response).toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private data class OnboardingFixture(
+        val receipt: AccountOnboardingPlanReceiptV1,
+        val authority: String,
+        val accountId: String,
+        val alias: String,
+    )
 
     private fun sha256Hex(bytes: ByteArray): String =
         hex(MessageDigest.getInstance("SHA-256").digest(bytes))

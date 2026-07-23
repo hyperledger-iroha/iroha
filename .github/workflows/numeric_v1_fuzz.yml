@@ -7,13 +7,22 @@ on:
       - "crates/iroha_primitives/src/bigint.rs"
       - "crates/iroha_primitives/src/numeric.rs"
       - "crates/iroha_primitives/src/numeric_abi.rs"
+      - "crates/kotodama_lang/src/**"
+      - "crates/kotodama_lang/tests/**"
       - "crates/ivm/fuzz/**"
+      - "crates/ivm/build.rs"
+      - "crates/ivm/examples/numeric_v1_fixture.rs"
       - "crates/ivm/src/numeric.rs"
       - "crates/ivm/src/numeric_v1.rs"
       - "crates/ivm/src/numeric_gas.rs"
       - "crates/ivm/src/numeric_tlv.rs"
+      - "crates/ivm/src/pointer_abi.rs"
+      - "crates/ivm/src/syscalls.rs"
       - "crates/ivm/spec/syscalls.toml"
+      - "crates/ivm/tests/**"
       - "crates/ivm_abi/src/**"
+      - "docs/source/kotodama_numeric_v1.md"
+      - "fixtures/numeric_v1_golden.json"
       - "pytests/scripts/fuzz_smoke_test.py"
       - "scripts/fuzz_smoke.sh"
   push:
@@ -28,8 +37,8 @@ permissions:
   contents: read
 
 concurrency:
-  group: numeric-v1-fuzz-${{ github.ref }}
-  cancel-in-progress: true
+  group: numeric-v1-fuzz-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   numeric_v1_fuzz:
@@ -47,6 +56,12 @@ jobs:
       FUZZ_CODEGEN_UNITS: "16"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact source commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
 
       - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:

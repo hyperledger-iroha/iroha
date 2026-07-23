@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 ზოლის მეტამონაცემების სადენები თითო მონაცემთა სივრცის ბუფერულ ანგარიშში:
 - `settlement.buffer_account` — ანგარიში, რომელიც ინახავს რეზერვს (მაგ., `buffer::cbdc_treasury`).
 - `settlement.buffer_asset` — აქტივის განმარტება დებეტირდება სათავე ოთახისთვის (ჩვეულებრივ `xor#sora`).
-- `settlement.buffer_capacity_micro` — კონფიგურირებული სიმძლავრე მიკრო-XOR-ში (ათწილადი სტრიქონი).
+- `settlement.buffer_capacity` — კონფიგურირებული სიმძლავრე მიკრო-XOR-ში (ათწილადი სტრიქონი).
 
 მეტამონაცემების არარსებობა თიშავს ამ ზოლის ბუფერულ სნეპშოტს (ტელემეტრია ბრუნდება ნულოვანი სიმძლავრის/სტატუსზე).## კონვერტაციის მილსადენი
 1. **ციტატა:** `SettlementEngine::quote` იყენებს კონფიგურირებულ epsilon + არასტაბილურობის ზღვარს და თმის შეჭრის დონეს TWAP ციტატებზე, აბრუნებს `SettlementReceipt`-ს `xor_due`-ით და `xor_due`-ით და Prometheus-ით და Prometheus. `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

@@ -277,6 +277,7 @@ public struct SumeragiV2ExecutionCommitment: Equatable, Sendable {
 /// Prepare or Commit vote.
 public struct SumeragiV2Vote: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
@@ -285,6 +286,7 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment,
@@ -292,6 +294,7 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         signature: Data
     ) {
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -301,8 +304,9 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
-            sumeragiV2U32(signer), sumeragiV2ByteVector(signature)
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode(), sumeragiV2U32(signer),
+            sumeragiV2ByteVector(signature)
         )
     }
 
@@ -310,6 +314,9 @@ public struct SumeragiV2Vote: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("vote round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("vote proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("vote phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("vote subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -326,17 +333,20 @@ public struct SumeragiV2Vote: Equatable, Sendable {
 /// Stable reference to a quorum certificate.
 public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment
     ) {
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -344,7 +354,8 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode()
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode()
         )
     }
 
@@ -352,6 +363,9 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("qc ref round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("qc ref proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc ref phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("qc ref subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -366,6 +380,7 @@ public struct SumeragiV2QuorumCertificateRef: Equatable, Sendable {
 /// Aggregate Prepare or Commit certificate.
 public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
     public let phase: SumeragiV2GlobalPhase
     public let subject: SumeragiV2BlockSubject
     public let executionCommitment: SumeragiV2ExecutionCommitment
@@ -374,6 +389,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
 
     public init(
         round: SumeragiV2ConsensusRound,
+        proposalRound: SumeragiV2ConsensusRound,
         phase: SumeragiV2GlobalPhase,
         subject: SumeragiV2BlockSubject,
         executionCommitment: SumeragiV2ExecutionCommitment,
@@ -382,6 +398,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     ) throws {
         try sumeragiV2RequireIncreasing(signers, label: "quorum certificate signers")
         self.round = round
+        self.proposalRound = proposalRound
         self.phase = phase
         self.subject = subject
         self.executionCommitment = executionCommitment
@@ -391,8 +408,8 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
 
     public func encode() -> Data {
         sumeragiV2Struct(
-            round.encode(), phase.encode(), subject.encode(), executionCommitment.encode(),
-            sumeragiV2Vector(signers, encode: sumeragiV2U32),
+            round.encode(), proposalRound.encode(), phase.encode(), subject.encode(),
+            executionCommitment.encode(), sumeragiV2Vector(signers, encode: sumeragiV2U32),
             sumeragiV2ByteVector(aggregateSignature)
         )
     }
@@ -400,6 +417,7 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
     public var reference: SumeragiV2QuorumCertificateRef {
         SumeragiV2QuorumCertificateRef(
             round: round,
+            proposalRound: proposalRound,
             phase: phase,
             subject: subject,
             executionCommitment: executionCommitment
@@ -410,6 +428,9 @@ public struct SumeragiV2QuorumCertificate: Equatable, Sendable {
         var reader = SumeragiV2Reader(data)
         let value = try Self(
             round: SumeragiV2ConsensusRound.decode(reader.field("qc round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("qc proposal round")
+            ),
             phase: SumeragiV2GlobalPhase.decode(reader.field("qc phase")),
             subject: SumeragiV2BlockSubject.decode(reader.field("qc subject")),
             executionCommitment: SumeragiV2ExecutionCommitment.decode(
@@ -1352,12 +1373,485 @@ public struct SumeragiV2CommitQCStatus: Equatable, Sendable {
     }
 }
 
+/// Partial dual-quorum state for one exact proposal round.
+public struct SumeragiV2VoteQuorumStatus: Equatable, Sendable {
+    public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound
+    public let subject: SumeragiV2BlockSubject
+    public let executionCommitment: SumeragiV2ExecutionCommitment
+    public let signerCount: UInt32
+    public let signedPower: UInt64
+    public let minSigners: UInt32
+    public let totalPower: UInt64
+
+    public init(round: SumeragiV2ConsensusRound, proposalRound: SumeragiV2ConsensusRound,
+                subject: SumeragiV2BlockSubject,
+                executionCommitment: SumeragiV2ExecutionCommitment, signerCount: UInt32,
+                signedPower: UInt64, minSigners: UInt32, totalPower: UInt64) {
+        self.round = round
+        self.proposalRound = proposalRound
+        self.subject = subject
+        self.executionCommitment = executionCommitment
+        self.signerCount = signerCount
+        self.signedPower = signedPower
+        self.minSigners = minSigners
+        self.totalPower = totalPower
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(round.encode(), proposalRound.encode(), subject.encode(),
+                         executionCommitment.encode(), sumeragiV2U32(signerCount),
+                         sumeragiV2U64(signedPower),
+                         sumeragiV2U32(minSigners), sumeragiV2U64(totalPower))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            round: SumeragiV2ConsensusRound.decode(reader.field("liveness vote round")),
+            proposalRound: SumeragiV2ConsensusRound.decode(
+                reader.field("liveness vote proposal round")
+            ),
+            subject: SumeragiV2BlockSubject.decode(reader.field("liveness vote subject")),
+            executionCommitment: SumeragiV2ExecutionCommitment.decode(reader.field("liveness vote execution")),
+            signerCount: sumeragiV2DecodeU32(reader.field("liveness vote signer count")),
+            signedPower: sumeragiV2DecodeU64(reader.field("liveness vote signed power")),
+            minSigners: sumeragiV2DecodeU32(reader.field("liveness vote min signers")),
+            totalPower: sumeragiV2DecodeU64(reader.field("liveness vote total power"))
+        )
+        try reader.finish("liveness vote quorum")
+        return value
+    }
+}
+
+/// Partial timeout quorum state for one exact round.
+public struct SumeragiV2TimeoutQuorumStatus: Equatable, Sendable {
+    public let round: SumeragiV2ConsensusRound
+    public let signerCount: UInt32
+    public let signedPower: UInt64
+    public let minSigners: UInt32
+    public let totalPower: UInt64
+    public let certificateFormed: Bool
+
+    public init(round: SumeragiV2ConsensusRound, signerCount: UInt32, signedPower: UInt64,
+                minSigners: UInt32, totalPower: UInt64, certificateFormed: Bool) {
+        self.round = round
+        self.signerCount = signerCount
+        self.signedPower = signedPower
+        self.minSigners = minSigners
+        self.totalPower = totalPower
+        self.certificateFormed = certificateFormed
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(round.encode(), sumeragiV2U32(signerCount), sumeragiV2U64(signedPower),
+                         sumeragiV2U32(minSigners), sumeragiV2U64(totalPower),
+                         sumeragiV2Bool(certificateFormed))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            round: SumeragiV2ConsensusRound.decode(reader.field("liveness timeout round")),
+            signerCount: sumeragiV2DecodeU32(reader.field("liveness timeout signer count")),
+            signedPower: sumeragiV2DecodeU64(reader.field("liveness timeout signed power")),
+            minSigners: sumeragiV2DecodeU32(reader.field("liveness timeout min signers")),
+            totalPower: sumeragiV2DecodeU64(reader.field("liveness timeout total power")),
+            certificateFormed: sumeragiV2DecodeBool(reader.field("liveness timeout formed"))
+        )
+        try reader.finish("liveness timeout quorum")
+        return value
+    }
+}
+
+/// Durable outbound protocol role retained for fair service.
+public enum SumeragiV2OutboundIntentKind: UInt32, Equatable, Sendable {
+    case proposal = 0, prepareVote, commitVote, prepareQC, commitQC, timeoutVote, timeoutCertificate
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown outbound intent kind \(tag)")
+        }
+        return value
+    }
+}
+
+/// Current delivery stage of a durable outbound intent.
+public enum SumeragiV2OutboundIntentStage: UInt32, Equatable, Sendable {
+    case pendingPersistence = 0, pendingSignature, queued, sent
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown outbound intent stage \(tag)")
+        }
+        return value
+    }
+}
+
+/// Exact durable outbound intent visible to liveness diagnostics.
+public struct SumeragiV2OutboundIntentStatus: Equatable, Sendable {
+    public let kind: SumeragiV2OutboundIntentKind
+    public let round: SumeragiV2ConsensusRound
+    public let proposalRound: SumeragiV2ConsensusRound?
+    public let subject: SumeragiV2BlockSubject?
+    public let executionCommitment: SumeragiV2ExecutionCommitment?
+    public let stage: SumeragiV2OutboundIntentStage
+
+    public init(kind: SumeragiV2OutboundIntentKind, round: SumeragiV2ConsensusRound,
+                proposalRound: SumeragiV2ConsensusRound?,
+                subject: SumeragiV2BlockSubject?,
+                executionCommitment: SumeragiV2ExecutionCommitment?,
+                stage: SumeragiV2OutboundIntentStage) throws {
+        let shapeIsValid: Bool
+        switch kind {
+        case .proposal:
+            shapeIsValid = proposalRound != nil && subject != nil && executionCommitment == nil
+        case .timeoutVote, .timeoutCertificate:
+            shapeIsValid = proposalRound == nil && subject == nil && executionCommitment == nil
+        case .prepareVote, .commitVote, .prepareQC, .commitQC:
+            shapeIsValid = proposalRound != nil && subject != nil && executionCommitment != nil
+        }
+        guard shapeIsValid else {
+            throw SumeragiV2WireError.invalid("invalid outbound intent shape for \(kind)")
+        }
+        if let proposalRound {
+            guard proposalRound.contextID == round.contextID,
+                  proposalRound.height == round.height,
+                  proposalRound.view <= round.view else {
+                throw SumeragiV2WireError.invalid("invalid outbound intent proposal round")
+            }
+            if kind == .proposal || kind == .prepareVote || kind == .prepareQC {
+                guard proposalRound == round else {
+                    throw SumeragiV2WireError.invalid(
+                        "Prepare/proposal outbound intent origin must match its round"
+                    )
+                }
+            }
+        }
+        self.kind = kind
+        self.round = round
+        self.proposalRound = proposalRound
+        self.subject = subject
+        self.executionCommitment = executionCommitment
+        self.stage = stage
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(kind.encode(), round.encode(),
+                         sumeragiV2Option(proposalRound?.encode()),
+                         sumeragiV2Option(subject?.encode()),
+                         sumeragiV2Option(executionCommitment?.encode()), stage.encode())
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            kind: SumeragiV2OutboundIntentKind.decode(reader.field("liveness outbound kind")),
+            round: SumeragiV2ConsensusRound.decode(reader.field("liveness outbound round")),
+            proposalRound: sumeragiV2DecodeOption(
+                reader.field("liveness outbound proposal round"),
+                decode: SumeragiV2ConsensusRound.decode
+            ),
+            subject: sumeragiV2DecodeOption(reader.field("liveness outbound subject"), decode: SumeragiV2BlockSubject.decode),
+            executionCommitment: sumeragiV2DecodeOption(reader.field("liveness outbound execution"), decode: SumeragiV2ExecutionCommitment.decode),
+            stage: SumeragiV2OutboundIntentStage.decode(reader.field("liveness outbound stage"))
+        )
+        try reader.finish("liveness outbound intent")
+        return value
+    }
+}
+
+/// State of one terminating local-work stage.
+public enum SumeragiV2LocalWorkStage: UInt32, Equatable, Sendable {
+    case idle = 0, queued, running, complete
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown local work stage \(tag)")
+        }
+        return value
+    }
+}
+
+/// Local body, validation, application, and handoff pipeline.
+public struct SumeragiV2WorkStatus: Equatable, Sendable {
+    public let candidate: SumeragiV2LocalWorkStage
+    public let bodyRecovery: SumeragiV2LocalWorkStage
+    public let bodyStore: SumeragiV2LocalWorkStage
+    public let validation: SumeragiV2LocalWorkStage
+    public let application: SumeragiV2LocalWorkStage
+    public let successorHeight: SumeragiV2LocalWorkStage
+
+    public static let idle = Self(candidate: .idle, bodyRecovery: .idle, bodyStore: .idle,
+                                  validation: .idle, application: .idle, successorHeight: .idle)
+
+    public init(candidate: SumeragiV2LocalWorkStage, bodyRecovery: SumeragiV2LocalWorkStage,
+                bodyStore: SumeragiV2LocalWorkStage, validation: SumeragiV2LocalWorkStage,
+                application: SumeragiV2LocalWorkStage,
+                successorHeight: SumeragiV2LocalWorkStage) {
+        self.candidate = candidate
+        self.bodyRecovery = bodyRecovery
+        self.bodyStore = bodyStore
+        self.validation = validation
+        self.application = application
+        self.successorHeight = successorHeight
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(candidate.encode(), bodyRecovery.encode(), bodyStore.encode(),
+                         validation.encode(), application.encode(), successorHeight.encode())
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            candidate: SumeragiV2LocalWorkStage.decode(reader.field("liveness candidate work")),
+            bodyRecovery: SumeragiV2LocalWorkStage.decode(reader.field("liveness recovery work")),
+            bodyStore: SumeragiV2LocalWorkStage.decode(reader.field("liveness store work")),
+            validation: SumeragiV2LocalWorkStage.decode(reader.field("liveness validation work")),
+            application: SumeragiV2LocalWorkStage.decode(reader.field("liveness application work")),
+            successorHeight: SumeragiV2LocalWorkStage.decode(reader.field("liveness successor work"))
+        )
+        try reader.finish("liveness work")
+        return value
+    }
+}
+
+/// Identity of a bounded local progress queue.
+public enum SumeragiV2QueueKind: UInt32, Equatable, Sendable {
+    case ingress = 0, deferredNormal, deferredProgress, deferredCompletion
+    case runtimeNormal, runtimeProgress, runtimeCompletion, effectCompletion, networkIngress
+    case effectDispatch = 9
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown liveness queue kind \(tag)")
+        }
+        return value
+    }
+}
+
+/// Occupancy and accumulated oldest-item service debt for one bounded queue.
+public struct SumeragiV2QueueStatus: Equatable, Sendable {
+    public let queue: SumeragiV2QueueKind
+    public let depth: UInt32
+    public let capacity: UInt32
+    public let oldestAgeMs: UInt64?
+    public let serviceDebt: UInt64
+
+    public init(queue: SumeragiV2QueueKind, depth: UInt32, capacity: UInt32,
+                oldestAgeMs: UInt64?, serviceDebt: UInt64) {
+        self.queue = queue
+        self.depth = depth
+        self.capacity = capacity
+        self.oldestAgeMs = oldestAgeMs
+        self.serviceDebt = serviceDebt
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(queue.encode(), sumeragiV2U32(depth), sumeragiV2U32(capacity),
+                         sumeragiV2Option(oldestAgeMs.map(sumeragiV2U64)), sumeragiV2U64(serviceDebt))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            queue: SumeragiV2QueueKind.decode(reader.field("liveness queue kind")),
+            depth: sumeragiV2DecodeU32(reader.field("liveness queue depth")),
+            capacity: sumeragiV2DecodeU32(reader.field("liveness queue capacity")),
+            oldestAgeMs: sumeragiV2DecodeOption(reader.field("liveness queue oldest age"), decode: sumeragiV2DecodeU64),
+            serviceDebt: sumeragiV2DecodeU64(reader.field("liveness queue service debt"))
+        )
+        try reader.finish("liveness queue")
+        return value
+    }
+}
+
+/// Semantic reducer transition retained for diagnostics; timeout churn does not
+/// reset the separate height-level no-progress clock.
+public enum SumeragiV2ProgressTransition: UInt32, Equatable, Sendable {
+    case proposalAdmitted = 0, bodyAvailable, bodyStored, bodyValidated
+    case prepareVoteAdmitted, commitVoteAdmitted, timeoutVoteAdmitted, prepareQuorum
+    case lockInstalled, commitQuorum, timeoutCertificateInstalled, decisionPersisted
+    case applied, successorHeightActivated, recoveryReplayed
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown progress transition \(tag)")
+        }
+        return value
+    }
+}
+
+/// Last tracked reducer transition and its local age.
+public struct SumeragiV2ProgressTransitionStatus: Equatable, Sendable {
+    public let generation: UInt64
+    public let round: SumeragiV2ConsensusRound
+    public let transition: SumeragiV2ProgressTransition
+    public let ageMs: UInt64
+
+    public init(generation: UInt64, round: SumeragiV2ConsensusRound,
+                transition: SumeragiV2ProgressTransition, ageMs: UInt64) {
+        self.generation = generation
+        self.round = round
+        self.transition = transition
+        self.ageMs = ageMs
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(sumeragiV2U64(generation), round.encode(), transition.encode(),
+                         sumeragiV2U64(ageMs))
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            generation: sumeragiV2DecodeU64(reader.field("liveness progress generation")),
+            round: SumeragiV2ConsensusRound.decode(reader.field("liveness progress round")),
+            transition: SumeragiV2ProgressTransition.decode(reader.field("liveness progress transition")),
+            ageMs: sumeragiV2DecodeU64(reader.field("liveness progress age"))
+        )
+        try reader.finish("liveness progress")
+        return value
+    }
+}
+
+/// Classified cause of an active no-progress interval.
+public enum SumeragiV2LivenessBlocker: UInt32, Equatable, Sendable {
+    case missingProposal = 0, bodyUnavailable, prepareQuorumMissing, commitQuorumMissing
+    case timeoutCertificateMissing, schedulerStarvation, applicationPending
+    case localControlPending = 7
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown liveness blocker \(tag)")
+        }
+        return value
+    }
+}
+
+/// Closed reducer reason for safely ignoring an input.
+public enum SumeragiV2IgnoreReason: UInt32, Equatable, Sendable {
+    case wrongHeight = 0, wrongView, staleGeneration, busy, duplicate, noMatchingWork
+    case observer, viewClosed, alreadyDecided, recoveryPending, irrelevantView
+    case unsafeProposal = 11
+    fileprivate func encode() -> Data { sumeragiV2U32(rawValue) }
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        let tag = try sumeragiV2DecodeU32(data)
+        guard let value = Self(rawValue: tag) else {
+            throw SumeragiV2WireError.invalid("unknown liveness ignore reason \(tag)")
+        }
+        return value
+    }
+}
+
+/// Per-height counter for one input-ignore reason.
+public struct SumeragiV2IgnoreCount: Equatable, Sendable {
+    public let reason: SumeragiV2IgnoreReason
+    public let count: UInt64
+
+    public init(reason: SumeragiV2IgnoreReason, count: UInt64) {
+        self.reason = reason
+        self.count = count
+    }
+
+    fileprivate func encode() -> Data { sumeragiV2Struct(reason.encode(), sumeragiV2U64(count)) }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            reason: SumeragiV2IgnoreReason.decode(reader.field("liveness ignore reason")),
+            count: sumeragiV2DecodeU64(reader.field("liveness ignore count"))
+        )
+        try reader.finish("liveness ignore count")
+        return value
+    }
+}
+
+/// Authoritative progress diagnostics for the active height.
+public struct SumeragiV2LivenessStatus: Equatable, Sendable {
+    public let generation: UInt64
+    public let prepareQuorums: [SumeragiV2VoteQuorumStatus]
+    public let commitQuorums: [SumeragiV2VoteQuorumStatus]
+    public let timeoutQuorums: [SumeragiV2TimeoutQuorumStatus]
+    public let outboundIntents: [SumeragiV2OutboundIntentStatus]
+    public let work: SumeragiV2WorkStatus
+    public let queues: [SumeragiV2QueueStatus]
+    public let lastProgress: SumeragiV2ProgressTransitionStatus?
+    public let noProgressAgeMs: UInt64
+    public let blocker: SumeragiV2LivenessBlocker?
+    public let ignoreCounts: [SumeragiV2IgnoreCount]
+
+    public static let empty = Self(generation: 0, prepareQuorums: [], commitQuorums: [],
+                                   timeoutQuorums: [], outboundIntents: [], work: .idle,
+                                   queues: [], lastProgress: nil, noProgressAgeMs: 0,
+                                   blocker: nil, ignoreCounts: [])
+
+    public init(generation: UInt64, prepareQuorums: [SumeragiV2VoteQuorumStatus],
+                commitQuorums: [SumeragiV2VoteQuorumStatus],
+                timeoutQuorums: [SumeragiV2TimeoutQuorumStatus],
+                outboundIntents: [SumeragiV2OutboundIntentStatus], work: SumeragiV2WorkStatus,
+                queues: [SumeragiV2QueueStatus], lastProgress: SumeragiV2ProgressTransitionStatus?,
+                noProgressAgeMs: UInt64, blocker: SumeragiV2LivenessBlocker?,
+                ignoreCounts: [SumeragiV2IgnoreCount]) {
+        self.generation = generation
+        self.prepareQuorums = prepareQuorums
+        self.commitQuorums = commitQuorums
+        self.timeoutQuorums = timeoutQuorums
+        self.outboundIntents = outboundIntents
+        self.work = work
+        self.queues = queues
+        self.lastProgress = lastProgress
+        self.noProgressAgeMs = noProgressAgeMs
+        self.blocker = blocker
+        self.ignoreCounts = ignoreCounts
+    }
+
+    fileprivate func encode() -> Data {
+        sumeragiV2Struct(
+            sumeragiV2U64(generation), sumeragiV2Vector(prepareQuorums) { $0.encode() },
+            sumeragiV2Vector(commitQuorums) { $0.encode() },
+            sumeragiV2Vector(timeoutQuorums) { $0.encode() },
+            sumeragiV2Vector(outboundIntents) { $0.encode() }, work.encode(),
+            sumeragiV2Vector(queues) { $0.encode() }, sumeragiV2Option(lastProgress?.encode()),
+            sumeragiV2U64(noProgressAgeMs), sumeragiV2Option(blocker?.encode()),
+            sumeragiV2Vector(ignoreCounts) { $0.encode() }
+        )
+    }
+
+    fileprivate static func decode(_ data: Data) throws -> Self {
+        var reader = SumeragiV2Reader(data)
+        let value = try Self(
+            generation: sumeragiV2DecodeU64(reader.field("liveness generation")),
+            prepareQuorums: sumeragiV2DecodeVector(reader.field("liveness prepare"), decode: SumeragiV2VoteQuorumStatus.decode),
+            commitQuorums: sumeragiV2DecodeVector(reader.field("liveness commit"), decode: SumeragiV2VoteQuorumStatus.decode),
+            timeoutQuorums: sumeragiV2DecodeVector(reader.field("liveness timeout"), decode: SumeragiV2TimeoutQuorumStatus.decode),
+            outboundIntents: sumeragiV2DecodeVector(reader.field("liveness outbound"), decode: SumeragiV2OutboundIntentStatus.decode),
+            work: SumeragiV2WorkStatus.decode(reader.field("liveness work")),
+            queues: sumeragiV2DecodeVector(reader.field("liveness queues"), decode: SumeragiV2QueueStatus.decode),
+            lastProgress: sumeragiV2DecodeOption(reader.field("liveness last progress"), decode: SumeragiV2ProgressTransitionStatus.decode),
+            noProgressAgeMs: sumeragiV2DecodeU64(reader.field("liveness no progress age")),
+            blocker: sumeragiV2DecodeOption(reader.field("liveness blocker"), decode: SumeragiV2LivenessBlocker.decode),
+            ignoreCounts: sumeragiV2DecodeVector(reader.field("liveness ignore counts"), decode: SumeragiV2IgnoreCount.decode)
+        )
+        try reader.finish("Sumeragi v2 liveness status")
+        return value
+    }
+}
+
 /// Compact protocol-v2-only `/v1/sumeragi/status` payload.
 public struct SumeragiV2Status: Equatable, Sendable {
     public let protocolVersion: UInt16
     public let nodeFingerprint: SumeragiV2Hash
     public let buildFingerprint: SumeragiV2Hash
     public let configFingerprint: SumeragiV2Hash
+    public let restartRequired: Bool
     public let heightContextID: SumeragiV2HeightContextID
     public let height: UInt64
     public let view: UInt64
@@ -1372,12 +1866,14 @@ public struct SumeragiV2Status: Equatable, Sendable {
     public let lastCommittedSubject: SumeragiV2BlockSubject?
     public let heightContext: SumeragiV2HeightContextStatus
     public let lastCommitQC: SumeragiV2CommitQCStatus?
+    public let liveness: SumeragiV2LivenessStatus
 
     public init(
         protocolVersion: UInt16 = SumeragiV2ConsensusMessage.protocolVersion,
         nodeFingerprint: SumeragiV2Hash,
         buildFingerprint: SumeragiV2Hash,
         configFingerprint: SumeragiV2Hash,
+        restartRequired: Bool,
         heightContextID: SumeragiV2HeightContextID,
         height: UInt64,
         view: UInt64,
@@ -1391,7 +1887,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
         lastCommittedHeight: UInt64,
         lastCommittedSubject: SumeragiV2BlockSubject?,
         heightContext: SumeragiV2HeightContextStatus,
-        lastCommitQC: SumeragiV2CommitQCStatus?
+        lastCommitQC: SumeragiV2CommitQCStatus?,
+        liveness: SumeragiV2LivenessStatus = .empty
     ) throws {
         guard protocolVersion == SumeragiV2ConsensusMessage.protocolVersion else {
             throw SumeragiV2WireError.invalid("unsupported status protocol version \(protocolVersion)")
@@ -1400,6 +1897,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
         self.nodeFingerprint = nodeFingerprint
         self.buildFingerprint = buildFingerprint
         self.configFingerprint = configFingerprint
+        self.restartRequired = restartRequired
         self.heightContextID = heightContextID
         self.height = height
         self.view = view
@@ -1414,12 +1912,14 @@ public struct SumeragiV2Status: Equatable, Sendable {
         self.lastCommittedSubject = lastCommittedSubject
         self.heightContext = heightContext
         self.lastCommitQC = lastCommitQC
+        self.liveness = liveness
     }
 
     public func encode() -> Data {
         sumeragiV2Struct(
             sumeragiV2U16(protocolVersion), nodeFingerprint.bytes, buildFingerprint.bytes,
-            configFingerprint.bytes, heightContextID.encode(), sumeragiV2U64(height),
+            configFingerprint.bytes, sumeragiV2Bool(restartRequired), heightContextID.encode(),
+            sumeragiV2U64(height),
             sumeragiV2U64(view), phase.encode(), sumeragiV2U32(leader),
             sumeragiV2Option(lockedPrepareQC?.encode()),
             sumeragiV2Option(highestPrepareQC?.encode()),
@@ -1427,7 +1927,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
             sumeragiV2Option(pendingPersistenceID.map(sumeragiV2U64)),
             sumeragiV2U64(lastCommittedHeight),
             sumeragiV2Option(lastCommittedSubject?.encode()), heightContext.encode(),
-            sumeragiV2Option(lastCommitQC?.encode())
+            sumeragiV2Option(lastCommitQC?.encode()), liveness.encode()
         )
     }
 
@@ -1439,6 +1939,7 @@ public struct SumeragiV2Status: Equatable, Sendable {
             nodeFingerprint: SumeragiV2Hash(reader.field("status node")),
             buildFingerprint: SumeragiV2Hash(reader.field("status build")),
             configFingerprint: SumeragiV2Hash(reader.field("status config")),
+            restartRequired: sumeragiV2DecodeBool(reader.field("status restart required")),
             heightContextID: SumeragiV2HeightContextID.decode(reader.field("status context")),
             height: sumeragiV2DecodeU64(reader.field("status height")),
             view: sumeragiV2DecodeU64(reader.field("status view")),
@@ -1452,7 +1953,8 @@ public struct SumeragiV2Status: Equatable, Sendable {
             lastCommittedHeight: sumeragiV2DecodeU64(reader.field("status committed height")),
             lastCommittedSubject: sumeragiV2DecodeOption(reader.field("status committed subject"), decode: SumeragiV2BlockSubject.decode),
             heightContext: SumeragiV2HeightContextStatus.decode(reader.field("status height context")),
-            lastCommitQC: sumeragiV2DecodeOption(reader.field("status last commit qc"), decode: SumeragiV2CommitQCStatus.decode)
+            lastCommitQC: sumeragiV2DecodeOption(reader.field("status last commit qc"), decode: SumeragiV2CommitQCStatus.decode),
+            liveness: SumeragiV2LivenessStatus.decode(reader.field("status liveness"))
         )
         try reader.finish("Sumeragi v2 status")
         guard value.encode() == data else {
@@ -1572,6 +2074,7 @@ private func sumeragiV2Enum(_ tag: UInt32, _ payload: Data) -> Data {
 private func sumeragiV2U16(_ value: UInt16) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U32(_ value: UInt32) -> Data { sumeragiV2Integer(value) }
 private func sumeragiV2U64(_ value: UInt64) -> Data { sumeragiV2Integer(value) }
+private func sumeragiV2Bool(_ value: Bool) -> Data { Data([value ? 1 : 0]) }
 
 private func sumeragiV2Integer<T: FixedWidthInteger>(_ value: T) -> Data {
     var littleEndian = value.littleEndian
@@ -1639,6 +2142,13 @@ private func sumeragiV2DecodeU64(_ data: Data) throws -> UInt64 {
     let value = try reader.u64("u64")
     try reader.finish("u64")
     return value
+}
+
+private func sumeragiV2DecodeBool(_ data: Data) throws -> Bool {
+    guard data.count == 1, let byte = data.first, byte <= 1 else {
+        throw SumeragiV2WireError.invalid("bool must contain one canonical boolean byte")
+    }
+    return byte == 1
 }
 
 private func sumeragiV2DecodeByteVector(_ data: Data) throws -> Data {

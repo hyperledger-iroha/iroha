@@ -27,7 +27,7 @@ use iroha_data_model::{
         pricing::ProviderCreditRecord,
     },
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use mv::storage::StorageReadOnly;
 use norito::{
     core::Error as NoritoDecodeError,
@@ -125,11 +125,11 @@ pub(crate) struct RegistryFeeLedgerEntry {
     pub(crate) provider_id_hex: String,
     pub(crate) total_declared_gib: u128,
     pub(crate) total_utilised_gib: u128,
-    pub(crate) storage_fee_nano: u128,
-    pub(crate) egress_fee_nano: u128,
-    pub(crate) accrued_fee_nano: u128,
-    pub(crate) expected_settlement_nano: u128,
-    pub(crate) penalty_slashed_nano: u128,
+    pub(crate) storage_fee: Quantity,
+    pub(crate) egress_fee: Quantity,
+    pub(crate) accrued_fee: Quantity,
+    pub(crate) expected_settlement: Quantity,
+    pub(crate) penalty_slashed: Quantity,
     pub(crate) penalty_events: u32,
     pub(crate) last_updated_epoch: u64,
 }
@@ -150,25 +150,16 @@ impl RegistryFeeLedgerEntry {
             "total_utilised_gib".into(),
             json::to_value(&self.total_utilised_gib)?,
         );
+        map.insert("storage_fee".into(), json::to_value(&self.storage_fee)?);
+        map.insert("egress_fee".into(), json::to_value(&self.egress_fee)?);
+        map.insert("accrued_fee".into(), json::to_value(&self.accrued_fee)?);
         map.insert(
-            "storage_fee_nano".into(),
-            json::to_value(&self.storage_fee_nano)?,
+            "expected_settlement".into(),
+            json::to_value(&self.expected_settlement)?,
         );
         map.insert(
-            "egress_fee_nano".into(),
-            json::to_value(&self.egress_fee_nano)?,
-        );
-        map.insert(
-            "accrued_fee_nano".into(),
-            json::to_value(&self.accrued_fee_nano)?,
-        );
-        map.insert(
-            "expected_settlement_nano".into(),
-            json::to_value(&self.expected_settlement_nano)?,
-        );
-        map.insert(
-            "penalty_slashed_nano".into(),
-            json::to_value(&self.penalty_slashed_nano)?,
+            "penalty_slashed".into(),
+            json::to_value(&self.penalty_slashed)?,
         );
         map.insert(
             "penalty_events".into(),
@@ -186,14 +177,14 @@ impl RegistryFeeLedgerEntry {
 #[derive(Debug, Clone)]
 pub(crate) struct RegistryCreditLedgerEntry {
     pub(crate) provider_id_hex: String,
-    pub(crate) available_credit_nano: u128,
-    pub(crate) bonded_nano: u128,
-    pub(crate) required_bond_nano: u128,
-    pub(crate) expected_settlement_nano: u128,
+    pub(crate) available_credit: Quantity,
+    pub(crate) bonded: Quantity,
+    pub(crate) required_bond: Quantity,
+    pub(crate) expected_settlement: Quantity,
     pub(crate) onboarding_epoch: u64,
     pub(crate) last_settlement_epoch: u64,
     pub(crate) low_balance_since_epoch: Option<u64>,
-    pub(crate) slashed_nano: u128,
+    pub(crate) slashed: Quantity,
     pub(crate) under_delivery_strikes: u32,
     pub(crate) last_penalty_epoch: Option<u64>,
     pub(crate) metadata_json: Value,
@@ -208,17 +199,14 @@ impl RegistryCreditLedgerEntry {
             Value::String(self.provider_id_hex),
         );
         map.insert(
-            "available_credit_nano".into(),
-            json::to_value(&self.available_credit_nano)?,
+            "available_credit".into(),
+            json::to_value(&self.available_credit)?,
         );
-        map.insert("bonded_nano".into(), json::to_value(&self.bonded_nano)?);
+        map.insert("bonded".into(), json::to_value(&self.bonded)?);
+        map.insert("required_bond".into(), json::to_value(&self.required_bond)?);
         map.insert(
-            "required_bond_nano".into(),
-            json::to_value(&self.required_bond_nano)?,
-        );
-        map.insert(
-            "expected_settlement_nano".into(),
-            json::to_value(&self.expected_settlement_nano)?,
+            "expected_settlement".into(),
+            json::to_value(&self.expected_settlement)?,
         );
         map.insert(
             "onboarding_epoch".into(),
@@ -232,7 +220,7 @@ impl RegistryCreditLedgerEntry {
             "low_balance_since_epoch".into(),
             json::to_value(&self.low_balance_since_epoch)?,
         );
-        map.insert("slashed_nano".into(), json::to_value(&self.slashed_nano)?);
+        map.insert("slashed".into(), json::to_value(&self.slashed)?);
         map.insert(
             "under_delivery_strikes".into(),
             json::to_value(&self.under_delivery_strikes)?,
@@ -417,11 +405,11 @@ where
             provider_id_hex: provider_id.as_bytes().encode_hex::<String>(),
             total_declared_gib: entry.total_declared_gib,
             total_utilised_gib: entry.total_utilised_gib,
-            storage_fee_nano: entry.storage_fee_nano,
-            egress_fee_nano: entry.egress_fee_nano,
-            accrued_fee_nano: entry.accrued_fee_nano,
-            expected_settlement_nano: entry.expected_settlement_nano,
-            penalty_slashed_nano: entry.penalty_slashed_nano,
+            storage_fee: entry.storage_fee.clone(),
+            egress_fee: entry.egress_fee.clone(),
+            accrued_fee: entry.accrued_fee.clone(),
+            expected_settlement: entry.expected_settlement.clone(),
+            penalty_slashed: entry.penalty_slashed.clone(),
             penalty_events: entry.penalty_events,
             last_updated_epoch: entry.last_updated_epoch,
         })
@@ -439,14 +427,14 @@ where
                 metadata_to_json(&record.metadata).unwrap_or_else(|_| Value::Object(Map::new()));
             RegistryCreditLedgerEntry {
                 provider_id_hex: provider_id.as_bytes().encode_hex::<String>(),
-                available_credit_nano: record.available_credit_nano,
-                bonded_nano: record.bonded_nano,
-                required_bond_nano: record.required_bond_nano,
-                expected_settlement_nano: record.expected_settlement_nano,
+                available_credit: record.available_credit.clone(),
+                bonded: record.bonded.clone(),
+                required_bond: record.required_bond.clone(),
+                expected_settlement: record.expected_settlement.clone(),
                 onboarding_epoch: record.onboarding_epoch,
                 last_settlement_epoch: record.last_settlement_epoch,
                 low_balance_since_epoch: record.low_balance_since_epoch,
-                slashed_nano: record.slashed_nano,
+                slashed: record.slashed.clone(),
                 under_delivery_strikes: record.under_delivery_strikes,
                 last_penalty_epoch: record.last_penalty_epoch,
                 metadata_json,
@@ -1858,6 +1846,7 @@ mod tests {
                 PinManifestRecord, PinPolicy, PinStatus, ReplicationOrderId,
                 ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
+            pricing::ProviderCreditRecord,
         },
     };
     use sorafs_manifest::{
@@ -1886,7 +1875,7 @@ mod tests {
             provider_id: provider_id.as_bytes().to_owned(),
             stake: StakePointer {
                 pool_id: [0xAA; 32],
-                stake_amount: 42,
+                stake_amount: "42".parse().expect("canonical stake quantity"),
             },
             committed_capacity_gib: 1_024,
             chunker_commitments: vec![ChunkerCommitmentV1 {
@@ -1949,15 +1938,20 @@ mod tests {
     #[test]
     fn build_fee_ledger_projects_entries() {
         let provider_id = ProviderId::new([0x22; 32]);
+        let storage_fee: Quantity = "0.0000000001".parse().expect("sub-nano quantity");
+        let egress_fee: Quantity = "12000".parse().expect("egress quantity");
+        let accrued_fee = storage_fee
+            .checked_add(&egress_fee)
+            .expect("representable accrued fee");
         let entry = CapacityFeeLedgerEntry {
             provider_id,
             total_declared_gib: 10_240,
             total_utilised_gib: 8_192,
-            storage_fee_nano: 30_000,
-            egress_fee_nano: 12_000,
-            accrued_fee_nano: 42_000,
-            expected_settlement_nano: 84_000,
-            penalty_slashed_nano: 0,
+            storage_fee: storage_fee.clone(),
+            egress_fee: egress_fee.clone(),
+            accrued_fee: accrued_fee.clone(),
+            expected_settlement: "84000.25".parse().expect("settlement quantity"),
+            penalty_slashed: Quantity::zero(),
             penalty_events: 0,
             last_updated_epoch: 128,
             last_window_start_epoch: 120,
@@ -1972,10 +1966,81 @@ mod tests {
             provider_id.as_bytes().encode_hex::<String>()
         );
         assert_eq!(ledger[0].total_utilised_gib, 8_192);
-        assert_eq!(ledger[0].storage_fee_nano, 30_000);
-        assert_eq!(ledger[0].egress_fee_nano, 12_000);
-        assert_eq!(ledger[0].accrued_fee_nano, 42_000);
-        assert_eq!(ledger[0].expected_settlement_nano, 84_000);
+        assert_eq!(ledger[0].storage_fee, storage_fee);
+        assert_eq!(ledger[0].egress_fee, egress_fee);
+        assert_eq!(ledger[0].accrued_fee, accrued_fee);
+        assert_eq!(ledger[0].expected_settlement.to_string(), "84000.25");
+
+        let json = ledger[0].clone().into_json().expect("serialize fee ledger");
+        let object = json.as_object().expect("fee ledger object");
+        assert_eq!(
+            object.get("storage_fee").and_then(Value::as_str),
+            Some("0.0000000001")
+        );
+        for retired in [
+            "storage_fee_nano",
+            "egress_fee_nano",
+            "accrued_fee_nano",
+            "expected_settlement_nano",
+            "penalty_slashed_nano",
+        ] {
+            assert!(
+                !object.contains_key(retired),
+                "retired fixed-nano field {retired} must not be exposed"
+            );
+        }
+    }
+
+    #[test]
+    fn build_credit_ledger_preserves_canonical_quantities() {
+        let provider_id = ProviderId::new([0x23; 32]);
+        let available_credit: Quantity = "340282366920938463463374607431768211456.0000000001"
+            .parse()
+            .expect("quantity wider than u128 with a sub-nano fraction");
+        let mut record = ProviderCreditRecord::new(
+            provider_id,
+            available_credit.clone(),
+            "12.5".parse().expect("bonded quantity"),
+            "10".parse().expect("required bond quantity"),
+            "0.0000000000000000000000000001"
+                .parse()
+                .expect("scale-28 settlement quantity"),
+            32,
+            64,
+            Metadata::default(),
+        );
+        record.slashed = "0.25".parse().expect("slashed quantity");
+        let entries = [(provider_id, record)];
+
+        let ledger = build_credit_ledger(entries.iter().map(|(id, rec)| (id, rec)));
+        assert_eq!(ledger.len(), 1);
+        assert_eq!(ledger[0].available_credit, available_credit);
+
+        let json = ledger[0]
+            .clone()
+            .into_json()
+            .expect("serialize credit ledger");
+        let object = json.as_object().expect("credit ledger object");
+        assert_eq!(
+            object.get("available_credit").and_then(Value::as_str),
+            Some("340282366920938463463374607431768211456.0000000001")
+        );
+        assert_eq!(
+            object.get("expected_settlement").and_then(Value::as_str),
+            Some("0.0000000000000000000000000001")
+        );
+        for retired in [
+            "available_credit_nano",
+            "bonded_nano",
+            "required_bond_nano",
+            "expected_settlement_nano",
+            "slashed_nano",
+        ] {
+            assert!(
+                !object.contains_key(retired),
+                "retired fixed-nano field {retired} must not be exposed"
+            );
+        }
     }
 
     #[test]

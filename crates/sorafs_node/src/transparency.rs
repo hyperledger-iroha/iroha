@@ -340,22 +340,25 @@ pub fn appeal_finance_report_source_entry(
         "appeal_finance_config_version".to_string(),
         report.appeal_finance_config_version.clone(),
     );
-    metadata.insert("deposit_xor".to_string(), report.deposit_xor.clone());
-    metadata.insert("held_xor".to_string(), report.held.amount_xor.clone());
+    metadata.insert("deposit_xor".to_string(), report.deposit_xor.to_string());
+    metadata.insert("held_xor".to_string(), report.held.amount_xor.to_string());
     metadata.insert("outcome".to_string(), report.outcome.as_str().to_string());
     metadata.insert("panel_size".to_string(), report.panel_size.to_string());
-    metadata.insert("refund_xor".to_string(), report.refund.amount_xor.clone());
+    metadata.insert(
+        "refund_xor".to_string(),
+        report.refund.amount_xor.to_string(),
+    );
     metadata.insert(
         "rewards_forfeited_treasury_xor".to_string(),
-        report.rewards_forfeited_treasury_xor.clone(),
+        report.rewards_forfeited_treasury_xor.to_string(),
     );
     metadata.insert(
         "rewards_paid_total_xor".to_string(),
-        report.rewards_paid_total_xor.clone(),
+        report.rewards_paid_total_xor.to_string(),
     );
     metadata.insert(
         "treasury_xor".to_string(),
-        report.treasury.amount_xor.clone(),
+        report.treasury.amount_xor.to_string(),
     );
     if let Some(round_id) = &report.round_id {
         metadata.insert("round_id".to_string(), round_id.clone());
@@ -402,14 +405,14 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         "appeal_finance_config_version".to_string(),
         receipt.appeal_finance_config_version.clone(),
     );
-    metadata.insert("amount_xor".to_string(), receipt.amount_xor.clone());
+    metadata.insert("amount_xor".to_string(), receipt.amount_xor.to_string());
     metadata.insert(
         "configured_signer_count".to_string(),
         receipt.configured_signer_count.to_string(),
     );
-    metadata.insert("held_xor".to_string(), receipt.held_xor.clone());
+    metadata.insert("held_xor".to_string(), receipt.held_xor.to_string());
     metadata.insert("outcome".to_string(), receipt.outcome.as_str().to_string());
-    metadata.insert("refund_xor".to_string(), receipt.refund_xor.clone());
+    metadata.insert("refund_xor".to_string(), receipt.refund_xor.to_string());
     metadata.insert(
         "required_authority".to_string(),
         receipt.required_authority.clone(),
@@ -418,7 +421,7 @@ pub fn appeal_finance_settlement_receipt_source_entry(
         "settlement_step".to_string(),
         receipt.submitted_step.clone(),
     );
-    metadata.insert("treasury_xor".to_string(), receipt.treasury_xor.clone());
+    metadata.insert("treasury_xor".to_string(), receipt.treasury_xor.to_string());
     if let Some(round_id) = &receipt.round_id {
         metadata.insert("round_id".to_string(), round_id.clone());
     }
@@ -613,17 +616,14 @@ pub fn reserve_lifecycle_event_source_entry(
     if let Some(previous_stage) = previous_stage {
         metadata.insert("previous_stage".to_string(), previous_stage.to_string());
     }
+    metadata.insert("rent_due".to_string(), event.ledger.rent_due.to_string());
     metadata.insert(
-        "rent_due_micro_xor".to_string(),
-        event.ledger.rent_due.as_micro().to_string(),
+        "reserve_shortfall".to_string(),
+        event.ledger.reserve_shortfall.to_string(),
     );
     metadata.insert(
-        "reserve_shortfall_micro_xor".to_string(),
-        event.ledger.reserve_shortfall.as_micro().to_string(),
-    );
-    metadata.insert(
-        "top_up_shortfall_micro_xor".to_string(),
-        event.ledger.top_up_shortfall.as_micro().to_string(),
+        "top_up_shortfall".to_string(),
+        event.ledger.top_up_shortfall.to_string(),
     );
     metadata.insert(
         "grace_period_days".to_string(),
@@ -640,16 +640,26 @@ pub fn reserve_lifecycle_event_source_entry(
         metadata.insert("applied_appeal_id_hex".to_string(), hex::encode(appeal_id));
     }
     metadata.insert(
-        "credit_draw_micro_xor".to_string(),
-        event.lifecycle.credit_draw.as_micro().to_string(),
+        "credit_draw".to_string(),
+        event.lifecycle.credit_draw.to_string(),
+    );
+    if let Some(available) = &event.lifecycle.credit_available_after_draw {
+        metadata.insert(
+            "credit_available_after_draw".to_string(),
+            available.to_string(),
+        );
+    }
+    metadata.insert(
+        "credit_shortfall".to_string(),
+        event.lifecycle.credit_shortfall.to_string(),
     );
     metadata.insert(
-        "credit_shortfall_micro_xor".to_string(),
-        event.lifecycle.credit_shortfall.as_micro().to_string(),
+        "accrued_interest".to_string(),
+        event.lifecycle.accrued_interest.to_string(),
     );
     metadata.insert(
-        "accrued_interest_micro_xor".to_string(),
-        event.lifecycle.accrued_interest.as_micro().to_string(),
+        "total_due_after_credit".to_string(),
+        event.lifecycle.total_due_after_credit.to_string(),
     );
     metadata.insert(
         "requires_governance_notification".to_string(),
@@ -660,78 +670,10 @@ pub fn reserve_lifecycle_event_source_entry(
         event.lifecycle.requires_manual_credit_approval.to_string(),
     );
     let metadata = metadata_vec(metadata);
+    let encoded_event = event.encode();
     let payload_digest = reserve_source_payload_digest(
         "reserve_lifecycle_event",
-        &[
-            ("sequence", event.sequence.to_le_bytes().as_ref()),
-            ("provider_id", event.provider_id.as_ref()),
-            ("current_stage", current_stage.as_bytes()),
-            (
-                "previous_stage",
-                event
-                    .previous_stage
-                    .map(reserve_lifecycle_stage_label)
-                    .unwrap_or("")
-                    .as_bytes(),
-            ),
-            (
-                "observed_at_unix",
-                event.observed_at_unix.to_le_bytes().as_ref(),
-            ),
-            (
-                "grace_period_days",
-                event.grace_period_days.to_le_bytes().as_ref(),
-            ),
-            (
-                "default_after_days",
-                event.default_after_days.to_le_bytes().as_ref(),
-            ),
-            (
-                "applied_policy_id",
-                event
-                    .applied_policy_id
-                    .as_ref()
-                    .map_or(&[][..], |policy_id| policy_id.as_ref()),
-            ),
-            (
-                "applied_appeal_id",
-                event
-                    .applied_appeal_id
-                    .as_ref()
-                    .map_or(&[][..], |appeal_id| appeal_id.as_ref()),
-            ),
-            (
-                "rent_due",
-                event.ledger.rent_due.as_micro().to_le_bytes().as_ref(),
-            ),
-            (
-                "reserve_shortfall",
-                event
-                    .ledger
-                    .reserve_shortfall
-                    .as_micro()
-                    .to_le_bytes()
-                    .as_ref(),
-            ),
-            (
-                "credit_draw",
-                event
-                    .lifecycle
-                    .credit_draw
-                    .as_micro()
-                    .to_le_bytes()
-                    .as_ref(),
-            ),
-            (
-                "credit_shortfall",
-                event
-                    .lifecycle
-                    .credit_shortfall
-                    .as_micro()
-                    .to_le_bytes()
-                    .as_ref(),
-            ),
-        ],
+        &[("canonical_event", encoded_event.as_slice())],
     );
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!("reserve-lifecycle:{}:{provider_id_hex}", event.sequence),
@@ -790,17 +732,14 @@ pub fn reserve_movement_source_entry(
     metadata.insert("provider_id_hex".to_string(), provider_id_hex.clone());
     metadata.insert("sequence".to_string(), record.sequence.to_string());
     metadata.insert("movement_kind".to_string(), kind.to_string());
+    metadata.insert("amount".to_string(), record.amount.to_string());
     metadata.insert(
-        "amount_micro_xor".to_string(),
-        record.amount.as_micro().to_string(),
+        "balance_after".to_string(),
+        record.balance_after.to_string(),
     );
     metadata.insert(
-        "balance_after_micro_xor".to_string(),
-        record.balance_after.as_micro().to_string(),
-    );
-    metadata.insert(
-        "confirmed_balance_after_micro_xor".to_string(),
-        record.confirmed_balance_after.as_micro().to_string(),
+        "confirmed_balance_after".to_string(),
+        record.confirmed_balance_after.to_string(),
     );
     metadata.insert("custody_status".to_string(), custody_status.to_string());
     metadata.insert(
@@ -823,40 +762,10 @@ pub fn reserve_movement_source_entry(
         metadata.insert("custody_tx_hash_hex".to_string(), tx_hash_hex.clone());
     }
     let metadata = metadata_vec(metadata);
+    let encoded_record = record.encode();
     let payload_digest = reserve_source_payload_digest(
         "reserve_movement",
-        &[
-            ("sequence", record.sequence.to_le_bytes().as_ref()),
-            ("movement_id", record.movement_id.as_ref()),
-            ("provider_id", record.provider_id.as_ref()),
-            ("provider_account", record.provider_account.as_ref()),
-            ("reserve_account", record.reserve_account.as_ref()),
-            ("asset_definition_id", record.asset_definition_id.as_ref()),
-            ("kind", kind.as_bytes()),
-            ("amount", record.amount.as_micro().to_le_bytes().as_ref()),
-            (
-                "balance_after",
-                record.balance_after.as_micro().to_le_bytes().as_ref(),
-            ),
-            (
-                "confirmed_balance_after",
-                record
-                    .confirmed_balance_after
-                    .as_micro()
-                    .to_le_bytes()
-                    .as_ref(),
-            ),
-            ("idempotency_key", record.idempotency_key.as_bytes()),
-            ("custody_status", custody_status.as_bytes()),
-            (
-                "custody_tx_hash_hex",
-                record
-                    .custody_tx_hash_hex
-                    .as_deref()
-                    .unwrap_or("")
-                    .as_bytes(),
-            ),
-        ],
+        &[("canonical_record", encoded_record.as_slice())],
     );
     let entry = TransparencyLedgerSourceEntry {
         event_id: format!(
@@ -2344,6 +2253,10 @@ fn system_time_to_unix_secs(
 mod tests {
     use super::*;
 
+    fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
     const VALID_PROOF_TOKEN_SIGNER_HEX: &str =
         "f4bfda67d38a409557e4a910dbdf0a862ee5aa6cf6c2284aa38b0b82c4f16532";
     const VALID_PROOF_TOKEN_B64: &str = "U0ZHVAEBAgAAAABrSdIeAAAAAGtLI55hYWFhYWFhYWFhYWFhYWFhAAIAD2RlbnlsaXN0L2dsb2JhbAANZ2FyL3BvbGljeS80MmRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkAEDHmshANx2cvkpmh1mCkrE94PJ6hL0A0qX4vQ-T3rWyTUKZG6uGoYM2sXbL36cYTahpsgcQ35z4R9bb1owinokB";
@@ -2463,35 +2376,35 @@ mod tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: "420".to_string(),
+            deposit_xor: xor("420"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "420".to_string(),
+                amount_xor: xor("420"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "50".to_string(),
+                amount_xor: xor("50"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0".to_string(),
+                amount_xor: xor("0"),
             },
             panel_size: 3,
-            panel_reward_total_xor: "85".to_string(),
-            rewards_paid_total_xor: "60".to_string(),
-            rewards_forfeited_treasury_xor: "25".to_string(),
+            panel_reward_total_xor: xor("85"),
+            rewards_paid_total_xor: xor("60"),
+            rewards_forfeited_treasury_xor: xor("25"),
             juror_payouts: vec![
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-a".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-b".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
             ],
             no_show_juror_ids: vec!["juror-c".to_string()],
@@ -2517,16 +2430,16 @@ mod tests {
             release_authority_account: Some("release-authority".to_string()),
             submitted_step: "treasury-release".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: "25".to_string(),
+            amount_xor: xor("25"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
             reconciliation_status: "pending".to_string(),
             observed_lifecycle_status: "funded".to_string(),
-            observed_remaining_xor: "420".to_string(),
-            deposit_xor: "420".to_string(),
-            refund_xor: "0".to_string(),
-            treasury_xor: "25".to_string(),
-            held_xor: "395".to_string(),
+            observed_remaining_xor: xor("420"),
+            deposit_xor: xor("420"),
+            refund_xor: xor("0"),
+            treasury_xor: xor("25"),
+            held_xor: xor("395"),
             panel_size: 3,
             configured_signer_count: 2,
         }
@@ -2539,7 +2452,7 @@ mod tests {
                 10,
                 iroha_data_model::sorafs::reserve::ReserveDuration::Monthly,
                 iroha_data_model::sorafs::reserve::ReserveTier::TierA,
-                sorafs_manifest::deal::XorAmount::zero(),
+                sorafs_manifest::deal::XorQuantity::zero(),
             )
             .expect("reserve quote")
     }
@@ -2555,7 +2468,7 @@ mod tests {
             previous_stage: Some(ReserveLifecycleStage::Warning),
             current_stage: lifecycle.stage,
             observed_at_unix: 1_800_000_040,
-            ledger: quote.ledger_projection(),
+            ledger: quote.ledger_projection().expect("ledger projection"),
             lifecycle,
             grace_period_days: 7,
             default_after_days: 30,
@@ -2573,9 +2486,11 @@ mod tests {
             reserve_account: b"reserve-account".to_vec(),
             asset_definition_id: b"xor#sora".to_vec(),
             kind: ReserveMovementKind::TopUp,
-            amount: sorafs_manifest::deal::XorAmount::from_micro(100),
-            balance_after: sorafs_manifest::deal::XorAmount::from_micro(100),
-            confirmed_balance_after: sorafs_manifest::deal::XorAmount::zero(),
+            amount: sorafs_manifest::deal::XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            balance_after: sorafs_manifest::deal::XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            confirmed_balance_after: sorafs_manifest::deal::XorQuantity::zero(),
             idempotency_key: "movement-1".to_string(),
             observed_at_unix: 1_800_000_050,
             custody_status: ReserveMovementCustodyStatus::Submitted,
@@ -2767,6 +2682,119 @@ mod tests {
         reserve_policy_entry
             .validate()
             .expect("reserve policy entry validates");
+    }
+
+    #[test]
+    fn reserve_source_entries_preserve_exact_quantities_and_hash_canonical_records() {
+        let sub_micro: sorafs_manifest::deal::XorQuantity =
+            "0.0000001".parse().expect("sub-micro quantity");
+        let wide: sorafs_manifest::deal::XorQuantity = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("quantity wider than u128");
+        let high_precision: sorafs_manifest::deal::XorQuantity =
+            "1.000000001".parse().expect("high precision quantity");
+
+        let mut lifecycle = reserve_lifecycle_event_fixture();
+        lifecycle.ledger.rent_due = sub_micro.clone();
+        lifecycle.ledger.reserve_shortfall = wide.clone();
+        lifecycle.ledger.top_up_shortfall = high_precision.clone();
+        lifecycle.lifecycle.credit_draw = wide.clone();
+        lifecycle.lifecycle.credit_available_after_draw = Some(high_precision.clone());
+        lifecycle.lifecycle.credit_shortfall = sub_micro.clone();
+        lifecycle.lifecycle.accrued_interest = high_precision.clone();
+        lifecycle.lifecycle.total_due_after_credit = wide.clone();
+        let lifecycle_entry =
+            reserve_lifecycle_event_source_entry(&lifecycle).expect("exact lifecycle entry");
+        for (key, expected) in [
+            ("rent_due", "0.0000001"),
+            (
+                "reserve_shortfall",
+                "340282366920938463463374607431768211456",
+            ),
+            ("top_up_shortfall", "1.000000001"),
+            ("credit_draw", "340282366920938463463374607431768211456"),
+            ("credit_available_after_draw", "1.000000001"),
+            ("credit_shortfall", "0.0000001"),
+            ("accrued_interest", "1.000000001"),
+            (
+                "total_due_after_credit",
+                "340282366920938463463374607431768211456",
+            ),
+        ] {
+            assert!(
+                lifecycle_entry
+                    .metadata
+                    .iter()
+                    .any(|item| item.key == key && item.value == expected),
+                "missing exact lifecycle metadata {key}"
+            );
+        }
+        assert!(
+            lifecycle_entry
+                .metadata
+                .iter()
+                .all(|item| !item.key.contains("micro_xor")),
+            "legacy micro-XOR metadata must not be emitted"
+        );
+        let lifecycle_bytes = lifecycle.encode();
+        assert_eq!(
+            lifecycle_entry.payload_digest,
+            reserve_source_payload_digest(
+                "reserve_lifecycle_event",
+                &[("canonical_event", lifecycle_bytes.as_slice())],
+            )
+        );
+        let mut changed_lifecycle = lifecycle.clone();
+        changed_lifecycle.lifecycle.total_due_after_credit = high_precision.clone();
+        assert_ne!(
+            reserve_lifecycle_event_source_entry(&changed_lifecycle)
+                .expect("changed lifecycle entry")
+                .payload_digest,
+            lifecycle_entry.payload_digest,
+            "every canonical lifecycle field must be authenticated"
+        );
+
+        let mut movement = reserve_movement_record_fixture();
+        movement.amount = sub_micro;
+        movement.balance_after = wide;
+        movement.confirmed_balance_after = high_precision;
+        let movement_entry =
+            reserve_movement_source_entry(&movement).expect("exact movement entry");
+        for (key, expected) in [
+            ("amount", "0.0000001"),
+            ("balance_after", "340282366920938463463374607431768211456"),
+            ("confirmed_balance_after", "1.000000001"),
+        ] {
+            assert!(
+                movement_entry
+                    .metadata
+                    .iter()
+                    .any(|item| item.key == key && item.value == expected),
+                "missing exact movement metadata {key}"
+            );
+        }
+        let movement_bytes = movement.encode();
+        assert_eq!(
+            movement_entry.payload_digest,
+            reserve_source_payload_digest(
+                "reserve_movement",
+                &[("canonical_record", movement_bytes.as_slice())],
+            )
+        );
+        let mut changed_movement = movement.clone();
+        changed_movement.custody_updated_at_unix = Some(
+            changed_movement
+                .custody_updated_at_unix
+                .expect("custody timestamp")
+                .saturating_add(1),
+        );
+        assert_ne!(
+            reserve_movement_source_entry(&changed_movement)
+                .expect("changed movement entry")
+                .payload_digest,
+            movement_entry.payload_digest,
+            "every canonical movement field must be authenticated"
+        );
     }
 
     #[test]

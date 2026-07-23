@@ -314,6 +314,7 @@ publishing {
 }
 
 tasks.withType<PublishToMavenRepository>().configureEach {
+    dependsOn(":core:publish")
     if (hasCycloneDx) {
         dependsOn(jvmDependencyManifest, tasks.named("cyclonedxBom"), "writeJvmRuntimeManifest")
     } else {
@@ -322,6 +323,7 @@ tasks.withType<PublishToMavenRepository>().configureEach {
 }
 
 tasks.withType<PublishToMavenLocal>().configureEach {
+    dependsOn(":core:publishToMavenLocal")
     if (hasCycloneDx) {
         dependsOn(jvmDependencyManifest, tasks.named("cyclonedxBom"), "writeJvmRuntimeManifest")
     } else {

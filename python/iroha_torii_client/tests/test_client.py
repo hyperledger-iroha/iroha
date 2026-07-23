@@ -7,7 +7,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
+from typing import Any, Callable, Dict, List, Mapping, Optional, Union, get_args, get_type_hints
 from urllib.parse import quote
 
 import pytest
@@ -23,21 +23,21 @@ import iroha_torii_client.client as client_module  # noqa: E402
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
     ContractCallResponse,
     ContractOperationReceipt,
-    ContractDeployResponse,
     ExplorerAccountQr,
     GovernanceContractResponse,
+    KagemushaRedeemRequestV4,
+    KagemushaTopUpRequestV4,
     MultisigResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
-    SumeragiV2Status,
     OfflineAppliedOperation,
     OfflineAssetScale,
+    OfflineAuthenticatedArtifactSet,
     OfflinePendingOperation,
-    KagemushaRedeemRequestV2,
     OfflineRejectedOperation,
     OfflineTopUpAnchor,
     OfflineTopUpFinalityProof,
-    KagemushaTopUpRequestV2,
+    SumeragiV2Status,
     ToriiCanonicalRequestAuth,
     ToriiClient,
     VpnQuoteCreateRequest,
@@ -57,12 +57,35 @@ from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 CANONICAL_OWNER = "sorauﾛ1NcMBm2dﾌBokヱDﾑﾅekAbｶﾍﾜﾇﾐMFｽヱﾋZﾘ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
 CANONICAL_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+CHECKSUM_INVALID_ASSET_DEFINITION_ID = "7EAD8EFYUx1aVKZPUU1fyKvr8dF2"
+CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID = "7EAD8EFYV3tk2BtyQaGhqhATjFy7"
+CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID = "7EAD8EFYUx1bhNP18PQmxXsySxi6"
+
+
+def _authority_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "payer": "authority",
+        "value": {"charge_limits": [], "gas_limit": gas_limit},
+    }
+
+
+def _sponsor_fee_payment(gas_limit: Optional[int] = None) -> Dict[str, Any]:
+    return {
+        "payer": "sponsor",
+        "value": {
+            "program_id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+            "program_revision": 3,
+            "charge_limits": [],
+            "gas_limit": gas_limit,
+        },
+    }
 
 
 def _contract_operation_receipt(
     *,
     entrypoint: str = "ping",
     gas_limit: int = 5000,
+    fee_payment: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     return {
         "operation_kind": "contract_call",
@@ -78,8 +101,7 @@ def _contract_operation_receipt(
         "entrypoint_hash_hex": "55" * 32,
         "gas_limit": gas_limit,
         "gas_used": 17,
-        "gas_asset_id": "xor#wonderland",
-        "fee_sponsor": CANONICAL_OWNER,
+        "fee_payment": fee_payment or _sponsor_fee_payment(gas_limit),
         "payload_digest_hex": "66" * 32,
     }
 
@@ -114,6 +136,7 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "node_fingerprint": _canonical_hash(0x11),
         "build_fingerprint": _canonical_hash(0x12),
         "config_fingerprint": _canonical_hash(0x13),
+        "restart_required": False,
         "height_context_id": [_canonical_hash(0x14)],
         "height": 10,
         "view": 2,
@@ -141,6 +164,11 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                     "height": 9,
                     "view": 1,
                 },
+                "proposal_round": {
+                    "context_id": [_canonical_hash(0x41)],
+                    "height": 9,
+                    "view": 1,
+                },
                 "phase": {"phase": "commit", "details": None},
                 "subject": dict(subject),
                 "execution_commitment": execution_commitment,
@@ -150,6 +178,86 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
             "min_signers": 3,
             "signed_power": 3,
             "total_power": 4,
+        },
+        "liveness": {
+            "generation": 2,
+            "prepare_quorums": [
+                {
+                    "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "proposal_round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "subject": dict(subject),
+                    "execution_commitment": dict(execution_commitment),
+                    "signer_count": 2,
+                    "signed_power": 2,
+                    "min_signers": 3,
+                    "total_power": 4,
+                }
+            ],
+            "commit_quorums": [],
+            "timeout_quorums": [],
+            "outbound_intents": [
+                {
+                    "kind": {"kind": "proposal", "details": None},
+                    "round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "proposal_round": {
+                        "context_id": [_canonical_hash(0x14)],
+                        "height": 10,
+                        "view": 1,
+                    },
+                    "subject": dict(subject),
+                    "stage": {"stage": "sent", "details": None},
+                }
+            ],
+            "work": {
+                "candidate": {"stage": "idle", "details": None},
+                "body_recovery": {"stage": "idle", "details": None},
+                "body_store": {"stage": "idle", "details": None},
+                "validation": {"stage": "complete", "details": None},
+                "application": {"stage": "idle", "details": None},
+                "successor_height": {"stage": "idle", "details": None},
+            },
+            "queues": [
+                {
+                    "queue": {"queue": "network_ingress", "details": None},
+                    "depth": 1,
+                    "capacity": 4,
+                    "oldest_age_ms": 17,
+                    "service_debt": 2,
+                }
+            ],
+            "last_progress": {
+                "generation": 2,
+                "round": {
+                    "context_id": [_canonical_hash(0x14)],
+                    "height": 10,
+                    "view": 1,
+                },
+                "transition": {
+                    "transition": "prepare_vote_admitted",
+                    "details": None,
+                },
+                "age_ms": 19,
+            },
+            "no_progress_age_ms": 19,
+            "blocker": {"blocker": "prepare_quorum_missing", "details": None},
+            "ignore_counts": [
+                {
+                    "reason": {"reason": "duplicate", "details": None},
+                    "count": 2,
+                }
+            ],
         },
         "safety_halt": {
             "active": False,
@@ -203,10 +311,10 @@ def _lane_settlement_payload() -> Dict[str, Any]:
         "lane_incarnation": _canonical_hash(0x51),
         "dataspace_id": 7,
         "tx_count": 1,
-        "total_local_micro": "10",
-        "total_xor_due_micro": "5",
-        "total_xor_after_haircut_micro": "4",
-        "total_xor_variance_micro": "1",
+        "total_local_amount": "10",
+        "total_xor_due": "5",
+        "total_xor_after_haircut": "4",
+        "total_xor_variance": "1",
         "swap_metadata": {
             "epsilon_bps": 5,
             "twap_window_seconds": 60,
@@ -217,10 +325,10 @@ def _lane_settlement_payload() -> Dict[str, Any]:
         "receipts": [
             {
                 "source_id": "52" * 32,
-                "local_amount_micro": "10",
-                "xor_due_micro": "5",
-                "xor_after_haircut_micro": "4",
-                "xor_variance_micro": "1",
+                "local_amount": "10",
+                "xor_due": "5",
+                "xor_after_haircut": "4",
+                "xor_variance": "1",
                 "timestamp_ms": 1700,
             }
         ],
@@ -355,26 +463,26 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
                     "lane_incarnation": _canonical_hash(0x65),
                     "dataspace_id": 8,
                     "tx_count": 2,
-                    "total_local_micro": "0",
-                    "total_xor_due_micro": "0",
-                    "total_xor_after_haircut_micro": "0",
-                    "total_xor_variance_micro": "0",
+                    "total_local_amount": "0",
+                    "total_xor_due": "0",
+                    "total_xor_after_haircut": "0",
+                    "total_xor_variance": "0",
                     "swap_metadata": None,
                     "receipts": [
                         {
                             "source_id": source_id,
-                            "local_amount_micro": "0",
-                            "xor_due_micro": "0",
-                            "xor_after_haircut_micro": "0",
-                            "xor_variance_micro": "0",
+                            "local_amount": "0",
+                            "xor_due": "0",
+                            "xor_after_haircut": "0",
+                            "xor_variance": "0",
                             "timestamp_ms": 10,
                         },
                         {
                             "source_id": "CD" * 32,
-                            "local_amount_micro": "0",
-                            "xor_due_micro": "0",
-                            "xor_after_haircut_micro": "0",
-                            "xor_variance_micro": "0",
+                            "local_amount": "0",
+                            "xor_due": "0",
+                            "xor_after_haircut": "0",
+                            "xor_variance": "0",
                             "timestamp_ms": 10,
                         },
                     ],
@@ -505,7 +613,7 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "order_id_hex": f"0x{order_id_hex.upper()}",
         "side": "bid",
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "quantity_gib": 4,
         "remaining_gib": 2,
         "owner_account_hex": "CAFE",
@@ -521,10 +629,10 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "maker_order_id_hex": order_id_hex,
         "taker_order_id_hex": "77" * 32,
         "tier": "hot",
-        "price_per_gib_micro_xor": "1500000",
+        "price_per_gib": "340282366920938463463374607431768211456.000000001",
         "filled_gib": 2,
-        "maker_fee_micro_xor": "75000",
-        "taker_fee_micro_xor": "105000",
+        "maker_fee": "0.000000001",
+        "taker_fee": "1.000000001",
         "timestamp_unix": 1_700_000_100,
     }
     channel = {
@@ -535,7 +643,7 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "provider_id_hex": provider_id_hex,
         "total_bytes": 2_147_483_648,
         "remaining_bytes": 1_073_741_824,
-        "xor_locked_micro": "3000000",
+        "xor_locked": "340282366920938463463374607431768211456.000000001",
         "status": "open",
         "opened_at_unix": 1_700_000_101,
         "updated_at_unix": 1_700_000_102,
@@ -548,9 +656,9 @@ def _sample_sorafs_orderbook_payloads() -> Dict[str, Any]:
         "range": {"start": 0, "end": 1024},
         "chunk_hash_hex": chunk_hash_hex,
         "bytes_delivered": 1024,
-        "xor_debited_micro": "1500",
-        "provider_credit_micro": "1400",
-        "fee_amount_micro": "100",
+        "xor_debited": "340282366920938463463374607431768211456.000000001",
+        "provider_credit": "1.000000001",
+        "fee_amount": "0.000000001",
         "issued_at_unix": 1_700_000_103,
         "settlement_signature": signature,
     }
@@ -695,7 +803,7 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
                         "trade": payloads["trade"],
                         "maker_remaining_gib": 0,
                         "taker_remaining_gib": 2,
-                        "gross_value_micro_xor": "3000000",
+                        "gross_value": "340282366920938463463374607431768211456.000000001",
                     }
                 ],
                 "settlement_channels_opened": [payloads["channel"]],
@@ -745,7 +853,9 @@ def test_sorafs_orderbook_submit_helpers_sign_exact_payload_bytes() -> None:
     )
     assert order_result["status"] == "accepted"
     assert order_result["sequence"] == 12
-    assert order_result["fills"][0]["gross_value_micro_xor"] == "3000000"
+    assert order_result["fills"][0]["gross_value"] == (
+        "340282366920938463463374607431768211456.000000001"
+    )
     order_call = session.calls[0]
     assert order_call["method"] == "POST"
     assert order_call["url"].endswith("/v1/sorafs/orderbook/orders")
@@ -795,6 +905,120 @@ def test_sorafs_orderbook_submit_helpers_validate_inputs() -> None:
             canonical_auth=auth,
             headers="not-a-mapping",  # type: ignore[arg-type]
         )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "0",
+        "0.000000001",
+        str(1 << 128),
+        str((1 << 511) - 1),
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047",
+    ],
+    ids=["zero", "nanoxor", "over-u128", "max-mantissa", "max-scaled"],
+)
+def test_sorafs_orderbook_xor_quantity_parser_preserves_exact_boundaries(
+    value: str,
+) -> None:
+    assert ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount") == value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        1,
+        1.0,
+        True,
+        None,
+        "",
+        "+1",
+        "-1",
+        " 1",
+        "1 ",
+        "01",
+        "1.",
+        ".1",
+        "1.0",
+        "1.000000000",
+        "1e0",
+        "0.0000000001",
+        str(1 << 511),
+        "1" * 156,
+        "1" * 10_000,
+    ],
+    ids=[
+        "json-integer",
+        "json-float",
+        "json-bool",
+        "json-null",
+        "empty",
+        "plus",
+        "negative",
+        "leading-space",
+        "trailing-space",
+        "leading-zero",
+        "missing-fraction",
+        "missing-whole",
+        "trailing-zero",
+        "nine-trailing-zeros",
+        "exponent",
+        "over-scale",
+        "mantissa-overflow",
+        "text-bound-overflow",
+        "oversized-input",
+    ],
+)
+def test_sorafs_orderbook_xor_quantity_parser_rejects_adversarial_values(
+    value: Any,
+) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        ToriiClient._normalize_sorafs_orderbook_xor_quantity(value, "amount")
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload_key", "retired_field"),
+    [
+        (
+            ToriiClient._parse_sorafs_orderbook_order,
+            "order",
+            "price_per_gib_micro_xor",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_trade,
+            "trade",
+            "maker_fee_micro_xor",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_channel,
+            "channel",
+            "xor_locked_micro",
+        ),
+        (
+            ToriiClient._parse_sorafs_orderbook_receipt,
+            "receipt",
+            "provider_credit_micro",
+        ),
+    ],
+)
+def test_sorafs_orderbook_exact_records_reject_legacy_duplicate_fields(
+    parser: Callable[..., Dict[str, Any]],
+    payload_key: str,
+    retired_field: str,
+) -> None:
+    record = dict(_sample_sorafs_orderbook_payloads()[payload_key])
+    record[retired_field] = "1"
+
+    with pytest.raises(ValueError, match="unknown or retired"):
+        parser(record, context=payload_key)
+
+
+def test_sorafs_orderbook_exact_records_reject_unknown_fields() -> None:
+    order = dict(_sample_sorafs_orderbook_payloads()["order"])
+    order["unexpected_amount"] = "1"
+
+    with pytest.raises(ValueError, match="unexpected_amount"):
+        ToriiClient._parse_sorafs_orderbook_order(order, context="order")
 
 
 def test_expect_status_surfaces_error_envelope_details() -> None:
@@ -851,10 +1075,11 @@ VPN_ACCOUNT = "vpn-user@paynet"
 VPN_OPERATOR = "vpn-operator@paynet"
 VPN_ESCROW = "vpn-escrow@paynet"
 VPN_QUOTE_ID = "11" * 32
+VPN_QUOTE_SESSION_ID = "44" * 16
 VPN_PAYMENT_HASH = "22" * 32
 VPN_METERING_KEY = "33" * 32
 VPN_LEASE_ID = VPN_QUOTE_ID
-VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 248
+VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00" * 656
 
 
 def _vpn_instruction(wire_id: str = "OpenVpnLeaseEscrow") -> Dict[str, str]:
@@ -865,7 +1090,7 @@ def _vpn_profile_payload() -> Dict[str, Any]:
     return {
         "available": True,
         "relay_endpoint": "/dns4/relay.example/tcp/443",
-        "supported_exit_classes": ["standard", "low-latency"],
+        "supported_exit_classes": ["standard", "low-latency", "high-security"],
         "default_exit_class": "standard",
         "lease_secs": 3600,
         "dns_push_interval_secs": 60,
@@ -875,13 +1100,13 @@ def _vpn_profile_payload() -> Dict[str, Any]:
         "dns_servers": ["1.1.1.1"],
         "tunnel_addresses": ["10.208.0.2/32"],
         "mtu_bytes": 1280,
-        "display_billing_label": "standard - soranet.vpn.v1 - 100 nano-XOR",
+        "display_billing_label": "standard - soranet.vpn.v1 - 100.25 XOR",
         "fee_asset_id": "xor#universal",
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": 100,
+        "lease_fee": "100.25",
         "settlement_grace_secs": 300,
-        "flow_label_bits": 20,
+        "flow_label_bits": 24,
         "padding_budget_ms": 250,
         "relay_tls_spki_sha256_hex": "44" * 32,
     }
@@ -892,7 +1117,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
     return {
         "quote_id": VPN_QUOTE_ID,
         "lease_id_hex": VPN_LEASE_ID,
-        "session_id_hex": VPN_QUOTE_ID,
+        "session_id_hex": VPN_QUOTE_SESSION_ID,
         "payment_reference": VPN_QUOTE_ID,
         "account_id": VPN_ACCOUNT,
         "exit_class": "standard",
@@ -902,7 +1127,7 @@ def _vpn_quote_payload() -> Dict[str, Any]:
         "fee_asset_id": payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": payload["lease_fee_nanos"],
+        "lease_fee": payload["lease_fee"],
         "route_pushes": payload["route_pushes"],
         "excluded_routes": payload["excluded_routes"],
         "dns_servers": payload["dns_servers"],
@@ -935,7 +1160,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "fee_asset_id": quote_payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": quote_payload["lease_fee_nanos"],
+        "lease_fee": quote_payload["lease_fee"],
         "flow_label_bits": quote_payload["flow_label_bits"],
         "padding_budget_ms": quote_payload["padding_budget_ms"],
         "relay_tls_spki_sha256_hex": quote_payload["relay_tls_spki_sha256_hex"],
@@ -947,7 +1172,7 @@ def _vpn_session_payload() -> Dict[str, Any]:
         "helper_ticket_hex": VPN_HELPER_TICKET_HEX,
         "bytes_in": 0,
         "bytes_out": 0,
-        "status": "connected",
+        "status": "active",
     }
 
 
@@ -971,9 +1196,9 @@ def _vpn_receipt_payload(status: str = "settled") -> Dict[str, Any]:
         "fee_asset_id": session_payload["fee_asset_id"],
         "escrow_account_id": VPN_ESCROW,
         "operator_account_id": VPN_OPERATOR,
-        "lease_fee_nanos": session_payload["lease_fee_nanos"],
-        "earned_fee_nanos": 25,
-        "refunded_fee_nanos": 75,
+        "lease_fee": session_payload["lease_fee"],
+        "earned_fee": "25.125",
+        "refunded_fee": "75.125",
         "lease_id_hex": VPN_LEASE_ID,
         "settle_lease_instruction": _vpn_instruction("SettleVpnLease"),
         "tx_instructions": [_vpn_instruction("SettleVpnLease")],
@@ -1001,12 +1226,193 @@ def test_vpn_profile_deserializes_native_lease_fields() -> None:
     profile = client.get_vpn_profile()
 
     assert profile.fee_asset_id == "xor#universal"
-    assert profile.lease_fee_nanos == 100
+    assert profile.lease_fee == "100.25"
     assert profile.escrow_account_id == VPN_ESCROW
     assert profile.operator_account_id == VPN_OPERATOR
     assert profile.route_pushes == ["0.0.0.0/0"]
     assert session.calls[0]["url"] == "http://node.test/v1/vpn/profile"
     assert session.calls[0]["headers"] == {"Accept": "application/json"}
+
+
+@pytest.mark.parametrize("invalid_fee", [100, "01", "-1", "1.0"])
+def test_vpn_profile_rejects_noncanonical_quantity_fee(invalid_fee: Any) -> None:
+    payload = _vpn_profile_payload()
+    payload["lease_fee"] = invalid_fee
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="lease_fee"):
+        client.get_vpn_profile()
+
+
+@pytest.mark.parametrize("dns_push_interval_secs", [None, 0, 29], ids=["missing", "zero", "below-minimum"])
+def test_vpn_profile_requires_dns_push_interval_of_at_least_30(
+    dns_push_interval_secs: Optional[int],
+) -> None:
+    payload = _vpn_profile_payload()
+    if dns_push_interval_secs is None:
+        payload.pop("dns_push_interval_secs")
+    else:
+        payload["dns_push_interval_secs"] = dns_push_interval_secs
+
+    with pytest.raises(RuntimeError, match="dns_push_interval_secs"):
+        ToriiClient._parse_vpn_profile(payload, context="vpn profile")
+
+
+def test_signed_vpn_methods_require_canonical_auth_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    omitted_auth_calls = [
+        lambda: client.create_vpn_quote(
+            VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY)
+        ),
+        lambda: client.create_vpn_session(
+            VpnSessionCreateRequest(
+                quote_id=VPN_QUOTE_ID,
+                payment_tx_hash=VPN_PAYMENT_HASH,
+                metering_public_key_hex=VPN_METERING_KEY,
+            )
+        ),
+        lambda: client.get_vpn_session(VPN_QUOTE_ID),
+        lambda: client.delete_vpn_session(VPN_QUOTE_ID),
+        lambda: client.submit_vpn_receipt(
+            VpnReceiptSubmitRequest(
+                relay_receipt_hex="abcd",
+                client_voucher_hex="beef",
+            )
+        ),
+        client.list_vpn_receipts,
+    ]
+
+    for invoke in omitted_auth_calls:
+        with pytest.raises(TypeError, match=r"canonical_auth"):
+            invoke()
+
+    explicit_none_calls = [
+        lambda: client.create_vpn_quote(
+            VpnQuoteCreateRequest(metering_public_key_hex=VPN_METERING_KEY),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.create_vpn_session(
+            VpnSessionCreateRequest(
+                quote_id=VPN_QUOTE_ID,
+                payment_tx_hash=VPN_PAYMENT_HASH,
+                metering_public_key_hex=VPN_METERING_KEY,
+            ),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.get_vpn_session(
+            VPN_QUOTE_ID,
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.delete_vpn_session(
+            VPN_QUOTE_ID,
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.submit_vpn_receipt(
+            VpnReceiptSubmitRequest(
+                relay_receipt_hex="abcd",
+                client_voucher_hex="beef",
+            ),
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+        lambda: client.list_vpn_receipts(
+            canonical_auth=None,  # type: ignore[arg-type]
+        ),
+    ]
+    for invoke in explicit_none_calls:
+        with pytest.raises(ValueError, match=r"canonical_auth is required"):
+            invoke()
+    assert session.calls == []
+
+
+def test_vpn_request_mappings_reject_unknown_fields_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    auth = _vpn_auth([])
+    calls = [
+        lambda: client.create_vpn_quote(
+            {"metering_public_key_hex": VPN_METERING_KEY, "unexpected": True},
+            canonical_auth=auth,
+        ),
+        lambda: client.create_vpn_session(
+            {
+                "quote_id": VPN_QUOTE_ID,
+                "payment_tx_hash": VPN_PAYMENT_HASH,
+                "metering_public_key_hex": VPN_METERING_KEY,
+                "unexpected": True,
+            },
+            canonical_auth=auth,
+        ),
+        lambda: client.submit_vpn_receipt(
+            {
+                "relay_receipt_hex": "abcd",
+                "client_voucher_hex": "beef",
+                "unexpected": True,
+            },
+            canonical_auth=auth,
+        ),
+    ]
+
+    for invoke in calls:
+        with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+            invoke()
+    assert session.calls == []
+
+
+def test_vpn_requests_keep_openapi_allowed_prefixed_mixed_case_hex() -> None:
+    metering_key = "ab" * 32
+    payment_hash = "cd" * 32
+    lease_id = "ef" * 32
+    assert ToriiClient._normalize_vpn_quote_request(
+        {"metering_public_key_hex": "0X" + ("aB" * 32)}
+    )["metering_public_key_hex"] == metering_key
+    session_payload = ToriiClient._normalize_vpn_session_request(
+        {
+            "quote_id": VPN_QUOTE_ID,
+            "payment_tx_hash": "0x" + ("cD" * 32),
+            "metering_public_key_hex": "0X" + ("aB" * 32),
+        }
+    )
+    assert session_payload["payment_tx_hash"] == payment_hash
+    assert session_payload["metering_public_key_hex"] == metering_key
+    receipt_payload = ToriiClient._normalize_vpn_receipt_request(
+        {
+            "relay_receipt_hex": "0XABCD",
+            "client_voucher_hex": "0xBEEF",
+            "lease_id_hex": "0X" + ("eF" * 32),
+        }
+    )
+    assert receipt_payload == {
+        "relay_receipt_hex": "abcd",
+        "client_voucher_hex": "beef",
+        "lease_id_hex": lease_id,
+    }
+    with pytest.raises(RuntimeError, match=r"quote_id must be an exact lowercase"):
+        ToriiClient._normalize_vpn_session_request(
+            {
+                "quote_id": "0X" + VPN_QUOTE_ID,
+                "payment_tx_hash": payment_hash,
+                "metering_public_key_hex": metering_key,
+            }
+        )
+    with pytest.raises(RuntimeError, match=r"exit_class must be one of"):
+        ToriiClient._normalize_vpn_quote_request(
+            {
+                "exit_class": "fastest",
+                "metering_public_key_hex": metering_key,
+            }
+        )
+    with pytest.raises(RuntimeError, match=r"exit_class must be one of"):
+        ToriiClient._normalize_vpn_session_request(
+            {
+                "exit_class": "fastest",
+                "quote_id": VPN_QUOTE_ID,
+                "payment_tx_hash": payment_hash,
+                "metering_public_key_hex": metering_key,
+            }
+        )
 
 
 def test_create_vpn_quote_signs_body_and_parses_open_lease_instruction() -> None:
@@ -1294,6 +1700,420 @@ def test_identifier_resolution_receipt_matches_shared_vectors() -> None:
             ), negative["name"]
 
 
+def test_vpn_session_accepts_exact_lowercase_664_byte_helper_ticket() -> None:
+    parsed = ToriiClient._parse_vpn_session(
+        _vpn_session_payload(),
+        context="vpn session response",
+    )
+
+    assert parsed.helper_ticket_hex == VPN_HELPER_TICKET_HEX
+    assert len(parsed.helper_ticket_hex) == 1328
+
+
+@pytest.mark.parametrize(
+    "helper_ticket_hex",
+    [
+        "0x" + VPN_HELPER_TICKET_HEX,
+        VPN_HELPER_TICKET_HEX.upper(),
+        VPN_HELPER_TICKET_HEX[:-1],
+        VPN_HELPER_TICKET_HEX[:-2],
+    ],
+    ids=["prefix", "uppercase", "odd-length", "wrong-even-length"],
+)
+def test_vpn_session_rejects_noncanonical_helper_ticket(helper_ticket_hex: str) -> None:
+    payload = _vpn_session_payload()
+    payload["helper_ticket_hex"] = helper_ticket_hex
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters",
+    ):
+        ToriiClient._parse_vpn_session(payload, context="vpn session response")
+
+
+def test_vpn_response_parsers_reject_unknown_fields() -> None:
+    cases = [
+        (ToriiClient._parse_vpn_profile, _vpn_profile_payload(), "vpn profile"),
+        (ToriiClient._parse_vpn_quote, _vpn_quote_payload(), "vpn quote"),
+        (ToriiClient._parse_vpn_session, _vpn_session_payload(), "vpn session"),
+        (ToriiClient._parse_vpn_receipt, _vpn_receipt_payload(), "vpn receipt"),
+        (
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [_vpn_receipt_payload()], "total": 1},
+            "vpn receipts",
+        ),
+    ]
+    for parser, payload, context in cases:
+        payload["unexpected"] = True
+        with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+            parser(payload, context=context)
+
+    nested = _vpn_quote_payload()
+    nested["open_lease_instruction"]["unexpected"] = True
+    with pytest.raises(RuntimeError, match=r"unsupported fields: unexpected"):
+        ToriiClient._parse_vpn_quote(nested, context="vpn quote")
+
+
+def test_vpn_response_parsers_require_all_openapi_fields() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload,
+            "relay_tls_spki_sha256_hex",
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload,
+            "open_lease_instruction",
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload,
+            "route_pushes",
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload,
+            "settle_lease_instruction",
+            "vpn receipt",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt_list,
+            lambda: {"items": [_vpn_receipt_payload()], "total": 1},
+            "total",
+            "vpn receipts",
+        ),
+    ]
+    for parser, payload_factory, missing_field, context in cases:
+        payload = payload_factory()
+        payload.pop(missing_field)
+        with pytest.raises(RuntimeError, match=rf"missing required fields: {missing_field}"):
+            parser(payload, context=context)
+
+    nested = _vpn_quote_payload()
+    nested["open_lease_instruction"].pop("payload_hex")
+    with pytest.raises(RuntimeError, match=r"missing required fields: payload_hex"):
+        ToriiClient._parse_vpn_quote(nested, context="vpn quote")
+
+    session = _vpn_session_payload()
+    session["route_pushes"] = None
+    with pytest.raises(RuntimeError, match=r"route_pushes must be a list"):
+        ToriiClient._parse_vpn_session(session, context="vpn session")
+
+
+def test_vpn_response_parsers_reject_empty_min_length_strings() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload,
+            "vpn profile",
+            (
+                "relay_endpoint",
+                "meter_family",
+                "display_billing_label",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload,
+            "vpn quote",
+            (
+                "payment_reference",
+                "account_id",
+                "relay_endpoint",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+                "meter_family",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload,
+            "vpn session",
+            (
+                "account_id",
+                "relay_endpoint",
+                "meter_family",
+                "payment_reference",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload,
+            "vpn receipt",
+            (
+                "account_id",
+                "relay_endpoint",
+                "meter_family",
+                "fee_asset_id",
+                "escrow_account_id",
+                "operator_account_id",
+            ),
+        ),
+    ]
+    for parser, payload_factory, context, fields in cases:
+        for field in fields:
+            payload = payload_factory()
+            payload[field] = ""
+            with pytest.raises(RuntimeError, match=field):
+                parser(payload, context=context)
+
+    instruction = _vpn_quote_payload()
+    instruction["open_lease_instruction"]["wire_id"] = ""
+    with pytest.raises(RuntimeError, match=r"wire_id"):
+        ToriiClient._parse_vpn_quote(instruction, context="vpn quote")
+
+
+def test_vpn_response_parsers_enforce_openapi_enums_and_bounds() -> None:
+    cases = [
+        (
+            "profile exit set",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__(
+                "supported_exit_classes",
+                ["standard", "standard", "high-security"],
+            ),
+            "supported_exit_classes",
+            "vpn profile",
+        ),
+        (
+            "profile lease lower bound",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__("lease_secs", 0),
+            "lease_secs",
+            "vpn profile",
+        ),
+        (
+            "profile settlement lower bound",
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            lambda payload: payload.__setitem__("settlement_grace_secs", 0),
+            "settlement_grace_secs",
+            "vpn profile",
+        ),
+        (
+            "quote instruction count",
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            lambda payload: payload.__setitem__("tx_instructions", []),
+            "tx_instructions",
+            "vpn quote",
+        ),
+        (
+            "quote exit enum",
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            lambda payload: payload.__setitem__("exit_class", "fastest"),
+            "exit_class",
+            "vpn quote",
+        ),
+        (
+            "session mtu constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("mtu_bytes", 1500),
+            "mtu_bytes",
+            "vpn session",
+        ),
+        (
+            "session flow label constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("flow_label_bits", 20),
+            "flow_label_bits",
+            "vpn session",
+        ),
+        (
+            "session padding lower bound",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("padding_budget_ms", 0),
+            "padding_budget_ms",
+            "vpn session",
+        ),
+        (
+            "session status constant",
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            lambda payload: payload.__setitem__("status", "connected"),
+            "status",
+            "vpn session",
+        ),
+        (
+            "receipt status enum",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__("status", "active"),
+            "status",
+            "vpn receipt",
+        ),
+        (
+            "receipt source enum",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__("receipt_source", "client"),
+            "receipt_source",
+            "vpn receipt",
+        ),
+        (
+            "receipt instruction count",
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            lambda payload: payload.__setitem__(
+                "tx_instructions",
+                [_vpn_instruction(), _vpn_instruction()],
+            ),
+            "tx_instructions",
+            "vpn receipt",
+        ),
+        (
+            "receipt list item count",
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [_vpn_receipt_payload()] * 25, "total": 24},
+            lambda payload: None,
+            "items",
+            "vpn receipts",
+        ),
+        (
+            "receipt list total",
+            ToriiClient._parse_vpn_receipt_list,
+            {"items": [], "total": 25},
+            lambda payload: None,
+            "total",
+            "vpn receipts",
+        ),
+    ]
+    for case_name, parser, payload, mutate, expected_field, context in cases:
+        mutate(payload)
+        with pytest.raises(RuntimeError, match=expected_field):
+            parser(payload, context=context)
+
+
+def test_vpn_response_parsers_require_json_uint64_integers() -> None:
+    cases = [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            "dns_push_interval_secs",
+            "30",
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "quote_expires_at_ms",
+            True,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "bytes_in",
+            -1,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            "duration_ms",
+            1 << 64,
+            "vpn receipt",
+        ),
+    ]
+    for parser, payload, field, invalid_value, context in cases:
+        payload[field] = invalid_value
+        with pytest.raises(RuntimeError, match=field):
+            parser(payload, context=context)
+
+
+@pytest.mark.parametrize(
+    ("parser", "payload", "field", "value", "context"),
+    [
+        (
+            ToriiClient._parse_vpn_profile,
+            _vpn_profile_payload(),
+            "relay_tls_spki_sha256_hex",
+            "AC" * 32,
+            "vpn profile",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "quote_id",
+            "AB" * 32,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "session_id_hex",
+            "0x" + VPN_QUOTE_SESSION_ID,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_quote,
+            _vpn_quote_payload(),
+            "metering_public_key_hex",
+            "CD" * 32,
+            "vpn quote",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "session_id",
+            "0X" + VPN_QUOTE_ID,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_session,
+            _vpn_session_payload(),
+            "payment_tx_hash",
+            "EF" * 32,
+            "vpn session",
+        ),
+        (
+            ToriiClient._parse_vpn_receipt,
+            _vpn_receipt_payload(),
+            "lease_id_hex",
+            "0x" + VPN_LEASE_ID,
+            "vpn receipt",
+        ),
+    ],
+    ids=[
+        "profile-uppercase-spki",
+        "quote-uppercase-id",
+        "quote-prefixed-session-id",
+        "quote-uppercase-metering-key",
+        "session-prefixed-id",
+        "session-uppercase-payment-hash",
+        "receipt-prefixed-lease-id",
+    ],
+)
+def test_vpn_response_parsers_reject_noncanonical_ids_and_hashes(
+    parser: Callable[..., Any],
+    payload: Dict[str, Any],
+    field: str,
+    value: str,
+    context: str,
+) -> None:
+    payload[field] = value
+
+    with pytest.raises(RuntimeError, match=r"exact lowercase"):
+        parser(payload, context=context)
+
+
 def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     session = RecordingSession()
     session.queue(StubResponse(status_code=201, payload=_vpn_session_payload()))
@@ -1331,7 +2151,7 @@ def test_vpn_session_delete_and_receipt_listing_use_native_receipts() -> None:
     assert deleted.settle_lease_instruction is not None
     assert deleted.tx_instructions[0].wire_id == "SettleVpnLease"
     assert receipts.total == 1
-    assert receipts.items[0].refunded_fee_nanos == 75
+    assert receipts.items[0].refunded_fee == "75.125"
     assert missing is None
     assert [call["method"] for call in session.calls] == ["POST", "GET", "DELETE", "GET", "GET"]
 
@@ -1358,8 +2178,8 @@ def test_submit_vpn_receipt_parses_settlement_instruction() -> None:
         "relay_receipt_hex": "aa" * 12,
     }
     assert receipt.status == "settled"
-    assert receipt.earned_fee_nanos == 25
-    assert receipt.refunded_fee_nanos == 75
+    assert receipt.earned_fee == "25.125"
+    assert receipt.refunded_fee == "75.125"
     assert receipt.settle_lease_instruction is not None
     assert receipt.settle_lease_instruction.wire_id == "SettleVpnLease"
 
@@ -1392,155 +2212,156 @@ def test_list_peers_returns_typed_records() -> None:
     ]
 
 
-def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> None:
+def test_fee_quote_posts_exact_payload_with_authority_signature() -> None:
     session = RecordingSession()
-    session.queue(
-        StubResponse(
-            status_code=202,
-            payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [
-                    {
-                        "name": "router::universal",
-                        "contract_alias": "router::universal",
-                        "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-                        "previous_contract_address": None,
-                        "kaizen": False,
-                        "dataspace": "universal",
-                        "deploy_nonce": 7,
-                        "tx_hash_hex": "11" * 32,
-                        "pipeline_status": {
-                            "hash": "11" * 32,
-                            "status": {
-                                "kind": "Queued",
-                                "block_height": None,
-                                "rejection_reason": None,
-                            },
-                            "summary": "Queued",
-                            "diagnostics": [],
-                            "scope": "local",
-                            "resolved_from": "queue",
-                        },
-                        "code_hash_hex": "22" * 32,
-                        "abi_hash_hex": "33" * 32,
-                        "status": "submitted",
-                    }
-                ],
-                "hajimari_calls": [],
-                "assertions": [],
-            },
-        )
-    )
-    client = ToriiClient("http://node.test", session=session)
-
-    result = client.deploy_contract(
-        authority=CANONICAL_OWNER,
-        private_key="00" * 32,
-        code_b64="AQID",
-        contract_alias="router::universal",
-        lease_expiry_ms=1234,
-    )
-
-    assert isinstance(result, ContractDeployResponse)
-    assert result is not None
-    assert result.bundle_digest == "mock-bundle-digest"
-    assert result.contracts[0].contract_alias == "router::universal"
-    assert result.contracts[0].deploy_nonce == 7
-    assert result.contracts[0].pipeline_status is not None
-    assert result.contracts[0].pipeline_status.status.kind == "Queued"
-    assert len(session.calls) == 1
-    assert session.calls[0]["method"] == "POST"
-    assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload == {
-        "authority": CANONICAL_OWNER,
-        "private_key": "00" * 32,
-        "code_b64": "AQID",
-        "contract_alias": "router::universal",
-        "lease_expiry_ms": 1234,
+    quote = {
+        "intent": _authority_fee_payment(),
+        "observation": {
+            "ledger_time_ms": 10,
+            "next_block_height": 4,
+            "route_dataspace_id": 0,
+        },
+        "components": [],
+        "capacities": [],
+        "decision": {"status": "accepted", "value": {"debit_source": {}}},
     }
+    session.queue(StubResponse(payload=quote))
+    signed_messages: List[bytes] = []
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda message: signed_messages.append(message) or b"signature",
+        timestamp_ms=123,
+        nonce="fee-quote-nonce",
+    )
+    client = ToriiClient("http://node.test", session=session)
+    draft = {"authority": CANONICAL_OWNER, "fee_payment": _authority_fee_payment()}
+
+    assert client.quote_fees(draft, canonical_auth=auth) == quote
+
+    call = session.calls[0]
+    assert call["url"] == "http://node.test/v1/fees/quote"
+    assert json.loads(call["data"].decode("utf-8")) == {"payload": draft}
+    assert call["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
+    assert call["headers"]["X-Iroha-Timestamp-Ms"] == "123"
+    assert call["headers"]["X-Iroha-Nonce"] == "fee-quote-nonce"
+    assert len(signed_messages) == 1
 
 
-def test_deploy_contract_rejects_retired_init_calls_response_field() -> None:
+def test_fee_quote_rejects_authority_substitution_before_dispatch() -> None:
+    session = RecordingSession()
+    client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id="another-account",
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(ValueError, match="must equal the exact payload authority"):
+        client.quote_fees(
+            {"authority": CANONICAL_OWNER},
+            canonical_auth=auth,
+        )
+
+    assert session.calls == []
+
+
+@pytest.mark.parametrize(
+    "requested, quoted",
+    [
+        (_authority_fee_payment(100), _authority_fee_payment(101)),
+        (_sponsor_fee_payment(100), _authority_fee_payment(100)),
+        (
+            _sponsor_fee_payment(100),
+            {
+                **_sponsor_fee_payment(100),
+                "value": {
+                    **_sponsor_fee_payment(100)["value"],
+                    "program_revision": 4,
+                },
+            },
+        ),
+    ],
+)
+def test_fee_quote_rejects_substituted_selection(
+    requested: Dict[str, Any],
+    quoted: Dict[str, Any],
+) -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
             payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [],
-                "init_calls": [],
-                "assertions": [],
-            },
+                "intent": quoted,
+                "observation": {},
+                "components": [],
+                "capacities": [],
+                "decision": {},
+            }
         )
     )
     client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
 
-    with pytest.raises(RuntimeError, match=r"contract deploy response\.hajimari_calls"):
-        client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
+    with pytest.raises(RuntimeError, match="changed the requested payer"):
+        client.quote_fees(
+            {"authority": CANONICAL_OWNER, "fee_payment": requested},
+            canonical_auth=auth,
         )
 
 
-def test_deploy_contract_posts_fee_sponsor_metadata() -> None:
+def test_fee_sponsor_program_lookup_is_account_signed_and_exact() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
-            status_code=202,
             payload={
-                "ok": True,
-                "bundle_name": "single-contract-deploy",
-                "bundle_digest": "mock-bundle-digest",
-                "chain_fingerprint": "mock-chain@height-0",
-                "dry_run": False,
-                "completed_stages": ["plan", "deploy"],
-                "failure_point": None,
-                "contracts": [],
-                "hajimari_calls": [],
-                "assertions": [],
-            },
+                "id": {"sponsor": CANONICAL_OWNER, "name": "retail"},
+                "lifecycle": "active",
+            }
         )
+    )
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+        timestamp_ms=124,
+        nonce="program-lookup-nonce",
     )
     client = ToriiClient("http://node.test", session=session)
 
-    client.deploy_contract(
-        authority=CANONICAL_OWNER,
-        private_key="00" * 32,
-        code_b64="AQID",
-        contract_alias="router::universal",
-        gas_asset_id="xor#sora",
-        fee_sponsor=CANONICAL_OWNER,
-        gas_limit=10_000_000,
+    result = client.get_fee_sponsor_program(
+        f"{CANONICAL_OWNER}/retail",
+        canonical_auth=auth,
     )
 
-    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["gas_asset_id"] == "xor#sora"
-    assert payload["fee_sponsor"] == CANONICAL_OWNER
-    assert payload["gas_limit"] == 10_000_000
+    assert result["lifecycle"] == "active"
+    assert json.loads(session.calls[0]["data"].decode("utf-8")) == {
+        "program_id": f"{CANONICAL_OWNER}/retail"
+    }
+    assert session.calls[0]["headers"]["X-Iroha-Account"] == CANONICAL_OWNER
 
-    with pytest.raises(ValueError, match="deploy_contract.fee_sponsor"):
-        client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
-            fee_sponsor="bad sponsor",
+
+def test_fee_sponsor_program_lookup_rejects_substituted_response_id() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "id": {"sponsor": CANONICAL_OWNER, "name": "other"},
+                "lifecycle": "active",
+            }
         )
+    )
+    client = ToriiClient("http://node.test", session=session)
+    auth = ToriiCanonicalRequestAuth(
+        account_id=CANONICAL_OWNER,
+        signer=lambda _message: b"signature",
+    )
+
+    with pytest.raises(RuntimeError, match="does not match the requested program"):
+        client.get_fee_sponsor_program(
+            f"{CANONICAL_OWNER}/retail",
+            canonical_auth=auth,
+        )
+
 
 
 def test_call_contract_posts_selector_payload_and_parses_response() -> None:
@@ -1597,8 +2418,7 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         contract_alias="router::universal",
         entrypoint="ping",
         payload={"value": 1, "labels": ["alpha"]},
-        gas_asset_id="xor#wonderland",
-        gas_limit=5000,
+        fee_payment=_authority_fee_payment(5000),
     )
 
     assert isinstance(result, ContractCallResponse)
@@ -1620,8 +2440,7 @@ def test_call_contract_posts_selector_payload_and_parses_response() -> None:
         "contract_alias": "router::universal",
         "entrypoint": "ping",
         "payload": {"value": 1, "labels": ["alpha"]},
-        "gas_asset_id": "xor#wonderland",
-        "gas_limit": 5000,
+        "fee_payment": _authority_fee_payment(5000),
     }
 
 
@@ -1659,7 +2478,8 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
                 "entrypoint": boundary["entrypoint"],
                 "operation_receipt": _contract_operation_receipt(
                     entrypoint=boundary["entrypoint"],
-                    gas_limit=boundary["gas_limit"],
+                    gas_limit=boundary["fee_payment"]["value"]["gas_limit"],
+                    fee_payment=boundary["fee_payment"],
                 ),
             },
         )
@@ -1672,7 +2492,7 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         contract_alias=boundary["contract_alias"],
         entrypoint=boundary["entrypoint"],
         payload=boundary["payload"],
-        gas_limit=boundary["gas_limit"],
+        fee_payment=boundary["fee_payment"],
     )
 
     submitted = json.loads(session.calls[0]["data"].decode("utf-8"))
@@ -1682,13 +2502,13 @@ def test_call_contract_preserves_shared_rust_argument_record_fixture() -> None:
         "contract_alias": boundary["contract_alias"],
         "entrypoint": boundary["entrypoint"],
         "payload": boundary["payload"],
-        "gas_limit": boundary["gas_limit"],
+        "fee_payment": boundary["fee_payment"],
     }
     assert "argument_record" not in submitted
     assert "argument_record_norito_hex" not in submitted
 
 
-def test_call_contract_posts_fee_sponsor_and_rejects_adversarial_sponsor() -> None:
+def test_call_contract_posts_exact_sponsor_program_and_rejects_adversarial_sponsor() -> None:
     session = RecordingSession()
     session.queue(
         StubResponse(
@@ -1715,22 +2535,22 @@ def test_call_contract_posts_fee_sponsor_and_rejects_adversarial_sponsor() -> No
         contract_alias="router::is",
         entrypoint="ping",
         payload={},
-        gas_limit=5000,
-        fee_sponsor=CANONICAL_OWNER,
+        fee_payment=_sponsor_fee_payment(5000),
     )
 
     payload = json.loads(session.calls[0]["data"].decode("utf-8"))
-    assert payload["fee_sponsor"] == CANONICAL_OWNER
+    assert payload["fee_payment"] == _sponsor_fee_payment(5000)
     assert payload["contract_alias"] == "router::is"
 
-    with pytest.raises(ValueError, match="call_contract.fee_sponsor"):
+    adversarial = _sponsor_fee_payment(5000)
+    adversarial["value"]["program_id"]["sponsor"] = "bad sponsor"
+    with pytest.raises(ValueError, match="call_contract.fee_payment.*sponsor"):
         client.call_contract(
             authority=CANONICAL_OWNER,
             private_key="00" * 32,
             contract_alias="router::is",
             entrypoint="ping",
-            gas_limit=5000,
-            fee_sponsor="bad sponsor",
+            fee_payment=adversarial,
         )
 
 
@@ -1745,16 +2565,16 @@ def test_call_contract_rejects_missing_entrypoint_and_non_positive_gas_before_di
                 private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint=entrypoint,
-                gas_limit=1,
+                fee_payment=_authority_fee_payment(1),
             )
-    for gas_limit in (0, -1):
-        with pytest.raises(ValueError, match="call_contract.gas_limit must be positive"):
+    for gas_limit in (None, 0, -1):
+        with pytest.raises(ValueError, match="call_contract.fee_payment.*gas_limit"):
             client.call_contract(
                 authority=CANONICAL_OWNER,
                 private_key="00" * 32,
                 contract_alias="router::universal",
                 entrypoint="ping",
-                gas_limit=gas_limit,
+                fee_payment=_authority_fee_payment(gas_limit),
             )
 
     assert session.calls == []
@@ -1801,7 +2621,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         signer_account_id=CANONICAL_OWNER,
         instructions=[instruction],
         creation_time_ms=123,
-        fee_sponsor=CANONICAL_OWNER,
+        fee_payment=_sponsor_fee_payment(),
     )
 
     assert isinstance(result, MultisigResponse)
@@ -1820,7 +2640,7 @@ def test_propose_multisig_posts_native_norito_instruction_payloads() -> None:
         "instructions": [base64.b64encode(instruction).decode("ascii")],
         "multisig_account_alias": "cbdc@banka",
         "creation_time_ms": 123,
-        "fee_sponsor": CANONICAL_OWNER,
+        "fee_payment": _sponsor_fee_payment(),
     }
 
 
@@ -1838,6 +2658,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
     kwargs = {
         "signer_account_id": CANONICAL_OWNER,
         "instructions": [b"\x01"],
+        "fee_payment": _authority_fee_payment(),
     }
     with pytest.raises(ValueError, match="exactly one"):
         client.propose_multisig(
@@ -1852,18 +2673,21 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=b"\x01\x02",
+            fee_payment=_authority_fee_payment(),
         )
     with pytest.raises(ValueError, match="must not be empty"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[],
+            fee_payment=_authority_fee_payment(),
         )
     with pytest.raises((RuntimeError, ValueError), match="valid base64|exact standard-base64"):
         client.propose_multisig(
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             signature_b64="not base64",
         )
     canonical_signature = _canonical_signature_base64_fixture()
@@ -1876,6 +2700,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
                 multisig_account_alias="cbdc@banka",
                 signer_account_id=CANONICAL_OWNER,
                 instructions=[b"\x01"],
+                fee_payment=_authority_fee_payment(),
                 signature_b64=signature_b64,
             )
     with pytest.raises(RuntimeError, match="64 hex"):
@@ -1883,6 +2708,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             public_key_hex="aa",
         )
     with pytest.raises(ValueError, match="non-negative"):
@@ -1890,6 +2716,7 @@ def test_propose_multisig_rejects_adversarial_request_shapes() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
             creation_time_ms=-1,
         )
 
@@ -1910,6 +2737,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     for resolved_account_id in (
@@ -1932,6 +2760,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
                 multisig_account_alias="cbdc@banka",
                 signer_account_id=CANONICAL_OWNER,
                 instructions=[b"\x01"],
+                fee_payment=_authority_fee_payment(),
             )
 
     session = RecordingSession()
@@ -1950,6 +2779,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -1968,6 +2798,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -1986,6 +2817,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2004,6 +2836,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
     session = RecordingSession()
@@ -2022,6 +2855,7 @@ def test_propose_multisig_rejects_malformed_response_fields() -> None:
             multisig_account_alias="cbdc@banka",
             signer_account_id=CANONICAL_OWNER,
             instructions=[b"\x01"],
+            fee_payment=_authority_fee_payment(),
         )
 
 
@@ -2035,7 +2869,7 @@ def test_call_contract_rejects_ambiguous_selector() -> None:
             contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             contract_alias="router::universal",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
 
@@ -2049,7 +2883,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
             private_key="00" * 32,
             contract_address=" tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
     with pytest.raises(ValueError, match="call_contract\\.contract_alias must not contain surrounding whitespace"):
@@ -2058,7 +2892,7 @@ def test_call_contract_rejects_padded_selectors_before_dispatch() -> None:
             private_key="00" * 32,
             contract_alias="router::universal ",
             entrypoint="ping",
-            gas_limit=1,
+            fee_payment=_authority_fee_payment(1),
         )
 
     assert session.calls == []
@@ -2485,32 +3319,6 @@ def test_contract_helpers_against_mock_server() -> None:
                         "code_hash_hex": "22" * 32,
                     }
                 },
-                "contract_deploy_response": {
-                    "ok": True,
-                    "bundle_name": "single-contract-deploy",
-                    "bundle_digest": "mock-single-contract-digest",
-                    "chain_fingerprint": "mock-chain@height-0",
-                    "dry_run": False,
-                    "completed_stages": ["plan", "deploy"],
-                    "failure_point": None,
-                    "contracts": [
-                        {
-                            "name": "router::universal",
-                            "contract_alias": "router::universal",
-                            "contract_address": contract_address,
-                            "previous_contract_address": None,
-                            "kaizen": False,
-                            "dataspace": "universal",
-                            "deploy_nonce": 1,
-                            "tx_hash_hex": "11" * 32,
-                            "code_hash_hex": "22" * 32,
-                            "abi_hash_hex": "33" * 32,
-                            "status": "submitted",
-                        }
-                    ],
-                    "hajimari_calls": [],
-                    "assertions": [],
-                },
                 "contract_call_response": {
                     "ok": True,
                     "submitted": True,
@@ -2534,24 +3342,16 @@ def test_contract_helpers_against_mock_server() -> None:
         response.raise_for_status()
 
         client = ToriiClient(server.base_url)
-        deploy = client.deploy_contract(
-            authority=CANONICAL_OWNER,
-            private_key="00" * 32,
-            code_b64="AQID",
-            contract_alias="router::universal",
-        )
         call = client.call_contract(
             authority=CANONICAL_OWNER,
             private_key="00" * 32,
             contract_address=contract_address,
             entrypoint="ping",
             payload={"value": 1},
-            gas_limit=5000,
+            fee_payment=_authority_fee_payment(5000),
         )
         governed = client.get_governance_contract(contract_address)
 
-        assert deploy is not None
-        assert deploy.contracts[0].contract_address == contract_address
         assert call.contract_address == contract_address
         assert governed.contract_address == contract_address
         assert governed.code_hash_hex == "22" * 32
@@ -2568,8 +3368,10 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         payload = response.json()
 
         assert payload["protocol_version"] == 3
+        assert payload["restart_required"] is False
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
+        assert payload["liveness"]["generation"] == 2
         assert payload["safety_halt"]["active"] is False
         assert payload["operator"]["tx_queue"]["capacity"] == 32
         assert payload["committed_lane_blocks"] == []
@@ -2583,13 +3385,30 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     status = _get_sumeragi_status(payload)
 
     assert status.protocol_version == 3
+    assert status.restart_required is False
     assert status.height == 10
     assert status.phase == "prepare"
     assert status.height_context.mode == "permissioned"
     assert status.height_context.min_signers == 3
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.round.height == 9
+    assert status.last_commit_qc.certificate.proposal_round.view == 1
     assert status.last_commit_qc.signed_power == 3
+    assert status.liveness.generation == 2
+    assert status.liveness.work.validation == "complete"
+    assert status.liveness.prepare_quorums[0].signer_count == 2
+    assert (
+        status.liveness.prepare_quorums[0].proposal_round
+        == status.liveness.prepare_quorums[0].round
+    )
+    assert (
+        status.liveness.outbound_intents[0].proposal_round
+        == status.liveness.outbound_intents[0].round
+    )
+    assert status.liveness.queues[0].queue == "network_ingress"
+    assert status.liveness.last_progress is not None
+    assert status.liveness.last_progress.transition == "prepare_vote_admitted"
+    assert status.liveness.blocker == "prepare_quorum_missing"
     assert status.safety_halt.active is False
     assert status.safety_halt.height == 0
     assert status.operator.view_change_install_total == 7
@@ -2597,8 +3416,234 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.operator.tx_queue.queued_transactions == 3
     assert status.lane_payload_ownerships == []
     settlement = status.lane_settlement_commitments[0]
-    assert settlement["total_local_micro"] == "10"
+    assert settlement["total_local_amount"] == "10"
     assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+
+
+def test_get_sumeragi_status_preserves_carried_proposal_origins() -> None:
+    payload = _sumeragi_v2_status_payload()
+    commit_quorum = copy.deepcopy(payload["liveness"]["prepare_quorums"][0])
+    commit_quorum["round"]["view"] = 2
+    commit_quorum["proposal_round"]["view"] = 1
+    payload["liveness"]["commit_quorums"] = [commit_quorum]
+
+    commit_intent = copy.deepcopy(payload["liveness"]["outbound_intents"][0])
+    commit_intent["kind"]["kind"] = "commit_vote"
+    commit_intent["round"]["view"] = 2
+    commit_intent["proposal_round"]["view"] = 1
+    commit_intent["execution_commitment"] = copy.deepcopy(
+        commit_quorum["execution_commitment"]
+    )
+    payload["liveness"]["outbound_intents"] = [commit_intent]
+    payload["last_commit_qc"]["certificate"]["round"]["view"] = 2
+    payload["last_commit_qc"]["certificate"]["proposal_round"]["view"] = 1
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.commit_quorums[0].round.view == 2
+    assert status.liveness.commit_quorums[0].proposal_round.view == 1
+    assert status.liveness.outbound_intents[0].round.view == 2
+    assert status.liveness.outbound_intents[0].proposal_round is not None
+    assert status.liveness.outbound_intents[0].proposal_round.view == 1
+    assert status.last_commit_qc is not None
+    assert status.last_commit_qc.certificate.proposal_round.view == 1
+
+    later_commit_payload = _sumeragi_v2_status_payload()
+    later_commit_intent = later_commit_payload["liveness"]["outbound_intents"][0]
+    later_commit_intent["kind"]["kind"] = "commit_qc"
+    later_commit_intent["round"]["view"] = 3
+    later_commit_intent["execution_commitment"] = copy.deepcopy(
+        later_commit_payload["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    later_commit_status = _get_sumeragi_status(later_commit_payload)
+    assert later_commit_status.liveness.outbound_intents[0].round.view == 3
+    assert (
+        later_commit_status.liveness.outbound_intents[0].proposal_round.view == 1
+    )
+
+    timeout_payload = _sumeragi_v2_status_payload()
+    timeout_intent = timeout_payload["liveness"]["outbound_intents"][0]
+    timeout_intent["kind"]["kind"] = "timeout_certificate"
+    del timeout_intent["proposal_round"]
+    del timeout_intent["subject"]
+    timeout_status = _get_sumeragi_status(timeout_payload)
+    assert timeout_status.liveness.outbound_intents[0].proposal_round is None
+
+
+def test_get_sumeragi_status_enforces_vote_quorum_proposal_geometry() -> None:
+    missing_origin = _sumeragi_v2_status_payload()
+    del missing_origin["liveness"]["prepare_quorums"][0]["proposal_round"]
+    with pytest.raises(RuntimeError, match="proposal_round"):
+        _get_sumeragi_status(missing_origin)
+
+    prepare_reproposal = _sumeragi_v2_status_payload()
+    prepare_reproposal["liveness"]["prepare_quorums"][0]["proposal_round"][
+        "view"
+    ] = 0
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
+        _get_sumeragi_status(prepare_reproposal)
+
+    future_commit_origin = _sumeragi_v2_status_payload()
+    commit_quorum = copy.deepcopy(
+        future_commit_origin["liveness"]["prepare_quorums"][0]
+    )
+    commit_quorum["proposal_round"]["view"] = 2
+    future_commit_origin["liveness"]["commit_quorums"] = [commit_quorum]
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_commit_origin)
+
+    foreign_origin = _sumeragi_v2_status_payload()
+    foreign_origin["liveness"]["prepare_quorums"][0]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x55)]
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(foreign_origin)
+
+    wrong_height = _sumeragi_v2_status_payload()
+    wrong_height["liveness"]["prepare_quorums"][0]["proposal_round"]["height"] = 9
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(wrong_height)
+
+
+def test_get_sumeragi_status_enforces_outbound_intent_proposal_geometry() -> None:
+    missing_origin = _sumeragi_v2_status_payload()
+    del missing_origin["liveness"]["outbound_intents"][0]["proposal_round"]
+    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
+        _get_sumeragi_status(missing_origin)
+
+    timeout_with_origin = _sumeragi_v2_status_payload()
+    timeout_intent = timeout_with_origin["liveness"]["outbound_intents"][0]
+    timeout_intent["kind"]["kind"] = "timeout_vote"
+    timeout_intent["subject"] = None
+    with pytest.raises(RuntimeError, match="inconsistent proposal_round"):
+        _get_sumeragi_status(timeout_with_origin)
+
+    prepare_reproposal = _sumeragi_v2_status_payload()
+    prepare_intent = prepare_reproposal["liveness"]["outbound_intents"][0]
+    prepare_intent["kind"]["kind"] = "prepare_vote"
+    prepare_intent["execution_commitment"] = copy.deepcopy(
+        prepare_reproposal["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    prepare_intent["round"]["view"] = 2
+    with pytest.raises(RuntimeError, match="proposal_round must equal round"):
+        _get_sumeragi_status(prepare_reproposal)
+
+    future_commit_origin = _sumeragi_v2_status_payload()
+    commit_intent = future_commit_origin["liveness"]["outbound_intents"][0]
+    commit_intent["kind"]["kind"] = "commit_vote"
+    commit_intent["execution_commitment"] = copy.deepcopy(
+        future_commit_origin["last_commit_qc"]["certificate"][
+            "execution_commitment"
+        ]
+    )
+    commit_intent["proposal_round"]["view"] = 2
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_commit_origin)
+
+    foreign_origin = _sumeragi_v2_status_payload()
+    foreign_origin["liveness"]["outbound_intents"][0]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x55)]
+    with pytest.raises(RuntimeError, match="proposal_round.*active height context"):
+        _get_sumeragi_status(foreign_origin)
+
+
+def test_get_sumeragi_status_accepts_local_control_pending_liveness_blocker() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["blocker"] = {
+        "blocker": "local_control_pending",
+        "details": None,
+    }
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.liveness.blocker == "local_control_pending"
+
+
+def test_get_sumeragi_status_accepts_unsafe_proposal_ignore_reason() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["ignore_counts"] = [
+        {
+            "reason": {"reason": "unsafe_proposal", "details": None},
+            "count": 3,
+        }
+    ]
+
+    status = _get_sumeragi_status(payload)
+
+    assert [(entry.reason, entry.count) for entry in status.liveness.ignore_counts] == [
+        ("unsafe_proposal", 3)
+    ]
+
+
+def test_get_sumeragi_status_accepts_all_twelve_ignore_reasons_at_the_bound() -> None:
+    reasons = [
+        "wrong_height",
+        "wrong_view",
+        "stale_generation",
+        "busy",
+        "duplicate",
+        "no_matching_work",
+        "observer",
+        "view_closed",
+        "already_decided",
+        "recovery_pending",
+        "irrelevant_view",
+        "unsafe_proposal",
+    ]
+    payload = _sumeragi_v2_status_payload()
+    payload["liveness"]["ignore_counts"] = [
+        {
+            "reason": {"reason": reason, "details": None},
+            "count": index,
+        }
+        for index, reason in enumerate(reasons, start=1)
+    ]
+
+    status = _get_sumeragi_status(payload)
+
+    assert [entry.reason for entry in status.liveness.ignore_counts] == reasons
+
+    payload["liveness"]["ignore_counts"].append(
+        copy.deepcopy(payload["liveness"]["ignore_counts"][-1])
+    )
+    with pytest.raises(RuntimeError, match="ignore_counts exceeds its protocol item bound"):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_accepts_all_ten_liveness_queue_kinds() -> None:
+    payload = _sumeragi_v2_status_payload()
+    queue_template = payload["liveness"]["queues"][0]
+    queue_kinds = [
+        "ingress",
+        "deferred_normal",
+        "deferred_progress",
+        "deferred_completion",
+        "runtime_normal",
+        "runtime_progress",
+        "runtime_completion",
+        "effect_completion",
+        "network_ingress",
+        "effect_dispatch",
+    ]
+    payload["liveness"]["queues"] = [
+        {
+            **copy.deepcopy(queue_template),
+            "queue": {"queue": queue, "details": None},
+        }
+        for queue in queue_kinds
+    ]
+
+    status = _get_sumeragi_status(payload)
+    assert [queue.queue for queue in status.liveness.queues] == queue_kinds
+
+    payload["liveness"]["queues"].append(copy.deepcopy(queue_template))
+    with pytest.raises(RuntimeError, match="queues exceeds its protocol item bound"):
+        _get_sumeragi_status(payload)
 
 
 def test_get_sumeragi_status_parses_and_validates_safety_halt() -> None:
@@ -2800,7 +3845,7 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
         leg["participant_settlement"]["lane_id"] = 99
 
     def nonzero_participant_effect(leg: Dict[str, Any]) -> None:
-        leg["participant_settlement"]["total_local_micro"] = "1"
+        leg["participant_settlement"]["total_local_amount"] = "1"
 
     def mismatch_settlement_source(leg: Dict[str, Any]) -> None:
         leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
@@ -2864,14 +3909,101 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
             _get_sumeragi_status(payload)
 
 
-@pytest.mark.parametrize("invalid", [7, "01", str(1 << 128)])
-def test_get_sumeragi_status_rejects_noncanonical_u128_json(invalid: Any) -> None:
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        7,
+        True,
+        "01",
+        "1.0",
+        "1.",
+        "-1",
+        "1e3",
+        "not-a-quantity",
+        "0.00000000000000000000000000001",
+        str(1 << 511),
+        "1" * 156,
+    ],
+)
+def test_get_sumeragi_status_rejects_noncanonical_quantity_json(invalid: Any) -> None:
     payload = _sumeragi_v2_status_payload()
     settlement = _lane_settlement_payload()
-    settlement["total_local_micro"] = invalid
+    settlement["total_local_amount"] = invalid
     payload["lane_settlement_commitments"] = [settlement]
 
-    with pytest.raises(RuntimeError, match="total_local_micro.*(?:canonical|u128)"):
+    with pytest.raises(
+        RuntimeError,
+        match="total_local_amount.*(?:quantity|canonical|length|512-bit)",
+    ):
+        _get_sumeragi_status(payload)
+
+
+def test_get_sumeragi_status_preserves_exact_quantity_boundaries() -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    maximum = str((1 << 511) - 1)
+    scale_28_maximum = f"{maximum[:126]}.{maximum[126:]}"
+    assert len(scale_28_maximum) == 155
+    settlement["total_local_amount"] = scale_28_maximum
+    settlement["total_xor_due"] = "0.0000000000000000000000000001"
+    settlement["total_xor_after_haircut"] = "123.000000001"
+    settlement["total_xor_variance"] = "0"
+    settlement["receipts"][0].update(
+        {
+            "local_amount": maximum,
+            "xor_due": "0.0000000000000000000000000001",
+            "xor_after_haircut": "123.000000001",
+            "xor_variance": "0",
+        }
+    )
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed = _get_sumeragi_status(payload).lane_settlement_commitments[0]
+
+    assert parsed["total_local_amount"] == scale_28_maximum
+    assert parsed["total_xor_due"] == "0.0000000000000000000000000001"
+    assert parsed["receipts"][0]["xor_after_haircut"] == "123.000000001"
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "total_local_micro",
+        "total_xor_due_micro",
+        "total_xor_after_haircut_micro",
+        "total_xor_variance_micro",
+    ],
+)
+def test_get_sumeragi_status_rejects_retired_settlement_fields(
+    retired_field: str,
+) -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement[retired_field] = "0"
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
+        _get_sumeragi_status(payload)
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "local_amount_micro",
+        "xor_due_micro",
+        "xor_after_haircut_micro",
+        "xor_variance_micro",
+    ],
+)
+def test_get_sumeragi_status_rejects_retired_settlement_receipt_fields(
+    retired_field: str,
+) -> None:
+    payload = _sumeragi_v2_status_payload()
+    settlement = _lane_settlement_payload()
+    settlement["receipts"][0][retired_field] = "0"
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
         _get_sumeragi_status(payload)
 
 
@@ -2974,6 +4106,16 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     with pytest.raises(RuntimeError, match="protocol_version must equal 3"):
         _get_sumeragi_status(wrong_version)
 
+    missing_restart_required = _sumeragi_v2_status_payload()
+    del missing_restart_required["restart_required"]
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(missing_restart_required)
+
+    invalid_restart_required = _sumeragi_v2_status_payload()
+    invalid_restart_required["restart_required"] = 0
+    with pytest.raises(RuntimeError, match="restart_required must be a boolean"):
+        _get_sumeragi_status(invalid_restart_required)
+
     wrong_quorum = _sumeragi_v2_status_payload()
     wrong_quorum["height_context"]["quorum"]["min_signers"] = 2
     with pytest.raises(RuntimeError, match="quorum is not canonical"):
@@ -2996,10 +4138,48 @@ def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> 
     with pytest.raises(RuntimeError, match="does not certify the committed subject"):
         _get_sumeragi_status(wrong_subject)
 
+    missing_proposal_round = _sumeragi_v2_status_payload()
+    del missing_proposal_round["last_commit_qc"]["certificate"]["proposal_round"]
+    with pytest.raises(RuntimeError, match="proposal_round"):
+        _get_sumeragi_status(missing_proposal_round)
+
+    foreign_proposal_round = _sumeragi_v2_status_payload()
+    foreign_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
+        "context_id"
+    ] = [_canonical_hash(0x42)]
+    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
+        _get_sumeragi_status(foreign_proposal_round)
+
+    wrong_proposal_height = _sumeragi_v2_status_payload()
+    wrong_proposal_height["last_commit_qc"]["certificate"]["proposal_round"][
+        "height"
+    ] = 8
+    with pytest.raises(RuntimeError, match="proposal_round must match round context"):
+        _get_sumeragi_status(wrong_proposal_height)
+
+    future_proposal_round = _sumeragi_v2_status_payload()
+    future_proposal_round["last_commit_qc"]["certificate"]["proposal_round"][
+        "view"
+    ] = 2
+    with pytest.raises(RuntimeError, match="proposal_round.view must not exceed"):
+        _get_sumeragi_status(future_proposal_round)
+
     underpowered = _sumeragi_v2_status_payload()
     underpowered["last_commit_qc"]["signed_power"] = 2
     with pytest.raises(RuntimeError, match="does not satisfy its frozen dual quorum"):
         _get_sumeragi_status(underpowered)
+
+
+def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_details() -> None:
+    payload = _sumeragi_v2_status_payload()
+    payload["last_committed_subject"] = None
+    payload["last_commit_qc"] = None
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.last_committed_height == 9
+    assert status.last_committed_subject is None
+    assert status.last_commit_qc is None
 
 
 def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
@@ -3061,91 +4241,6 @@ def test_mock_server_rejects_retired_global_sumeragi_routes(method: str, path: s
     finally:
         server.stop()
 
-
-def test_contract_bundle_helpers_against_mock_server() -> None:
-    server = ToriiMockServer().start()
-    try:
-        response = requests.post(
-            f"{server.base_url.rstrip('/')}/__mock__/contracts/config",
-            json={
-                "bundle_response": {
-                    "bundle_digest": "mock-bundle-digest",
-                    "completed_stages": ["plan", "deploy", "hajimari_calls", "assertions"],
-                }
-            },
-            timeout=5.0,
-        )
-        response.raise_for_status()
-
-        request_payload = {
-            "bundle_name": "demo",
-            "authority": CANONICAL_OWNER,
-            "private_key": "00" * 32,
-            "contracts": [
-                {
-                    "name": "demo.greeter",
-                    "contract_alias": "greeter::universal",
-                    "code_b64": "AQID",
-                    "depends_on": [],
-                }
-            ],
-            "hajimari_calls": [
-                {
-                    "id": "seed",
-                    "contract_alias": "greeter::universal",
-                    "entrypoint": "hajimari",
-                    "gas_limit": 1000,
-                }
-            ],
-            "assertions": [
-                {
-                    "id": "status",
-                    "contract_alias": "greeter::universal",
-                    "entrypoint": "status",
-                    "gas_limit": 1000,
-                    "expected_result": 7,
-                }
-            ],
-        }
-
-        dry_run = requests.post(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle?dry_run=true",
-            json=request_payload,
-            timeout=5.0,
-        )
-        dry_run.raise_for_status()
-        dry_run_payload = dry_run.json()
-        assert dry_run_payload["bundle_name"] == "demo"
-        assert dry_run_payload["dry_run"] is True
-        assert dry_run_payload["contracts"][0]["status"] == "planned"
-        assert dry_run_payload["hajimari_calls"][0]["status"] == "pending"
-
-        submit = requests.post(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundle",
-            json=request_payload,
-            timeout=5.0,
-        )
-        submit.raise_for_status()
-        submit_payload = submit.json()
-        assert submit_payload["dry_run"] is False
-        assert submit_payload["contracts"][0]["status"] == "deployed"
-        assert submit_payload["contracts"][0]["tx_hash_hex"] == "01" * 32
-
-        status = requests.get(
-            f"{server.base_url.rstrip('/')}/v1/contracts/deploy-bundles/mock-bundle-digest",
-            timeout=5.0,
-        )
-        status.raise_for_status()
-        status_payload = status.json()
-        assert status_payload["bundle_digest"] == "mock-bundle-digest"
-        assert status_payload["completed_stages"] == [
-            "plan",
-            "deploy",
-            "hajimari_calls",
-            "assertions",
-        ]
-    finally:
-        server.stop()
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:
@@ -3739,13 +4834,7 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
                     "per_byte_fee": "0",
                     "per_instruction_fee": "0",
                     "per_gas_unit_fee": "0",
-                    "sponsorship_enabled": False,
-                    "sponsor_max_fee": "0",
-                    "sponsor_verified_balance_safety_floor": "0",
-                    "canonical_sponsor_account_id": None,
-                    "fee_receipts_activation_height": 7,
-                    "external_settlement_enabled": False,
-                    "burn_from_unix_timestamp_ms": 0,
+                    "sponsor_vault_custody_account_id": "vault@system",
                     "settlement_mode": "direct",
                     "successful_claim_fee_exempt_authorities": ["authority@system"],
                 },
@@ -3773,6 +4862,7 @@ def test_get_pipeline_preflight_parses_payload_and_liveness_helper() -> None:
     assert preflight.pipeline.signature_batch_max_ed25519 == 64
     assert preflight.queue.queued == 1
     assert preflight.fees.base_fee == "0"
+    assert preflight.fees.sponsor_vault_custody_account_id == "vault@system"
     assert preflight.fees.successful_claim_fee_exempt_authorities == ["authority@system"]
     assert preflight.is_status_stalled(status) is True
     assert session.calls[0]["url"].endswith("/v1/pipeline/preflight")
@@ -4737,7 +5827,10 @@ def test_trigger_registration_deletion_and_query() -> None:
 
 def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = {
-        "id": {"backend": "halo2/ipa", "name": "asset-transfer-v2"},
+        "id": {
+            "backend": "halo2/ipa",
+            "name": "confidential_transfer_v2_verifier_record",
+        },
         "version": 7,
         "circuit_id": "halo2/pasta/ipa/confidential-transfer-2x2-merkle16-axiom-poseidon-v3",
         "commitment": "44" * 32,
@@ -4752,7 +5845,10 @@ def _offline_active_transfer_verifier(**overrides: Any) -> Dict[str, Any]:
 
 def _offline_active_topup_shield_verifier(**overrides: Any) -> Dict[str, Any]:
     verifier = _offline_active_transfer_verifier(
-        id={"backend": "halo2/ipa", "name": "asset-topup-shield-v2"},
+        id={
+            "backend": "halo2/ipa",
+            "name": "kagemusha_topup_shield_v2_verifier_record",
+        },
         circuit_id=(
             "halo2/pasta/ipa/"
             "kagemusha-topup-shield-merkle16-axiom-poseidon-v3"
@@ -4782,11 +5878,14 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_step_eq_v3_verifier_record",
+            "name": "kagemusha_recursive_step_eq_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-two-parent-exact-state-v1",
+        circuit_id="kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
+        max_proof_bytes=2 * 1024 * 1024,
+        activation_height=40,
+        withdrawal_height=80,
     )
     verifier.update(overrides)
     return verifier
@@ -4796,19 +5895,65 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
     verifier = _offline_active_transfer_verifier(
         id={
             "backend": "halo2/ipa",
-            "name": "kagemusha_recursive_step_ep_v3_verifier_record",
+            "name": "kagemusha_recursive_step_ep_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1",
+        circuit_id="kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
+        max_proof_bytes=2 * 1024 * 1024,
+        activation_height=40,
+        withdrawal_height=80,
     )
     verifier.update(overrides)
     return verifier
 
 
+def _offline_authenticated_artifact_set(**overrides: Any) -> Dict[str, Any]:
+    artifact_set = {
+        "generation": "release-v4",
+        "manifest_sha256": "11" * 32,
+        "release_policy_sha256": "22" * 32,
+        "release_attestation_sha256": "33" * 32,
+        "activation_height": 40,
+        "withdrawal_height": 80,
+        "max_proof_bytes": 2 * 1024 * 1024,
+        "asset_scale": 4,
+    }
+    artifact_set.update(overrides)
+    return artifact_set
+
+
+def _offline_recursive_lineage_blocker() -> Dict[str, str]:
+    return {
+        "code": "recursive_lineage_unavailable",
+        "message": "The authenticated recursive lineage path is unavailable.",
+    }
+
+
+def _offline_recursive_v4_unavailable_blockers() -> List[Dict[str, str]]:
+    return [
+        {
+            "code": "recursive_v4_registry_unavailable",
+            "message": "No active atomic ABI-21 V4 release is installed.",
+        },
+        {
+            "code": "recursive_step_eq_verifier_unavailable",
+            "message": "The authenticated ABI-21 V4 StepEq verifier is unavailable.",
+        },
+        {
+            "code": "recursive_step_ep_verifier_unavailable",
+            "message": "The authenticated ABI-21 V4 StepEp verifier is unavailable.",
+        },
+        {
+            "code": "proof_backend_unavailable",
+            "message": "The authenticated ABI-21 V4 proof backend is unavailable.",
+        },
+    ]
+
+
 def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
     payload = {
-        "required_bridge_abi_version": 19,
+        "required_bridge_abi_version": 21,
         "max_hops": 8,
         "asset_definition_id": CANONICAL_ASSET_DEFINITION_ID,
         "asset_scale": 4,
@@ -4821,6 +5966,7 @@ def _offline_readiness_payload(**overrides: Any) -> Dict[str, Any]:
             _offline_active_recursive_step_eq_verifier()
         ),
         "active_recursive_step_ep_verifier": _offline_active_recursive_step_ep_verifier(),
+        "artifact_set": _offline_authenticated_artifact_set(),
         "proof_backend_available": True,
         "recursive_lineage_supported": True,
         "ready": True,
@@ -4838,18 +5984,18 @@ OFFLINE_STATUS_URI = f"/v1/offline/operations/{OFFLINE_OPERATION_ID}"
 
 def _offline_top_up_request(
     *,
-    norito: bytes = b"kagemusha-top-up-v2\x00\x01\x02",
+    norito: bytes = b"kagemusha-top-up-v4\x00\x01\x02",
     operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaTopUpRequestV2:
-    return KagemushaTopUpRequestV2(norito=norito, operation_id=operation_id)
+) -> KagemushaTopUpRequestV4:
+    return KagemushaTopUpRequestV4(norito=norito, operation_id=operation_id)
 
 
 def _offline_redeem_request(
     *,
-    norito: bytes = b"kagemusha-redeem-v2\x03\x04\x05",
+    norito: bytes = b"kagemusha-redeem-v4\x03\x04\x05",
     operation_id: str = OFFLINE_OPERATION_ID,
-) -> KagemushaRedeemRequestV2:
-    return KagemushaRedeemRequestV2(norito=norito, operation_id=operation_id)
+) -> KagemushaRedeemRequestV4:
+    return KagemushaRedeemRequestV4(norito=norito, operation_id=operation_id)
 
 
 def _offline_operation_reference(**overrides: Any) -> Dict[str, Any]:
@@ -4882,7 +6028,7 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         },
     )
     anchor = {
-        "version": 2,
+        "version": 4,
         "chain_id": "wonderland",
         "payer": CANONICAL_OWNER,
         "asset": CANONICAL_ASSET_ID,
@@ -4899,6 +6045,7 @@ def _offline_top_up_anchor(**overrides: Any) -> Dict[str, Any]:
         },
         "shield_verifier_commitment": _offline_fixed_bytes(0x61),
         "artifact_binding": {
+            "version": 4,
             "generation": "generation-1",
             "manifest_sha256": _offline_fixed_bytes(0x81),
         },
@@ -4982,9 +6129,12 @@ def _offline_rejected_status(error: Mapping[str, Any]) -> Dict[str, Any]:
 
 
 def test_offline_public_request_annotations_are_closed_first_release_types() -> None:
-    assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV2
-    assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV2
+    assert get_type_hints(ToriiClient.submit_kagemusha_top_up)["request"] is KagemushaTopUpRequestV4
+    assert get_type_hints(ToriiClient.submit_kagemusha_redeem)["request"] is KagemushaRedeemRequestV4
     assert get_args(OfflineAssetScale) == tuple(range(29))
+    assert "next_zero_leaf_index" in (
+        client_module.OfflineRecursiveSpendStatementJson.__required_keys__
+    )
 
 
 def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> None:
@@ -5031,7 +6181,7 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     readiness = client.get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
     assert readiness.asset_definition_id == CANONICAL_ASSET_DEFINITION_ID
-    assert readiness.required_bridge_abi_version == 19
+    assert readiness.required_bridge_abi_version == 21
     assert readiness.max_hops == 8
     assert readiness.asset_scale == 4
     assert readiness.evaluated_block_height == 42
@@ -5040,19 +6190,208 @@ def test_get_kagemusha_readiness_sends_exact_asset_selector_and_parses_blockers(
     assert readiness.active_transfer_verifier.id.backend == "halo2/ipa"
     assert readiness.active_transfer_verifier.max_proof_bytes == 4096
     assert readiness.active_topup_shield_verifier is not None
-    assert readiness.active_topup_shield_verifier.id.name == "asset-topup-shield-v2"
+    assert (
+        readiness.active_topup_shield_verifier.id.name
+        == "kagemusha_topup_shield_v2_verifier_record"
+    )
     assert readiness.active_unshield_verifier is not None
     assert readiness.active_recursive_step_eq_verifier is not None
     assert readiness.active_recursive_step_ep_verifier is not None
+    assert (
+        readiness.active_recursive_step_eq_verifier.id.name
+        == "kagemusha_recursive_step_eq_v4_verifier_record"
+    )
+    assert readiness.active_recursive_step_eq_verifier.max_proof_bytes == 2 * 1024 * 1024
+    assert isinstance(readiness.artifact_set, OfflineAuthenticatedArtifactSet)
+    assert readiness.artifact_set.generation == "release-v4"
+    assert readiness.artifact_set.max_proof_bytes == 2 * 1024 * 1024
+    assert readiness.artifact_set.asset_scale == 4
     assert readiness.proof_backend_available is True
     assert readiness.recursive_lineage_supported is True
     assert readiness.ready is False
-    assert readiness.blockers[0].code == "issuer_unavailable"
+    assert [blocker.code for blocker in readiness.blockers] == ["issuer_unavailable"]
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/offline/readiness")
     assert call["params"] == {"asset_definition_id": CANONICAL_ASSET_DEFINITION_ID}
     assert call["headers"]["Accept"] == "application/json"
+
+
+def test_kagemusha_readiness_accepts_authenticated_v4_artifacts_when_backend_fails() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                proof_backend_available=False,
+                recursive_lineage_supported=False,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "proof_backend_unavailable",
+                        "message": "The authenticated ABI-21 V4 backend could not be constructed.",
+                    },
+                    _offline_recursive_lineage_blocker(),
+                ],
+            )
+        )
+    )
+
+    readiness = ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+        CANONICAL_ASSET_DEFINITION_ID
+    )
+
+    assert readiness.proof_backend_available is False
+    assert readiness.artifact_set is not None
+    assert readiness.active_recursive_step_eq_verifier is not None
+    assert readiness.active_recursive_step_ep_verifier is not None
+    assert readiness.recursive_lineage_supported is False
+    assert readiness.ready is False
+
+
+def test_kagemusha_readiness_null_artifact_rejects_available_backend() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                active_recursive_step_eq_verifier=None,
+                active_recursive_step_ep_verifier=None,
+                artifact_set=None,
+                proof_backend_available=True,
+                recursive_lineage_supported=False,
+                ready=False,
+                blockers=[
+                    {
+                        "code": "recursive_v4_registry_unavailable",
+                        "message": "The authenticated V4 registry is unavailable.",
+                    },
+                    {
+                        "code": "recursive_step_eq_verifier_unavailable",
+                        "message": "The StepEq verifier is unavailable.",
+                    },
+                    {
+                        "code": "recursive_step_ep_verifier_unavailable",
+                        "message": "The StepEp verifier is unavailable.",
+                    },
+                    _offline_recursive_lineage_blocker(),
+                ],
+            )
+        )
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="proof_backend_available requires an authenticated artifact_set",
+    ):
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+            CANONICAL_ASSET_DEFINITION_ID
+        )
+
+
+def test_kagemusha_readiness_artifact_set_requires_exact_v4_fields() -> None:
+    for field in (
+        "generation",
+        "manifest_sha256",
+        "release_policy_sha256",
+        "release_attestation_sha256",
+        "activation_height",
+        "withdrawal_height",
+        "max_proof_bytes",
+        "asset_scale",
+    ):
+        artifact_set = _offline_authenticated_artifact_set()
+        artifact_set.pop(field)
+        session = RecordingSession()
+        session.queue(
+            StubResponse(payload=_offline_readiness_payload(artifact_set=artifact_set))
+        )
+        with pytest.raises(RuntimeError, match=rf"artifact_set\.{field} is required"):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
+
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload=_offline_readiness_payload(
+                artifact_set=_offline_authenticated_artifact_set(future=True)
+            )
+        )
+    )
+    with pytest.raises(RuntimeError, match="artifact_set.future is not part"):
+        ToriiClient("http://node.test", session=session).get_kagemusha_readiness(
+            CANONICAL_ASSET_DEFINITION_ID
+        )
+
+
+def test_kagemusha_readiness_rejects_malformed_v4_artifact_constraints() -> None:
+    malformed_artifact_sets = [
+        _offline_authenticated_artifact_set(generation=""),
+        _offline_authenticated_artifact_set(generation="rélease-v4"),
+        _offline_authenticated_artifact_set(generation=".release-v4"),
+        _offline_authenticated_artifact_set(generation="release-v4."),
+        _offline_authenticated_artifact_set(generation="CON.release"),
+        _offline_authenticated_artifact_set(generation="com1.release"),
+        _offline_authenticated_artifact_set(generation="a" * 129),
+        _offline_authenticated_artifact_set(manifest_sha256="AA" * 32),
+        _offline_authenticated_artifact_set(manifest_sha256="11" * 31),
+        _offline_authenticated_artifact_set(manifest_sha256="00" * 32),
+        _offline_authenticated_artifact_set(release_policy_sha256="11" * 32),
+        _offline_authenticated_artifact_set(activation_height=0),
+        _offline_authenticated_artifact_set(activation_height=43),
+        _offline_authenticated_artifact_set(activation_height=1 << 64),
+        _offline_authenticated_artifact_set(withdrawal_height=40),
+        _offline_authenticated_artifact_set(withdrawal_height=42),
+        _offline_authenticated_artifact_set(withdrawal_height=1 << 64),
+        _offline_authenticated_artifact_set(max_proof_bytes=0),
+        _offline_authenticated_artifact_set(max_proof_bytes=16 * 1024 * 1024 + 1),
+        _offline_authenticated_artifact_set(max_proof_bytes=True),
+        _offline_authenticated_artifact_set(asset_scale=29),
+    ]
+    payloads = [
+        *[
+            _offline_readiness_payload(artifact_set=artifact_set)
+            for artifact_set in malformed_artifact_sets
+        ],
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(asset_scale=5)
+        ),
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(activation_height=39)
+        ),
+        _offline_readiness_payload(
+            artifact_set=_offline_authenticated_artifact_set(withdrawal_height=81)
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                max_proof_bytes=1024
+            )
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                id={
+                    "backend": "halo2/ipa",
+                    "name": "kagemusha_recursive_step_eq_v3_verifier_record",
+                }
+            )
+        ),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=_offline_active_recursive_step_eq_verifier(
+                circuit_id="kagemusha-recursive-spend-step-eq-two-parent-operation-protocol-v2"
+            )
+        ),
+        _offline_readiness_payload(artifact_set=None),
+        _offline_readiness_payload(
+            active_recursive_step_eq_verifier=None,
+            active_recursive_step_ep_verifier=None,
+        ),
+    ]
+    for payload in payloads:
+        session = RecordingSession()
+        session.queue(StubResponse(payload=payload))
+        with pytest.raises(RuntimeError):
+            ToriiClient(
+                "http://node.test", session=session
+            ).get_kagemusha_readiness(CANONICAL_ASSET_DEFINITION_ID)
 
 
 def test_get_kagemusha_readiness_resolves_alias_to_canonical_asset_id() -> None:
@@ -5073,12 +6412,33 @@ def test_get_kagemusha_readiness_rejects_invalid_selector_before_network() -> No
         "",
         "different-asset",
         "XOR#sora",
+        CHECKSUM_INVALID_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID,
         f" {CANONICAL_ASSET_DEFINITION_ID}",
         f"{CANONICAL_ASSET_DEFINITION_ID} ",
     ):
         with pytest.raises(RuntimeError, match="asset_definition_id"):
             client.get_kagemusha_readiness(asset)
     assert session.calls == []
+
+
+def test_offline_asset_definition_id_validation_matches_canonical_rust_codec() -> None:
+    assert client_module._offline_canonical_asset_definition_id(
+        CANONICAL_ASSET_DEFINITION_ID,
+        "asset_definition_id",
+    ) == CANONICAL_ASSET_DEFINITION_ID
+
+    for invalid in (
+        CHECKSUM_INVALID_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_UUID_V4_ASSET_DEFINITION_ID,
+        CHECKSUM_VALID_NON_RFC4122_ASSET_DEFINITION_ID,
+    ):
+        with pytest.raises(RuntimeError, match="checksummed UUIDv4"):
+            client_module._offline_canonical_asset_definition_id(
+                invalid,
+                "asset_definition_id",
+            )
 
 
 def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
@@ -5096,6 +6456,8 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
     missing_recursive_step_eq_verifier.pop("active_recursive_step_eq_verifier")
     missing_recursive_step_ep_verifier = _offline_readiness_payload()
     missing_recursive_step_ep_verifier.pop("active_recursive_step_ep_verifier")
+    missing_artifact_set = _offline_readiness_payload()
+    missing_artifact_set.pop("artifact_set")
     payloads = [
         missing_hash,
         missing_scale,
@@ -5104,6 +6466,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         missing_unshield_verifier,
         missing_recursive_step_eq_verifier,
         missing_recursive_step_ep_verifier,
+        missing_artifact_set,
         _offline_readiness_payload(unexpected_field="not-part-of-readiness"),
         _offline_readiness_payload(required_bridge_abi_version=17),
         _offline_readiness_payload(max_hops=9),
@@ -5117,6 +6480,19 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(evaluated_block_height=1 << 64),
         _offline_readiness_payload(evaluated_block_hash="AB" * 32),
         _offline_readiness_payload(evaluated_block_hash="ab" * 31),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(version=0)
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                commitment="00" * 32
+            )
+        ),
+        _offline_readiness_payload(
+            active_transfer_verifier=_offline_active_transfer_verifier(
+                public_inputs_schema_hash="00" * 32
+            )
+        ),
         _offline_readiness_payload(blockers=[{"code": "NOT-CANONICAL", "message": "no"}]),
         _offline_readiness_payload(
             ready=False, blockers=[{"code": "not_ready", "message": ""}]
@@ -5144,7 +6520,7 @@ def test_get_kagemusha_readiness_rejects_adversarial_snapshots() -> None:
         _offline_readiness_payload(recursive_lineage_supported=False),
         _offline_readiness_payload(
             active_unshield_verifier=_offline_active_unshield_verifier(
-                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-exact-state-v1"
+                circuit_id="kagemusha-recursive-spend-step-ep-two-parent-operation-protocol-v2"
             )
         ),
         _offline_readiness_payload(
@@ -5253,12 +6629,19 @@ def test_kagemusha_readiness_rejects_unknown_members_and_accepts_exact_unavailab
         StubResponse(
             payload=_offline_readiness_payload(
                 asset_scale=29,
+                active_recursive_step_eq_verifier=None,
+                active_recursive_step_ep_verifier=None,
+                artifact_set=None,
+                proof_backend_available=False,
+                recursive_lineage_supported=False,
                 ready=False,
-                blockers=[
+                blockers=_offline_recursive_v4_unavailable_blockers()
+                + [
                     {
                         "code": "asset_scale_unsupported",
                         "message": "unsupported scale",
-                    }
+                    },
+                    _offline_recursive_lineage_blocker(),
                 ],
             )
         )
@@ -5362,11 +6745,14 @@ def test_kagemusha_command_validation_rejects_noncanonical_inputs_before_network
         with pytest.raises(TypeError):
             client.submit_kagemusha_redeem(malformed)  # type: ignore[arg-type]
 
-    for request_type in (KagemushaTopUpRequestV2, KagemushaRedeemRequestV2):
+    for request_type, maximum_bytes in (
+        (KagemushaTopUpRequestV4, 512 * 1024),
+        (KagemushaRedeemRequestV4, 48 * 1024 * 1024),
+    ):
         with pytest.raises(ValueError, match="must not be empty"):
             request_type(norito=b"", operation_id=OFFLINE_OPERATION_ID)
         with pytest.raises(ValueError, match="exceeds"):
-            request_type(norito=b"x" * (256 * 1024 + 1), operation_id=OFFLINE_OPERATION_ID)
+            request_type(norito=b"x" * (maximum_bytes + 1), operation_id=OFFLINE_OPERATION_ID)
         for norito in (bytearray(b"x"), memoryview(b"x"), "x"):
             with pytest.raises(TypeError, match="immutable bytes"):
                 request_type(norito=norito, operation_id=OFFLINE_OPERATION_ID)  # type: ignore[arg-type]
@@ -5500,10 +6886,13 @@ def test_kagemusha_top_up_anchor_is_closed_typed_and_cross_checked() -> None:
     assert status.result.kind == "top_up"
     typed_anchor = status.result.result.anchor
     assert isinstance(typed_anchor, OfflineTopUpAnchor)
-    assert typed_anchor.version == 2
+    # ABI-21 promotes the finalized anchor and its authenticated artifact
+    # binding atomically to the V4 wire contract.
+    assert typed_anchor.version == 4
     assert typed_anchor.amount.scale == 4
     assert typed_anchor.shield_leaf_index == 7
     assert typed_anchor.shield_verifier_id.backend == "halo2/ipa"
+    assert typed_anchor.artifact_binding.version == 4
     assert typed_anchor.artifact_binding.generation == "generation-1"
     assert typed_anchor.artifact_binding.manifest_sha256 == tuple(
         _offline_fixed_bytes(0x81)
@@ -5645,12 +7034,14 @@ def test_offline_top_up_anchor_rejects_malformed_and_cross_resource_conflicts() 
         _offline_top_up_anchor(shield_verifier_commitment=_offline_fixed_bytes(0)),
         _offline_top_up_anchor(
             artifact_binding={
+                "version": 4,
                 "generation": "é" * 65,
                 "manifest_sha256": _offline_fixed_bytes(0x81),
             }
         ),
         _offline_top_up_anchor(
             artifact_binding={
+                "version": 4,
                 "generation": "generation-1",
                 "manifest_sha256": _offline_fixed_bytes(0),
             }
@@ -5893,6 +7284,7 @@ def test_offline_error_details_reject_malformed_nested_types_and_ranges() -> Non
 def test_offline_json_decoder_rejects_duplicates_non_finite_depth_and_size() -> None:
     valid = json.dumps(_offline_readiness_payload())
     duplicate = valid.replace('"ready": true', '"ready": true, "ready": true')
+    assert duplicate != valid, "duplicate-key fixture must actually introduce a duplicate"
     non_finite = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": NaN')
     infinity = valid.replace('"evaluated_block_height": 42', '"evaluated_block_height": Infinity')
     deep_value = "0"

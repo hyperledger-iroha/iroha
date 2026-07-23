@@ -47,6 +47,7 @@ use iroha_data_model::{
         TaikaiSegmentWindow, TaikaiStreamId, TaikaiTimeIndexKey,
     },
 };
+use iroha_primitives::numeric::XorQuantity;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
 use norito::{
@@ -4043,12 +4044,18 @@ fn build_receipt_includes_pdp_commitment() {
     let pdp_commitment = sample_pdp_commitment_for_tests();
     let encoded = encode_pdp_commitment_bytes(&pdp_commitment).expect("encode commitment");
     let rent_quote = DaRentQuote {
-        base_rent: XorAmount::from_micro(111),
-        protocol_reserve: XorAmount::from_micro(222),
-        provider_reward: XorAmount::from_micro(333),
-        pdp_bonus: XorAmount::from_micro(444),
-        potr_bonus: XorAmount::from_micro(555),
-        egress_credit_per_gib: XorAmount::from_micro(666),
+        base_rent: XorQuantity::try_from_micro(111)
+            .expect("legacy micro-XOR value is representable"),
+        protocol_reserve: XorQuantity::try_from_micro(222)
+            .expect("legacy micro-XOR value is representable"),
+        provider_reward: XorQuantity::try_from_micro(333)
+            .expect("legacy micro-XOR value is representable"),
+        pdp_bonus: XorQuantity::try_from_micro(444)
+            .expect("legacy micro-XOR value is representable"),
+        potr_bonus: XorQuantity::try_from_micro(555)
+            .expect("legacy micro-XOR value is representable"),
+        egress_credit_per_gib: XorQuantity::try_from_micro(666)
+            .expect("legacy micro-XOR value is representable"),
     };
     let receipt = build_receipt(
         &signer,
@@ -4059,7 +4066,7 @@ fn build_receipt_includes_pdp_commitment() {
         BlobDigest::from_hash(blake3_hash(b"manifest-hash")),
         StorageTicketId::new([0x44; 32]),
         encoded.clone(),
-        rent_quote,
+        rent_quote.clone(),
         DaStripeLayout::default(),
     )
     .expect("build receipt");
@@ -4536,7 +4543,7 @@ fn build_da_commitment_record_reflects_artifacts() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4597,7 +4604,7 @@ fn build_da_commitment_record_sets_kzg_commitment_for_kzg_lane() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4648,7 +4655,7 @@ fn persist_da_commitment_record_writes_and_is_idempotent() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4723,7 +4730,7 @@ fn persist_da_commitment_schedule_entry_writes_bundle() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -4985,7 +4992,7 @@ fn persist_spool_artifacts_reject_existing_mismatched_targets() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout,
     )
     .expect("build receipt");
@@ -6135,7 +6142,7 @@ fn duplicate_da_ingest_reuses_durable_artifacts_after_timestamp_retry() {
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes.clone(),
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
     )
     .expect("build receipt");
@@ -6226,7 +6233,7 @@ fn da_receipt_log_rejects_receipt_fingerprint_mismatch_against_manifest_on_open(
         manifest.manifest_hash,
         manifest.storage_ticket,
         pdp_bytes,
-        manifest.manifest.rent_quote,
+        manifest.manifest.rent_quote.clone(),
         stripe_layout_from_manifest(&manifest.manifest),
     )
     .expect("build receipt");
@@ -7355,7 +7362,13 @@ fn resolve_manifest_uses_provided_rent_policy() {
     let chunk_store = build_chunk_store(&request, canonical.as_slice());
     let metadata =
         encrypt_governance_metadata(&request.metadata, None, None).expect("metadata encryption");
-    let rent_policy = DaRentPolicyV1::from_components(750_000, 1_500, 250, 125, 2_000);
+    let rent_policy = DaRentPolicyV1::from_components(
+        "0.75".parse().expect("canonical XOR rate"),
+        1_500,
+        250,
+        125,
+        "0.002".parse().expect("canonical XOR egress credit"),
+    );
     let artifacts = resolve_manifest(
         &request,
         &chunk_store,
@@ -8101,12 +8114,18 @@ fn record_taikai_alias_rotation_event_updates_metrics() {
 fn record_da_rent_quote_metrics_accumulates_values() {
     let (metrics, telemetry) = telemetry_handle_for_tests();
     let quote = DaRentQuote {
-        base_rent: XorAmount::from_micro(1_000_000),
-        protocol_reserve: XorAmount::from_micro(250_000),
-        provider_reward: XorAmount::from_micro(750_000),
-        pdp_bonus: XorAmount::from_micro(50_000),
-        potr_bonus: XorAmount::from_micro(25_000),
-        egress_credit_per_gib: XorAmount::from_micro(1_500),
+        base_rent: XorQuantity::try_from_micro(1_000_000)
+            .expect("legacy micro-XOR value is representable"),
+        protocol_reserve: XorQuantity::try_from_micro(250_000)
+            .expect("legacy micro-XOR value is representable"),
+        provider_reward: XorQuantity::try_from_micro(750_000)
+            .expect("legacy micro-XOR value is representable"),
+        pdp_bonus: XorQuantity::try_from_micro(50_000)
+            .expect("legacy micro-XOR value is representable"),
+        potr_bonus: XorQuantity::try_from_micro(25_000)
+            .expect("legacy micro-XOR value is representable"),
+        egress_credit_per_gib: XorQuantity::try_from_micro(1_500)
+            .expect("legacy micro-XOR value is representable"),
     };
 
     record_da_rent_quote_metrics(&telemetry, "cluster-a", StorageClass::Warm, 4, 3, &quote);
@@ -8155,12 +8174,18 @@ fn record_da_chunking_metrics_observes_histogram() {
 async fn da_rent_metrics_exposed_via_metrics_handler_snapshot() {
     let (metrics, telemetry) = telemetry_handle_for_tests_with_profile(TelemetryProfile::Extended);
     let quote = DaRentQuote {
-        base_rent: XorAmount::from_micro(1_000_000),
-        protocol_reserve: XorAmount::from_micro(250_000),
-        provider_reward: XorAmount::from_micro(750_000),
-        pdp_bonus: XorAmount::from_micro(50_000),
-        potr_bonus: XorAmount::from_micro(25_000),
-        egress_credit_per_gib: XorAmount::from_micro(1_500),
+        base_rent: XorQuantity::try_from_micro(1_000_000)
+            .expect("legacy micro-XOR value is representable"),
+        protocol_reserve: XorQuantity::try_from_micro(250_000)
+            .expect("legacy micro-XOR value is representable"),
+        provider_reward: XorQuantity::try_from_micro(750_000)
+            .expect("legacy micro-XOR value is representable"),
+        pdp_bonus: XorQuantity::try_from_micro(50_000)
+            .expect("legacy micro-XOR value is representable"),
+        potr_bonus: XorQuantity::try_from_micro(25_000)
+            .expect("legacy micro-XOR value is representable"),
+        egress_credit_per_gib: XorQuantity::try_from_micro(1_500)
+            .expect("legacy micro-XOR value is representable"),
     };
 
     record_da_rent_quote_metrics(&telemetry, "cluster-a", StorageClass::Warm, 4, 3, &quote);

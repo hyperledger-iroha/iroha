@@ -2486,32 +2486,32 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(settlement.ledger.settlement_window_epochs),
             );
             settlement_obj.insert(
-                "provider_accrual_nano".into(),
-                JsonValue::from(settlement.ledger.provider_accrual_nano.to_string()),
+                "provider_accrual".into(),
+                JsonValue::from(settlement.ledger.provider_accrual.to_string()),
             );
             settlement_obj.insert(
-                "client_liability_nano".into(),
-                JsonValue::from(settlement.ledger.client_liability_nano.to_string()),
+                "client_liability".into(),
+                JsonValue::from(settlement.ledger.client_liability.to_string()),
             );
             settlement_obj.insert(
-                "outstanding_liability_nano".into(),
-                JsonValue::from(settlement.ledger.outstanding_liability_nano.to_string()),
+                "outstanding_liability".into(),
+                JsonValue::from(settlement.ledger.outstanding_liability.to_string()),
             );
             settlement_obj.insert(
-                "bond_total_nano".into(),
-                JsonValue::from(settlement.ledger.bond_total_nano.to_string()),
+                "bond_total".into(),
+                JsonValue::from(settlement.ledger.bond_total.to_string()),
             );
             settlement_obj.insert(
-                "bond_locked_nano".into(),
-                JsonValue::from(settlement.ledger.bond_locked_nano.to_string()),
+                "bond_locked".into(),
+                JsonValue::from(settlement.ledger.bond_locked.to_string()),
             );
             settlement_obj.insert(
-                "bond_slashed_nano".into(),
-                JsonValue::from(settlement.ledger.bond_slashed_nano.to_string()),
+                "bond_slashed".into(),
+                JsonValue::from(settlement.ledger.bond_slashed.to_string()),
             );
             settlement_obj.insert(
-                "bond_released_nano".into(),
-                JsonValue::from(settlement.ledger.bond_released_nano.to_string()),
+                "bond_released".into(),
+                JsonValue::from(settlement.ledger.bond_released.to_string()),
             );
             if let Some(notes) = &settlement.audit_notes {
                 settlement_obj.insert("audit_notes".into(), JsonValue::from(notes.clone()));
@@ -3088,11 +3088,15 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 );
                 metadata.insert(
                     "appeal_finance_total_treasury_xor".into(),
-                    JsonValue::from(appeal_finance.total_treasury_xor.clone()),
+                    JsonValue::from(appeal_finance.total_treasury_xor.to_string()),
                 );
                 metadata.insert(
                     "appeal_finance_total_rewards_forfeited_treasury_xor".into(),
-                    JsonValue::from(appeal_finance.total_rewards_forfeited_treasury_xor.clone()),
+                    JsonValue::from(
+                        appeal_finance
+                            .total_rewards_forfeited_treasury_xor
+                            .to_string(),
+                    ),
                 );
             }
             metadata.insert("encoded_blake3".into(), JsonValue::from(digest_hex.clone()));
@@ -3136,7 +3140,7 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 );
                 labels.insert(
                     "appeal_finance_total_treasury_xor".into(),
-                    JsonValue::from(appeal_finance.total_treasury_xor.clone()),
+                    JsonValue::from(appeal_finance.total_treasury_xor.to_string()),
                 );
             }
             self.record_publish_index(
@@ -3578,19 +3582,19 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             );
             labels.insert(
                 "deposit_xor".into(),
-                JsonValue::from(report.deposit_xor.clone()),
+                JsonValue::from(report.deposit_xor.to_string()),
             );
             labels.insert(
                 "refund_xor".into(),
-                JsonValue::from(report.refund.amount_xor.clone()),
+                JsonValue::from(report.refund.amount_xor.to_string()),
             );
             labels.insert(
                 "treasury_xor".into(),
-                JsonValue::from(report.treasury.amount_xor.clone()),
+                JsonValue::from(report.treasury.amount_xor.to_string()),
             );
             labels.insert(
                 "held_xor".into(),
-                JsonValue::from(report.held.amount_xor.clone()),
+                JsonValue::from(report.held.amount_xor.to_string()),
             );
             labels.insert(
                 "panel_size".into(),
@@ -3598,15 +3602,15 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             );
             labels.insert(
                 "panel_reward_total_xor".into(),
-                JsonValue::from(report.panel_reward_total_xor.clone()),
+                JsonValue::from(report.panel_reward_total_xor.to_string()),
             );
             labels.insert(
                 "rewards_paid_total_xor".into(),
-                JsonValue::from(report.rewards_paid_total_xor.clone()),
+                JsonValue::from(report.rewards_paid_total_xor.to_string()),
             );
             labels.insert(
                 "rewards_forfeited_treasury_xor".into(),
-                JsonValue::from(report.rewards_forfeited_treasury_xor.clone()),
+                JsonValue::from(report.rewards_forfeited_treasury_xor.to_string()),
             );
             labels.insert(
                 "juror_payout_count".into(),
@@ -3691,11 +3695,11 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             );
             labels.insert(
                 "total_treasury_xor".into(),
-                JsonValue::from(rollup.total_treasury_xor.clone()),
+                JsonValue::from(rollup.total_treasury_xor.to_string()),
             );
             labels.insert(
                 "total_rewards_forfeited_treasury_xor".into(),
-                JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.clone()),
+                JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.to_string()),
             );
             self.record_publish_index(
                 "appeal_finance_weekly_rollup",
@@ -3802,21 +3806,24 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
             );
             labels.insert(
                 "amount_xor".into(),
-                JsonValue::from(receipt.amount_xor.clone()),
+                JsonValue::from(receipt.amount_xor.to_string()),
             );
             labels.insert(
                 "deposit_xor".into(),
-                JsonValue::from(receipt.deposit_xor.clone()),
+                JsonValue::from(receipt.deposit_xor.to_string()),
             );
             labels.insert(
                 "refund_xor".into(),
-                JsonValue::from(receipt.refund_xor.clone()),
+                JsonValue::from(receipt.refund_xor.to_string()),
             );
             labels.insert(
                 "treasury_xor".into(),
-                JsonValue::from(receipt.treasury_xor.clone()),
+                JsonValue::from(receipt.treasury_xor.to_string()),
             );
-            labels.insert("held_xor".into(), JsonValue::from(receipt.held_xor.clone()));
+            labels.insert(
+                "held_xor".into(),
+                JsonValue::from(receipt.held_xor.to_string()),
+            );
             labels.insert(
                 "panel_size".into(),
                 JsonValue::from(u64::from(receipt.panel_size)),
@@ -3898,16 +3905,16 @@ impl GovernancePublisher for FilesystemGovernancePublisher {
                 JsonValue::from(receipt.bytes_delivered),
             );
             labels.insert(
-                "xor_debited_micro".into(),
-                JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+                "xor_debited".into(),
+                JsonValue::from(receipt.xor_debited.to_string()),
             );
             labels.insert(
-                "provider_credit_micro".into(),
-                JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+                "provider_credit".into(),
+                JsonValue::from(receipt.provider_credit.to_string()),
             );
             labels.insert(
-                "fee_amount_micro".into(),
-                JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+                "fee_amount".into(),
+                JsonValue::from(receipt.fee_amount.to_string()),
             );
             labels.insert(
                 "issued_at_unix".into(),
@@ -4278,19 +4285,19 @@ fn appeal_finance_report_json(
     );
     metadata.insert(
         "deposit_xor".into(),
-        JsonValue::from(report.deposit_xor.clone()),
+        JsonValue::from(report.deposit_xor.to_string()),
     );
     metadata.insert(
         "refund_xor".into(),
-        JsonValue::from(report.refund.amount_xor.clone()),
+        JsonValue::from(report.refund.amount_xor.to_string()),
     );
     metadata.insert(
         "treasury_xor".into(),
-        JsonValue::from(report.treasury.amount_xor.clone()),
+        JsonValue::from(report.treasury.amount_xor.to_string()),
     );
     metadata.insert(
         "held_xor".into(),
-        JsonValue::from(report.held.amount_xor.clone()),
+        JsonValue::from(report.held.amount_xor.to_string()),
     );
     metadata.insert(
         "panel_size".into(),
@@ -4354,23 +4361,23 @@ fn appeal_finance_weekly_rollup_json(
     );
     metadata.insert(
         "total_deposit_xor".into(),
-        JsonValue::from(rollup.total_deposit_xor.clone()),
+        JsonValue::from(rollup.total_deposit_xor.to_string()),
     );
     metadata.insert(
         "total_refund_xor".into(),
-        JsonValue::from(rollup.total_refund_xor.clone()),
+        JsonValue::from(rollup.total_refund_xor.to_string()),
     );
     metadata.insert(
         "total_treasury_xor".into(),
-        JsonValue::from(rollup.total_treasury_xor.clone()),
+        JsonValue::from(rollup.total_treasury_xor.to_string()),
     );
     metadata.insert(
         "total_held_xor".into(),
-        JsonValue::from(rollup.total_held_xor.clone()),
+        JsonValue::from(rollup.total_held_xor.to_string()),
     );
     metadata.insert(
         "total_rewards_forfeited_treasury_xor".into(),
-        JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.clone()),
+        JsonValue::from(rollup.total_rewards_forfeited_treasury_xor.to_string()),
     );
     metadata.insert(
         "juror_payout_count".into(),
@@ -4509,16 +4516,16 @@ fn orderbook_settlement_receipt_json(
         JsonValue::from(receipt.bytes_delivered),
     );
     receipt_obj.insert(
-        "xor_debited_micro".into(),
-        JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+        "xor_debited".into(),
+        JsonValue::from(receipt.xor_debited.to_string()),
     );
     receipt_obj.insert(
-        "provider_credit_micro".into(),
-        JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+        "provider_credit".into(),
+        JsonValue::from(receipt.provider_credit.to_string()),
     );
     receipt_obj.insert(
-        "fee_amount_micro".into(),
-        JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+        "fee_amount".into(),
+        JsonValue::from(receipt.fee_amount.to_string()),
     );
     receipt_obj.insert(
         "issued_at_unix".into(),
@@ -4564,16 +4571,16 @@ fn orderbook_settlement_receipt_json(
         JsonValue::from(receipt.bytes_delivered),
     );
     metadata.insert(
-        "xor_debited_micro".into(),
-        JsonValue::from(receipt.xor_debited.as_micro().to_string()),
+        "xor_debited".into(),
+        JsonValue::from(receipt.xor_debited.to_string()),
     );
     metadata.insert(
-        "provider_credit_micro".into(),
-        JsonValue::from(receipt.provider_credit.as_micro().to_string()),
+        "provider_credit".into(),
+        JsonValue::from(receipt.provider_credit.to_string()),
     );
     metadata.insert(
-        "fee_amount_micro".into(),
-        JsonValue::from(receipt.fee_amount.as_micro().to_string()),
+        "fee_amount".into(),
+        JsonValue::from(receipt.fee_amount.to_string()),
     );
     metadata.insert(
         "issued_at_unix".into(),
@@ -4619,7 +4626,7 @@ mod tests {
     use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
     use norito::codec::Encode;
     use sorafs_manifest::deal::{
-        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1,
+        DEAL_LEDGER_VERSION_V1, DEAL_SETTLEMENT_VERSION_V1, DealLedgerSnapshotV1, XorQuantity,
     };
     use sorafs_manifest::repair::{
         GC_AUDIT_EVENT_VERSION_V1, GC_AUDIT_PAYLOAD_VERSION_V1, GC_AUDIT_SIGNER_V1, GcAuditEventV1,
@@ -4651,6 +4658,10 @@ mod tests {
     use tempfile::{NamedTempFile, TempDir};
 
     use super::*;
+
+    fn xor(value: &str) -> sorafs_manifest::deal::XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
 
     struct CanonicalTempDir {
         _inner: TempDir,
@@ -4694,23 +4705,23 @@ mod tests {
             settlement_window_epochs: 10,
             window_start_epoch: 1_699_999_990,
             window_end_epoch: 1_700_000_000,
-            provider_accrual_nano: 500_000,
-            client_liability_nano: 500_000,
-            micropayment_credit_generated_nano: 0,
-            micropayment_credit_applied_nano: 0,
-            micropayment_credit_carry_nano: 0,
-            client_debit_nano: 500_000,
-            outstanding_liability_nano: 0,
-            bond_total_nano: 1_000_000,
-            bond_locked_nano: 0,
-            bond_slashed_nano: 0,
-            bond_released_nano: 1_000_000,
-            window_expected_charge_nano: 500_000,
-            window_micropayment_generated_nano: 0,
-            window_micropayment_applied_nano: 0,
-            window_client_debit_nano: 500_000,
-            window_bond_slashed_nano: 0,
-            window_bond_released_nano: 1_000_000,
+            provider_accrual: xor("0.5"),
+            client_liability: xor("0.5"),
+            micropayment_credit_generated: XorQuantity::zero(),
+            micropayment_credit_applied: XorQuantity::zero(),
+            micropayment_credit_carry: XorQuantity::zero(),
+            client_debit: xor("0.5"),
+            outstanding_liability: XorQuantity::zero(),
+            bond_total: xor("1"),
+            bond_locked: XorQuantity::zero(),
+            bond_slashed: XorQuantity::zero(),
+            bond_released: xor("1"),
+            window_expected_charge: xor("0.5"),
+            window_micropayment_generated: XorQuantity::zero(),
+            window_micropayment_applied: XorQuantity::zero(),
+            window_client_debit: xor("0.5"),
+            window_bond_slashed: XorQuantity::zero(),
+            window_bond_released: xor("1"),
             captured_at: 1_700_000_000,
         };
         ledger.snapshot_id = ledger.derive_snapshot_id().expect("ledger id");
@@ -4913,35 +4924,35 @@ mod tests {
             appeal_finance_config_version: "baseline-v1".to_string(),
             evidence_bundle_digest: Some([0xA7; 32]),
             outcome: SoraFsAppealFinanceOutcomeV1::Overturn,
-            deposit_xor: "420".to_string(),
+            deposit_xor: xor("420"),
             refund: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "refund-account".to_string(),
-                amount_xor: "420".to_string(),
+                amount_xor: xor("420"),
             },
             treasury: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "treasury-account".to_string(),
-                amount_xor: "50".to_string(),
+                amount_xor: xor("50"),
             },
             held: SoraFsAppealFinanceAccountFlowV1 {
                 account_id: "escrow-account".to_string(),
-                amount_xor: "0".to_string(),
+                amount_xor: xor("0"),
             },
             panel_size: 3,
-            panel_reward_total_xor: "85".to_string(),
-            rewards_paid_total_xor: "60".to_string(),
-            rewards_forfeited_treasury_xor: "25".to_string(),
+            panel_reward_total_xor: xor("85"),
+            rewards_paid_total_xor: xor("60"),
+            rewards_forfeited_treasury_xor: xor("25"),
             juror_payouts: vec![
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-a".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
                 SoraFsAppealFinanceJurorPayoutV1 {
                     juror_id: "juror-b".to_string(),
-                    stipend_xor: "25".to_string(),
-                    bonus_xor: "5".to_string(),
-                    total_xor: "30".to_string(),
+                    stipend_xor: xor("25"),
+                    bonus_xor: xor("5"),
+                    total_xor: xor("30"),
                 },
             ],
             no_show_juror_ids: vec!["juror-c".to_string()],
@@ -4981,16 +4992,16 @@ mod tests {
             release_authority_account: Some("release-authority".to_string()),
             submitted_step: "drawdown_non_refund".to_string(),
             required_authority: "release-authority".to_string(),
-            amount_xor: "420".to_string(),
+            amount_xor: xor("420"),
             tx_hash_hex: "22".repeat(32),
             reconciliation_digest_hex: "33".repeat(32),
             reconciliation_status: "pending_client_submission".to_string(),
             observed_lifecycle_status: "locked".to_string(),
-            observed_remaining_xor: "420".to_string(),
-            deposit_xor: "420".to_string(),
-            refund_xor: "0".to_string(),
-            treasury_xor: "210".to_string(),
-            held_xor: "210".to_string(),
+            observed_remaining_xor: xor("420"),
+            deposit_xor: xor("420"),
+            refund_xor: xor("0"),
+            treasury_xor: xor("210"),
+            held_xor: xor("210"),
             panel_size: 7,
             configured_signer_count: 1,
         };
@@ -5010,9 +5021,12 @@ mod tests {
             },
             chunk_hash: [0x65; 32],
             bytes_delivered: BYTES_PER_GIB,
-            xor_debited: sorafs_manifest::deal::XorAmount::from_micro(500),
-            provider_credit: sorafs_manifest::deal::XorAmount::from_micro(450),
-            fee_amount: sorafs_manifest::deal::XorAmount::from_micro(50),
+            xor_debited: sorafs_manifest::deal::XorQuantity::try_from_micro(500)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: sorafs_manifest::deal::XorQuantity::try_from_micro(450)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: sorafs_manifest::deal::XorQuantity::try_from_micro(50)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_033,
             settlement_signature: OrderbookSignatureV1 {
                 algorithm: sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519,
@@ -5267,7 +5281,7 @@ mod tests {
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
             auditor_account: "auditor-1".into(),
-            proposed_penalty_nano: 50_000,
+            proposed_penalty: xor("0.00005"),
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),
             approval: Some(RepairEscalationApprovalV1 {
@@ -5434,10 +5448,13 @@ mod tests {
                 let marker = u8::try_from(index + 1).expect("small publication count");
                 settlement.deal_id = [marker; 32];
                 settlement.ledger.deal_id = settlement.deal_id;
-                settlement.settled_at = settlement
-                    .settled_at
-                    .checked_add(u64::try_from(index).expect("small publication index"))
-                    .expect("settlement timestamp range");
+                settlement.ledger.snapshot_id = settlement
+                    .ledger
+                    .derive_snapshot_id()
+                    .expect("reseal ledger snapshot");
+                settlement.settlement_id = settlement
+                    .derive_settlement_id()
+                    .expect("reseal settlement");
                 thread::spawn(move || {
                     let encoded = norito::to_bytes(&settlement).expect("encode settlement");
                     publisher
@@ -6577,6 +6594,136 @@ mod tests {
     }
 
     #[test]
+    fn filesystem_publisher_settlement_json_preserves_exact_wide_quantities() {
+        let temp = tempdir().expect("tempdir");
+        let publisher =
+            FilesystemGovernancePublisher::try_new(temp.path().to_path_buf()).expect("publisher");
+        let (mut settlement, _) = sample_settlement();
+        let wide = xor("340282366920938463463374607431768211456");
+        let sub_micro = xor("0.0000001");
+        let applied = xor("0.00000004");
+        let client_debit = xor("0.00000006");
+        let slash = xor("0.000000001");
+        let satisfied_without_outstanding = applied
+            .checked_add(&client_debit)
+            .and_then(|amount| amount.checked_add(&slash))
+            .expect("fixture liability components");
+        let outstanding = wide
+            .checked_sub(&satisfied_without_outstanding)
+            .expect("wide liability exceeds fixture payments");
+        settlement.status = DealSettlementStatusV1::WindowSettled;
+        settlement.ledger.deal_end_epoch = settlement.ledger.window_end_epoch + 10;
+        settlement.ledger.provider_accrual = "0.0000001".parse().expect("sub-micro quantity");
+        settlement.ledger.client_liability = wide.clone();
+        settlement.ledger.micropayment_credit_generated = applied.clone();
+        settlement.ledger.micropayment_credit_applied = applied.clone();
+        settlement.ledger.micropayment_credit_carry = XorQuantity::zero();
+        settlement.ledger.client_debit = client_debit.clone();
+        settlement.ledger.outstanding_liability = outstanding;
+        settlement.ledger.bond_total = xor("1.000000002");
+        settlement.ledger.bond_locked = xor("1.000000001");
+        settlement.ledger.bond_slashed = slash.clone();
+        settlement.ledger.bond_released = XorQuantity::zero();
+        settlement.ledger.window_expected_charge = wide;
+        settlement.ledger.window_micropayment_generated = applied.clone();
+        settlement.ledger.window_micropayment_applied = applied;
+        settlement.ledger.window_client_debit = client_debit;
+        settlement.ledger.window_bond_slashed = slash;
+        settlement.ledger.window_bond_released = XorQuantity::zero();
+        settlement.audit_notes = Some("exact wide-quantity settlement fixture".to_owned());
+        assert_eq!(settlement.ledger.provider_accrual, sub_micro);
+        settlement.ledger.snapshot_id = settlement.ledger.derive_snapshot_id().expect("ledger id");
+        settlement.settlement_id = settlement.derive_settlement_id().expect("settlement id");
+        settlement
+            .validate_transition(None)
+            .expect("coherent exact settlement fixture");
+        let encoded = norito::to_bytes(&settlement).expect("encode canonical settlement");
+
+        publisher
+            .publish_deal_settlement(&settlement, &encoded)
+            .expect("publish exact settlement");
+
+        let dir = temp
+            .path()
+            .join("settlements")
+            .join(settlement.deal_id.encode_hex::<String>());
+        let json_path = fs::read_dir(dir)
+            .expect("settlement directory")
+            .map(|entry| entry.expect("dir entry").path())
+            .find(|path| path.extension().is_some_and(|ext| ext == "json"))
+            .expect("settlement json");
+        let body = fs::read(json_path).expect("read settlement json");
+        let value: JsonValue = json::from_slice(&body).expect("parse settlement json");
+        let object = value
+            .get("settlement")
+            .and_then(JsonValue::as_object)
+            .expect("settlement object");
+        for (field, expected) in [
+            ("provider_accrual", "0.0000001"),
+            (
+                "client_liability",
+                "340282366920938463463374607431768211456",
+            ),
+            ("bond_locked", "1.000000001"),
+            ("bond_slashed", "0.000000001"),
+        ] {
+            assert_eq!(
+                object.get(field).and_then(JsonValue::as_str),
+                Some(expected),
+                "exact quantity field {field}"
+            );
+        }
+        for retired in [
+            "provider_accrual_micro",
+            "client_liability_micro",
+            "bond_locked_micro",
+            "bond_slashed_micro",
+        ] {
+            assert!(!object.contains_key(retired), "retired field {retired}");
+        }
+    }
+
+    #[test]
+    fn orderbook_settlement_json_preserves_exact_wide_quantities() {
+        let (mut receipt, _) = sample_orderbook_settlement_receipt();
+        receipt.xor_debited = "0.0000001".parse().expect("sub-micro quantity");
+        receipt.provider_credit = "340282366920938463463374607431768211456"
+            .parse()
+            .expect("quantity wider than u128");
+        receipt.fee_amount = "0.000000001".parse().expect("high precision quantity");
+        let encoded = receipt.encode();
+        let digest = blake3::hash(&encoded).to_hex().to_string();
+        let body = orderbook_settlement_receipt_json(&receipt, &encoded, &digest)
+            .expect("serialize exact receipt");
+        let value: JsonValue = json::from_str(&body).expect("parse receipt json");
+
+        for section in ["receipt", "metadata"] {
+            let object = value
+                .get(section)
+                .and_then(JsonValue::as_object)
+                .expect("receipt json object");
+            for (field, expected) in [
+                ("xor_debited", "0.0000001"),
+                ("provider_credit", "340282366920938463463374607431768211456"),
+                ("fee_amount", "0.000000001"),
+            ] {
+                assert_eq!(
+                    object.get(field).and_then(JsonValue::as_str),
+                    Some(expected),
+                    "exact {section}.{field}"
+                );
+            }
+            for retired in [
+                "xor_debited_micro",
+                "provider_credit_micro",
+                "fee_amount_micro",
+            ] {
+                assert!(!object.contains_key(retired), "retired {section}.{retired}");
+            }
+        }
+    }
+
+    #[test]
     fn filesystem_publisher_rejects_malformed_car_queue() {
         let temp = tempdir().expect("tempdir");
         let publisher =
@@ -6788,7 +6935,7 @@ mod tests {
             provider_id: [0x11; 32],
             manifest_digest: [0x22; 32],
             auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty_nano: 50_000,
+            proposed_penalty: "0.00005".parse().expect("valid quantity"),
             submitted_at_unix: 1_700_000_222,
             rationale: "missed SLA".into(),
             approval: None,

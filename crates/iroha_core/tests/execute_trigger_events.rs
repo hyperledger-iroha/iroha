@@ -83,9 +83,13 @@ fn register_trigger(
                 .under_authority(ALICE_ID.clone()),
         ),
     ));
-    let register_tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-        .with_instructions([register_trigger])
-        .sign(ALICE_KEYPAIR.private_key());
+    let register_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([register_trigger])
+    .sign(ALICE_KEYPAIR.private_key());
 
     let register_block =
         BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(
@@ -114,11 +118,15 @@ fn execute_trigger(
     asset_id: &AssetId,
     parent: &iroha_core::block::CommittedBlock,
 ) -> (Vec<EventBox>, usize, Option<String>) {
-    let exec_tx = TransactionBuilder::new(chain_id.clone(), ALICE_ID.clone())
-        .with_instructions([InstructionBox::from(ExecuteTrigger::new(
-            trigger_id.clone(),
-        ))])
-        .sign(ALICE_KEYPAIR.private_key());
+    let exec_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(ExecuteTrigger::new(
+        trigger_id.clone(),
+    ))])
+    .sign(ALICE_KEYPAIR.private_key());
 
     let execute_block =
         BlockBuilder::new(vec![iroha_core::tx::AcceptedTransaction::new_unchecked(

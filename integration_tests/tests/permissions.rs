@@ -330,7 +330,10 @@ fn permissions_disallow_asset_transfer() {
 
     let alice_start_assets = get_assets(&iroha, &alice_id);
     iroha
-        .submit_blocking(create_asset)
+        .submit_blocking(
+            create_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to prepare state.");
 
     let quantity = Quantity::from(200_u32);
@@ -339,7 +342,10 @@ fn permissions_disallow_asset_transfer() {
         AssetId::new(asset_definition_id.clone(), bob_id.clone()),
     );
     iroha
-        .submit_blocking(mint_asset)
+        .submit_blocking(
+            mint_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to create asset.");
 
     //When
@@ -348,9 +354,13 @@ fn permissions_disallow_asset_transfer() {
         quantity,
         alice_id.clone(),
     );
-    let transfer_tx = TransactionBuilder::new(chain_id, mouse_id)
-        .with_instructions([transfer_asset])
-        .sign(mouse_keypair.private_key());
+    let transfer_tx = TransactionBuilder::new(
+        chain_id,
+        mouse_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer_asset])
+    .sign(mouse_keypair.private_key());
     let err = iroha
         .submit_transaction_blocking(&transfer_tx)
         .expect_err("Transaction was not rejected.");
@@ -391,7 +401,10 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let mut last_non_empty_height = status.blocks_non_empty;
 
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    client.submit_blocking(Register::account(Account::new(mouse_id.clone())))?;
+    client.submit_blocking(
+        Register::account(Account::new(mouse_id.clone())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     status = sync_after_submission(
         &network,
         &rt,
@@ -405,7 +418,10 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         account: mouse_id.clone(),
     }
     .into();
-    client.submit_blocking(Grant::account_permission(perm.clone(), ALICE_ID.clone()))?;
+    client.submit_blocking(
+        Grant::account_permission(perm.clone(), ALICE_ID.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     let _status = sync_after_submission(
         &network,
         &rt,
@@ -416,9 +432,13 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
 
     let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
     let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
-    let tx = TransactionBuilder::new(network.chain_id(), ALICE_ID.clone())
-        .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
-        .sign(ALICE_KEYPAIR.private_key());
+    let tx = TransactionBuilder::new(
+        network.chain_id(),
+        ALICE_ID.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
+    .sign(ALICE_KEYPAIR.private_key());
     client.submit_transaction_blocking(&tx)?;
 
     let status = client.get_status()?;
@@ -487,7 +507,10 @@ fn permissions_disallow_asset_burn() {
     let alice_start_assets = get_assets(&iroha, &alice_id);
 
     iroha
-        .submit_blocking(create_asset)
+        .submit_blocking(
+            create_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to prepare state.");
 
     let quantity = Quantity::from(200_u32);
@@ -496,15 +519,22 @@ fn permissions_disallow_asset_burn() {
         AssetId::new(asset_definition_id.clone(), bob_id),
     );
     iroha
-        .submit_blocking(mint_asset)
+        .submit_blocking(
+            mint_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to create asset.");
     let burn_asset = Burn::asset_quantity(
         quantity,
         AssetId::new(asset_definition_id, mouse_id.clone()),
     );
-    let burn_tx = TransactionBuilder::new(chain_id, mouse_id)
-        .with_instructions([burn_asset])
-        .sign(mouse_keypair.private_key());
+    let burn_tx = TransactionBuilder::new(
+        chain_id,
+        mouse_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([burn_asset])
+    .sign(mouse_keypair.private_key());
 
     let err = iroha
         .submit_transaction_blocking(&burn_tx)
@@ -575,20 +605,20 @@ fn permissions_differ_not_only_by_names() {
         return;
     };
     let client = network.client();
-    submit_register_domain_with_network_lease(
-        &network,
-        &client,
-        Domain::new(outfit_domain.clone()),
-    )
-    .expect("Failed to register outfit domain");
+    submit_ensure_domain_for_network(&network, &client, Domain::new(outfit_domain.clone()))
+        .expect("Failed to register outfit domain");
 
     let submit_with_authority = |isi: InstructionBox,
                                  authority: &AccountId,
                                  authority_keypair: &KeyPair|
      -> Result<HashOf<SignedTransaction>> {
-        let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([isi])
-            .sign(authority_keypair.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([isi])
+        .sign(authority_keypair.private_key());
         client.submit_transaction_blocking(&tx)
     };
 
@@ -600,7 +630,10 @@ fn permissions_differ_not_only_by_names() {
     // Registering mouse
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     client
-        .submit_all_blocking::<InstructionBox>([register_mouse_account.into()])
+        .submit_all_blocking::<InstructionBox>(
+            [register_mouse_account.into()],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to register mouse");
 
     // Registering NFT
@@ -616,11 +649,14 @@ fn permissions_differ_not_only_by_names() {
     );
     let register_shoes_nft = Register::nft(Nft::new(shoes_nft_id.clone(), Metadata::default()));
     client
-        .submit_all_blocking::<InstructionBox>([
-            register_hat_nft.into(),
-            register_shoes_nft.into(),
-            transfer_shoes_domain.into(),
-        ])
+        .submit_all_blocking::<InstructionBox>(
+            [
+                register_hat_nft.into(),
+                register_shoes_nft.into(),
+                transfer_shoes_domain.into(),
+            ],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to register new NFTs");
 
     // Granting permission to Bob to modify metadata in Mouse's hats
@@ -697,7 +733,10 @@ fn stored_vs_granted_permission_payload() {
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     iroha
-        .submit_all_blocking::<InstructionBox>([register_mouse_account.into(), create_asset.into()])
+        .submit_all_blocking::<InstructionBox>(
+            [register_mouse_account.into(), create_asset.into()],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to register mouse");
 
     let mouse_asset = AssetId::new(asset_definition_id, mouse_id.clone());
@@ -714,9 +753,13 @@ fn stored_vs_granted_permission_payload() {
         alice_id,
     );
 
-    let transaction = TransactionBuilder::new(chain_id, mouse_id)
-        .with_instructions([allow_alice_to_mint_mouse_asset])
-        .sign(mouse_keypair.private_key());
+    let transaction = TransactionBuilder::new(
+        chain_id,
+        mouse_id,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([allow_alice_to_mint_mouse_asset])
+    .sign(mouse_keypair.private_key());
     iroha
         .submit_transaction_blocking(&transaction)
         .expect("Failed to grant permission to alice.");
@@ -724,7 +767,10 @@ fn stored_vs_granted_permission_payload() {
     // Check that alice can indeed mint mouse asset
     let mint_asset = Mint::asset_quantity(1_u32, mouse_asset);
     iroha
-        .submit_blocking(mint_asset)
+        .submit_blocking(
+            mint_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to mint asset for mouse.");
 }
 
@@ -756,11 +802,17 @@ fn permissions_are_unified() {
     let allow_alice_to_transfer_rose_2 = Grant::account_permission(permission2, alice_id);
 
     iroha
-        .submit_blocking(allow_alice_to_transfer_rose_1)
+        .submit_blocking(
+            allow_alice_to_transfer_rose_1,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to grant permission");
 
     let _ = iroha
-        .submit_blocking(allow_alice_to_transfer_rose_2)
+        .submit_blocking(
+            allow_alice_to_transfer_rose_2,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("should reject due to duplication");
 }
 
@@ -787,7 +839,10 @@ fn associated_permissions_removed_on_unregister() {
         Grant::account_permission(bob_to_set_kv_in_domain.clone(), bob_id.clone());
 
     iroha
-        .submit_all_blocking::<InstructionBox>([allow_bob_to_set_kv_in_domain.into()])
+        .submit_all_blocking::<InstructionBox>(
+            [allow_bob_to_set_kv_in_domain.into()],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to grant permission");
     status = sync_after_submission(
         &network,
@@ -810,7 +865,10 @@ fn associated_permissions_removed_on_unregister() {
 
     // unregister kingdom
     iroha
-        .submit_blocking(Unregister::domain(kingdom_id))
+        .submit_blocking(
+            Unregister::domain(kingdom_id),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to unregister domain");
     let _status = sync_after_submission(
         &network,
@@ -855,7 +913,10 @@ fn associated_permissions_removed_from_role_on_unregister() {
     );
 
     iroha
-        .submit_all_blocking::<InstructionBox>([register_role.into()])
+        .submit_all_blocking::<InstructionBox>(
+            [register_role.into()],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to register role");
     status = sync_after_submission(
         &network,
@@ -877,7 +938,10 @@ fn associated_permissions_removed_from_role_on_unregister() {
 
     // unregister kingdom
     iroha
-        .submit_blocking(Unregister::domain(kingdom_id))
+        .submit_blocking(
+            Unregister::domain(kingdom_id),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("failed to unregister domain");
     let _status = sync_after_submission(
         &network,

@@ -83,6 +83,7 @@ from iroha_torii_client.client import (
     SumeragiSafetyHaltStatus as _CanonicalSumeragiSafetyHaltStatus,
     SumeragiV2CommitQcStatus as _CanonicalSumeragiV2CommitQcStatus,
     SumeragiV2HeightContextStatus as _CanonicalSumeragiV2HeightContextStatus,
+    SumeragiV2LivenessStatus,
     SumeragiV2OperatorStatus as _CanonicalSumeragiV2OperatorStatus,
     SumeragiV2Round,
     SumeragiV2Status as _CanonicalSumeragiV2Status,
@@ -225,8 +226,37 @@ def _encode_sort_arg(sort_value: Optional[Any]) -> Optional[str]:
 
 DEFAULT_I105_DISCRIMINANT = 0x02F1
 # Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
-DATA_MODEL_VERSION = 1
+DATA_MODEL_VERSION = 3
 ACCOUNT_FAUCET_POW_DOMAIN_SEPARATOR = b"iroha:accounts:faucet:pow:v2"
+ACCOUNT_ONBOARDING_TOKEN_HEADER = "X-Iroha-Onboarding-Token"
+
+
+def _require_account_onboarding_token(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TypeError("onboarding_token must be a string")
+    encoded = value.encode("utf-8")
+    if not 32 <= len(encoded) <= 256 or any(byte < 0x21 or byte > 0x7E for byte in encoded):
+        raise ValueError(
+            "onboarding_token must contain 32..256 printable ASCII bytes "
+            "without spaces or normalization"
+        )
+    return value
+
+
+def _set_exact_header(headers: MutableMapping[str, str], name: str, value: str) -> None:
+    lower_name = name.lower()
+    for existing in list(headers):
+        if existing.lower() == lower_name:
+            del headers[existing]
+    headers[name] = value
+
+
+def _reject_default_onboarding_header(headers: Mapping[str, Any], context: str) -> None:
+    if any(str(name).lower() == ACCOUNT_ONBOARDING_TOKEN_HEADER.lower() for name in headers):
+        raise ValueError(
+            f"{context} must not contain {ACCOUNT_ONBOARDING_TOKEN_HEADER}; "
+            "pass onboarding_token explicitly to onboard_account"
+        )
 
 
 def _reject_alias_keys(source: Mapping[str, Any],
@@ -1523,6 +1553,72 @@ _SORAFS_ORDERBOOK_EVENT_KIND_VALUES = {
     "order_cancelled",
     "settlement_receipt_accepted",
 }
+_SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155
+_SORAFS_ORDERBOOK_ORDER_FIELDS = frozenset(
+    {
+        "version",
+        "order_id_hex",
+        "side",
+        "tier",
+        "price_per_gib",
+        "quantity_gib",
+        "remaining_gib",
+        "owner_account_hex",
+        "expiry_unix",
+        "nonce",
+        "maker_fee_bps",
+        "taker_fee_bps",
+        "signature",
+    }
+)
+_SORAFS_ORDERBOOK_FILL_FIELDS = frozenset(
+    {"trade", "maker_remaining_gib", "taker_remaining_gib", "gross_value"}
+)
+_SORAFS_ORDERBOOK_TRADE_FIELDS = frozenset(
+    {
+        "version",
+        "trade_id_hex",
+        "maker_order_id_hex",
+        "taker_order_id_hex",
+        "tier",
+        "price_per_gib",
+        "filled_gib",
+        "maker_fee",
+        "taker_fee",
+        "timestamp_unix",
+    }
+)
+_SORAFS_ORDERBOOK_CHANNEL_FIELDS = frozenset(
+    {
+        "version",
+        "channel_id_hex",
+        "trade_id_hex",
+        "buyer_account_hex",
+        "provider_id_hex",
+        "total_bytes",
+        "remaining_bytes",
+        "xor_locked",
+        "status",
+        "opened_at_unix",
+        "updated_at_unix",
+    }
+)
+_SORAFS_ORDERBOOK_RECEIPT_FIELDS = frozenset(
+    {
+        "version",
+        "receipt_id_hex",
+        "channel_id_hex",
+        "trade_id_hex",
+        "range",
+        "chunk_hash_hex",
+        "bytes_delivered",
+        "xor_debited",
+        "provider_credit",
+        "fee_amount",
+        "issued_at_unix",
+        "settlement_signature",
+    }
+)
 
 
 def _sorafs_orderbook_headers(
@@ -1653,6 +1749,11 @@ def _normalize_sorafs_orderbook_status(value: Any, expected: str, context: str) 
 
 def _normalize_sorafs_orderbook_fill(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_FILL_FIELDS,
+        context,
+    )
     return {
         "trade": _normalize_sorafs_orderbook_trade(record.get("trade"), f"{context}.trade"),
         "maker_remaining_gib": _normalize_sorafs_unsigned_integer(
@@ -1665,9 +1766,9 @@ def _normalize_sorafs_orderbook_fill(payload: Any, context: str) -> Dict[str, An
             f"{context}.taker_remaining_gib",
             allow_zero=True,
         ),
-        "gross_value_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("gross_value_micro_xor"),
-            f"{context}.gross_value_micro_xor",
+        "gross_value": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("gross_value"),
+            f"{context}.gross_value",
         ),
     }
 
@@ -1925,6 +2026,11 @@ def _normalize_sorafs_orderbook_entry(payload: Any, context: str) -> Dict[str, A
 
 def _normalize_sorafs_orderbook_order(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_ORDER_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -1945,9 +2051,9 @@ def _normalize_sorafs_orderbook_order(payload: Any, context: str) -> Dict[str, A
             _SORAFS_ORDERBOOK_TIER_VALUES,
             f"{context}.tier",
         ),
-        "price_per_gib_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("price_per_gib_micro_xor"),
-            f"{context}.price_per_gib_micro_xor",
+        "price_per_gib": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("price_per_gib"),
+            f"{context}.price_per_gib",
         ),
         "quantity_gib": _normalize_sorafs_unsigned_integer(
             record.get("quantity_gib"),
@@ -2007,6 +2113,11 @@ def _normalize_sorafs_orderbook_signature(payload: Any, context: str) -> Dict[st
 
 def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_TRADE_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2030,22 +2141,22 @@ def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, A
             _SORAFS_ORDERBOOK_TIER_VALUES,
             f"{context}.tier",
         ),
-        "price_per_gib_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("price_per_gib_micro_xor"),
-            f"{context}.price_per_gib_micro_xor",
+        "price_per_gib": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("price_per_gib"),
+            f"{context}.price_per_gib",
         ),
         "filled_gib": _normalize_sorafs_unsigned_integer(
             record.get("filled_gib"),
             f"{context}.filled_gib",
             allow_zero=True,
         ),
-        "maker_fee_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("maker_fee_micro_xor"),
-            f"{context}.maker_fee_micro_xor",
+        "maker_fee": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("maker_fee"),
+            f"{context}.maker_fee",
         ),
-        "taker_fee_micro_xor": _normalize_sorafs_orderbook_decimal_string(
-            record.get("taker_fee_micro_xor"),
-            f"{context}.taker_fee_micro_xor",
+        "taker_fee": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("taker_fee"),
+            f"{context}.taker_fee",
         ),
         "timestamp_unix": _normalize_sorafs_unsigned_integer(
             record.get("timestamp_unix"),
@@ -2057,6 +2168,11 @@ def _normalize_sorafs_orderbook_trade(payload: Any, context: str) -> Dict[str, A
 
 def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_CHANNEL_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2089,9 +2205,9 @@ def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str,
             f"{context}.remaining_bytes",
             allow_zero=True,
         ),
-        "xor_locked_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("xor_locked_micro"),
-            f"{context}.xor_locked_micro",
+        "xor_locked": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("xor_locked"),
+            f"{context}.xor_locked",
         ),
         "status": _normalize_sorafs_orderbook_label(
             record.get("status"),
@@ -2113,6 +2229,11 @@ def _normalize_sorafs_orderbook_channel(payload: Any, context: str) -> Dict[str,
 
 def _normalize_sorafs_orderbook_receipt(payload: Any, context: str) -> Dict[str, Any]:
     record = _require_mapping(payload, context)
+    _require_exact_sorafs_orderbook_fields(
+        record,
+        _SORAFS_ORDERBOOK_RECEIPT_FIELDS,
+        context,
+    )
     return {
         "version": _normalize_sorafs_unsigned_integer(
             record.get("version"),
@@ -2144,17 +2265,17 @@ def _normalize_sorafs_orderbook_receipt(payload: Any, context: str) -> Dict[str,
             f"{context}.bytes_delivered",
             allow_zero=True,
         ),
-        "xor_debited_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("xor_debited_micro"),
-            f"{context}.xor_debited_micro",
+        "xor_debited": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("xor_debited"),
+            f"{context}.xor_debited",
         ),
-        "provider_credit_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("provider_credit_micro"),
-            f"{context}.provider_credit_micro",
+        "provider_credit": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("provider_credit"),
+            f"{context}.provider_credit",
         ),
-        "fee_amount_micro": _normalize_sorafs_orderbook_decimal_string(
-            record.get("fee_amount_micro"),
-            f"{context}.fee_amount_micro",
+        "fee_amount": _normalize_sorafs_orderbook_xor_quantity(
+            record.get("fee_amount"),
+            f"{context}.fee_amount",
         ),
         "issued_at_unix": _normalize_sorafs_unsigned_integer(
             record.get("issued_at_unix"),
@@ -2288,11 +2409,26 @@ def _normalize_sorafs_orderbook_hex_bytes(
     return _normalize_hex_string(literal, context, expected_length=expected_length)
 
 
-def _normalize_sorafs_orderbook_decimal_string(value: Any, context: str) -> str:
-    literal = _require_non_empty_string(value, context)
-    if not re.fullmatch(r"(0|[1-9][0-9]*)", literal):
-        raise ValueError(f"{context} must be a non-negative decimal integer string")
-    return literal
+def _normalize_sorafs_orderbook_xor_quantity(value: Any, context: str) -> str:
+    if type(value) is not str:
+        raise TypeError(f"{context} must be a canonical XOR quantity string")
+    if len(value) > _SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH:
+        raise ValueError(f"{context} exceeds the bounded XOR quantity text length")
+    quantity = NumericV1Codec.decode_quantity_json(value)
+    if quantity.scale > 9:
+        raise ValueError(f"{context} must have at most 9 fractional decimal places")
+    return str(quantity)
+
+
+def _require_exact_sorafs_orderbook_fields(
+    record: Mapping[str, Any],
+    expected: frozenset[str],
+    context: str,
+) -> None:
+    unexpected = set(record).difference(expected)
+    if unexpected:
+        labels = ", ".join(sorted(str(field) for field in unexpected))
+        raise ValueError(f"{context} contains unknown or retired fields: {labels}")
 
 
 def _normalize_sorafs_unsigned_integer(
@@ -2423,7 +2559,7 @@ def _normalize_sorafs_pin_register_request(
         "private_key",
         "manifest_payload",
         "submitted_epoch",
-        "gas_asset_id",
+        "fee_payment",
         "alias",
         "successor_of_hex",
     }
@@ -2445,11 +2581,13 @@ def _normalize_sorafs_pin_register_request(
 
     manifest_payload_value = _first_present(request, "manifest_payload")
     submitted_epoch_value = _first_present(request, "submitted_epoch")
-    gas_asset_value = _first_present(request, "gas_asset_id")
+    fee_payment_value = _first_present(request, "fee_payment")
     if manifest_payload_value is _MISSING:
         raise TypeError(f"{context}.manifest_payload is required")
     if submitted_epoch_value is _MISSING:
         raise TypeError(f"{context}.submitted_epoch is required")
+    if fee_payment_value is _MISSING:
+        raise TypeError(f"{context}.fee_payment is required")
     if not isinstance(submitted_epoch_value, int) or isinstance(submitted_epoch_value, bool):
         raise TypeError(f"{context}.submitted_epoch must be an integer")
 
@@ -2464,12 +2602,11 @@ def _normalize_sorafs_pin_register_request(
             f"{context}.submitted_epoch",
             allow_zero=True,
         ),
+        "fee_payment": _BaseToriiClient._normalize_fee_payment_intent(
+            fee_payment_value,
+            context=f"{context}.fee_payment",
+        ),
     }
-    if gas_asset_value is not _MISSING:
-        payload["gas_asset_id"] = _require_exact_non_empty_string(
-            gas_asset_value,
-            f"{context}.gas_asset_id",
-        )
 
     alias_value = _first_present(request, "alias")
     if alias_value is not _MISSING:
@@ -7342,10 +7479,10 @@ class SumeragiLaneSettlementReceipt:
     """Receipt entry bundled in a lane settlement commitment."""
 
     source_id: str
-    local_amount_micro: int
-    xor_due_micro: int
-    xor_after_haircut_micro: int
-    xor_variance_micro: int
+    local_amount: str
+    xor_due: str
+    xor_after_haircut: str
+    xor_variance: str
     timestamp_ms: int
 
 
@@ -7391,18 +7528,6 @@ def _strict_uint(
     return value
 
 
-def _strict_decimal_uint(payload: Mapping[str, Any], field_name: str, context: str) -> int:
-    value = _required_field(payload, field_name, context)
-    if not isinstance(value, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)", value) is None:
-        raise TypeError(
-            f"{context} `{field_name}` must be a canonical unsigned decimal string"
-        )
-    number = int(value)
-    if number < 0 or number > (1 << 128) - 1:
-        raise ValueError(f"{context} `{field_name}` exceeds the unsigned 128-bit range")
-    return number
-
-
 def _strict_tagged_unit_enum(
     payload: Mapping[str, Any],
     field_name: str,
@@ -7434,6 +7559,30 @@ def _strict_numeric_string(payload: Mapping[str, Any], field_name: str, context:
         or re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.[0-9]+)?", value) is None
     ):
         raise TypeError(f"{context} `{field_name}` must be a non-negative Numeric string")
+    return value
+
+
+def _strict_quantity_string(
+    payload: Mapping[str, Any], field_name: str, context: str
+) -> str:
+    """Decode one canonical bounded non-negative Kotodama quantity."""
+
+    value = _required_field(payload, field_name, context)
+    if not isinstance(value, str):
+        raise TypeError(f"{context} `{field_name}` must be a quantity string")
+    if len(value) > 155:
+        raise ValueError(
+            f"{context} `{field_name}` exceeds the quantity text length bound"
+        )
+    matched = re.fullmatch(r"(0|[1-9][0-9]*)(?:\.([0-9]{0,27}[1-9]))?", value)
+    if matched is None:
+        raise TypeError(
+            f"{context} `{field_name}` must be a canonical non-negative quantity"
+        )
+    fraction = matched.group(2) or ""
+    mantissa = int(matched.group(1) + fraction)
+    if mantissa > (1 << 511) - 1:
+        raise ValueError(f"{context} `{field_name}` exceeds the signed 512-bit domain")
     return value
 
 
@@ -8152,18 +8301,18 @@ class SumeragiNativeAmxLeg:
             or settlement.dataspace_id != dataspace_id
             or settlement.lane_incarnation != body.participant_lane_incarnation
             or settlement.tx_count != len(settlement.receipts)
-            or settlement.total_local_micro != 0
-            or settlement.total_xor_due_micro != 0
-            or settlement.total_xor_after_haircut_micro != 0
-            or settlement.total_xor_variance_micro != 0
+            or settlement.total_local_amount != "0"
+            or settlement.total_xor_due != "0"
+            or settlement.total_xor_after_haircut != "0"
+            or settlement.total_xor_variance != "0"
             or settlement.swap_metadata is not None
             or len(set(settlement_sources)) != len(settlement_sources)
             or settlement_sources.count(body.source_id) != 1
             or any(
-                receipt.local_amount_micro != 0
-                or receipt.xor_due_micro != 0
-                or receipt.xor_after_haircut_micro != 0
-                or receipt.xor_variance_micro != 0
+                receipt.local_amount != "0"
+                or receipt.xor_due != "0"
+                or receipt.xor_after_haircut != "0"
+                or receipt.xor_variance != "0"
                 or receipt.timestamp_ms != body.authority_context_height
                 for receipt in settlement.receipts
             )
@@ -8425,10 +8574,10 @@ class SumeragiLaneSettlementCommitment:
     lane_incarnation: str
     dataspace_id: int
     tx_count: int
-    total_local_micro: int
-    total_xor_due_micro: int
-    total_xor_after_haircut_micro: int
-    total_xor_variance_micro: int
+    total_local_amount: str
+    total_xor_due: str
+    total_xor_after_haircut: str
+    total_xor_variance: str
     receipts: List[SumeragiLaneSettlementReceipt]
     nexus_fee_receipts: Tuple[SumeragiNexusFeeReceipt, ...]
     native_amx_receipts: Tuple[SumeragiNativeAmxReceipt, ...]
@@ -8447,10 +8596,10 @@ class SumeragiLaneSettlementCommitment:
                 "lane_incarnation",
                 "dataspace_id",
                 "tx_count",
-                "total_local_micro",
-                "total_xor_due_micro",
-                "total_xor_after_haircut_micro",
-                "total_xor_variance_micro",
+                "total_local_amount",
+                "total_xor_due",
+                "total_xor_after_haircut",
+                "total_xor_variance",
                 "swap_metadata",
                 "receipts",
                 "nexus_fee_receipts",
@@ -8463,13 +8612,15 @@ class SumeragiLaneSettlementCommitment:
         lane_incarnation = _strict_hash_literal(payload, "lane_incarnation", context)
         dataspace_id = _strict_uint(payload, "dataspace_id", 64, context)
         tx_count = _strict_uint(payload, "tx_count", 64, context)
-        total_local_micro = _strict_decimal_uint(payload, "total_local_micro", context)
-        total_xor_due_micro = _strict_decimal_uint(payload, "total_xor_due_micro", context)
-        total_xor_after_haircut_micro = _strict_decimal_uint(
-            payload, "total_xor_after_haircut_micro", context
+        total_local_amount = _strict_quantity_string(
+            payload, "total_local_amount", context
         )
-        total_xor_variance_micro = _strict_decimal_uint(
-            payload, "total_xor_variance_micro", context
+        total_xor_due = _strict_quantity_string(payload, "total_xor_due", context)
+        total_xor_after_haircut = _strict_quantity_string(
+            payload, "total_xor_after_haircut", context
+        )
+        total_xor_variance = _strict_quantity_string(
+            payload, "total_xor_variance", context
         )
         receipts_payload = _required_field(payload, "receipts", context)
         if not isinstance(receipts_payload, list):
@@ -8483,33 +8634,33 @@ class SumeragiLaneSettlementCommitment:
                 receipt,
                 {
                     "source_id",
-                    "local_amount_micro",
-                    "xor_due_micro",
-                    "xor_after_haircut_micro",
-                    "xor_variance_micro",
+                    "local_amount",
+                    "xor_due",
+                    "xor_after_haircut",
+                    "xor_variance",
                     "timestamp_ms",
                 },
                 receipt_context,
             )
             source_id = _strict_hex_string(receipt, "source_id", 32, receipt_context)
-            receipt_local = _strict_decimal_uint(
-                receipt, "local_amount_micro", receipt_context
+            receipt_local = _strict_quantity_string(
+                receipt, "local_amount", receipt_context
             )
-            receipt_due = _strict_decimal_uint(receipt, "xor_due_micro", receipt_context)
-            receipt_after = _strict_decimal_uint(
-                receipt, "xor_after_haircut_micro", receipt_context
+            receipt_due = _strict_quantity_string(receipt, "xor_due", receipt_context)
+            receipt_after = _strict_quantity_string(
+                receipt, "xor_after_haircut", receipt_context
             )
-            receipt_variance = _strict_decimal_uint(
-                receipt, "xor_variance_micro", receipt_context
+            receipt_variance = _strict_quantity_string(
+                receipt, "xor_variance", receipt_context
             )
             receipt_timestamp = _strict_uint(receipt, "timestamp_ms", 64, receipt_context)
             receipts.append(
                 SumeragiLaneSettlementReceipt(
                     source_id=source_id,
-                    local_amount_micro=receipt_local,
-                    xor_due_micro=receipt_due,
-                    xor_after_haircut_micro=receipt_after,
-                    xor_variance_micro=receipt_variance,
+                    local_amount=receipt_local,
+                    xor_due=receipt_due,
+                    xor_after_haircut=receipt_after,
+                    xor_variance=receipt_variance,
                     timestamp_ms=receipt_timestamp,
                 )
             )
@@ -8608,10 +8759,10 @@ class SumeragiLaneSettlementCommitment:
             lane_incarnation=lane_incarnation,
             dataspace_id=dataspace_id,
             tx_count=tx_count,
-            total_local_micro=total_local_micro,
-            total_xor_due_micro=total_xor_due_micro,
-            total_xor_after_haircut_micro=total_xor_after_haircut_micro,
-            total_xor_variance_micro=total_xor_variance_micro,
+            total_local_amount=total_local_amount,
+            total_xor_due=total_xor_due,
+            total_xor_after_haircut=total_xor_after_haircut,
+            total_xor_variance=total_xor_variance,
             receipts=receipts,
             nexus_fee_receipts=nexus_fee_receipts,
             native_amx_receipts=native_amx_receipts,
@@ -8889,18 +9040,97 @@ class SumeragiV2BlockSubject:
 
 
 @dataclass(frozen=True)
+class SumeragiV2ExecutionCommitment:
+    """Exact deterministic execution result authenticated by a v2 QC."""
+
+    parent_state_root: str
+    post_state_root: str
+    ordinary_writes_root: str
+    topup_anchor_root: Optional[str]
+    topup_anchor_count: int
+    executed_block_wire_hash: str
+
+    @classmethod
+    def from_payload(
+        cls, payload: Any, context: str
+    ) -> "SumeragiV2ExecutionCommitment":
+        if not isinstance(payload, Mapping):
+            raise TypeError(f"{context} must be an object")
+        _sumeragi_v2_exact_fields(
+            payload,
+            (
+                "parent_state_root",
+                "post_state_root",
+                "ordinary_writes_root",
+                "topup_anchor_root",
+                "topup_anchor_count",
+                "executed_block_wire_hash",
+            ),
+            context,
+        )
+        topup_anchor_count = _sumeragi_v2_uint(
+            payload.get("topup_anchor_count"),
+            f"{context}.topup_anchor_count",
+            maximum=16,
+        )
+        topup_anchor_root_value = payload.get("topup_anchor_root")
+        topup_anchor_root = (
+            None
+            if topup_anchor_root_value is None
+            else _sumeragi_v2_string(
+                topup_anchor_root_value, f"{context}.topup_anchor_root"
+            )
+        )
+        if (topup_anchor_count == 0) != (topup_anchor_root is None):
+            raise ValueError(
+                f"{context}.topup_anchor_root must be present exactly when "
+                "topup_anchor_count is positive"
+            )
+        return cls(
+            parent_state_root=_sumeragi_v2_string(
+                payload.get("parent_state_root"), f"{context}.parent_state_root"
+            ),
+            post_state_root=_sumeragi_v2_string(
+                payload.get("post_state_root"), f"{context}.post_state_root"
+            ),
+            ordinary_writes_root=_sumeragi_v2_string(
+                payload.get("ordinary_writes_root"),
+                f"{context}.ordinary_writes_root",
+            ),
+            topup_anchor_root=topup_anchor_root,
+            topup_anchor_count=topup_anchor_count,
+            executed_block_wire_hash=_sumeragi_v2_string(
+                payload.get("executed_block_wire_hash"),
+                f"{context}.executed_block_wire_hash",
+            ),
+        )
+
+
+@dataclass(frozen=True)
 class SumeragiV2QuorumCertificateRef:
     """Stable reference to a PrepareQC or CommitQC."""
 
     round: SumeragiV2ConsensusRound
+    proposal_round: SumeragiV2ConsensusRound
     phase: SumeragiV2GlobalPhase
     subject: SumeragiV2BlockSubject
+    execution_commitment: SumeragiV2ExecutionCommitment
 
     @classmethod
     def from_payload(cls, payload: Any, context: str) -> "SumeragiV2QuorumCertificateRef":
         if not isinstance(payload, Mapping):
             raise TypeError(f"{context} must be an object")
-        _sumeragi_v2_exact_fields(payload, ("round", "phase", "subject"), context)
+        _sumeragi_v2_exact_fields(
+            payload,
+            (
+                "round",
+                "proposal_round",
+                "phase",
+                "subject",
+                "execution_commitment",
+            ),
+            context,
+        )
         phase = _sumeragi_v2_tagged_unit(
             payload.get("phase"),
             "phase",
@@ -8911,9 +9141,16 @@ class SumeragiV2QuorumCertificateRef:
             round=SumeragiV2ConsensusRound.from_payload(
                 payload.get("round"), f"{context}.round"
             ),
+            proposal_round=SumeragiV2ConsensusRound.from_payload(
+                payload.get("proposal_round"), f"{context}.proposal_round"
+            ),
             phase=SumeragiV2GlobalPhase(phase),
             subject=SumeragiV2BlockSubject.from_payload(
                 payload.get("subject"), f"{context}.subject"
+            ),
+            execution_commitment=SumeragiV2ExecutionCommitment.from_payload(
+                payload.get("execution_commitment"),
+                f"{context}.execution_commitment",
             ),
         )
 
@@ -8964,6 +9201,7 @@ class SumeragiStatusSnapshot:
     node_fingerprint: str
     build_fingerprint: str
     config_fingerprint: str
+    restart_required: bool
     height_context_id: SumeragiV2HeightContextId
     height: int
     view: int
@@ -8978,6 +9216,7 @@ class SumeragiStatusSnapshot:
     last_committed_subject: Optional[SumeragiV2BlockSubject]
     height_context: _CanonicalSumeragiV2HeightContextStatus
     last_commit_qc: Optional[_CanonicalSumeragiV2CommitQcStatus]
+    liveness: SumeragiV2LivenessStatus
     safety_halt: _CanonicalSumeragiSafetyHaltStatus
     lane_settlement_commitments: List[SumeragiLaneSettlementCommitment]
     lane_relay_envelopes: List[SumeragiLaneRelayEnvelope]
@@ -8995,6 +9234,19 @@ class SumeragiStatusSnapshot:
             payload_hash=subject.payload_hash,
         )
 
+    @staticmethod
+    def _execution_commitment_from_canonical(
+        execution_commitment: Any,
+    ) -> SumeragiV2ExecutionCommitment:
+        return SumeragiV2ExecutionCommitment(
+            parent_state_root=execution_commitment.parent_state_root,
+            post_state_root=execution_commitment.post_state_root,
+            ordinary_writes_root=execution_commitment.ordinary_writes_root,
+            topup_anchor_root=execution_commitment.topup_anchor_root,
+            topup_anchor_count=execution_commitment.topup_anchor_count,
+            executed_block_wire_hash=execution_commitment.executed_block_wire_hash,
+        )
+
     @classmethod
     def _qc_from_canonical(cls, qc: Any) -> SumeragiV2QuorumCertificateRef:
         return SumeragiV2QuorumCertificateRef(
@@ -9003,8 +9255,18 @@ class SumeragiStatusSnapshot:
                 height=qc.round.height,
                 view=qc.round.view,
             ),
+            proposal_round=SumeragiV2ConsensusRound(
+                context_id=SumeragiV2HeightContextId(
+                    hash=qc.proposal_round.context_id[0]
+                ),
+                height=qc.proposal_round.height,
+                view=qc.proposal_round.view,
+            ),
             phase=SumeragiV2GlobalPhase(qc.phase),
             subject=cls._subject_from_canonical(qc.subject),
+            execution_commitment=cls._execution_commitment_from_canonical(
+                qc.execution_commitment
+            ),
         )
 
     @classmethod
@@ -9035,6 +9297,7 @@ class SumeragiStatusSnapshot:
             node_fingerprint=canonical.node_fingerprint,
             build_fingerprint=canonical.build_fingerprint,
             config_fingerprint=canonical.config_fingerprint,
+            restart_required=canonical.restart_required,
             height_context_id=SumeragiV2HeightContextId(
                 hash=canonical.height_context_id[0]
             ),
@@ -9067,6 +9330,7 @@ class SumeragiStatusSnapshot:
             ),
             height_context=canonical.height_context,
             last_commit_qc=canonical.last_commit_qc,
+            liveness=canonical.liveness,
             safety_halt=canonical.safety_halt,
             lane_settlement_commitments=[
                 SumeragiLaneSettlementCommitment.from_payload(entry)
@@ -10933,12 +11197,14 @@ __all__ = [
     "SumeragiRbcStoreStatus",
     "SumeragiPrfStatus",
     "SumeragiStatusSnapshot",
+    "SumeragiV2LivenessStatus",
     "SumeragiV2StatusPhase",
     "SumeragiV2BodyState",
     "SumeragiV2GlobalPhase",
     "SumeragiV2HeightContextId",
     "SumeragiV2ConsensusRound",
     "SumeragiV2BlockSubject",
+    "SumeragiV2ExecutionCommitment",
     "SumeragiV2QuorumCertificateRef",
     "SumeragiV2TimeoutCertificateRef",
     "SumeragiLaneSettlementReceipt",
@@ -11087,6 +11353,7 @@ class ToriiClient(_BaseToriiClient):
         }
         self._default_headers: Dict[str, str] = {"Accept": "application/json"}
         if default_headers:
+            _reject_default_onboarding_header(default_headers, "default_headers")
             self._default_headers.update(default_headers)
         self._auth_token: Optional[str] = None
         self._api_token: Optional[str] = None
@@ -11467,6 +11734,7 @@ class ToriiClient(_BaseToriiClient):
     def update_default_headers(self, headers: Mapping[str, str]) -> None:
         """Merge `headers` into the default header set applied to every request."""
 
+        _reject_default_onboarding_header(headers, "headers")
         self._default_headers.update(headers)
 
     def request_json(
@@ -13181,6 +13449,7 @@ class ToriiClient(_BaseToriiClient):
         self,
         additions: Sequence[Mapping[str, Any]],
         *,
+        fee_payment: Mapping[str, Any],
         retire: Optional[Sequence[int]] = None,
         chain_id: Optional[str] = None,
         authority: Optional[str] = None,
@@ -13291,6 +13560,7 @@ class ToriiClient(_BaseToriiClient):
             chain_id.strip(),
             authority.strip(),
             private_key_bytes,
+            fee_payment=fee_payment,
             instructions=[instruction],
             wait=wait,
             interval=interval,
@@ -14340,13 +14610,15 @@ class ToriiClient(_BaseToriiClient):
         json_body: Optional[Mapping[str, Any]] = None,
         timeout: Optional[float] = None,
         allow_retry: bool = True,
+        allow_redirects: bool = True,
     ) -> requests.Response:
         if json_body is not None and data is not None:
             raise ValueError("provide either `json_body` or `data`, not both")
 
         final_headers: Dict[str, str] = dict(self._default_headers)
         if headers:
-            final_headers.update(headers)
+            for name, value in headers.items():
+                _set_exact_header(final_headers, str(name), str(value))
 
         payload: Optional[bytes]
         if json_body is not None:
@@ -14371,6 +14643,7 @@ class ToriiClient(_BaseToriiClient):
                     headers=final_headers or None,
                     data=payload,
                     timeout=request_timeout,
+                    allow_redirects=allow_redirects,
                 )
             except requests.RequestException:
                 if attempt == max_attempts - 1:
@@ -14410,6 +14683,7 @@ class ToriiClient(_BaseToriiClient):
         authority: str,
         private_key: bytes,
         *,
+        fee_payment: Mapping[str, Any],
         instructions: Iterable["Instruction"] = (),
         creation_time_ms: Optional[int] = None,
         ttl_ms: Optional[int] = None,
@@ -14437,6 +14711,7 @@ class ToriiClient(_BaseToriiClient):
             chain_id,
             authority,
             private_key,
+            fee_payment=fee_payment,
             instructions=instructions,
             creation_time_ms=creation_time_ms,
             ttl_ms=ttl_ms,
@@ -14622,6 +14897,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         ttl_ms: Optional[int] = 900_000,
         nonce: Optional[int] = None,
         metadata: Optional[Mapping[str, Any]] = None,
@@ -14637,6 +14913,7 @@ class ToriiClient(_BaseToriiClient):
             TransactionConfig(
                 chain_id=effective_chain_id,
                 authority=effective_authority,
+                fee_payment=fee_payment,
                 ttl_ms=ttl_ms,
                 nonce=nonce,
                 metadata=metadata,
@@ -14700,6 +14977,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         instructions: Iterable["Instruction"],
@@ -14717,6 +14995,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             ttl_ms=ttl_ms,
             nonce=nonce,
             metadata=metadata,
@@ -14738,6 +15017,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         domain_id: str,
@@ -14752,6 +15032,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_domain(domain_id, metadata=domain_metadata)
@@ -14769,6 +15050,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14783,6 +15065,7 @@ class ToriiClient(_BaseToriiClient):
         return self.register_accounts_and_wait(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             private_key=private_key,
             private_key_hex=private_key_hex,
             accounts=[account_id],
@@ -14798,6 +15081,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         accounts: Iterable[str],
@@ -14812,6 +15096,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         metadata_by_account = dict(account_metadata or {})
@@ -14845,6 +15130,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14860,6 +15146,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.grant_account_permission(
@@ -14881,6 +15168,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         account_id: str,
@@ -14896,6 +15184,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.revoke_account_permission(
@@ -14917,6 +15206,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         definition_id: str,
@@ -14939,6 +15229,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_asset_definition(
@@ -14967,6 +15258,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -14981,6 +15273,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.mint_asset_quantity(
@@ -15006,6 +15299,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         mints: Iterable[Mapping[str, Any]],
@@ -15019,6 +15313,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         count = 0
@@ -15060,6 +15355,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -15074,6 +15370,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.burn_asset_quantity(
@@ -15099,6 +15396,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_id: str,
@@ -15114,6 +15412,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.transfer_asset_quantity(
@@ -15140,6 +15439,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15159,6 +15459,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.open_asset_lock(
@@ -15191,6 +15492,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15205,6 +15507,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.drawdown_asset_lock(escrow_id, amount)
@@ -15222,6 +15525,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15235,6 +15539,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.cancel_asset_lock(escrow_id)
@@ -15252,6 +15557,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         escrow_id: str,
@@ -15265,6 +15571,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.expire_asset_lock(escrow_id)
@@ -15282,6 +15589,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         transfers: Iterable[Mapping[str, Any]],
@@ -15295,6 +15603,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         count = 0
@@ -15344,6 +15653,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15363,6 +15673,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_zk_asset(
@@ -15388,6 +15699,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         proof: Mapping[str, Any],
@@ -15403,6 +15715,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.verify_proof(dict(proof))
@@ -15420,6 +15733,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         pool_id: str,
@@ -15436,6 +15750,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_asset_hidden_zk_pool(
@@ -15458,6 +15773,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15482,6 +15798,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.register_zk_ace_identity_commitment(
@@ -15533,6 +15850,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15553,6 +15871,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.rotate_zk_ace_identity_commitment(
@@ -15585,6 +15904,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15600,6 +15920,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.revoke_zk_ace_identity_commitment(
@@ -15621,6 +15942,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15641,6 +15963,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.shield_asset(
@@ -15667,6 +15990,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15684,6 +16008,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.zk_transfer_prepared(
@@ -15707,6 +16032,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         asset_definition_id: str,
@@ -15726,6 +16052,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.unshield_prepared(
@@ -15751,6 +16078,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         pool_id: str,
@@ -15768,6 +16096,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.asset_hidden_zk_transfer_prepared(
@@ -15791,6 +16120,7 @@ class ToriiClient(_BaseToriiClient):
         *,
         chain_id: str,
         authority: str,
+        fee_payment: Mapping[str, Any],
         private_key: Optional[bytes] = None,
         private_key_hex: Optional[str] = None,
         from_account_id: str,
@@ -15824,6 +16154,7 @@ class ToriiClient(_BaseToriiClient):
         draft = self._transaction_draft(
             chain_id=chain_id,
             authority=authority,
+            fee_payment=fee_payment,
             metadata=transaction_metadata,
         )
         draft.zk_ace_authorized_transfer(
@@ -16259,28 +16590,69 @@ class ToriiClient(_BaseToriiClient):
     def onboard_account(
         self,
         *,
+        onboarding_token: str,
         alias: str,
-        public_key_hex: str,
-        gas_asset_id: Optional[str] = None,
-        identity: Optional[Mapping[str, Any]] = None,
+        uaid: str,
+        account_id: Optional[str] = None,
+        public_key_hex: Optional[str] = None,
+        identity_commitment_hex: Optional[str] = None,
+        permissions: Optional[Sequence[str]] = None,
     ) -> requests.Response:
-        """Submit an account onboarding request and return the raw response."""
+        """Submit a JSON-only account onboarding request with an explicit route credential."""
 
+        exact_onboarding_token = _require_account_onboarding_token(onboarding_token)
+        if (account_id is None) == (public_key_hex is None):
+            raise ValueError(
+                "onboard_account requires exactly one of account_id or public_key_hex"
+            )
         payload: Dict[str, Any] = {
             "alias": _require_non_empty_string(alias, "onboard_account.alias"),
-            "public_key_hex": _require_non_empty_string(
+            "uaid": _normalize_uaid_literal(uaid, context="onboard_account.uaid"),
+        }
+        if account_id is not None:
+            canonical_account_id = self._normalize_canonical_account_id(
+                account_id,
+                "onboard_account.account_id",
+            )
+            if "@" in canonical_account_id:
+                raise ValueError("onboard_account.account_id must be a canonical I105 account id")
+            payload["account_id"] = canonical_account_id
+        else:
+            assert public_key_hex is not None
+            payload["public_key_hex"] = _normalize_32_byte_hex(
                 public_key_hex,
                 "onboard_account.public_key_hex",
-            ),
-        }
-        if gas_asset_id is not None:
-            payload["gas_asset_id"] = _require_non_empty_string(
-                gas_asset_id,
-                "onboard_account.gas_asset_id",
             )
-        if identity is not None:
-            payload["identity"] = _json_safe_value(identity)
-        return self._request("POST", "/v1/accounts/onboard", json_body=payload)
+        if identity_commitment_hex is not None:
+            payload["identity_commitment_hex"] = _normalize_32_byte_hex(
+                identity_commitment_hex,
+                "onboard_account.identity_commitment_hex",
+            )
+        if permissions is not None:
+            if isinstance(permissions, (str, bytes, bytearray)):
+                raise TypeError("onboard_account.permissions must be a sequence of strings")
+            normalized_permissions: List[str] = []
+            for index, permission in enumerate(permissions):
+                normalized = _require_non_empty_string(
+                    permission,
+                    f"onboard_account.permissions[{index}]",
+                )
+                if normalized not in normalized_permissions:
+                    normalized_permissions.append(normalized)
+            if normalized_permissions:
+                payload["permissions"] = normalized_permissions
+        return self._request(
+            "POST",
+            "/v1/accounts/onboard",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                ACCOUNT_ONBOARDING_TOKEN_HEADER: exact_onboarding_token,
+            },
+            json_body=payload,
+            allow_retry=False,
+            allow_redirects=False,
+        )
 
     def find_domain(self, domain_id: str, *, limit: int = 200) -> Optional[Mapping[str, Any]]:
         """Fetch a domain by id, falling back to paginated listing on route gaps."""
@@ -16352,22 +16724,6 @@ class ToriiClient(_BaseToriiClient):
         if not isinstance(payload, Mapping):
             raise RuntimeError("SNS policy endpoint returned non-object payload")
         return payload
-
-    def submit_sns_name_registration(self, request: Mapping[str, Any]) -> requests.Response:
-        """Submit an SNS registration request and return the raw response."""
-
-        return self._request(
-            "POST",
-            "/v1/sns/names",
-            json_body=dict(_json_safe_value(dict(request))),
-        )
-
-    def register_sns_name(self, request: Mapping[str, Any]) -> Optional[Any]:
-        """Submit an SNS registration request and decode a successful response."""
-
-        response = self.submit_sns_name_registration(request)
-        self._expect_status(response, {200, 201, 202})
-        return self._maybe_json(response)
 
     def request_zk_verifying_key(self, backend: str, name: str) -> requests.Response:
         """Fetch a ZK verifying-key registry entry and return the raw response."""
@@ -17247,100 +17603,17 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, {200, 202})
         return self._maybe_json(response)
 
-    def deploy_contract(self, request: Mapping[str, Any]) -> Optional[Any]:
-        """Backward-compatible raw deploy wrapper.
-
-        For the typed convenience path that accepts a code file or base64 payload,
-        use :meth:`deploy_contract_bundle`.
-        """
-
-        response = self._request(
-            "POST",
-            "/v1/contracts/deploy",
-            data=json.dumps(request).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-        )
-        self._expect_status(response, {200, 202})
-        return self._maybe_json(response)
-
-    def deploy_contract_bundle(
-        self,
-        *,
-        authority: str,
-        private_key: str,
-        contract_alias: str,
-        code_b64: Optional[str] = None,
-        code_file: Optional[Union[str, os.PathLike[str]]] = None,
-        lease_expiry_ms: Optional[int] = None,
-        wait: bool = False,
-        timeout_ms: Optional[int] = 120_000,
-        interval: float = 1.0,
-        scope: str = "global",
-        success_statuses: Optional[Iterable[str]] = None,
-        failure_statuses: Optional[Iterable[str]] = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
-        gas_limit: Any = None,
-        gov_manifest_approvers: Optional[Iterable[str]] = None,
-    ) -> Any:
-        """Deploy a compiled contract through the typed Torii endpoint wrapper.
-
-        This helper deliberately leaves the older ``deploy_contract(request)``
-        method unchanged for callers that still need raw payload control.
-        """
-
-        if (code_b64 is None) == (code_file is None):
-            raise ValueError("provide exactly one of `code_b64` or `code_file`")
-        resolved_code_b64 = code_b64
-        if code_file is not None:
-            with open(os.fspath(code_file), "rb") as handle:
-                resolved_code_b64 = base64.b64encode(handle.read()).decode("ascii")
-        request: Dict[str, Any] = {
-            "authority": authority,
-            "private_key": private_key,
-            "code_b64": str(resolved_code_b64),
-            "contract_alias": contract_alias,
-        }
-        if lease_expiry_ms is not None:
-            request["lease_expiry_ms"] = lease_expiry_ms
-        if gas_asset_id is not None:
-            request["gas_asset_id"] = str(gas_asset_id)
-        if fee_sponsor is not None:
-            request["fee_sponsor"] = str(fee_sponsor)
-        if gas_limit is not None:
-            request["gas_limit"] = gas_limit
-        if gov_manifest_approvers is not None:
-            approvers = [
-                str(approver).strip()
-                for approver in gov_manifest_approvers
-                if str(approver).strip()
-            ]
-            if approvers:
-                request["gov_manifest_approvers"] = approvers
-        typed_response = self.deploy_contract(request)
-        if not wait:
-            return self._contract_response_payload(typed_response)
-        return self._wait_for_contract_response(
-            typed_response,
-            timeout_ms=timeout_ms,
-            interval=interval,
-            scope=scope,
-            success_statuses=success_statuses,
-            failure_statuses=failure_statuses,
-        )
 
     def call_contract_and_wait(
         self,
         *,
         authority: str,
         private_key: str,
-        gas_limit: Any,
+        fee_payment: Mapping[str, Any],
         entrypoint: str,
         contract_address: Optional[str] = None,
         contract_alias: Optional[str] = None,
         payload: Any = None,
-        gas_asset_id: Optional[str] = None,
-        fee_sponsor: Optional[str] = None,
         wait: bool = True,
         timeout_ms: Optional[int] = 120_000,
         interval: float = 1.0,
@@ -17357,9 +17630,7 @@ class ToriiClient(_BaseToriiClient):
             contract_alias=contract_alias,
             entrypoint=entrypoint,
             payload=payload,
-            gas_asset_id=gas_asset_id,
-            fee_sponsor=fee_sponsor,
-            gas_limit=gas_limit,
+            fee_payment=fee_payment,
         )
         if not wait:
             return self._contract_response_payload(typed_response)

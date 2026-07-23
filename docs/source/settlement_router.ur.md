@@ -108,7 +108,7 @@ mirroring the summary described in `docs/source/nexus_fee_model.md`.
 
 Every receipt contains:
 
-- `source_id`, `local_amount_micro`, `xor_due`, `xor_after_haircut`, and `xor_variance_micro` (the safety margin consumed per transaction).
+- `source_id`, `local_amount`, `xor_due`, `xor_after_haircut`, and `xor_variance` (the safety margin consumed per transaction).
 - UTC millisecond timestamp (rounded for deterministic serialisation).
 - Liquidity profile, epsilon, and TWAP parameters recorded in the builder so
   nightly reconciliation can reconstruct the quote inputs.
@@ -163,7 +163,7 @@ or a treasury swapline top-up when buffers fall. When adding those hooks:
    undefined conversion ratios.
 2. **Receipt reconciliation** - Pull `lane_settlement_commitments` from
    `/v1/sumeragi/status` or the nightly export, verify that the sums of
-   `xor_due_micro` and `xor_after_haircut_micro` match ledger expectations, and
+   `xor_due` and `xor_after_haircut` match ledger expectations, and
    archive the attached parameters.
 3. **Buffer monitoring** - Track the buffer soft/hard thresholds via telemetry.
    When the soft alert triggers, notify treasury and consider drawing on an

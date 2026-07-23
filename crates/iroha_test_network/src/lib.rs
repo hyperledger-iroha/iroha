@@ -37,6 +37,7 @@ pub use config::chain_id;
 use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
+use iroha::data_model::block::consensus_v2::{QuorumCertificateRef, SumeragiV2Status};
 use iroha::{client::Client, data_model::prelude::*};
 use iroha_config::base::{
     ParameterOrigin,
@@ -50,18 +51,20 @@ use iroha_core::sumeragi::consensus::{
 use iroha_crypto::{
     Algorithm, ExposedPrivateKey, Hash as CryptoHash, KeyPair, PrivateKey, PublicKey,
 };
-#[cfg(test)]
-use iroha_data_model::da::commitment::DaProofPolicyBundle;
 use iroha_data_model::{
     ChainId,
-    account::{AccountAddress, AccountId},
+    account::AccountId,
+    alias_setup::{
+        AccountAliasName, AccountAliasRoleV1, AccountProvisionV1, AliasAccountIntentV1,
+        AliasDataSpaceIntentV1, AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1,
+        AliasQuoteGuardV1, ResolvedAccountAliasV1, ResolvedDataSpaceV1, ResolvedDomainV1,
+    },
     block::consensus::{ConsensusGenesisModeParams, ConsensusGenesisParams},
     domain::NewDomain,
     isi::{
         InstructionBox, SetParameter,
-        register::RegisterBox,
+        alias_setup::EnsureAlias,
         set_instruction_registry,
-        sns::RegisterSnsName,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     metadata::Metadata,
@@ -72,13 +75,13 @@ use iroha_data_model::{
             SumeragiNposParameters, consensus_metadata,
         },
     },
-    sns::{
-        DOMAIN_NAME_SUFFIX_ID, NameControllerV1, NameStatus, PaymentProofV1, RegisterNameRequestV1,
-    },
+    sns::NameStatus,
     transaction::Executable,
     transaction::signed::TransactionResultInner,
     trigger::DataTriggerSequence,
 };
+#[cfg(test)]
+use iroha_data_model::{da::commitment::DaProofPolicyBundle, isi::register::RegisterBox};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
@@ -97,22 +100,25 @@ use norito::json::{self, Value as JsonValue};
 // no external dependency needed: versioned encoding is a single leading byte (1)
 use tokio::{
     fs::File,
-    io::{AsyncBufReadExt, AsyncRead, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader},
+    net::{TcpListener as TokioTcpListener, TcpStream},
     process::Child,
     runtime::{self, Runtime},
     sync::{Mutex, Notify, broadcast, oneshot, watch},
-    task::{JoinSet, spawn_blocking},
+    task::{JoinHandle, JoinSet, spawn_blocking},
     time::timeout,
 };
 use toml::{Table, Value, map::Entry};
 use tracing::{Instrument, debug, error, info, info_span, warn};
 
-use crate::config::ensure_genesis_results;
+use crate::config::ensure_genesis_results_with_runtime_config;
 
 /// Consensus mode frozen into the test network's signed genesis profile.
 pub use iroha_data_model::block::consensus_v2::ConsensusMode;
 
-const TEST_SNS_LEASE_PAYMENT_NANOS: u64 = 500_000_000;
+const TEST_SNS_LEASE_PAYMENT: &str = "0.5";
+const TEST_SNS_POLICY_VERSION: u16 = 1;
+const TEST_SNS_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 const TEST_SNS_LEASE_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(120);
 const TEST_SNS_LEASE_VISIBILITY_POLL: Duration = Duration::from_millis(250);
 
@@ -141,75 +147,130 @@ pub fn genesis_factory_with_post_topology(
     )
 }
 
-fn test_domain_name_controller(account: &AccountId) -> Result<NameControllerV1> {
-    let address = AccountAddress::from_account_id(account)
-        .map_err(|err| eyre!("convert account `{account}` to SNS controller: {err}"))?;
-    Ok(NameControllerV1::account(&address))
-}
-
-fn test_domain_register_request(
-    domain: &DomainId,
-    owner: &AccountId,
-) -> Result<RegisterNameRequestV1> {
-    test_domain_register_request_for_owner_payer(domain, owner, owner)
-}
-
-fn test_domain_register_request_for_owner_payer(
-    domain: &DomainId,
-    owner: &AccountId,
-    payer: &AccountId,
-) -> Result<RegisterNameRequestV1> {
-    let domain_label = domain.to_string();
-    Ok(RegisterNameRequestV1 {
-        selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
-            .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
-        owner: owner.clone(),
-        controllers: vec![test_domain_name_controller(owner)?],
-        term_years: 1,
-        pricing_class_hint: None,
-        payment: PaymentProofV1 {
-            asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            gross_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-            net_amount: TEST_SNS_LEASE_PAYMENT_NANOS,
-            settlement_tx: Json::from("mock-settlement"),
-            payer: payer.clone(),
-            signature: Json::from("mock-signature"),
-        },
-        governance: None,
-        metadata: Metadata::default(),
+fn test_domain_dataspace_id(domain: &DomainId) -> Result<DataSpaceId> {
+    iroha_core::sns::dataspace_id_for_sns_alias(domain.dataspace().as_ref()).ok_or_else(|| {
+        eyre!(
+            "derive deterministic dataspace id for domain `{domain}`; pass an explicit id for a static catalog mapping"
+        )
     })
 }
 
-/// Build the SNS lease instruction required before a runtime domain registration.
-pub fn domain_registration_lease_instruction_for_owner_payer(
+fn test_domain_setup_instruction(
     domain: &DomainId,
+    dataspace_id: DataSpaceId,
     owner: &AccountId,
-    payer: &AccountId,
+) -> Result<EnsureAlias> {
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::Domain(AliasDomainIntentV1 {
+            domain: ResolvedDomainV1::new(domain.clone(), dataspace_id),
+            owner: owner.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    ))
+}
+
+/// Build one declarative instruction that ensures a domain and its lease state.
+pub fn domain_setup_instruction_in_dataspace(
+    domain: &DomainId,
+    dataspace_id: DataSpaceId,
+    owner: &AccountId,
 ) -> Result<InstructionBox> {
-    Ok(
-        RegisterSnsName::new(test_domain_register_request_for_owner_payer(
-            domain, owner, payer,
-        )?)
-        .into(),
+    Ok(test_domain_setup_instruction(domain, dataspace_id, owner)?.into())
+}
+
+/// Build one declarative instruction for a deterministically mapped domain.
+pub fn domain_setup_instruction(domain: &DomainId, owner: &AccountId) -> Result<InstructionBox> {
+    domain_setup_instruction_in_dataspace(domain, test_domain_dataspace_id(domain)?, owner)
+}
+
+/// Build one declarative dataspace-alias setup instruction.
+pub fn dataspace_setup_instruction(
+    alias: &str,
+    dataspace_id: DataSpaceId,
+    owner: &AccountId,
+) -> Result<InstructionBox> {
+    let canonical_name = alias
+        .parse()
+        .wrap_err_with(|| format!("parse test dataspace alias `{alias}`"))?;
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::Dataspace(AliasDataSpaceIntentV1 {
+            dataspace: ResolvedDataSpaceV1::new(canonical_name, dataspace_id),
+            owner: owner.clone(),
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    )
+    .into())
+}
+
+/// Build one declarative account-alias setup instruction with an explicit dataspace mapping.
+pub fn account_alias_setup_instruction_in_dataspace(
+    alias_literal: &str,
+    dataspace_id: DataSpaceId,
+    target_account: &AccountId,
+    provision: AccountProvisionV1,
+    role: AccountAliasRoleV1,
+) -> Result<InstructionBox> {
+    let canonical_name = alias_literal
+        .parse::<AccountAliasName>()
+        .wrap_err_with(|| format!("parse test account alias `{alias_literal}`"))?;
+    let payment_asset = AssetDefinitionId::parse_address_literal(TEST_SNS_PAYMENT_ASSET_DEFINITION)
+        .wrap_err("parse test SNS payment asset definition")?;
+    Ok(EnsureAlias::new(
+        AliasIntentV1::AccountAlias(AliasAccountIntentV1 {
+            alias: ResolvedAccountAliasV1::new(canonical_name, dataspace_id),
+            target_account: target_account.clone(),
+            provision,
+            role,
+        }),
+        AliasLeaseAcquisitionV1::new(1, None),
+        AliasQuoteGuardV1 {
+            expected_policy_version: TEST_SNS_POLICY_VERSION,
+            expected_payment_asset: payment_asset,
+            max_amount: TEST_SNS_LEASE_PAYMENT.parse().expect("valid test payment"),
+            valid_until_ms: u64::MAX,
+        },
+    )
+    .into())
+}
+
+/// Build one declarative account-alias setup instruction for a deterministically mapped alias.
+pub fn account_alias_setup_instruction(
+    alias_literal: &str,
+    target_account: &AccountId,
+    provision: AccountProvisionV1,
+    role: AccountAliasRoleV1,
+) -> Result<InstructionBox> {
+    let parsed = alias_literal
+        .parse::<AccountAliasName>()
+        .wrap_err_with(|| format!("parse test account alias `{alias_literal}`"))?;
+    let dataspace_id = iroha_core::sns::dataspace_id_for_sns_alias(parsed.dataspace.as_ref())
+        .ok_or_else(|| eyre!("derive deterministic dataspace id for alias `{alias_literal}`"))?;
+    account_alias_setup_instruction_in_dataspace(
+        alias_literal,
+        dataspace_id,
+        target_account,
+        provision,
+        role,
     )
 }
 
-/// Build the SNS lease instruction required before a runtime domain registration.
-pub fn domain_registration_lease_instruction(
-    domain: &DomainId,
-    owner: &AccountId,
-) -> Result<InstructionBox> {
-    domain_registration_lease_instruction_for_owner_payer(domain, owner, owner)
-}
-
-fn is_duplicate_sns_selector_error(err: &Report) -> bool {
-    err.chain().any(|cause| {
-        let message = cause.to_string();
-        message.contains("selector `") && message.contains(" is already registered")
-    })
-}
-
-fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+fn domain_alias_record_visible_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_label = domain.to_string();
     match client
         .sns()
@@ -228,9 +289,19 @@ fn domain_registration_lease_visible_to_client(client: &Client, domain: &DomainI
     }
 }
 
-fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
+fn domain_setup_ready_to_client(client: &Client, domain: &DomainId) -> Result<bool> {
     let domain_exists = match client.query(FindDomains::new()).execute_all() {
-        Ok(domains) => domains.into_iter().any(|existing| existing.id() == domain),
+        Ok(domains) => match domains.into_iter().find(|existing| existing.id() == domain) {
+            Some(existing) if existing.owned_by() == &client.account => true,
+            Some(existing) => {
+                return Err(eyre!(
+                    "domain `{domain}` is owned by `{}`, not setup authority `{}`",
+                    existing.owned_by(),
+                    client.account
+                ));
+            }
+            None => false,
+        },
         Err(err) => {
             let report = Report::from(err);
             if torii_request_error_is_transient(&report) {
@@ -246,58 +317,59 @@ fn domain_registration_ready_to_client(client: &Client, domain: &DomainId) -> Re
             }
         }
     };
-    if domain_exists {
-        return Ok(true);
-    }
-    domain_registration_lease_visible_to_client(client, domain)
+    domain_exists
+        .then(|| domain_alias_record_visible_to_client(client, domain))
+        .transpose()
+        .map(|visible| visible.unwrap_or(false))
 }
 
-fn wait_for_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<bool> {
+fn wait_for_domain_setup(client: &Client, domain: &DomainId) -> Result<bool> {
     let deadline = Instant::now() + TEST_SNS_LEASE_VISIBILITY_TIMEOUT;
     while Instant::now() < deadline {
-        if domain_registration_ready_to_client(client, domain)? {
+        if domain_setup_ready_to_client(client, domain)? {
             return Ok(true);
         }
         std::thread::sleep(TEST_SNS_LEASE_VISIBILITY_POLL);
     }
-    domain_registration_ready_to_client(client, domain)
+    domain_setup_ready_to_client(client, domain)
 }
 
-/// Ensure a runtime domain registration has the SNS lease required by the executor.
-pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> Result<()> {
-    if domain_registration_ready_to_client(client, domain)? {
+/// Ensure a domain and all of its lease-derived state in one ordinary transaction.
+pub fn ensure_domain_setup_in_dataspace(
+    client: &Client,
+    domain: &DomainId,
+    dataspace_id: DataSpaceId,
+) -> Result<()> {
+    if domain_setup_ready_to_client(client, domain)? {
         return Ok(());
     }
 
-    let request = test_domain_register_request(domain, &client.account)?;
-    match client.submit_blocking(RegisterSnsName::new(request)) {
+    match client.submit_blocking(
+        test_domain_setup_instruction(domain, dataspace_id, &client.account)?,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         Ok(_) => {
-            if wait_for_domain_registration_lease(client, domain)? {
+            if wait_for_domain_setup(client, domain)? {
                 Ok(())
             } else {
                 Err(eyre!(
-                    "domain `{domain}` SNS lease was not visible within {:?}",
+                    "domain `{domain}` declarative setup was not visible within {:?}",
                     TEST_SNS_LEASE_VISIBILITY_TIMEOUT
                 ))
-            }
-        }
-        Err(err) if is_duplicate_sns_selector_error(&err) => {
-            if wait_for_domain_registration_lease(client, domain)? {
-                Ok(())
-            } else {
-                Err(err)
             }
         }
         Err(err) => Err(err),
     }
 }
 
+/// Ensure a domain whose dataspace uses the deterministic dynamic mapping.
+pub fn ensure_domain_setup(client: &Client, domain: &DomainId) -> Result<()> {
+    ensure_domain_setup_in_dataspace(client, domain, test_domain_dataspace_id(domain)?)
+}
+
 /// Ensure a runtime domain registration has the SNS lease required by the executor on every peer
 /// in a test network.
-pub fn ensure_domain_registration_lease_for_network(
-    network: &Network,
-    domain: &DomainId,
-) -> Result<()> {
+pub fn ensure_domain_setup_for_network(network: &Network, domain: &DomainId) -> Result<()> {
     let mut peers = network.peers().iter().collect::<Vec<_>>();
     peers.sort_by(|left, right| left.id().cmp(&right.id()));
     let clients = peers
@@ -308,11 +380,11 @@ pub fn ensure_domain_registration_lease_for_network(
         return Ok(());
     };
 
-    ensure_domain_registration_lease(primary, domain)?;
+    ensure_domain_setup(primary, domain)?;
     for client in replicas {
-        if !wait_for_domain_registration_lease(client, domain)? {
+        if !wait_for_domain_setup(client, domain)? {
             return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
+                "domain `{domain}` declarative setup was not visible to peer `{}` within {:?}",
                 client.torii_url,
                 TEST_SNS_LEASE_VISIBILITY_TIMEOUT
             ));
@@ -321,129 +393,41 @@ pub fn ensure_domain_registration_lease_for_network(
     Ok(())
 }
 
-fn ensure_domain_registration_leases(client: &Client, domains: &BTreeSet<DomainId>) -> Result<()> {
-    let mut registrations = Vec::new();
-    for domain in domains {
-        if domain_registration_ready_to_client(client, domain)? {
-            continue;
-        }
-        let request = test_domain_register_request(domain, &client.account)?;
-        registrations.push(RegisterSnsName::new(request));
+/// Ensure a runtime domain declaratively.
+pub fn submit_ensure_domain(client: &Client, domain: NewDomain) -> Result<()> {
+    if domain.logo.is_some() || !domain.metadata.is_empty() {
+        return Err(eyre!(
+            "declarative test domain setup requires empty immutable metadata and no logo"
+        ));
     }
-
-    if !registrations.is_empty() {
-        match client.submit_all_blocking(registrations) {
-            Ok(_) => {}
-            Err(err) if is_duplicate_sns_selector_error(&err) => {
-                for domain in domains {
-                    ensure_domain_registration_lease(client, domain)?;
-                }
-                return Ok(());
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
-    for domain in domains {
-        if !wait_for_domain_registration_lease(client, domain)? {
-            return Err(eyre!(
-                "domain `{domain}` SNS lease was not visible within {:?}",
-                TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-            ));
-        }
-    }
-
-    Ok(())
+    ensure_domain_setup(client, &domain.id)
 }
 
-/// Ensure SNS leases exist for every runtime `Register<Domain>` instruction in an executable.
-pub fn ensure_domain_registration_leases_for_executable(
-    client: &Client,
-    executable: &Executable,
-) -> Result<()> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-    let mut domains = BTreeSet::new();
-    for instruction in instructions {
-        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
-            continue;
-        };
-        if let RegisterBox::Domain(register_domain) = register {
-            domains.insert(register_domain.object.id.clone());
-        }
-    }
-    ensure_domain_registration_leases(client, &domains)
-}
-
-/// Ensure SNS leases exist on every peer for every runtime `Register<Domain>` instruction in an
-/// executable.
-pub fn ensure_domain_registration_leases_for_network_executable(
-    network: &Network,
-    executable: &Executable,
-) -> Result<()> {
-    let Executable::Instructions(instructions) = executable else {
-        return Ok(());
-    };
-    let mut domains = BTreeSet::new();
-    for instruction in instructions {
-        let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
-            continue;
-        };
-        if let RegisterBox::Domain(register_domain) = register {
-            domains.insert(register_domain.object.id.clone());
-        }
-    }
-
-    let mut peers = network.peers().iter().collect::<Vec<_>>();
-    peers.sort_by(|left, right| left.id().cmp(&right.id()));
-    let clients = peers
-        .into_iter()
-        .map(NetworkPeer::client)
-        .collect::<Vec<_>>();
-    let Some((primary, replicas)) = clients.split_first() else {
-        return Ok(());
-    };
-
-    ensure_domain_registration_leases(primary, &domains)?;
-    for client in replicas {
-        for domain in &domains {
-            if !wait_for_domain_registration_lease(client, domain)? {
-                return Err(eyre!(
-                    "domain `{domain}` SNS lease was not visible to peer `{}` within {:?}",
-                    client.torii_url,
-                    TEST_SNS_LEASE_VISIBILITY_TIMEOUT
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Register a runtime domain after provisioning its required SNS lease.
-pub fn submit_register_domain_with_lease(client: &Client, domain: NewDomain) -> Result<()> {
-    ensure_domain_registration_lease(client, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
-    Ok(())
-}
-
-/// Register a runtime domain after provisioning its required SNS lease on every peer in a test
-/// network.
-pub fn submit_register_domain_with_network_lease(
+/// Ensure a runtime domain declaratively and wait for every peer to observe it.
+pub fn submit_ensure_domain_for_network(
     network: &Network,
     client: &Client,
     domain: NewDomain,
 ) -> Result<()> {
-    ensure_domain_registration_lease_for_network(network, &domain.id)?;
-    client.submit_blocking(Register::domain(domain))?;
-    Ok(())
+    if client.account != network.client().account {
+        return Err(eyre!(
+            "network domain setup must be submitted by the network client authority"
+        ));
+    }
+    if domain.logo.is_some() || !domain.metadata.is_empty() {
+        return Err(eyre!(
+            "declarative test domain setup requires empty immutable metadata and no logo"
+        ));
+    }
+    ensure_domain_setup_for_network(network, &domain.id)
 }
 
 const DEFAULT_BLOCK_SYNC: Duration = Duration::from_millis(150);
 // Fast signed cadence for local test networks; callers can opt into Sumeragi defaults.
 const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
 // Sumeragi default, used only when the builder is explicitly told to keep it.
-const DEFAULT_BLOCK_CADENCE: Duration = Duration::from_secs(2);
+const DEFAULT_BLOCK_CADENCE: Duration =
+    Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
 // Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
@@ -487,7 +471,7 @@ const STARTUP_STATUS_WARN_INTERVAL: Duration = Duration::from_secs(5);
 /// Low-priority `/status` fallback cadence after startup has already been observed.
 const STATUS_FALLBACK_INTERVAL: Duration = Duration::from_secs(2);
 
-type GenesisBuilderFn = Box<
+type GenesisBuilderFn = Arc<
     dyn Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
 >;
 
@@ -1706,7 +1690,7 @@ fn ensure_binary_fresh(
     if needs_build && !allow_build {
         return Err(eyre!(
             "cannot build `{name}` (pkg `{pkg}`) while another Cargo invocation is running; \
-             build it ahead of time with `cargo build -p {pkg}` or rerun with \
+             build it ahead of time with `cargo build --locked -p {pkg}` or rerun with \
              IROHA_TEST_SKIP_BUILD=1 to reuse an existing binary, \
              or set IROHA_TEST_ALLOW_REENTRANT_BUILD=1 to force a rebuild; target_dir={}",
             target_dir.display()
@@ -1728,7 +1712,7 @@ fn ensure_binary_fresh(
             attempt = attempt.saturating_add(1);
 
             let mut command = std::process::Command::new(&cargo_program);
-            command.arg("build").arg("-p").arg(pkg);
+            command.arg("build").arg("--locked").arg("-p").arg(pkg);
             match profile {
                 "debug" => {}
                 "release" => {
@@ -1807,6 +1791,14 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
+const fn must_validate_binary_freshness(
+    skip_build: bool,
+    running_under_cargo: bool,
+    allow_reentrant: bool,
+) -> bool {
+    !skip_build && (!running_under_cargo || allow_reentrant)
+}
+
 fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
     let cached = cache.get()?;
     if cached.exists() {
@@ -1828,8 +1820,8 @@ impl Program {
     /// - `CARGO_BIN_EXE_*` if Cargo provided a direct path to the built binary
     /// - Common target locations (debug/release) under the repo root (defaulting to
     ///   `target/iroha-test-network`, or under `IROHA_TEST_TARGET_DIR` / `CARGO_TARGET_DIR` when set)
-    /// - Rebuilds with `cargo build -p <pkg>` when the cached fingerprint disagrees with the current
-    ///   workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
+    /// - Rebuilds with `cargo build --locked -p <pkg>` when the cached fingerprint disagrees with
+    ///   the current workspace state (skipped when `IROHA_TEST_SKIP_BUILD=1`).
     ///
     /// # Errors
     /// If the path is not found (and build did not help).
@@ -1903,21 +1895,6 @@ impl Program {
             .then(|| current_exe_colocated_binary(&bin))
             .flatten();
 
-        if let Some(found) = colocated_candidate.clone() {
-            match self {
-                Program::Irohad => {
-                    let _ = IROHAD_BIN.set(found.clone());
-                }
-                Program::IrohadMessageControl => {
-                    unreachable!("isolated message-control daemon never uses a colocated binary")
-                }
-                Program::Iroha => {
-                    let _ = IROHA_BIN.set(found.clone());
-                }
-            }
-            return Ok(found);
-        }
-
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
         let target_dir = isolated_target_subdir.map_or_else(
@@ -1963,7 +1940,9 @@ impl Program {
         });
         let running_under_cargo = std::env::var_os("CARGO").is_some();
         let allow_reentrant = allow_reentrant_build(running_under_cargo);
-        if running_under_cargo && !skip_build && !allow_reentrant {
+        let validate_freshness =
+            must_validate_binary_freshness(skip_build, running_under_cargo, allow_reentrant);
+        if !skip_build && !validate_freshness {
             if let Some(found) = prebuild_candidate.clone() {
                 warn!(
                     %name,
@@ -1985,7 +1964,7 @@ impl Program {
                 return Ok(found);
             }
         }
-        if !skip_build {
+        if validate_freshness {
             ensure_binary_fresh(
                 &repo,
                 pkg,
@@ -2032,7 +2011,7 @@ impl Program {
             "Could not resolve path of `{name}` program. Have you built it?\n\
                Tried: {candidates_txt}\n  \
                Solutions:\n  \
-               1. Run `cargo build -p {pkg}`\n  \
+               1. Run `cargo build --locked -p {pkg}`\n  \
                2. Provide a different path via `{env}` env var"
         ))
     }
@@ -2353,7 +2332,13 @@ set {NETWORK_PERMIT_WAIT_TIMEOUT_ENV}=0 to disable timeout or provide an isolate
 /// Network of peers
 pub struct Network {
     env: Environment,
+    // Keep this field as the validator roster: `peers()` predates observer
+    // support and many consensus tests intentionally use its length as quorum
+    // input.
     peers: Vec<NetworkPeer>,
+    observers: Vec<NetworkPeer>,
+    observer_advertised_p2p_addresses: HashMap<PeerId, SocketAddr>,
+    observer_slow_reader_relays: Option<ObserverSlowReaderRelays>,
     next_peer_index: AtomicUsize,
 
     block_cadence: Duration,
@@ -2380,18 +2365,22 @@ pub struct Network {
 
 impl Drop for Network {
     fn drop(&mut self) {
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.abort();
+        }
         let keep_tempdir = std::env::var_os(KEEP_TEMPDIR_ENV).is_some();
-        if self.peers.iter().any(|peer| peer.is_running()) {
-            let peers = self.peers.clone();
+        if self
+            .peers
+            .iter()
+            .chain(&self.observers)
+            .any(NetworkPeer::is_running)
+        {
+            let peers = self.peers.iter().chain(&self.observers).cloned().collect();
             let dir = self.env.dir.clone();
             let keep = keep_tempdir;
             std::thread::spawn(move || match runtime::Runtime::new() {
                 Ok(rt) => rt.block_on(async {
-                    for peer in peers {
-                        if peer.is_running() {
-                            let _ = peer.shutdown().await;
-                        }
-                    }
+                    shutdown_peers_for_drop(peers).await;
                     if keep {
                         info!(
                             dir = ?dir,
@@ -2430,6 +2419,12 @@ impl Drop for Network {
     }
 }
 
+async fn shutdown_peers_for_drop(peers: Vec<NetworkPeer>) {
+    for peer in peers {
+        let _ = peer.shutdown_if_started().await;
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ConsensusBootstrapProfile {
     params: ConsensusGenesisParams,
@@ -2460,7 +2455,9 @@ impl Network {
     fn log_startup_diagnostics(&self) {
         let handshake_fingerprint = self.consensus_profile.fingerprint();
         debug!(
-            total_peers = self.peers.len(),
+            validators = self.peers.len(),
+            observers = self.observers.len(),
+            total_peers = self.peers.len().saturating_add(self.observers.len()),
             consensus_block_cadence_ms = self.consensus_profile.params.block_cadence_ms.get(),
             "sumeragi configuration snapshot prior to peer bootstrap"
         );
@@ -2477,7 +2474,7 @@ impl Network {
         );
     }
 
-    /// Add a peer to the network.
+    /// Add a validator peer to the network and its genesis topology.
     pub fn add_peer(&mut self, peer: &NetworkPeer) {
         self.peers.push(peer.clone());
         if let Some(pop) = peer.genesis_pop() {
@@ -2487,7 +2484,7 @@ impl Network {
         self.cached_genesis_augmented = OnceLock::new();
     }
 
-    /// Remove a peer from the network.
+    /// Remove a validator peer from the network and its genesis topology.
     pub fn remove_peer(&mut self, peer: &NetworkPeer) {
         self.peers.retain(|x| x != peer);
         if let Some(bls_pk) = peer.bls_public_key() {
@@ -2499,12 +2496,83 @@ impl Network {
         self.cached_genesis_augmented = OnceLock::new();
     }
 
-    /// Access network peers
+    /// Access voting validator peers.
+    ///
+    /// This preserves the pre-observer meaning of `peers()`: callers may use
+    /// its length for consensus quorum calculations without counting replicas.
     pub fn peers(&self) -> &Vec<NetworkPeer> {
         &self.peers
     }
 
-    /// Get the next peer in deterministic round-robin order.
+    /// Access voting validator peers explicitly.
+    pub fn validators(&self) -> &[NetworkPeer] {
+        &self.peers
+    }
+
+    /// Access signed, non-voting observer replicas.
+    pub fn observers(&self) -> &[NetworkPeer] {
+        &self.observers
+    }
+
+    /// Snapshot transparent slow-reader relay activity, when the harness hook is enabled.
+    pub fn observer_slow_reader_relay_stats(&self) -> Option<ObserverSlowReaderRelayStats> {
+        self.observer_slow_reader_relays
+            .as_ref()
+            .map(ObserverSlowReaderRelays::stats)
+    }
+
+    /// Snapshot transparent slow-reader relay activity for one observer.
+    pub fn observer_slow_reader_relay_stats_for(
+        &self,
+        observer: &PeerId,
+    ) -> Option<ObserverSlowReaderRelayStats> {
+        self.observer_slow_reader_relays
+            .as_ref()?
+            .stats_for(observer)
+    }
+
+    /// Pause or resume validator-to-observer forwarding on every transparent
+    /// slow-reader relay. Returns `false` when this network has no relay hook.
+    pub fn set_observer_slow_reader_relays_paused(&self, paused: bool) -> bool {
+        let Some(relays) = &self.observer_slow_reader_relays else {
+            return false;
+        };
+        relays.set_paused(paused);
+        true
+    }
+
+    /// Iterate over validators followed by observers in stable builder order.
+    pub fn all_peers(&self) -> impl Iterator<Item = &NetworkPeer> {
+        self.peers.iter().chain(&self.observers)
+    }
+
+    fn advertised_p2p_address(&self, peer: &NetworkPeer) -> SocketAddr {
+        self.observer_advertised_p2p_addresses
+            .get(&peer.network_peer_id())
+            .cloned()
+            .unwrap_or_else(|| peer.p2p_address())
+    }
+
+    fn observer_start_layer(&self, peer: &NetworkPeer) -> Table {
+        let Some(published_address) = self
+            .observer_advertised_p2p_addresses
+            .get(&peer.network_peer_id())
+        else {
+            return observer_role_layer();
+        };
+        let outbound_delay_ms = i64::try_from(OBSERVER_RELAY_OUTBOUND_DIAL_DELAY.as_millis())
+            .expect("bounded observer relay dial delay fits i64 milliseconds");
+        observer_role_layer()
+            .write(
+                ["network", "public_address"],
+                published_address.to_literal(),
+            )
+            // Keep observer-initiated dials from creating a direct session that
+            // bypasses the advertised relay during the bounded integration run.
+            .write(["network", "connect_startup_delay_ms"], outbound_delay_ms)
+    }
+
+    /// Get the next validator in deterministic round-robin order.
     pub fn peer(&self) -> &NetworkPeer {
         let len = self.peers.len();
         assert!(len > 0, "there is at least one peer");
@@ -2545,14 +2613,9 @@ impl Network {
     where
         I: IntoIterator<Item = usize>,
     {
-        if self
-            .peers
-            .iter()
-            .all(NetworkPeer::should_run_bind_preflight)
-        {
+        if self.all_peers().all(NetworkPeer::should_run_bind_preflight) {
             let preflight = preflight_bind_addresses(
-                self.peers
-                    .iter()
+                self.all_peers()
                     .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
             );
             if let Err(err) = preflight {
@@ -2566,7 +2629,7 @@ impl Network {
             .peers
             .first()
             .map_or(Program::Irohad, |peer| peer.program);
-        if self.peers.iter().any(|peer| peer.program != program) {
+        if self.all_peers().any(|peer| peer.program != program) {
             return Err(eyre!(
                 "all peers in one test network must use the same daemon program"
             ));
@@ -2588,6 +2651,13 @@ impl Network {
             ));
         }
 
+        // Bind every published observer endpoint before validators start. The
+        // relay retains accepted sockets and retries the private upstream until
+        // the validators-first bootstrap reaches the observer stage.
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.start().await?;
+        }
+
         let genesis_block = Arc::new(self.genesis());
         let genesis_order = Arc::new(submitters.clone());
         let genesis_lookup = Arc::new(
@@ -2599,7 +2669,9 @@ impl Network {
         );
         let startup_timeout = self.peer_startup_timeout();
         info!(
-            total_peers = self.peers.len(),
+            validators = self.peers.len(),
+            observers = self.observers.len(),
+            total_peers = self.peers.len().saturating_add(self.observers.len()),
             genesis_submitters = ?submitters,
             ?startup_timeout,
             "bootstrapping test network",
@@ -2609,7 +2681,7 @@ impl Network {
 
         let start_instant = Instant::now();
 
-        let start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
+        let validator_start_futures = self.peers.iter().enumerate().map(|(index, peer)| {
             let genesis_lookup = genesis_lookup.clone();
             let genesis_order = genesis_order.clone();
             let genesis_block = genesis_block.clone();
@@ -2677,12 +2749,56 @@ impl Network {
             }
         });
 
-        match timeout(
-            startup_timeout,
-            futures::future::try_join_all(start_futures),
-        )
-        .await
-        {
+        let bootstrap = async {
+            futures::future::try_join_all(validator_start_futures).await?;
+
+            // Observers are started only after the validator set has committed
+            // the one canonical genesis. They receive the same signed block but
+            // a node-local role override, so their BLS identities authenticate
+            // P2P and block sync without enabling proposal or voting paths.
+            let observer_start_futures =
+                self.observers
+                    .iter()
+                    .enumerate()
+                    .map(|(observer_index, peer)| {
+                        let genesis_block = genesis_block.clone();
+                        let observer_role = self.observer_start_layer(peer);
+                        async move {
+                            let index = self.peers.len().saturating_add(observer_index);
+                            let mnemonic = peer.mnemonic().to_string();
+                            let delay = Duration::from_millis(200)
+                                .checked_mul(
+                                    u32::try_from(observer_index.saturating_add(1))
+                                        .expect("bounded observer index fits u32"),
+                                )
+                                .unwrap_or(Duration::from_secs(u64::MAX));
+                            if delay > Duration::ZERO {
+                                tokio::time::sleep(delay).await;
+                            }
+                            info!(
+                                index,
+                                %mnemonic,
+                                role = "observer",
+                                "starting signed observer replica"
+                            );
+                            peer.start_checked(
+                                self.config_layers()
+                                    .chain(iter::once(Cow::Owned(observer_role))),
+                                Some(genesis_block.as_ref()),
+                            )
+                            .await?;
+                            Self::wait_for_block_1_with_watchdog(
+                                peer, index, &mnemonic, "observer",
+                            )
+                            .await?;
+                            Ok::<(), color_eyre::Report>(())
+                        }
+                    });
+            futures::future::try_join_all(observer_start_futures).await?;
+            Ok::<(), color_eyre::Report>(())
+        };
+
+        match timeout(startup_timeout, bootstrap).await {
             Ok(result) => match result {
                 Ok(_) => {
                     self.verify_post_genesis_liveness().await?;
@@ -2716,11 +2832,11 @@ impl Network {
 
     async fn verify_post_genesis_liveness(&self) -> Result<()> {
         let window = post_genesis_liveness_window_env();
-        if window == Duration::ZERO || self.peers.is_empty() {
+        if window == Duration::ZERO || self.all_peers().next().is_none() {
             return Ok(());
         }
 
-        let futures = self.peers.iter().enumerate().map(|(index, peer)| {
+        let futures = self.all_peers().enumerate().map(|(index, peer)| {
             let mnemonic = peer.mnemonic().to_string();
             let stdout = peer.latest_stdout_log_path();
             let stderr = peer.latest_stderr_log_path();
@@ -2867,6 +2983,26 @@ impl Network {
                 }
                 _ = watchdog.tick() => {
                     elapsed += GENESIS_BLOCK_LOG_INTERVAL;
+                    let sumeragi_v2 = match tokio::time::timeout(
+                        status_timeout,
+                        peer.sumeragi_v2_startup_snapshot(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(snapshot)) => format!("ok({snapshot})"),
+                        Ok(Err(error)) => format!(
+                            "error(\"{}\")",
+                            sanitize_preview_for_display(&format!("{error:?}")),
+                        ),
+                        Err(_) => {
+                            let error = format!("query timed out after {status_timeout:?}");
+                            NetworkPeer::record_probe_sumeragi_v2_error(
+                                &peer.startup_probe,
+                                &error,
+                            );
+                            format!("error(\"{error}\")")
+                        }
+                    };
                     if let Some(status) = &latest_status {
                         warn!(
                             index,
@@ -2877,6 +3013,7 @@ impl Network {
                             status_blocks_non_empty = status.blocks_non_empty,
                             status_queue = status.queue_size,
                             status_view_changes = status.view_changes,
+                            sumeragi_v2 = %sumeragi_v2,
                             "still waiting for block 1 after genesis submission"
                         );
                     } else if peer.has_observed_block(1) {
@@ -2894,6 +3031,7 @@ impl Network {
                             %mnemonic,
                             role,
                             waited = ?elapsed,
+                            sumeragi_v2 = %sumeragi_v2,
                             "still waiting for block 1; no status snapshot available"
                         );
                     }
@@ -2927,7 +3065,7 @@ impl Network {
         let base = self
             .peer_startup_timeout_override
             .unwrap_or_else(peer_start_timeout_env);
-        let peers = self.peers.len() as u128;
+        let peers = self.peers.len().saturating_add(self.observers.len()) as u128;
         if peers == 0 {
             return base;
         }
@@ -2944,8 +3082,7 @@ impl Network {
 
     /// Capture a human-readable snapshot of the current startup state for all peers.
     pub fn startup_snapshot(&self) -> Vec<PeerStartupState> {
-        self.peers
-            .iter()
+        self.all_peers()
             .enumerate()
             .map(|(index, peer)| peer.startup_state(index))
             .collect()
@@ -2974,7 +3111,7 @@ impl Network {
 
     /// Torii URLs for all peers in the network.
     pub fn torii_urls(&self) -> Vec<String> {
-        self.peers.iter().map(NetworkPeer::torii_url).collect()
+        self.all_peers().map(NetworkPeer::torii_url).collect()
     }
 
     /// Base configuration of all peers.
@@ -3019,6 +3156,9 @@ impl Network {
             let mut trusted_peers_pop: Vec<Value> = Vec::new();
             let mut seen = HashSet::new();
 
+            // Only validators carry a PoP into the consensus roster. Observers
+            // remain BLS-authenticated trusted peers but deliberately have no
+            // `trusted_peers_pop` entry.
             for peer in self.peers.iter().chain(extra.into_iter()) {
                 let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop())
                 else {
@@ -3066,6 +3206,7 @@ impl Network {
         let da_proof_policies = actual_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
+        let pipeline_config = actual_config.as_ref().map(|config| config.pipeline.clone());
         let nexus_config = actual_config.as_ref().map(|config| config.nexus.clone());
         let zk_config = actual_config.as_ref().map(|config| config.zk.clone());
         let confidential_policy_hash = Some(actual_config.as_ref().map_or_else(
@@ -3073,167 +3214,88 @@ impl Network {
             |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
         let consensus_handshake_meta = consensus_handshake_parameter(&self.consensus_profile);
+        let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
+        let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
+        let recompute_staged_hash = |block: &GenesisBlock| {
+            config::staged_genesis_nexus_amx_context_hash(
+                block,
+                &genesis_account_id,
+                &peer_topology,
+                &self.genesis_key_pair,
+                pipeline_config.as_ref(),
+                nexus_config.as_ref(),
+                zk_config.as_ref(),
+            )
+            .expect("signed test-network genesis must stage without synthetic results")
+        };
+        let assert_signed_staged_hash = |staged_hash: CryptoHash| {
+            let signed_hash = CryptoHash::prehashed(
+                self.consensus_profile
+                    .params
+                    .v2_context
+                    .nexus_amx_context_hash,
+            );
+            assert_eq!(
+                staged_hash, signed_hash,
+                "signed test-network Nexus/AMX context must match exact genesis pre-execution"
+            );
+        };
 
         if let Some(cached_genesis) = self.cached_genesis.get() {
-            if genesis_has_consensus_handshake(cached_genesis, &consensus_handshake_meta) {
+            if genesis_has_exactly_one_consensus_handshake(
+                cached_genesis,
+                &consensus_handshake_meta,
+            ) {
+                assert_signed_staged_hash(recompute_staged_hash(cached_genesis));
                 return cached_genesis.clone();
             }
             if genesis_contains_any_consensus_handshake(cached_genesis) {
                 debug!(
-                    "custom genesis consensus_handshake_meta mismatches builder profile; appending canonical consensus parameter overrides"
+                    "custom genesis consensus_handshake_meta is duplicate or mismatches builder profile; normalizing the canonical consensus parameter"
                 );
             }
 
-            // Preserve custom genesis blocks by augmenting them with the consensus metadata that
-            // `irohad` requires at startup (instead of silently rebuilding from `genesis_isi`).
-            //
-            // `genesis_isi`/`genesis_post_topology_isi` already contain the builder-computed
-            // SetParameter instructions (including consensus_handshake_meta). We append those as
-            // a dedicated transaction so the resulting on-chain parameter state and advertised
-            // handshake fingerprint match the runtime consensus profile.
-            let mut param_instructions: Vec<InstructionBox> = Vec::new();
-            for batch in self
-                .genesis_isi
-                .iter()
-                .chain(self.genesis_post_topology_isi.iter())
-            {
-                for instruction in batch {
-                    if instruction
-                        .as_any()
-                        .downcast_ref::<SetParameter>()
-                        .is_some()
-                    {
-                        param_instructions.push(instruction.clone());
-                    }
-                }
-            }
-            if !genesis_instructions_contain_consensus_handshake_meta(
-                &[param_instructions.clone()],
+            let mut augmented = normalize_genesis_consensus_handshake(
+                cached_genesis,
+                &self.genesis_isi,
+                &self.genesis_post_topology_isi,
                 &consensus_handshake_meta,
-            ) {
-                param_instructions.push(InstructionBox::from(SetParameter::new(
-                    consensus_handshake_meta.clone(),
-                )));
-            }
-
-            let chain_id = cached_genesis
-                .0
-                .transactions_vec()
-                .first()
-                .map(|tx| tx.chain().clone())
-                .unwrap_or_else(|| self.chain_id());
-            let authority = AccountId::new(self.genesis_key_pair.public_key().clone());
-            let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
-            let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
-                chain_id,
-                authority,
-                &time_source,
-            )
-            .with_instructions(param_instructions)
-            .try_sign(self.genesis_key_pair.private_key())
-            .expect("sign cached genesis consensus metadata transaction");
-
-            let mut transactions = cached_genesis.0.transactions_vec().clone();
-            transactions.push(param_tx);
-
-            let external_merkle: iroha_crypto::MerkleTree<
-                iroha_data_model::transaction::TransactionEntrypoint,
-            > = transactions
-                .iter()
-                .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-                .collect();
-            let mut header = cached_genesis.0.header();
-            header.merkle_root = external_merkle.root();
-            header.result_merkle_root = None;
-
-            let signer_index = cached_genesis
-                .0
-                .signatures()
-                .next()
-                .map(|sig| sig.index())
-                .unwrap_or(0);
-            let placeholder_sig = iroha_data_model::block::BlockSignature::new(
-                signer_index,
-                iroha_crypto::SignatureOf::try_from_hash(
-                    self.genesis_key_pair.private_key(),
-                    header.hash(),
-                )
-                .expect("sign cached genesis placeholder header"),
+                &self.genesis_key_pair,
+                &self.chain_id(),
             );
-            let mut working = iroha_data_model::block::SignedBlock::presigned(
-                placeholder_sig,
-                header,
-                transactions.clone(),
-            );
-            working.set_da_commitments(cached_genesis.0.da_commitments().cloned());
-            working.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
-            working.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
-            // Attach placeholder results so callers can inspect the block before pre-execution.
-            // `ensure_genesis_results` will pre-execute and replace these.
-            let hashes = transactions
-                .iter()
-                .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-                .collect::<Vec<_>>();
-            let placeholder_results = std::iter::repeat_with(|| {
-                TransactionResultInner::Ok(DataTriggerSequence::default())
-            })
-            .take(hashes.len())
-            .collect::<Vec<_>>();
-            working
-                .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
-                .expect("genesis placeholder hashes should match payload");
-            working.set_committed_fragment_count(0);
 
-            let sig = iroha_data_model::block::BlockSignature::new(
-                signer_index,
-                iroha_crypto::SignatureOf::try_from_hash(
-                    self.genesis_key_pair.private_key(),
-                    working.hash(),
-                )
-                .expect("sign cached genesis rebuilt header"),
-            );
-            let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
-                sig,
-                working.payload().header,
-                transactions,
-            );
-            rebuilt.set_da_commitments(cached_genesis.0.da_commitments().cloned());
-            rebuilt.set_da_proof_policies(cached_genesis.0.da_proof_policies().cloned());
-            rebuilt.set_da_pin_intents(cached_genesis.0.da_pin_intents().cloned());
-            rebuilt
-                .set_transaction_results(Vec::new(), &hashes, placeholder_results)
-                .expect("genesis placeholder hashes should match payload");
-            rebuilt.set_committed_fragment_count(0);
-            let mut augmented = GenesisBlock(rebuilt);
-
-            let genesis_account_id = AccountId::new(self.genesis_key_pair.public_key().clone());
-            let peer_topology: Vec<PeerId> = self.peers.iter().map(NetworkPeer::id).collect();
-            ensure_genesis_results(
+            ensure_genesis_results_with_runtime_config(
                 &mut augmented,
                 &genesis_account_id,
                 &peer_topology,
                 &self.genesis_key_pair,
+                pipeline_config.as_ref(),
                 nexus_config.as_ref(),
                 zk_config.as_ref(),
             );
+            assert_signed_staged_hash(recompute_staged_hash(&augmented));
             let _ = self.cached_genesis_augmented.set(augmented.clone());
             return augmented;
         }
 
-        let genesis = config::genesis_with_keypair_and_post_topology_with_policies(
-            self.genesis_isi.clone(),
-            self.genesis_post_topology_isi.clone(),
-            self.peers.iter().map(NetworkPeer::id).collect(),
-            self.topology_entries.clone(),
-            self.genesis_key_pair.clone(),
-            self.chain_id(),
-            genesis_crypto,
-            da_proof_policies,
-            nexus_config,
-            zk_config,
-            Some(consensus_handshake_meta),
-            confidential_policy_hash,
-        );
+        let (genesis, staged_hash) =
+            config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+                self.genesis_isi.clone(),
+                self.genesis_post_topology_isi.clone(),
+                self.peers.iter().map(NetworkPeer::id).collect(),
+                self.topology_entries.clone(),
+                self.genesis_key_pair.clone(),
+                self.chain_id(),
+                genesis_crypto,
+                da_proof_policies,
+                pipeline_config.clone(),
+                nexus_config.clone(),
+                zk_config.clone(),
+                Some(consensus_handshake_meta),
+                None,
+                confidential_policy_hash,
+            );
+        assert_signed_staged_hash(staged_hash);
         let _ = self.cached_genesis.set(genesis.clone());
         genesis
     }
@@ -3250,19 +3312,20 @@ impl Network {
 
     /// Shutdown running peers
     pub async fn shutdown(&self) -> &Self {
-        self.peers
-            .iter()
+        self.all_peers()
             .map(|peer| peer.shutdown_if_started())
             .collect::<FuturesUnordered<_>>()
             .collect::<Vec<_>>()
             .await;
+        if let Some(relays) = &self.observer_slow_reader_relays {
+            relays.shutdown().await;
+        }
         self
     }
 
     fn trusted_peers(&self) -> UniqueVec<Peer> {
-        self.peers
-            .iter()
-            .map(|x| Peer::new(x.p2p_address(), x.network_peer_id()))
+        self.all_peers()
+            .map(|peer| Peer::new(self.advertised_p2p_address(peer), peer.network_peer_id()))
             .collect()
     }
 
@@ -3287,7 +3350,7 @@ impl Network {
     }
 
     pub async fn ensure_blocks_with<F: Fn(BlockHeight) -> bool>(&self, f: F) -> Result<&Self> {
-        let running_peers: Vec<_> = self.peers.iter().filter(|peer| peer.is_running()).collect();
+        let running_peers: Vec<_> = self.all_peers().filter(|peer| peer.is_running()).collect();
         if running_peers.is_empty() {
             return Ok(self);
         }
@@ -3363,7 +3426,7 @@ impl Network {
         let deadline = Instant::now() + self.sync_timeout();
         loop {
             let mut satisfied = true;
-            for peer in self.peers.iter().filter(|peer| peer.is_running()) {
+            for peer in self.all_peers().filter(|peer| peer.is_running()) {
                 match peer.status().await {
                     Ok(status) => {
                         if status.blocks_non_empty < height {
@@ -3451,7 +3514,7 @@ async fn detect_peer_termination(
 }
 
 /// Determines how [`NetworkBuilder`] configures [`SmartContractParameter::Fuel`] in the genesis.
-#[derive(Default)]
+#[derive(Clone, Copy, Default)]
 pub enum IvmFuelConfig {
     /// Do not set anything, i.e. let Iroha use its default value
     #[default]
@@ -3485,6 +3548,12 @@ pub struct PeerStartupState {
     pub status_error: Option<String>,
     /// Unix timestamp in milliseconds when the status snapshot (success or error) was recorded.
     pub status_unix_timestamp_ms: Option<u128>,
+    /// Most recent compact `/v1/sumeragi/status` snapshot, if the peer responded.
+    pub sumeragi_v2_snapshot: Option<PeerSumeragiV2Snapshot>,
+    /// Most recent `/v1/sumeragi/status` error captured by the startup watchdog.
+    pub sumeragi_v2_error: Option<String>,
+    /// Unix timestamp in milliseconds when the Sumeragi v2 probe completed.
+    pub sumeragi_v2_unix_timestamp_ms: Option<u128>,
     /// Snapshot of the peer's Kura storage layout.
     pub storage: PeerStorageSnapshot,
 }
@@ -3540,6 +3609,22 @@ impl fmt::Display for PeerStartupState {
             write!(f, "; status=unavailable")?;
         }
 
+        let formatted_v2_ts = self
+            .sumeragi_v2_unix_timestamp_ms
+            .map(|ms| format!("{ms}ms"))
+            .unwrap_or_else(|| "unknown".to_string());
+        if let Some(snapshot) = &self.sumeragi_v2_snapshot {
+            write!(f, "; sumeragi_v2=ok({snapshot})@{formatted_v2_ts}")?;
+        } else if let Some(error) = &self.sumeragi_v2_error {
+            write!(
+                f,
+                "; sumeragi_v2=error(\"{}\")@{formatted_v2_ts}",
+                sanitize_preview_for_display(error)
+            )?;
+        } else {
+            write!(f, "; sumeragi_v2=unavailable")?;
+        }
+
         let stdout_log = self
             .logs
             .stdout_log
@@ -3558,6 +3643,16 @@ impl fmt::Display for PeerStartupState {
             "; logs=stdout={stdout_log} stderr={stderr_log} stderr_run={:?}",
             self.logs.stderr_run_id
         )?;
+
+        if let Some(preview) = &self.logs.stdout_preview {
+            write!(
+                f,
+                " stdout_tail=\"{}\" tail_lines={:?} truncated={}",
+                sanitize_preview_for_display(preview),
+                self.logs.stdout_preview_line_count,
+                self.logs.stdout_truncated
+            )?;
+        }
 
         if let Some(preview) = &self.logs.stderr_preview {
             write!(
@@ -3581,11 +3676,243 @@ impl fmt::Display for PeerStartupState {
     }
 }
 
+/// Compact progress-oriented projection of `/v1/sumeragi/status` used in startup diagnostics.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeerSumeragiV2Snapshot {
+    /// Active consensus height.
+    pub height: u64,
+    /// Active view within the height.
+    pub view: u64,
+    /// Reducer generation owning volatile consumer state.
+    pub generation: u64,
+    /// Current reducer phase.
+    pub phase: String,
+    /// Current local body lifecycle state.
+    pub body_state: String,
+    /// Expected leader index for the active view.
+    pub leader: u32,
+    /// Exact persisted PrepareQC lock, if any.
+    pub locked_prepare_qc: Option<String>,
+    /// Highest verified PrepareQC known locally, if any.
+    pub highest_prepare_qc: Option<String>,
+    /// Partial Prepare quorum summaries keyed by exact round and subject.
+    pub prepare_quorums: Vec<String>,
+    /// Partial Commit quorum summaries keyed by exact round and subject.
+    pub commit_quorums: Vec<String>,
+    /// Partial timeout quorum summaries keyed by exact round.
+    pub timeout_quorums: Vec<String>,
+    /// Durable outbound progress intents and their service stages.
+    pub outbound_intents: Vec<String>,
+    /// Candidate, recovery, store, validation, application, and successor work stages.
+    pub work: String,
+    /// Bounded queue occupancy, oldest age, and service debt.
+    pub queues: Vec<String>,
+    /// Most recent reducer progress transition, if any.
+    pub last_progress: Option<String>,
+    /// Local monotonic time without meaningful height progress.
+    pub no_progress_age_ms: u64,
+    /// Classified liveness blocker after the watchdog threshold, if any.
+    pub blocker: Option<String>,
+    /// Per-height ignore-reason counters.
+    pub ignore_counts: Vec<String>,
+    /// Whether consensus has fail-stopped and requires restart.
+    pub restart_required: bool,
+    /// WAL persistence operation currently blocking the reducer, if any.
+    pub pending_persistence_id: Option<u64>,
+}
+
+impl From<&SumeragiV2Status> for PeerSumeragiV2Snapshot {
+    fn from(status: &SumeragiV2Status) -> Self {
+        let liveness = &status.liveness;
+        Self {
+            height: status.height,
+            view: status.view,
+            generation: liveness.generation,
+            phase: format!("{:?}", status.phase),
+            body_state: format!("{:?}", status.body_state),
+            leader: status.leader,
+            locked_prepare_qc: status.locked_prepare_qc.map(format_v2_certificate_ref),
+            highest_prepare_qc: status.highest_prepare_qc.map(format_v2_certificate_ref),
+            prepare_quorums: liveness
+                .prepare_quorums
+                .iter()
+                .map(format_v2_vote_quorum)
+                .collect(),
+            commit_quorums: liveness
+                .commit_quorums
+                .iter()
+                .map(format_v2_vote_quorum)
+                .collect(),
+            timeout_quorums: liveness
+                .timeout_quorums
+                .iter()
+                .map(|quorum| {
+                    format!(
+                        "h{}/v{}:signers={}/{},power={}/{},tc={}",
+                        quorum.round.height,
+                        quorum.round.view,
+                        quorum.signer_count,
+                        quorum.min_signers,
+                        quorum.signed_power,
+                        quorum.total_power,
+                        quorum.certificate_formed,
+                    )
+                })
+                .collect(),
+            outbound_intents: liveness
+                .outbound_intents
+                .iter()
+                .map(|intent| {
+                    let subject = intent
+                        .subject
+                        .map(|subject| abbreviated_hash(subject.block_hash))
+                        .unwrap_or_else(|| "-".to_string());
+                    let execution = intent
+                        .execution_commitment
+                        .map(|commitment| abbreviated_hash(commitment.executed_block_wire_hash))
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        "{:?}@h{}/v{}:{:?}:block={subject}:exec={execution}",
+                        intent.kind, intent.round.height, intent.round.view, intent.stage,
+                    )
+                })
+                .collect(),
+            work: format!(
+                "candidate={:?},recovery={:?},store={:?},validation={:?},application={:?},successor={:?}",
+                liveness.work.candidate,
+                liveness.work.body_recovery,
+                liveness.work.body_store,
+                liveness.work.validation,
+                liveness.work.application,
+                liveness.work.successor_height,
+            ),
+            queues: liveness
+                .queues
+                .iter()
+                .map(|queue| {
+                    let oldest = queue
+                        .oldest_age_ms
+                        .map(|age| format!("{age}ms"))
+                        .unwrap_or_else(|| "-".to_string());
+                    format!(
+                        "{:?}={}/{},oldest={oldest},debt={}",
+                        queue.queue, queue.depth, queue.capacity, queue.service_debt,
+                    )
+                })
+                .collect(),
+            last_progress: liveness.last_progress.map(|progress| {
+                format!(
+                    "{:?}@h{}/v{}/g{},age={}ms",
+                    progress.transition,
+                    progress.round.height,
+                    progress.round.view,
+                    progress.generation,
+                    progress.age_ms,
+                )
+            }),
+            no_progress_age_ms: liveness.no_progress_age_ms,
+            blocker: liveness.blocker.map(|blocker| format!("{blocker:?}")),
+            ignore_counts: liveness
+                .ignore_counts
+                .iter()
+                .map(|entry| format!("{:?}={}", entry.reason, entry.count))
+                .collect(),
+            restart_required: status.restart_required,
+            pending_persistence_id: status.pending_persistence_id,
+        }
+    }
+}
+
+impl fmt::Display for PeerSumeragiV2Snapshot {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let lock = self.locked_prepare_qc.as_deref().unwrap_or("-");
+        let highest = self.highest_prepare_qc.as_deref().unwrap_or("-");
+        let progress = self.last_progress.as_deref().unwrap_or("-");
+        let blocker = self.blocker.as_deref().unwrap_or("-");
+        let persistence = self
+            .pending_persistence_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "-".to_string());
+        write!(
+            f,
+            "h{}/v{}/g{} phase={} body={} leader={} lock={} highest={} quorums=P[{}] C[{}] T[{}] intents=[{}] work=[{}] queues=[{}] progress={} no_progress={}ms blocker={} ignores=[{}] restart={} persist={}",
+            self.height,
+            self.view,
+            self.generation,
+            self.phase,
+            self.body_state,
+            self.leader,
+            lock,
+            highest,
+            compact_v2_list(&self.prepare_quorums),
+            compact_v2_list(&self.commit_quorums),
+            compact_v2_list(&self.timeout_quorums),
+            compact_v2_list(&self.outbound_intents),
+            self.work,
+            compact_v2_list(&self.queues),
+            progress,
+            self.no_progress_age_ms,
+            blocker,
+            compact_v2_list(&self.ignore_counts),
+            self.restart_required,
+            persistence,
+        )
+    }
+}
+
+fn abbreviated_hash(hash: impl fmt::Display) -> String {
+    let rendered = hash.to_string();
+    rendered.get(..12).unwrap_or(&rendered).to_owned()
+}
+
+fn format_v2_certificate_ref(certificate: QuorumCertificateRef) -> String {
+    format!(
+        "h{}/v{}<-v{}/{:?}/block={}/exec={}",
+        certificate.round.height,
+        certificate.round.view,
+        certificate.proposal_round.view,
+        certificate.phase,
+        abbreviated_hash(certificate.subject.block_hash),
+        abbreviated_hash(certificate.execution_commitment.executed_block_wire_hash),
+    )
+}
+
+fn format_v2_vote_quorum(
+    quorum: &iroha::data_model::block::consensus_v2::SumeragiV2VoteQuorumStatus,
+) -> String {
+    format!(
+        "h{}/v{}<-v{}:signers={}/{},power={}/{},block={},exec={}",
+        quorum.round.height,
+        quorum.round.view,
+        quorum.proposal_round.view,
+        quorum.signer_count,
+        quorum.min_signers,
+        quorum.signed_power,
+        quorum.total_power,
+        abbreviated_hash(quorum.subject.block_hash),
+        abbreviated_hash(quorum.execution_commitment.executed_block_wire_hash),
+    )
+}
+
+fn compact_v2_list(entries: &[String]) -> String {
+    if entries.is_empty() {
+        "-".to_string()
+    } else {
+        entries.join("|")
+    }
+}
+
 /// Snapshot of a peer's log state.
 #[derive(Debug, Clone, Default)]
 pub struct PeerLogSnapshot {
     /// Path to the latest stdout log.
     pub stdout_log: Option<PathBuf>,
+    /// Bounded preview of the latest stdout log tail.
+    pub stdout_preview: Option<String>,
+    /// Number of lines in the stdout preview.
+    pub stdout_preview_line_count: Option<usize>,
+    /// Whether bytes or lines preceding the stdout preview were omitted.
+    pub stdout_truncated: bool,
     /// Path to the latest stderr log (if the peer already exited).
     pub stderr_log: Option<PathBuf>,
     /// Preview of the stderr tail captured from the live stream.
@@ -3682,6 +4009,9 @@ struct PeerStartupProbe {
     last_status: Option<PeerStatusSnapshot>,
     last_status_error: Option<String>,
     last_status_unix_ms: Option<u128>,
+    last_sumeragi_v2: Option<PeerSumeragiV2Snapshot>,
+    last_sumeragi_v2_error: Option<String>,
+    last_sumeragi_v2_unix_ms: Option<u128>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3804,10 +4134,690 @@ async fn drain_log_lines<R, F>(
     }
 }
 
-/// Builder of [`Network`]
+/// Bounded recipe for adding signed, non-voting P2P observers to a test network.
+///
+/// The descriptor contains only a count. Observer identities and all private
+/// key material are created later inside [`NetworkPeer`] instances and never
+/// enter this public bootstrap value or the shared trusted-peer layer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObserverP2pBootstrap {
+    observer_count: NonZero<usize>,
+}
+
+/// Validation error for [`ObserverP2pBootstrap`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObserverP2pBootstrapError {
+    /// At least one observer must be requested when the bootstrap is enabled.
+    ZeroObservers,
+    /// The observer count alone exceeds the production core-profile connection cap.
+    ObserverCountExceedsConnectionCapacity {
+        /// Requested observer replicas.
+        requested: usize,
+        /// Maximum observer replicas possible beside one validator.
+        maximum: usize,
+    },
+    /// Validator and observer counts could not be added without overflow.
+    ParticipantCountOverflow {
+        /// Voting validator count.
+        validators: usize,
+        /// Requested observer count.
+        observers: usize,
+    },
+    /// A full trusted-peer fanout would exceed the configured connection cap.
+    FanoutExceedsConnectionCapacity {
+        /// Voting validator count.
+        validators: usize,
+        /// Requested observer count.
+        observers: usize,
+        /// Connections required per participant for full localnet fanout.
+        required: usize,
+        /// Available total-connection capacity per participant.
+        capacity: usize,
+    },
+}
+
+impl fmt::Display for ObserverP2pBootstrapError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroObservers => write!(f, "observer bootstrap count must be non-zero"),
+            Self::ObserverCountExceedsConnectionCapacity { requested, maximum } => write!(
+                f,
+                "observer bootstrap count {requested} exceeds the core P2P connection capacity {maximum}"
+            ),
+            Self::ParticipantCountOverflow {
+                validators,
+                observers,
+            } => write!(
+                f,
+                "validator count {validators} plus observer count {observers} overflows usize"
+            ),
+            Self::FanoutExceedsConnectionCapacity {
+                validators,
+                observers,
+                required,
+                capacity,
+            } => write!(
+                f,
+                "{validators} validators plus {observers} observers require {required} connections per peer, above capacity {capacity}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObserverP2pBootstrapError {}
+
+impl ObserverP2pBootstrap {
+    /// Construct a bounded observer recipe.
+    ///
+    /// The upper bound is derived from the production core lane profile's
+    /// total-connection capacity. [`NetworkBuilder`] performs the stricter
+    /// validator-aware full-fanout check when the recipe is attached and built.
+    ///
+    /// # Errors
+    /// Returns an error for zero or for a count that cannot fit beside even one
+    /// validator under the core P2P connection cap.
+    pub fn new(observer_count: usize) -> std::result::Result<Self, ObserverP2pBootstrapError> {
+        let observer_count =
+            NonZero::new(observer_count).ok_or(ObserverP2pBootstrapError::ZeroObservers)?;
+        let maximum = Self::connection_capacity();
+        if observer_count.get() > maximum {
+            return Err(
+                ObserverP2pBootstrapError::ObserverCountExceedsConnectionCapacity {
+                    requested: observer_count.get(),
+                    maximum,
+                },
+            );
+        }
+        Ok(Self { observer_count })
+    }
+
+    /// Number of observer replicas requested by this recipe.
+    pub const fn observer_count(self) -> usize {
+        self.observer_count.get()
+    }
+
+    /// Production core-profile total-connection capacity used by the harness.
+    pub const fn connection_capacity() -> usize {
+        iroha_config::parameters::defaults::network::lane_profile::CORE_MAX_TOTAL_CONNECTIONS
+    }
+
+    fn validate_for_validators(
+        self,
+        validators: usize,
+        capacity: usize,
+    ) -> std::result::Result<usize, ObserverP2pBootstrapError> {
+        let observers = self.observer_count();
+        let participants = validators.checked_add(observers).ok_or(
+            ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators,
+                observers,
+            },
+        )?;
+        let required = participants.checked_sub(1).ok_or(
+            ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators,
+                observers,
+            },
+        )?;
+        if required > capacity {
+            return Err(ObserverP2pBootstrapError::FanoutExceedsConnectionCapacity {
+                validators,
+                observers,
+                required,
+                capacity,
+            });
+        }
+        Ok(participants)
+    }
+}
+
+const OBSERVER_SLOW_READER_MAX_CHUNK_BYTES: usize = 64 * 1024;
+const OBSERVER_SLOW_READER_MAX_DELAY: Duration = Duration::from_secs(1);
+const OBSERVER_RELAY_UPSTREAM_RETRY_DELAY: Duration = Duration::from_millis(25);
+const OBSERVER_RELAY_OUTBOUND_DIAL_DELAY: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// Bounded transparent-relay settings for observer slow-reader tests.
+///
+/// The relay does not decode or alter P2P traffic. It only limits each read
+/// from a validator-facing TCP socket and delays forwarding that ciphertext to
+/// the real observer listener.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObserverSlowReaderRelayConfig {
+    read_chunk_bytes: NonZero<usize>,
+    read_delay: Duration,
+}
+
+/// Validation error for [`ObserverSlowReaderRelayConfig`] or its builder hook.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ObserverSlowReaderRelayError {
+    /// A relay was requested before any observer bootstrap was attached.
+    MissingObserverBootstrap,
+    /// A read chunk must contain at least one byte.
+    ZeroReadChunkBytes,
+    /// A read chunk exceeded the bounded relay allocation limit.
+    ReadChunkBytesExceedsLimit {
+        /// Requested bytes per read.
+        requested: usize,
+        /// Maximum bytes per read.
+        maximum: usize,
+    },
+    /// Each forwarded read must have a non-zero delay.
+    ZeroReadDelay,
+    /// The per-read delay exceeded the bounded test-harness limit.
+    ReadDelayExceedsLimit {
+        /// Requested delay.
+        requested: Duration,
+        /// Maximum delay.
+        maximum: Duration,
+    },
+}
+
+impl fmt::Display for ObserverSlowReaderRelayError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingObserverBootstrap => {
+                write!(
+                    f,
+                    "observer slow-reader relays require an observer bootstrap"
+                )
+            }
+            Self::ZeroReadChunkBytes => write!(f, "observer relay read chunk must be non-zero"),
+            Self::ReadChunkBytesExceedsLimit { requested, maximum } => write!(
+                f,
+                "observer relay read chunk {requested} exceeds the {maximum}-byte limit"
+            ),
+            Self::ZeroReadDelay => write!(f, "observer relay read delay must be non-zero"),
+            Self::ReadDelayExceedsLimit { requested, maximum } => write!(
+                f,
+                "observer relay read delay {requested:?} exceeds the {maximum:?} limit"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ObserverSlowReaderRelayError {}
+
+impl ObserverSlowReaderRelayConfig {
+    /// Construct bounded transparent-relay settings.
+    ///
+    /// # Errors
+    /// Returns an error for a zero or over-limit read chunk, or a zero or
+    /// over-limit delay.
+    pub fn new(
+        read_chunk_bytes: usize,
+        read_delay: Duration,
+    ) -> std::result::Result<Self, ObserverSlowReaderRelayError> {
+        let read_chunk_bytes = NonZero::new(read_chunk_bytes)
+            .ok_or(ObserverSlowReaderRelayError::ZeroReadChunkBytes)?;
+        if read_chunk_bytes.get() > OBSERVER_SLOW_READER_MAX_CHUNK_BYTES {
+            return Err(ObserverSlowReaderRelayError::ReadChunkBytesExceedsLimit {
+                requested: read_chunk_bytes.get(),
+                maximum: OBSERVER_SLOW_READER_MAX_CHUNK_BYTES,
+            });
+        }
+        if read_delay == Duration::ZERO {
+            return Err(ObserverSlowReaderRelayError::ZeroReadDelay);
+        }
+        if read_delay > OBSERVER_SLOW_READER_MAX_DELAY {
+            return Err(ObserverSlowReaderRelayError::ReadDelayExceedsLimit {
+                requested: read_delay,
+                maximum: OBSERVER_SLOW_READER_MAX_DELAY,
+            });
+        }
+        Ok(Self {
+            read_chunk_bytes,
+            read_delay,
+        })
+    }
+
+    /// Maximum read-chunk allocation accepted by the harness.
+    pub const fn maximum_read_chunk_bytes() -> usize {
+        OBSERVER_SLOW_READER_MAX_CHUNK_BYTES
+    }
+
+    /// Maximum per-read delay accepted by the harness.
+    pub const fn maximum_read_delay() -> Duration {
+        OBSERVER_SLOW_READER_MAX_DELAY
+    }
+
+    /// Bytes read from the validator-facing socket per delayed operation.
+    pub const fn read_chunk_bytes(self) -> usize {
+        self.read_chunk_bytes.get()
+    }
+
+    /// Delay applied to each non-empty validator-to-observer read.
+    pub const fn read_delay(self) -> Duration {
+        self.read_delay
+    }
+}
+
+/// Snapshot of transparent observer-relay activity.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObserverSlowReaderRelayStats {
+    /// Validator-facing TCP connections accepted by the relays.
+    pub accepted_connections: u64,
+    /// Accepted connections paired with a real observer listener.
+    pub upstream_connections: u64,
+    /// Failed upstream connection attempts while waiting for observers to start.
+    pub upstream_connect_retries: u64,
+    /// Non-empty validator-to-observer reads subjected to the configured delay.
+    pub delayed_reads: u64,
+    /// Unmodified validator-to-observer ciphertext bytes forwarded upstream.
+    pub forwarded_to_observers_bytes: u64,
+}
+
+#[derive(Debug, Default)]
+struct ObserverSlowReaderRelayCounters {
+    accepted_connections: AtomicU64,
+    upstream_connections: AtomicU64,
+    upstream_connect_retries: AtomicU64,
+    delayed_reads: AtomicU64,
+    forwarded_to_observers_bytes: AtomicU64,
+}
+
+impl ObserverSlowReaderRelayCounters {
+    fn snapshot(&self) -> ObserverSlowReaderRelayStats {
+        ObserverSlowReaderRelayStats {
+            accepted_connections: self.accepted_connections.load(Ordering::Relaxed),
+            upstream_connections: self.upstream_connections.load(Ordering::Relaxed),
+            upstream_connect_retries: self.upstream_connect_retries.load(Ordering::Relaxed),
+            delayed_reads: self.delayed_reads.load(Ordering::Relaxed),
+            forwarded_to_observers_bytes: self.forwarded_to_observers_bytes.load(Ordering::Relaxed),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ObserverSlowReaderRelayRoute {
+    peer_id: PeerId,
+    published_address: SocketAddr,
+    upstream_address: SocketAddr,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    _published_port: AllocatedPort,
+}
+
+#[derive(Debug, Default)]
+struct ObserverSlowReaderRelayRuntime {
+    shutdown: Option<watch::Sender<bool>>,
+    listeners: Vec<JoinHandle<()>>,
+}
+
+#[derive(Debug)]
+struct ObserverSlowReaderRelays {
+    config: ObserverSlowReaderRelayConfig,
+    routes: Vec<ObserverSlowReaderRelayRoute>,
+    published_addresses: HashMap<PeerId, SocketAddr>,
+    running: AtomicBool,
+    paused: watch::Sender<bool>,
+    runtime: StdMutex<ObserverSlowReaderRelayRuntime>,
+}
+
+impl ObserverSlowReaderRelays {
+    fn new(observers: &[NetworkPeer], config: ObserverSlowReaderRelayConfig) -> Self {
+        let routes = observers
+            .iter()
+            .map(|observer| {
+                let published_port = AllocatedPort::new();
+                let published_address = socket_addr!(127.0.0.1:*published_port);
+                ObserverSlowReaderRelayRoute {
+                    peer_id: observer.network_peer_id(),
+                    published_address,
+                    upstream_address: observer.p2p_address(),
+                    counters: Arc::new(ObserverSlowReaderRelayCounters::default()),
+                    _published_port: published_port,
+                }
+            })
+            .collect::<Vec<_>>();
+        let published_addresses = routes
+            .iter()
+            .map(|route| (route.peer_id.clone(), route.published_address.clone()))
+            .collect();
+        let (paused, _) = watch::channel(false);
+        Self {
+            config,
+            routes,
+            published_addresses,
+            running: AtomicBool::new(false),
+            paused,
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        }
+    }
+
+    fn published_addresses(&self) -> HashMap<PeerId, SocketAddr> {
+        self.published_addresses.clone()
+    }
+
+    fn stats(&self) -> ObserverSlowReaderRelayStats {
+        self.routes.iter().fold(
+            ObserverSlowReaderRelayStats::default(),
+            |mut aggregate, route| {
+                let route = route.counters.snapshot();
+                aggregate.accepted_connections = aggregate
+                    .accepted_connections
+                    .saturating_add(route.accepted_connections);
+                aggregate.upstream_connections = aggregate
+                    .upstream_connections
+                    .saturating_add(route.upstream_connections);
+                aggregate.upstream_connect_retries = aggregate
+                    .upstream_connect_retries
+                    .saturating_add(route.upstream_connect_retries);
+                aggregate.delayed_reads =
+                    aggregate.delayed_reads.saturating_add(route.delayed_reads);
+                aggregate.forwarded_to_observers_bytes = aggregate
+                    .forwarded_to_observers_bytes
+                    .saturating_add(route.forwarded_to_observers_bytes);
+                aggregate
+            },
+        )
+    }
+
+    fn stats_for(&self, peer_id: &PeerId) -> Option<ObserverSlowReaderRelayStats> {
+        self.routes
+            .iter()
+            .find(|route| &route.peer_id == peer_id)
+            .map(|route| route.counters.snapshot())
+    }
+
+    fn set_paused(&self, paused: bool) {
+        self.paused.send_replace(paused);
+    }
+
+    async fn start(&self) -> Result<()> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .expect("observer relay runtime should not be poisoned");
+        if self.running.load(Ordering::Acquire) {
+            return Ok(());
+        }
+
+        let mut bound = Vec::with_capacity(self.routes.len());
+        for route in &self.routes {
+            match TcpListener::bind(route.published_address.to_string()).and_then(|listener| {
+                listener.set_nonblocking(true)?;
+                TokioTcpListener::from_std(listener)
+            }) {
+                Ok(listener) => bound.push((listener, route)),
+                Err(error) => {
+                    return Err(error).wrap_err_with(|| {
+                        format!(
+                            "failed to bind observer slow-reader relay {} for {}",
+                            route.published_address, route.peer_id
+                        )
+                    });
+                }
+            }
+        }
+
+        let (shutdown, shutdown_rx) = watch::channel(false);
+        let listeners = bound
+            .into_iter()
+            .map(|(listener, route)| {
+                let counters = Arc::clone(&route.counters);
+                let config = self.config;
+                let shutdown_rx = shutdown_rx.clone();
+                let paused = self.paused.subscribe();
+                let peer_id = route.peer_id.clone();
+                let published_address = route.published_address.clone();
+                let upstream_address = route.upstream_address.clone();
+                tokio::spawn(async move {
+                    run_observer_slow_reader_listener(
+                        listener,
+                        peer_id,
+                        published_address,
+                        upstream_address,
+                        config,
+                        counters,
+                        shutdown_rx,
+                        paused,
+                    )
+                    .await;
+                })
+            })
+            .collect();
+        runtime.shutdown = Some(shutdown);
+        runtime.listeners = listeners;
+        self.running.store(true, Ordering::Release);
+        Ok(())
+    }
+
+    async fn shutdown(&self) {
+        let listeners = self.signal_shutdown_and_take_listeners();
+        for listener in listeners {
+            let _ = listener.await;
+        }
+    }
+
+    fn abort(&self) {
+        for listener in self.signal_shutdown_and_take_listeners() {
+            listener.abort();
+        }
+    }
+
+    fn signal_shutdown_and_take_listeners(&self) -> Vec<JoinHandle<()>> {
+        let mut runtime = self
+            .runtime
+            .lock()
+            .expect("observer relay runtime should not be poisoned");
+        self.running.store(false, Ordering::Release);
+        if let Some(shutdown) = runtime.shutdown.take() {
+            let _ = shutdown.send(true);
+        }
+        std::mem::take(&mut runtime.listeners)
+    }
+}
+
+impl Drop for ObserverSlowReaderRelays {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
+async fn run_observer_slow_reader_listener(
+    listener: TokioTcpListener,
+    peer_id: PeerId,
+    published_address: SocketAddr,
+    upstream_address: SocketAddr,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    paused: watch::Receiver<bool>,
+) {
+    let mut connections = JoinSet::new();
+    loop {
+        let accepted = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    break;
+                }
+                continue;
+            }
+            accepted = listener.accept() => accepted,
+            Some(result) = connections.join_next(), if !connections.is_empty() => {
+                if let Err(error) = result {
+                    debug!(%error, %peer_id, "observer relay connection task failed");
+                }
+                continue;
+            }
+        };
+        let (client, _) = match accepted {
+            Ok(accepted) => accepted,
+            Err(error) => {
+                warn!(%error, %peer_id, %published_address, "observer relay accept failed");
+                break;
+            }
+        };
+        counters
+            .accepted_connections
+            .fetch_add(1, Ordering::Relaxed);
+        let connection_counters = Arc::clone(&counters);
+        let connection_shutdown = shutdown.clone();
+        let connection_paused = paused.clone();
+        let connection_peer_id = peer_id.clone();
+        let connection_upstream = upstream_address.clone();
+        connections.spawn(async move {
+            run_observer_slow_reader_connection(
+                client,
+                connection_peer_id,
+                connection_upstream,
+                config,
+                connection_counters,
+                connection_shutdown,
+                connection_paused,
+            )
+            .await;
+        });
+    }
+    connections.shutdown().await;
+}
+
+async fn run_observer_slow_reader_connection(
+    client: TcpStream,
+    peer_id: PeerId,
+    upstream_address: SocketAddr,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    paused: watch::Receiver<bool>,
+) {
+    let upstream = loop {
+        let connect = TcpStream::connect(upstream_address.to_string());
+        match tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+                continue;
+            }
+            connected = connect => connected,
+        } {
+            Ok(upstream) => break upstream,
+            Err(_error) => {
+                counters
+                    .upstream_connect_retries
+                    .fetch_add(1, Ordering::Relaxed);
+                tokio::select! {
+                    changed = shutdown.changed() => {
+                        if changed.is_err() || *shutdown.borrow() {
+                            return;
+                        }
+                    }
+                    () = tokio::time::sleep(OBSERVER_RELAY_UPSTREAM_RETRY_DELAY) => {}
+                }
+            }
+        }
+    };
+    counters
+        .upstream_connections
+        .fetch_add(1, Ordering::Relaxed);
+
+    let (client_read, mut client_write) = client.into_split();
+    let (mut upstream_read, upstream_write) = upstream.into_split();
+    let delayed = slow_copy_observer_ciphertext(
+        client_read,
+        upstream_write,
+        config,
+        Arc::clone(&counters),
+        shutdown.clone(),
+        paused,
+    );
+    let returned = tokio::io::copy(&mut upstream_read, &mut client_write);
+    tokio::pin!(delayed);
+    tokio::pin!(returned);
+    tokio::select! {
+        changed = shutdown.changed() => {
+            let _ = changed;
+        }
+        result = &mut delayed => {
+            if let Err(error) = result {
+                debug!(%error, %peer_id, "observer relay delayed direction closed");
+            }
+        }
+        result = &mut returned => {
+            if let Err(error) = result {
+                debug!(%error, %peer_id, "observer relay return direction closed");
+            }
+        }
+    }
+}
+
+async fn slow_copy_observer_ciphertext<R, W>(
+    mut reader: R,
+    mut writer: W,
+    config: ObserverSlowReaderRelayConfig,
+    counters: Arc<ObserverSlowReaderRelayCounters>,
+    mut shutdown: watch::Receiver<bool>,
+    mut paused: watch::Receiver<bool>,
+) -> std::io::Result<()>
+where
+    R: AsyncRead + Unpin,
+    W: AsyncWrite + Unpin,
+{
+    let mut buffer = vec![0_u8; config.read_chunk_bytes()];
+    loop {
+        let read = tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+                continue;
+            }
+            read = reader.read(&mut buffer) => read?,
+        };
+        if read == 0 {
+            return Ok(());
+        }
+        counters.delayed_reads.fetch_add(1, Ordering::Relaxed);
+        loop {
+            let forwarding_is_paused = *paused.borrow();
+            if !forwarding_is_paused {
+                break;
+            }
+            tokio::select! {
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        return Ok(());
+                    }
+                }
+                changed = paused.changed() => {
+                    if changed.is_err() {
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            () = tokio::time::sleep(config.read_delay()) => {}
+        }
+        tokio::select! {
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return Ok(());
+                }
+            }
+            result = writer.write_all(&buffer[..read]) => result?,
+        }
+        counters
+            .forwarded_to_observers_bytes
+            .fetch_add(u64::try_from(read).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+}
+
+/// Builder of [`Network`].
+///
+/// Cloning copies only the deterministic network recipe. Every call to
+/// [`Self::build`] allocates a distinct environment, peer directories, and
+/// ports, which lets startup retries remain isolated from prior durable state.
+#[derive(Clone)]
 pub struct NetworkBuilder {
-    env: Environment,
     n_peers: usize,
+    observer_p2p_bootstrap: Option<ObserverP2pBootstrap>,
+    observer_slow_reader_relays: Option<ObserverSlowReaderRelayConfig>,
     config_layers: Vec<Table>,
     block_cadence: Option<Duration>,
     sync_timeout: Option<Duration>,
@@ -3821,8 +4831,18 @@ pub struct NetworkBuilder {
     block_sync_gossip_period: Duration,
     consensus_mode: ConsensusMode,
     auto_populate_trusted_peer_pops: bool,
-    npos_genesis_bootstrap_stake: Option<u64>,
+    npos_genesis_bootstrap_stake: Option<Quantity>,
     consensus_message_control: bool,
+    initial_consensus_message_control: Option<InitialConsensusMessageControl>,
+}
+
+type InitialConsensusMessageControlFactory =
+    dyn Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync;
+
+#[derive(Clone)]
+struct InitialConsensusMessageControl {
+    queue_capacity: usize,
+    factory: Arc<InitialConsensusMessageControlFactory>,
 }
 
 fn bool_env_override(key: &str) -> Option<bool> {
@@ -3876,14 +4896,37 @@ fn trusted_peers_layer_for_parse(
     peers: &[NetworkPeer],
     auto_populate_trusted_peer_pops: bool,
 ) -> Table {
-    let trusted_peers: Vec<String> = peers
+    trusted_peers_layer_for_parse_with_observers(peers, &[], auto_populate_trusted_peer_pops)
+}
+
+fn trusted_peers_layer_for_parse_with_observers(
+    validators: &[NetworkPeer],
+    observers: &[NetworkPeer],
+    auto_populate_trusted_peer_pops: bool,
+) -> Table {
+    trusted_peers_layer_for_parse_with_observer_addresses(
+        validators,
+        observers,
+        &HashMap::new(),
+        auto_populate_trusted_peer_pops,
+    )
+}
+
+fn trusted_peers_layer_for_parse_with_observer_addresses(
+    validators: &[NetworkPeer],
+    observers: &[NetworkPeer],
+    observer_advertised_p2p_addresses: &HashMap<PeerId, SocketAddr>,
+    auto_populate_trusted_peer_pops: bool,
+) -> Table {
+    let trusted_peers: Vec<String> = validators
         .iter()
+        .chain(observers)
         .map(|peer| {
-            format!(
-                "{}@{}",
-                peer.network_peer_id(),
-                peer.p2p_address().to_literal()
-            )
+            let address = observer_advertised_p2p_addresses
+                .get(&peer.network_peer_id())
+                .cloned()
+                .unwrap_or_else(|| peer.p2p_address());
+            format!("{}@{}", peer.network_peer_id(), address.to_literal())
         })
         .collect();
     let mut base_layer = Table::new().write(["trusted_peers"], trusted_peers);
@@ -3892,7 +4935,7 @@ fn trusted_peers_layer_for_parse(
         let mut trusted_peers_pop: Vec<Value> = Vec::new();
         let mut seen = HashSet::new();
 
-        for peer in peers {
+        for peer in validators {
             let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop()) else {
                 continue;
             };
@@ -3915,6 +4958,10 @@ fn trusted_peers_layer_for_parse(
     }
 
     base_layer
+}
+
+fn observer_role_layer() -> Table {
+    Table::new().write(["sumeragi", "role"], "observer")
 }
 
 // Deterministic BLS keypair/PoP so consensus validation doesn't reject profile detection defaults.
@@ -4287,6 +5334,32 @@ fn consensus_parameters_from_genesis(
     parameter_state
 }
 
+fn consensus_parameters_from_genesis_with_overrides(
+    genesis: &GenesisBlock,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+) -> iroha_data_model::parameter::Parameters {
+    let mut parameters = consensus_parameters_from_genesis(genesis);
+    for instruction in genesis_isi
+        .iter()
+        .chain(genesis_post_topology_isi)
+        .flat_map(|batch| batch.iter())
+    {
+        let Some(set_parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
+            continue;
+        };
+        if matches!(
+            set_parameter.inner(),
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id()
+        ) {
+            continue;
+        }
+        parameters.set_parameter(set_parameter.inner().clone());
+    }
+    parameters
+}
+
 fn genesis_instructions_contain_consensus_handshake_meta(
     genesis_isi: &[Vec<InstructionBox>],
     consensus_handshake_meta: &Parameter,
@@ -4312,7 +5385,7 @@ fn genesis_instructions_contain_consensus_handshake_meta(
         })
 }
 
-fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
+fn genesis_has_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -> bool {
     let expected_meta = match expected {
         Parameter::Custom(custom) if custom.id() == &consensus_metadata::handshake_meta_id() => {
             custom
@@ -4320,22 +5393,26 @@ fn genesis_has_consensus_handshake(block: &GenesisBlock, expected: &Parameter) -
         _ => return false,
     };
 
-    block
+    let mut handshakes = block
         .0
         .transactions_vec()
         .iter()
-        .any(|tx| match tx.instructions() {
-            Executable::Instructions(instructions) => instructions.iter().any(|instruction| {
-                instruction
-                    .as_any()
-                    .downcast_ref::<SetParameter>()
-                    .is_some_and(|set_param| match set_param.inner() {
-                        Parameter::Custom(custom) => custom == expected_meta,
-                        _ => false,
-                    })
-            }),
-            _ => false,
+        .filter_map(|tx| match tx.instructions() {
+            Executable::Instructions(instructions) => Some(instructions),
+            _ => None,
         })
+        .flat_map(|instructions| instructions.iter())
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set_param| match set_param.inner() {
+            Parameter::Custom(custom)
+                if custom.id() == &consensus_metadata::handshake_meta_id() =>
+            {
+                Some(custom)
+            }
+            _ => None,
+        });
+    matches!(handshakes.next(), Some(actual) if actual == expected_meta)
+        && handshakes.next().is_none()
 }
 
 fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
@@ -4358,6 +5435,189 @@ fn genesis_contains_any_consensus_handshake(block: &GenesisBlock) -> bool {
             }),
             _ => false,
         })
+}
+
+fn normalize_genesis_consensus_handshake(
+    source: &GenesisBlock,
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+    consensus_handshake_meta: &Parameter,
+    genesis_key_pair: &KeyPair,
+    fallback_chain_id: &ChainId,
+) -> GenesisBlock {
+    let mut param_instructions = genesis_isi
+        .iter()
+        .chain(genesis_post_topology_isi)
+        .flat_map(|batch| batch.iter())
+        .filter(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some()
+        })
+        .filter(|instruction| {
+            !instruction
+                .as_any()
+                .downcast_ref::<SetParameter>()
+                .is_some_and(|set_param| {
+                    matches!(
+                        set_param.inner(),
+                        Parameter::Custom(custom)
+                            if custom.id() == &consensus_metadata::handshake_meta_id()
+                    )
+                })
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    param_instructions.push(InstructionBox::from(SetParameter::new(
+        consensus_handshake_meta.clone(),
+    )));
+
+    let chain_id = source
+        .0
+        .transactions_vec()
+        .first()
+        .map(|tx| tx.chain().clone())
+        .unwrap_or_else(|| fallback_chain_id.clone());
+    let authority = AccountId::new(genesis_key_pair.public_key().clone());
+    let (_, time_source) = TimeSource::new_mock(Duration::ZERO);
+    let param_tx = iroha_data_model::transaction::TransactionBuilder::new_with_time_source(
+        chain_id,
+        authority,
+        &time_source,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(param_instructions)
+    .try_sign(genesis_key_pair.private_key())
+    .expect("sign normalized genesis consensus metadata transaction");
+
+    let mut transactions = transactions_without_consensus_handshake_metadata(
+        source.0.transactions_vec(),
+        genesis_key_pair,
+    );
+    transactions.push(param_tx);
+
+    let external_merkle: iroha_crypto::MerkleTree<
+        iroha_data_model::transaction::TransactionEntrypoint,
+    > = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect();
+    let mut header = source.0.header();
+    header.merkle_root = external_merkle.root();
+    header.result_merkle_root = None;
+
+    let signer_index = source
+        .0
+        .signatures()
+        .next()
+        .map(|sig| sig.index())
+        .unwrap_or(0);
+    let placeholder_sig = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
+            .expect("sign normalized genesis placeholder header"),
+    );
+    let mut working = iroha_data_model::block::SignedBlock::presigned(
+        placeholder_sig,
+        header,
+        transactions.clone(),
+    );
+    working.set_da_commitments(source.0.da_commitments().cloned());
+    working.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    working.set_da_pin_intents(source.0.da_pin_intents().cloned());
+    let hashes = transactions
+        .iter()
+        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
+        .collect::<Vec<_>>();
+    let placeholder_results =
+        std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
+            .take(hashes.len())
+            .collect::<Vec<_>>();
+    working
+        .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
+        .expect("normalized genesis placeholder hashes must match payload");
+    working.set_committed_fragment_count(0);
+
+    let signature = iroha_data_model::block::BlockSignature::new(
+        signer_index,
+        iroha_crypto::SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
+            .expect("sign normalized genesis header"),
+    );
+    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
+        signature,
+        working.payload().header,
+        transactions,
+    );
+    rebuilt.set_da_commitments(source.0.da_commitments().cloned());
+    rebuilt.set_da_proof_policies(source.0.da_proof_policies().cloned());
+    rebuilt.set_da_pin_intents(source.0.da_pin_intents().cloned());
+    rebuilt
+        .set_transaction_results(Vec::new(), &hashes, placeholder_results)
+        .expect("normalized genesis placeholder hashes must match payload");
+    rebuilt.set_committed_fragment_count(0);
+    GenesisBlock(rebuilt)
+}
+
+fn transactions_without_consensus_handshake_metadata(
+    transactions: &[iroha_data_model::transaction::SignedTransaction],
+    genesis_key_pair: &KeyPair,
+) -> Vec<iroha_data_model::transaction::SignedTransaction> {
+    transactions
+        .iter()
+        .filter_map(|transaction| {
+            let Executable::Instructions(instructions) = transaction.instructions() else {
+                return Some(transaction.clone());
+            };
+            let filtered = instructions
+                .iter()
+                .filter(|instruction| {
+                    !instruction
+                        .as_any()
+                        .downcast_ref::<SetParameter>()
+                        .is_some_and(|set_param| {
+                            matches!(
+                                set_param.inner(),
+                                Parameter::Custom(custom)
+                                    if custom.id() == &consensus_metadata::handshake_meta_id()
+                            )
+                        })
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            if filtered.len() == instructions.len() {
+                return Some(transaction.clone());
+            }
+            if filtered.is_empty() {
+                return None;
+            }
+
+            assert_eq!(
+                transaction.authority().try_signatory(),
+                Some(genesis_key_pair.public_key()),
+                "cannot normalize handshake metadata in a genesis transaction signed by another authority"
+            );
+            assert!(
+                transaction.attachments().is_none(),
+                "cannot normalize handshake metadata inside a proof-attached genesis transaction"
+            );
+            assert!(
+                transaction.multisig_signatures().is_none(),
+                "cannot normalize handshake metadata inside a multisig genesis transaction"
+            );
+            let canonical_payload = norito::codec::encode_adaptive(transaction.payload());
+            let builder = iroha_data_model::transaction::TransactionBuilder::decode_payload(
+                &canonical_payload,
+            )
+            .expect("cached genesis transaction payload must decode canonically")
+            .with_instructions(filtered);
+            Some(
+                builder
+                    .try_sign(genesis_key_pair.private_key())
+                    .expect("re-sign cached genesis transaction after handshake normalization"),
+            )
+        })
+        .collect()
 }
 
 fn consensus_handshake_parameter(consensus_profile: &ConsensusBootstrapProfile) -> Parameter {
@@ -4412,11 +5672,16 @@ fn npos_params_from_genesis(
         .ok_or_else(|| "genesis contains invalid `sumeragi_npos_parameters`".to_owned())
 }
 
-fn resolve_npos_bootstrap_stake(genesis_isi: &[Vec<InstructionBox>], requested: u64) -> u64 {
-    let min_self_bond = npos_params_from_genesis(genesis_isi, &[])
+fn resolve_npos_bootstrap_stake(
+    genesis_isi: &[Vec<InstructionBox>],
+    genesis_post_topology_isi: &[Vec<InstructionBox>],
+    requested: Quantity,
+) -> Quantity {
+    let min_self_bond = npos_params_from_genesis(genesis_isi, genesis_post_topology_isi)
         .expect("NPoS genesis snapshot must be valid")
         .expect("NPoS genesis snapshot must be present before stake bootstrap")
-        .min_self_bond();
+        .min_self_bond()
+        .clone();
     requested.max(min_self_bond)
 }
 
@@ -4430,11 +5695,14 @@ impl Default for NetworkBuilder {
 impl NetworkBuilder {
     /// Constructor
     pub fn new() -> Self {
+        init_logger_once();
+        init_instruction_registry();
         // Default to a fast signed localnet cadence; callers can explicitly use
         // the protocol default when timing fidelity matters more than test speed.
         let mut builder = Self {
-            env: Environment::new(),
             n_peers: DEFAULT_NETWORK_PEERS,
+            observer_p2p_bootstrap: None,
+            observer_slow_reader_relays: None,
             config_layers: vec![],
             block_cadence: Some(LOCALNET_BLOCK_CADENCE),
             sync_timeout: None,
@@ -4448,8 +5716,11 @@ impl NetworkBuilder {
             block_sync_gossip_period: DEFAULT_BLOCK_SYNC,
             consensus_mode: ConsensusMode::Permissioned,
             auto_populate_trusted_peer_pops: true,
-            npos_genesis_bootstrap_stake: Some(SumeragiNposParameters::default().min_self_bond()),
+            npos_genesis_bootstrap_stake: Some(
+                SumeragiNposParameters::default().min_self_bond().clone(),
+            ),
             consensus_message_control: false,
+            initial_consensus_message_control: None,
         };
         let mut default_layer = Table::new();
         let mut writer = TomlWriter::new(&mut default_layer);
@@ -4479,8 +5750,54 @@ impl NetworkBuilder {
     /// One by default.
     pub fn with_peers(mut self, n_peers: usize) -> Self {
         assert_ne!(n_peers, 0);
+        if let Some(bootstrap) = self.observer_p2p_bootstrap {
+            bootstrap
+                .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
+                .unwrap_or_else(|error| {
+                    panic!("invalid observer bootstrap after peer change: {error}")
+                });
+        }
         self.n_peers = n_peers;
         self
+    }
+
+    /// Add a bounded set of signed, non-voting observer replicas.
+    ///
+    /// Observers become trusted P2P participants but are excluded from genesis
+    /// topology and `trusted_peers_pop`. Their private keys stay owned by the
+    /// generated [`NetworkPeer`] values.
+    ///
+    /// # Errors
+    /// Returns an error when the current validator count plus observers cannot
+    /// fit a full localnet fanout under the production core P2P connection cap.
+    pub fn with_observer_p2p_bootstrap(
+        mut self,
+        bootstrap: ObserverP2pBootstrap,
+    ) -> std::result::Result<Self, ObserverP2pBootstrapError> {
+        bootstrap
+            .validate_for_validators(self.n_peers, ObserverP2pBootstrap::connection_capacity())?;
+        self.observer_p2p_bootstrap = Some(bootstrap);
+        Ok(self)
+    }
+
+    /// Route every signed observer through a bounded transparent slow-reader relay.
+    ///
+    /// The hook is intended for P2P backpressure integration tests. Relay
+    /// addresses replace observer listener addresses in all shared trusted-peer
+    /// layers, while encrypted production traffic is forwarded unchanged.
+    ///
+    /// # Errors
+    /// Returns an error unless [`Self::with_observer_p2p_bootstrap`] was called
+    /// first.
+    pub fn with_observer_slow_reader_relays(
+        mut self,
+        config: ObserverSlowReaderRelayConfig,
+    ) -> std::result::Result<Self, ObserverSlowReaderRelayError> {
+        if self.observer_p2p_bootstrap.is_none() {
+            return Err(ObserverSlowReaderRelayError::MissingObserverBootstrap);
+        }
+        self.observer_slow_reader_relays = Some(config);
+        Ok(self)
     }
 
     /// Use a separately built, feature-isolated daemon with receiver-local
@@ -4490,12 +5807,41 @@ impl NetworkBuilder {
         self
     }
 
+    /// Stage receiver-local authenticated consensus rules before controlled
+    /// daemon processes start.
+    ///
+    /// The factory receives the receiver index and the stable ordered peer-id
+    /// roster. Its result is installed as that receiver's revision-1 command,
+    /// which the feature-isolated daemon must acknowledge during startup.
+    pub fn with_initial_consensus_message_control_rules<F>(
+        mut self,
+        queue_capacity: usize,
+        factory: F,
+    ) -> Self
+    where
+        F: Fn(usize, &[PeerId]) -> Vec<ConsensusMessageControlRule> + Send + Sync + 'static,
+    {
+        self.consensus_message_control = true;
+        self.initial_consensus_message_control = Some(InitialConsensusMessageControl {
+            queue_capacity,
+            factory: Arc::new(factory),
+        });
+        self
+    }
+
     /// Ensure the network has at least `min_peers` peers.
     ///
     /// If the current peer count is below `min_peers`, it is raised to that value.
     pub fn with_min_peers(mut self, min_peers: usize) -> Self {
         assert_ne!(min_peers, 0);
         if self.n_peers < min_peers {
+            if let Some(bootstrap) = self.observer_p2p_bootstrap {
+                bootstrap
+                    .validate_for_validators(min_peers, ObserverP2pBootstrap::connection_capacity())
+                    .unwrap_or_else(|error| {
+                        panic!("invalid observer bootstrap after minimum peer change: {error}")
+                    });
+            }
             self.n_peers = min_peers;
         }
         self
@@ -4601,8 +5947,8 @@ impl NetworkBuilder {
     /// This registers Nexus/IVM domains, a gas account, the default stake asset, and per-peer
     /// validator accounts funded with the stake amount, then activates them. Calling this method
     /// also selects NPoS in the signed genesis consensus profile.
-    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: u64) -> Self {
-        assert!(stake_amount > 0, "stake_amount must be non-zero");
+    pub fn with_npos_genesis_bootstrap(mut self, stake_amount: Quantity) -> Self {
+        assert!(!stake_amount.is_zero(), "stake_amount must be non-zero");
         self.consensus_mode = ConsensusMode::Npos;
         self.npos_genesis_bootstrap_stake = Some(stake_amount);
         self
@@ -4696,17 +6042,20 @@ impl NetworkBuilder {
         self
     }
 
-    /// Override the genesis block entirely using a custom builder.
+    /// Override the genesis instructions using a custom block builder.
     ///
     /// The provided closure receives the network topology (as peer IDs) and the
-    /// corresponding Proof-of-Possession entries. It must return a fully signed
-    /// genesis block. When set, the regular `genesis_isi` instructions are ignored
-    /// and the resulting block is reused verbatim by all peers.
+    /// corresponding Proof-of-Possession entries. It must return a signed genesis
+    /// block. The harness normalizes the system-owned consensus parameter carrier,
+    /// re-signs the affected transactions and block with the configured genesis
+    /// key, and pre-executes under the exact final pipeline, Nexus, and ZK runtime
+    /// configuration. It then binds the staged Nexus/AMX context and caches the
+    /// identical final bytes supplied to every peer.
     pub fn with_genesis_block<F>(mut self, build: F) -> Self
     where
         F: Fn(UniqueVec<PeerId>, Vec<GenesisTopologyEntry>) -> GenesisBlock + Send + Sync + 'static,
     {
-        self.custom_genesis = Some(Box::new(build));
+        self.custom_genesis = Some(Arc::new(build));
         self.genesis_isi = vec![Vec::new()];
         self
     }
@@ -4762,8 +6111,9 @@ impl NetworkBuilder {
 
     fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
-            env,
             n_peers,
+            observer_p2p_bootstrap,
+            observer_slow_reader_relays,
             mut config_layers,
             block_cadence,
             sync_timeout,
@@ -4779,7 +6129,21 @@ impl NetworkBuilder {
             auto_populate_trusted_peer_pops,
             npos_genesis_bootstrap_stake,
             consensus_message_control,
+            initial_consensus_message_control,
         } = self;
+        let observer_count = observer_p2p_bootstrap.map_or(0, |bootstrap| {
+            bootstrap
+                .validate_for_validators(n_peers, ObserverP2pBootstrap::connection_capacity())
+                .unwrap_or_else(|error| panic!("invalid observer P2P bootstrap: {error}"));
+            bootstrap.observer_count()
+        });
+        let participant_count = n_peers
+            .checked_add(observer_count)
+            .expect("validated observer participant count cannot overflow");
+        // A builder is a reusable network recipe. Allocate the environment only
+        // when the recipe is built so retrying a cloned recipe cannot inherit a
+        // previous attempt's peer directories, Kura state, logs, or ports.
+        let env = Environment::new();
 
         // Keep Nexus sink/escrow account literals parseable for unregister-guard checks even
         // when callers don't provide explicit nexus account overrides.
@@ -4816,7 +6180,7 @@ impl NetworkBuilder {
             config_layers.push(nexus_accounts_layer);
         }
 
-        let peers: Vec<_> = (0..n_peers)
+        let mut peers: Vec<_> = (0..n_peers)
             .map(|i| {
                 let seed = seed.as_ref().map(|x| format!("{x}-peer-{i}"));
                 NetworkPeerBuilder::new()
@@ -4832,6 +6196,29 @@ impl NetworkBuilder {
             })
             .collect();
 
+        let mut observers: Vec<_> = (0..observer_count)
+            .map(|i| {
+                let seed = seed.as_ref().map(|x| format!("{x}-observer-{i}"));
+                NetworkPeerBuilder::new()
+                    .with_seed(seed.as_ref().map(|x| x.as_bytes()))
+                    .build_with_program(
+                        &env,
+                        if consensus_message_control {
+                            Program::IrohadMessageControl
+                        } else {
+                            Program::Irohad
+                        },
+                    )
+            })
+            .collect();
+
+        let observer_slow_reader_relays = observer_slow_reader_relays
+            .map(|config| ObserverSlowReaderRelays::new(&observers, config));
+        let observer_advertised_p2p_addresses = observer_slow_reader_relays
+            .as_ref()
+            .map(ObserverSlowReaderRelays::published_addresses)
+            .unwrap_or_default();
+
         let peer_ids: UniqueVec<PeerId> = peers.iter().map(NetworkPeer::id).collect();
         let collected_entries: Vec<GenesisTopologyEntry> =
             peers.iter().filter_map(NetworkPeer::genesis_pop).collect();
@@ -4844,6 +6231,29 @@ impl NetworkBuilder {
         let topology_entries: Vec<GenesisTopologyEntry> = collected_entries.clone();
 
         let peer_topology: Vec<PeerId> = peer_ids.iter().cloned().collect();
+        if let Some(initial) = initial_consensus_message_control {
+            for (receiver_index, peer) in peers.iter_mut().enumerate() {
+                let rules = (initial.factory)(receiver_index, &peer_topology);
+                let control = peer
+                    .consensus_message_control
+                    .as_mut()
+                    .and_then(Arc::get_mut)
+                    .expect("new controlled peer must uniquely own its controller");
+                control
+                    .stage_initial_rules(&rules, initial.queue_capacity)
+                    .expect("stage valid initial consensus message-control rules");
+            }
+            for observer in &mut observers {
+                let control = observer
+                    .consensus_message_control
+                    .as_mut()
+                    .and_then(Arc::get_mut)
+                    .expect("new controlled observer must uniquely own its controller");
+                control
+                    .stage_initial_rules(&[], initial.queue_capacity)
+                    .expect("stage empty observer message-control rules");
+            }
+        }
         let mut config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
         config_layers_for_parse.push(
             Table::new()
@@ -4853,32 +6263,21 @@ impl NetworkBuilder {
                     genesis_key_pair.public_key().to_string(),
                 ),
         );
-        config_layers_for_parse.push(trusted_peers_layer_for_parse(
+        config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
             &peers,
+            &observers,
+            &observer_advertised_p2p_addresses,
             auto_populate_trusted_peer_pops,
         ));
         config_layers_for_parse.extend(config_layers.iter().cloned());
         let resolved_npos_config = peers
             .first()
             .and_then(|peer| resolve_actual_config(peer, &config_layers_for_parse));
+        let custom_genesis_block = custom_genesis
+            .as_ref()
+            .map(|builder_fn| builder_fn(peer_ids.clone(), topology_entries.clone()));
         let cached_genesis = OnceLock::new();
         let cached_genesis_augmented = OnceLock::new();
-        if let Some(builder_fn) = custom_genesis.as_ref() {
-            let mut block = builder_fn(peer_ids.clone(), topology_entries.clone());
-            let genesis_key_pair = genesis_key_pair.clone();
-            let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-            ensure_genesis_results(
-                &mut block,
-                &genesis_account_id,
-                &peer_topology,
-                &genesis_key_pair,
-                resolved_npos_config.as_ref().map(|config| &config.nexus),
-                resolved_npos_config.as_ref().map(|config| &config.zk),
-            );
-            cached_genesis
-                .set(block)
-                .expect("custom genesis should be set exactly once");
-        }
 
         let block_cadence = block_cadence.unwrap_or(DEFAULT_BLOCK_CADENCE);
 
@@ -4938,8 +6337,12 @@ impl NetworkBuilder {
 
         let npos_bootstrap =
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
-        if let Some(stake_amount) = npos_bootstrap {
-            let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
+        if let Some(stake_amount) = npos_bootstrap.clone() {
+            let stake_amount = resolve_npos_bootstrap_stake(
+                &genesis_isi,
+                &genesis_post_topology_isi,
+                stake_amount,
+            );
             let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
             let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
             let universal_domain =
@@ -5000,7 +6403,7 @@ impl NetworkBuilder {
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_quantity(
-                        stake_amount,
+                        stake_amount.clone(),
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
                     )
                     .into(),
@@ -5038,7 +6441,7 @@ impl NetworkBuilder {
                         validator: validator_id.clone(),
                         peer_id: peer.id(),
                         stake_account: validator_id.clone(),
-                        initial_stake: iroha_primitives::numeric::Quantity::from(stake_amount),
+                        initial_stake: stake_amount.clone(),
                         metadata: Metadata::default(),
                     }
                     .into(),
@@ -5102,39 +6505,121 @@ impl NetworkBuilder {
             }
         }
 
+        let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
+            .expect("block gossip period fits in i64 milliseconds");
+        let participant_fanout = i64::try_from(participant_count)
+            .expect("bounded observer participant count fits in i64");
+        let mut base_layer =
+            config::base_iroha_config().write("chain", consensus_chain_id.to_string());
+        base_layer = base_layer
+            .write(["network", "block_gossip_period_ms"], gossip_ms)
+            // Fan-out gossip to all peers so block sync converges quickly in multi-peer
+            // integration scenarios (NPoS liveness and certified-body recovery).
+            .write(["network", "block_gossip_size"], participant_fanout);
+        base_layer = base_layer
+            .write(["sumeragi", "queues", "bodies"], 512i64)
+            // Test networks always provision BLS validator keys; drop the HSM binding requirement
+            // so genesis peer registration succeeds.
+            .write(["sumeragi", "keys", "require_hsm"], false)
+            .write(
+                ["genesis", "public_key"],
+                genesis_key_pair.public_key().to_string(),
+            );
+        base_layer = base_layer
+            // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
+            .write(["pipeline", "signature_batch_max_bls"], 4i64)
+            // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
+            .write(["torii", "transport", "norito_rpc", "stage"], "ga")
+            .write(["torii", "transport", "norito_rpc", "enabled"], true);
+
+        // Resolve the same ordered layers that peers will consume. The provisional
+        // genesis commitment must include the exact runtime pipeline and Nexus
+        // projection, including config layers injected for NPoS bootstrap.
+        let mut final_config_layers_for_parse = Vec::with_capacity(config_layers.len() + 2);
+        final_config_layers_for_parse.push(trusted_peers_layer_for_parse_with_observer_addresses(
+            &peers,
+            &observers,
+            &observer_advertised_p2p_addresses,
+            auto_populate_trusted_peer_pops,
+        ));
+        final_config_layers_for_parse.push(base_layer.clone());
+        final_config_layers_for_parse.extend(config_layers.iter().cloned());
+        let resolved_genesis_config = peers
+            .first()
+            .and_then(|peer| resolve_actual_config(peer, &final_config_layers_for_parse));
+        if let Some(bootstrap) = observer_p2p_bootstrap {
+            let configured_capacity = resolved_genesis_config
+                .as_ref()
+                .and_then(|config| config.network.max_total_connections)
+                .map_or_else(ObserverP2pBootstrap::connection_capacity, NonZero::get)
+                .min(ObserverP2pBootstrap::connection_capacity());
+            bootstrap
+                .validate_for_validators(n_peers, configured_capacity)
+                .unwrap_or_else(|error| {
+                    panic!("observer P2P fanout exceeds effective network capacity: {error}")
+                });
+        }
+
         // Build consensus parameters from the effective genesis instructions (base + post-topology),
         // so consensus metadata is consistent with the final submitted genesis layout.
-        let da_proof_policies = resolved_npos_config
+        let da_proof_policies = resolved_genesis_config
             .as_ref()
             .map(|config| iroha_core::da::proof_policy_bundle(&config.nexus.lane_config));
-        let confidential_policy_hash = Some(resolved_npos_config.as_ref().map_or_else(
+        let confidential_policy_hash = Some(resolved_genesis_config.as_ref().map_or_else(
             iroha_core::state::default_genesis_confidential_policy_hash,
             |config| iroha_core::state::compute_genesis_confidential_policy_hash(&config.zk),
         ));
-        let genesis_crypto = resolved_npos_config
+        let genesis_crypto = resolved_genesis_config
             .as_ref()
             .map(|config| config::manifest_crypto_from_actual(&config.crypto));
-        let nexus_config = resolved_npos_config
+        let pipeline_config = resolved_genesis_config
+            .as_ref()
+            .map(|config| config.pipeline.clone());
+        let nexus_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.nexus.clone());
-        let zk_config = resolved_npos_config
+        let zk_config = resolved_genesis_config
             .as_ref()
             .map(|config| config.zk.clone());
-        let preview_genesis = config::genesis_with_keypair_and_post_topology_with_policies(
-            genesis_isi.clone(),
-            genesis_post_topology_isi.clone(),
-            peer_ids.clone(),
-            topology_entries.clone(),
-            genesis_key_pair.clone(),
-            consensus_chain_id.clone(),
-            genesis_crypto,
-            da_proof_policies,
-            nexus_config,
-            zk_config,
-            None,
-            confidential_policy_hash,
-        );
-        let mut parameter_state = consensus_parameters_from_genesis(&preview_genesis);
+        let (mut parameter_state, preview_staged_nexus_amx_context_hash) =
+            match custom_genesis_block.as_ref() {
+                Some(custom) => (
+                    consensus_parameters_from_genesis_with_overrides(
+                        custom,
+                        &genesis_isi,
+                        &genesis_post_topology_isi,
+                    ),
+                    None,
+                ),
+                None => {
+                    let (preview_genesis, staged_hash) =
+                        config::genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+                            genesis_isi.clone(),
+                            genesis_post_topology_isi.clone(),
+                            peer_ids.clone(),
+                            topology_entries.clone(),
+                            genesis_key_pair.clone(),
+                            consensus_chain_id.clone(),
+                            genesis_crypto.clone(),
+                            da_proof_policies.clone(),
+                            pipeline_config.clone(),
+                            nexus_config.clone(),
+                            zk_config.clone(),
+                            None,
+                            Some(match consensus_mode {
+                                ConsensusMode::Permissioned => {
+                                    SumeragiConsensusMode::Permissioned
+                                }
+                                ConsensusMode::Npos => SumeragiConsensusMode::Npos,
+                            }),
+                            confidential_policy_hash,
+                        );
+                    (
+                        consensus_parameters_from_genesis(&preview_genesis),
+                        Some(staged_hash),
+                    )
+                }
+            };
         parameter_state.sumeragi.block_cadence_ms = std::num::NonZeroU64::new(
             u64::try_from(block_cadence.as_millis())
                 .expect("signed block cadence fits into u64 milliseconds"),
@@ -5146,14 +6631,57 @@ impl NetworkBuilder {
             consensus_mode_tag = NPOS_TAG;
             consensus_bls_domain = NPOS_BLS_DOMAIN;
         }
+        let provisional_v2_context =
+            iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(
+            );
+        let provisional_params =
+            iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
+                consensus_mode,
+                &parameter_state,
+                provisional_v2_context,
+            )
+            .expect("test-network genesis parameters must form a canonical carrier");
+        let provisional_profile = ConsensusBootstrapProfile {
+            params: provisional_params,
+            mode_tag: consensus_mode_tag,
+            bls_domain: consensus_bls_domain,
+            chain_id: consensus_chain_id.clone(),
+            wire_protocol_version: PROTO_VERSION,
+        };
+        let staged_nexus_amx_context_hash = match custom_genesis_block.as_ref() {
+            Some(custom) => {
+                let provisional = normalize_genesis_consensus_handshake(
+                    custom,
+                    &genesis_isi,
+                    &genesis_post_topology_isi,
+                    &consensus_handshake_parameter(&provisional_profile),
+                    &genesis_key_pair,
+                    &consensus_chain_id,
+                );
+                config::staged_genesis_nexus_amx_context_hash(
+                    &provisional,
+                    &AccountId::new(genesis_key_pair.public_key().clone()),
+                    &peer_topology,
+                    &genesis_key_pair,
+                    pipeline_config.as_ref(),
+                    nexus_config.as_ref(),
+                    zk_config.as_ref(),
+                )
+                .expect("normalized custom genesis must pre-execute for v2 context binding")
+            }
+            None => preview_staged_nexus_amx_context_hash
+                .expect("normal genesis preview must provide the staged Nexus/AMX context hash"),
+        };
+
+        let mut signed_v2_context = provisional_v2_context;
+        signed_v2_context.nexus_amx_context_hash = staged_nexus_amx_context_hash.into();
         let consensus_params =
             iroha_core::sumeragi::consensus::consensus_genesis_params_from_parameters(
                 consensus_mode,
                 &parameter_state,
-                iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
+                signed_v2_context,
             )
-            .expect("test-network genesis parameters must form a canonical carrier");
-
+            .expect("bound test-network genesis parameters must form a canonical carrier");
         let consensus_profile = ConsensusBootstrapProfile {
             params: consensus_params,
             mode_tag: consensus_mode_tag,
@@ -5199,38 +6727,48 @@ impl NetworkBuilder {
             );
         }
 
-        let gossip_ms = i64::try_from(block_sync_gossip_period.as_millis())
-            .expect("block gossip period fits in i64 milliseconds");
-
-        let mut base_layer =
-            config::base_iroha_config().write("chain", consensus_chain_id.to_string());
-        base_layer = base_layer
-            .write(["network", "block_gossip_period_ms"], gossip_ms)
-            // Fan-out gossip to all peers so block sync converges quickly in multi-peer
-            // integration scenarios (NPoS liveness and certified-body recovery).
-            .write(
-                ["network", "block_gossip_size"],
-                i64::try_from(peers.len()).unwrap_or(i64::MAX),
+        if let Some(custom) = custom_genesis_block.as_ref() {
+            let mut final_custom = normalize_genesis_consensus_handshake(
+                custom,
+                &genesis_isi,
+                &genesis_post_topology_isi,
+                &consensus_handshake_meta,
+                &genesis_key_pair,
+                &consensus_chain_id,
             );
-        base_layer = base_layer
-            .write(["sumeragi", "queues", "bodies"], 512i64)
-            // Test networks always provision BLS validator keys; drop the HSM binding requirement
-            // so genesis peer registration succeeds.
-            .write(["sumeragi", "keys", "require_hsm"], false)
-            .write(
-                ["genesis", "public_key"],
-                genesis_key_pair.public_key().to_string(),
+            let (signed_block, final_staged_hash) = config::preexecute_genesis_with_runtime_config(
+                &final_custom,
+                &AccountId::new(genesis_key_pair.public_key().clone()),
+                &peer_topology,
+                &genesis_key_pair,
+                pipeline_config.as_ref(),
+                nexus_config.as_ref(),
+                zk_config.as_ref(),
+            )
+            .expect("final custom genesis must pre-execute without synthetic results");
+            assert_eq!(
+                final_staged_hash, staged_nexus_amx_context_hash,
+                "custom genesis Nexus/AMX binding must be a pre-execution fixed point"
             );
-        base_layer = base_layer
-            // Ensure BLS batching stays enabled so PoP-based peers can register and vote.
-            .write(["pipeline", "signature_batch_max_bls"], 4i64)
-            // Enable Norito-RPC for test networks so client-based flows keep working out of the box.
-            .write(["torii", "transport", "norito_rpc", "stage"], "ga")
-            .write(["torii", "transport", "norito_rpc", "enabled"], true);
+            final_custom.0 = signed_block;
+            assert!(
+                genesis_has_exactly_one_consensus_handshake(
+                    &final_custom,
+                    &consensus_handshake_meta
+                ),
+                "final custom genesis must contain exactly one canonical handshake carrier"
+            );
+            cached_genesis
+                .set(final_custom)
+                .expect("final custom genesis should be cached exactly once");
+        }
 
         Network {
             env,
             peers,
+            observers,
+            observer_advertised_p2p_addresses,
+            observer_slow_reader_relays,
             next_peer_index: AtomicUsize::new(0),
             block_cadence,
             block_sync_gossip_period,
@@ -5453,6 +6991,24 @@ impl NetworkPeer {
         let mut probe = probe.lock().expect("startup probe should not be poisoned");
         probe.last_status_error = Some(snapshot_snippet(&format!("{error:?}")));
         probe.last_status_unix_ms = Some(unix_timestamp_ms_now());
+    }
+
+    fn record_probe_sumeragi_v2_status(
+        probe: &Arc<StdMutex<PeerStartupProbe>>,
+        status: &SumeragiV2Status,
+    ) -> PeerSumeragiV2Snapshot {
+        let snapshot = PeerSumeragiV2Snapshot::from(status);
+        let mut probe = probe.lock().expect("startup probe should not be poisoned");
+        probe.last_sumeragi_v2 = Some(snapshot.clone());
+        probe.last_sumeragi_v2_error = None;
+        probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
+        snapshot
+    }
+
+    fn record_probe_sumeragi_v2_error(probe: &Arc<StdMutex<PeerStartupProbe>>, error: &str) {
+        let mut probe = probe.lock().expect("startup probe should not be poisoned");
+        probe.last_sumeragi_v2_error = Some(snapshot_snippet(error));
+        probe.last_sumeragi_v2_unix_ms = Some(unix_timestamp_ms_now());
     }
 
     fn last_status_peers(probe: &Arc<StdMutex<PeerStartupProbe>>) -> Option<u64> {
@@ -6662,6 +8218,23 @@ impl NetworkPeer {
         result
     }
 
+    async fn sumeragi_v2_startup_snapshot(&self) -> Result<PeerSumeragiV2Snapshot> {
+        let client = self.client();
+        let result = spawn_blocking(move || client.get_sumeragi_status())
+            .await
+            .expect("should not panic");
+        match result {
+            Ok(status) => Ok(Self::record_probe_sumeragi_v2_status(
+                &self.startup_probe,
+                &status,
+            )),
+            Err(error) => {
+                Self::record_probe_sumeragi_v2_error(&self.startup_probe, &format!("{error:?}"));
+                Err(error)
+            }
+        }
+    }
+
     fn record_status_success(&self, status: &Status) {
         let _ = Self::record_probe_status(&self.startup_probe, status);
     }
@@ -6745,6 +8318,11 @@ impl NetworkPeer {
 
     fn log_snapshot(&self) -> PeerLogSnapshot {
         let stdout_log = self.latest_stdout_log_path();
+        let stdout_summary = stdout_log.as_deref().and_then(summarize_peer_stdout_file);
+        let stdout_preview_line_count = stdout_summary
+            .as_ref()
+            .map(|inner| inner.preview.lines().count());
+        let stdout_truncated = stdout_summary.as_ref().is_some_and(|inner| inner.truncated);
         let stderr_log = self.latest_stderr_log_path();
         let (stderr_run_id, summary) = {
             let guard = self
@@ -6758,6 +8336,9 @@ impl NetworkPeer {
         let stderr_truncated = summary.as_ref().is_some_and(|inner| inner.truncated);
         PeerLogSnapshot {
             stdout_log,
+            stdout_preview: stdout_summary.map(|inner| inner.preview),
+            stdout_preview_line_count,
+            stdout_truncated,
             stderr_log,
             stderr_preview: summary.map(|inner| inner.preview),
             stderr_preview_line_count,
@@ -6788,6 +8369,9 @@ impl NetworkPeer {
             status_snapshot: probe.last_status,
             status_error: probe.last_status_error,
             status_unix_timestamp_ms: probe.last_status_unix_ms,
+            sumeragi_v2_snapshot: probe.last_sumeragi_v2,
+            sumeragi_v2_error: probe.last_sumeragi_v2_error,
+            sumeragi_v2_unix_timestamp_ms: probe.last_sumeragi_v2_unix_ms,
             storage: self.storage_snapshot(),
         }
     }
@@ -7091,6 +8675,7 @@ struct PeerStderrBuffer {
 
 const PEER_STDERR_PREVIEW_MAX_LINES: usize = 25;
 const PEER_STDERR_PREVIEW_MAX_CHARS: usize = 3_072;
+const PEER_STDOUT_PREVIEW_READ_BYTES: u64 = 64 * 1_024;
 
 struct StderrSummary {
     preview: String,
@@ -7131,6 +8716,50 @@ fn summarize_peer_stderr(buffer: &str) -> Option<StderrSummary> {
         truncated,
         total_lines,
     })
+}
+
+fn summarize_peer_stdout_file(path: &Path) -> Option<StderrSummary> {
+    let mut file = fs::File::open(path).ok()?;
+    let length = file.metadata().ok()?.len();
+    let start = length.saturating_sub(PEER_STDOUT_PREVIEW_READ_BYTES);
+    file.seek(SeekFrom::Start(start)).ok()?;
+    let mut bytes = Vec::with_capacity(usize::try_from(length - start).ok()?);
+    file.read_to_end(&mut bytes).ok()?;
+    let decoded = String::from_utf8_lossy(&bytes);
+    let tail = if start == 0 {
+        decoded.as_ref()
+    } else {
+        decoded
+            .find('\n')
+            .map_or(decoded.as_ref(), |index| &decoded[index + 1..])
+    };
+    let decisive_excerpt = decisive_peer_stdout_excerpt(tail);
+    let mut summary = summarize_peer_stderr(decisive_excerpt.as_deref().unwrap_or(tail))?;
+    summary.truncated |= start > 0;
+    Some(summary)
+}
+
+fn decisive_peer_stdout_excerpt(tail: &str) -> Option<String> {
+    let lines = tail.lines().collect::<Vec<_>>();
+    let failure_index = lines.iter().rposition(|line| {
+        let normalized = line.to_ascii_lowercase();
+        normalized.contains("failed closed")
+            || normalized.contains("fail-closed")
+            || normalized.contains("panicked at")
+            || normalized.contains("fatal consensus")
+            || normalized.contains("restart is required")
+    })?;
+    let failure_start = failure_index.saturating_sub(1);
+    let failure_end = failure_index.saturating_add(5).min(lines.len());
+    let trailing_start = lines.len().saturating_sub(6);
+    if trailing_start <= failure_end {
+        return None;
+    }
+
+    let mut excerpt = lines[trailing_start..].join("\n");
+    excerpt.push_str("\n... decisive peer failure ...\n");
+    excerpt.push_str(&lines[failure_start..failure_end].join("\n"));
+    Some(excerpt)
 }
 
 impl PeerStderrBuffer {
@@ -8071,7 +9700,7 @@ mod tests {
         },
         isi::{Instruction, SetParameter},
         parameter::{Parameter, system::consensus_metadata},
-        transaction::Executable,
+        transaction::{Executable, ExecutableBatchItem},
     };
     use iroha_version::{Version, codec::EncodeVersioned};
     use tempfile::tempdir;
@@ -8388,6 +10017,43 @@ mod tests {
     }
 
     #[test]
+    fn cloned_builder_recipe_allocates_an_isolated_network_environment() {
+        if skip_network_tests("cloned_builder_recipe_allocates_an_isolated_network_environment") {
+            return;
+        }
+
+        let recipe = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed("fresh-network-retry-recipe");
+        let first = build_with_isolated_permit(recipe.clone());
+        let second = build_with_isolated_permit(recipe);
+
+        assert_ne!(
+            first.env_dir(),
+            second.env_dir(),
+            "each build of one retry recipe must own a fresh filesystem root"
+        );
+        assert_eq!(
+            first
+                .peers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            second
+                .peers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            "fresh attempts must preserve the deterministic test topology"
+        );
+        for (first_peer, second_peer) in first.peers().iter().zip(second.peers()) {
+            assert_ne!(first_peer.dir, second_peer.dir);
+            assert_ne!(first_peer.p2p_address(), second_peer.p2p_address());
+            assert_ne!(first_peer.api_address(), second_peer.api_address());
+        }
+    }
+
+    #[test]
     fn peer_startup_timeout_applies_per_peer_floor() {
         if skip_network_tests("peer_startup_timeout_applies_per_peer_floor") {
             return;
@@ -8628,6 +10294,73 @@ mod tests {
             result.is_ok(),
             "wait_for_block_1_with_watchdog should return when best-effort height already reached block 1"
         );
+    }
+
+    #[test]
+    fn startup_snapshot_formats_compact_sumeragi_v2_progress_state() {
+        let dir = tempdir().expect("tempdir");
+        let v2 = PeerSumeragiV2Snapshot {
+            height: 1,
+            view: 13,
+            generation: 17,
+            phase: "Commit".to_string(),
+            body_state: "Validated".to_string(),
+            leader: 2,
+            locked_prepare_qc: Some("h1/v6/Prepare/block=799af30d96fa".to_string()),
+            highest_prepare_qc: Some("h1/v6/Prepare/block=799af30d96fa".to_string()),
+            prepare_quorums: vec!["h1/v6:signers=3/3,power=3/4".to_string()],
+            commit_quorums: vec!["h1/v6:signers=2/3,power=2/4".to_string()],
+            timeout_quorums: vec!["h1/v13:signers=2/3,power=2/4,tc=false".to_string()],
+            outbound_intents: vec!["CommitVote@h1/v6:Sent".to_string()],
+            work: "candidate=Complete,recovery=Idle,store=Complete,validation=Complete,application=Idle,successor=Idle".to_string(),
+            queues: vec!["DeferredProgress=1/64,oldest=50ms,debt=2".to_string()],
+            last_progress: Some(
+                "TimeoutCertificateInstalled@h1/v12/g16,age=10000ms".to_string(),
+            ),
+            no_progress_age_ms: 70_000,
+            blocker: Some("CommitQuorumMissing".to_string()),
+            ignore_counts: vec!["Duplicate=42".to_string()],
+            restart_required: false,
+            pending_persistence_id: None,
+        };
+
+        let rendered = PeerStartupState {
+            index: 3,
+            mnemonic: "diagnostic-peer".to_string(),
+            is_running: true,
+            last_block: Some(BlockHeight {
+                total: 0,
+                non_empty: 0,
+            }),
+            logs: PeerLogSnapshot::default(),
+            status_snapshot: Some(PeerStatusSnapshot::default()),
+            status_error: None,
+            status_unix_timestamp_ms: Some(1),
+            sumeragi_v2_snapshot: Some(v2),
+            sumeragi_v2_error: None,
+            sumeragi_v2_unix_timestamp_ms: Some(2),
+            storage: PeerStorageSnapshot::capture(dir.path().join("storage"), false),
+        }
+        .to_string();
+
+        for expected in [
+            "sumeragi_v2=ok(h1/v13/g17",
+            "phase=Commit body=Validated leader=2",
+            "lock=h1/v6/Prepare/block=799af30d96fa",
+            "highest=h1/v6/Prepare/block=799af30d96fa",
+            "quorums=P[h1/v6:signers=3/3,power=3/4] C[h1/v6:signers=2/3,power=2/4] T[h1/v13:signers=2/3,power=2/4,tc=false]",
+            "intents=[CommitVote@h1/v6:Sent]",
+            "work=[candidate=Complete",
+            "queues=[DeferredProgress=1/64,oldest=50ms,debt=2]",
+            "progress=TimeoutCertificateInstalled@h1/v12/g16,age=10000ms",
+            "no_progress=70000ms blocker=CommitQuorumMissing",
+            "ignores=[Duplicate=42] restart=false persist=-)@2ms",
+        ] {
+            assert!(
+                rendered.contains(expected),
+                "startup diagnostic omitted `{expected}`: {rendered}"
+            );
+        }
     }
 
     /// Restores environment variable to its previous value when dropped.
@@ -8963,6 +10696,38 @@ mod tests {
             !peer.shutdown_if_started().await,
             "shutdown_if_started should be a no-op when the peer never started"
         );
+    }
+
+    #[tokio::test]
+    async fn network_drop_cleanup_tolerates_peer_that_already_stopped() {
+        if skip_network_tests("network_drop_cleanup_tolerates_peer_that_already_stopped") {
+            return;
+        }
+
+        let env = Environment::new();
+        let running_peer = NetworkPeer::builder().build(&env);
+        let stopped_peer = NetworkPeer::builder().build(&env);
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::oneshot::channel();
+        let tasks = tokio::task::JoinSet::new();
+        let (fatal_tx, _fatal_rx) = watch::channel(false);
+        {
+            let mut guard = running_peer.run.lock().await;
+            *guard = Some(PeerRun {
+                tasks,
+                shutdown: shutdown_tx,
+                fatal_tx,
+                pid: None,
+            });
+        }
+        running_peer.is_running.store(true, Ordering::Relaxed);
+
+        shutdown_peers_for_drop(vec![running_peer.clone(), stopped_peer.clone()]).await;
+
+        assert!(!running_peer.is_running());
+        assert!(running_peer.run.lock().await.is_none());
+        assert!(!stopped_peer.is_running());
+        assert!(stopped_peer.run.lock().await.is_none());
     }
 
     #[tokio::test]
@@ -9659,6 +11424,11 @@ exit 0
             !first_log.is_empty(),
             "fake cargo script should log its invocation"
         );
+        assert_eq!(
+            first_log.trim(),
+            "build --locked -p dummy_pkg",
+            "test-network child builds must preserve the workspace lockfile"
+        );
 
         ensure_binary_fresh(
             root,
@@ -10008,6 +11778,14 @@ exit 0
     }
 
     #[test]
+    fn freshness_validation_cannot_be_bypassed_by_existing_candidates() {
+        assert!(must_validate_binary_freshness(false, false, false));
+        assert!(must_validate_binary_freshness(false, true, true));
+        assert!(!must_validate_binary_freshness(true, false, true));
+        assert!(!must_validate_binary_freshness(false, true, false));
+    }
+
+    #[test]
     fn reentrant_builds_can_be_enabled_via_env() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
@@ -10103,6 +11881,32 @@ exit 0
     }
 
     #[test]
+    fn summarize_peer_stdout_file_retains_bounded_failure_tail() {
+        let directory = tempfile::tempdir().expect("temporary peer log directory");
+        let path = directory.path().join("run-1-stdout.log");
+        let mut input = (0..10_000)
+            .map(|index| format!("ordinary startup line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        input.push_str("\nSumeragi v2 effect services failed closed: exact ownership violation\n");
+        for index in 0..100 {
+            input.push_str(&format!("ordinary shutdown detail {index}\n"));
+        }
+        fs::write(&path, input).expect("write synthetic peer stdout");
+
+        let summary = summarize_peer_stdout_file(&path).expect("stdout summary should exist");
+
+        assert!(summary.truncated);
+        assert!(summary.preview.len() <= PEER_STDERR_PREVIEW_MAX_CHARS);
+        assert!(
+            summary
+                .preview
+                .contains("Sumeragi v2 effect services failed closed: exact ownership violation")
+        );
+        assert!(summary.preview.contains("... decisive peer failure ..."));
+    }
+
+    #[test]
     fn canonical_genesis_bytes_roundtrip_signed_block() {
         init_instruction_registry();
         let network = NetworkBuilder::new().build();
@@ -10158,6 +11962,16 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::Batch(items) => items
+                    .iter()
+                    .filter_map(|item| match item {
+                        ExecutableBatchItem::Instruction(instruction) => instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .map(|set| set.inner().clone()),
+                        ExecutableBatchItem::ContractCall(_) => None,
+                    })
+                    .collect(),
                 Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
@@ -10166,7 +11980,8 @@ exit 0
     }
 
     fn consensus_fingerprint_from_block(block: &GenesisBlock) -> Option<String> {
-        consensus_handshake_metadata(block).map(|metadata| metadata.consensus_fingerprint)
+        consensus_handshake_metadata(block)
+            .map(|metadata| metadata.consensus_fingerprint.to_string())
     }
 
     fn consensus_handshake_metadata(block: &GenesisBlock) -> Option<ConsensusHandshakeMetadata> {
@@ -10180,6 +11995,52 @@ exit 0
             }
         }
         last
+    }
+
+    fn assert_exactly_one_consensus_handshake(block: &GenesisBlock, expected: &Parameter) {
+        let handshakes = collect_set_parameters(block)
+            .into_iter()
+            .filter(|parameter| {
+                matches!(
+                    parameter,
+                    Parameter::Custom(custom)
+                        if custom.id() == &consensus_metadata::handshake_meta_id()
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            handshakes,
+            vec![expected.clone()],
+            "genesis must contain exactly one handshake metadata entry equal to the runtime profile"
+        );
+    }
+
+    fn collect_non_handshake_instructions(block: &GenesisBlock) -> Vec<InstructionBox> {
+        block
+            .0
+            .transactions_vec()
+            .iter()
+            .flat_map(|transaction| match transaction.instructions() {
+                Executable::Instructions(instructions) => instructions
+                    .iter()
+                    .filter(|instruction| {
+                        !instruction
+                            .as_any()
+                            .downcast_ref::<SetParameter>()
+                            .is_some_and(|set_param| {
+                                matches!(
+                                    set_param.inner(),
+                                    Parameter::Custom(custom)
+                                        if custom.id()
+                                            == &consensus_metadata::handshake_meta_id()
+                                )
+                            })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect()
     }
 
     fn reconstructed_consensus_params(block: &GenesisBlock) -> ConsensusGenesisParams {
@@ -10202,14 +12063,56 @@ exit 0
         .expect("genesis must reconstruct one canonical consensus carrier")
     }
 
+    fn assert_signed_nexus_amx_context_matches_preexecution(
+        network: &Network,
+        genesis: &GenesisBlock,
+    ) {
+        let config_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let actual = resolve_actual_config(
+            network
+                .peers
+                .first()
+                .expect("test network must contain a peer"),
+            &config_layers,
+        )
+        .expect("test-network peer config must resolve for genesis staging");
+        let topology = network
+            .peers
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let staged = config::staged_genesis_nexus_amx_context_hash(
+            genesis,
+            &AccountId::new(network.genesis_key_pair.public_key().clone()),
+            &topology,
+            &network.genesis_key_pair,
+            Some(&actual.pipeline),
+            Some(&actual.nexus),
+            Some(&actual.zk),
+        )
+        .expect("signed genesis must independently pre-execute");
+        let metadata = consensus_handshake_metadata(genesis)
+            .expect("genesis must contain canonical consensus metadata");
+        assert_eq!(
+            staged,
+            CryptoHash::prehashed(metadata.sumeragi_v2.nexus_amx_context_hash),
+            "signed Nexus/AMX commitment must equal the independently staged projection"
+        );
+    }
+
     #[test]
     fn genesis_consensus_metadata_matches_runtime_profile() {
         init_instruction_registry();
         let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
         let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
         let actual = consensus_fingerprint_from_block(&genesis)
             .expect("genesis should contain consensus fingerprint metadata");
         let profile = network.consensus_bootstrap_profile();
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
         assert_eq!(
             profile.chain_id,
             network.chain_id(),
@@ -10245,7 +12148,7 @@ exit 0
             profile.bls_domain, NPOS_BLS_DOMAIN,
             "NPoS handshake must use the NPoS BLS domain"
         );
-        let ConsensusGenesisModeParams::Npos(npos) = profile.params.mode else {
+        let ConsensusGenesisModeParams::Npos(ref npos) = profile.params.mode else {
             panic!("NPoS profile must embed NPoS genesis parameters")
         };
         assert_eq!(
@@ -10255,6 +12158,8 @@ exit 0
         );
 
         let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&genesis)
             .expect("genesis should encode consensus handshake metadata");
         assert_eq!(
@@ -10662,6 +12567,522 @@ exit 0
     }
 
     #[test]
+    fn observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster() {
+        let bootstrap = ObserverP2pBootstrap::new(5).expect("five observers fit the core profile");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    observer_bootstrap_trusts_all_participants_but_keeps_validator_only_roster
+                ))
+                .with_observer_p2p_bootstrap(bootstrap)
+                .expect("four validators and five observers fit the P2P cap"),
+        );
+
+        assert_eq!(network.peers().len(), 4);
+        assert_eq!(network.validators().len(), 4);
+        assert_eq!(network.observers().len(), 5);
+        assert_eq!(network.all_peers().count(), 9);
+        assert_eq!(network.topology_entries().len(), 4);
+
+        let validator_keys = network
+            .validators()
+            .iter()
+            .map(|peer| {
+                peer.bls_public_key()
+                    .expect("validator has BLS identity")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        let observer_keys = network
+            .observers()
+            .iter()
+            .map(|peer| {
+                peer.bls_public_key()
+                    .expect("observer has signed BLS identity")
+                    .to_string()
+            })
+            .collect::<BTreeSet<_>>();
+        let topology_keys = network
+            .topology_entries()
+            .iter()
+            .map(|entry| entry.peer.public_key.to_string())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(topology_keys, validator_keys);
+        assert!(topology_keys.is_disjoint(&observer_keys));
+
+        let trusted_layer = network
+            .config_layers()
+            .next()
+            .expect("trusted peer layer")
+            .into_owned();
+        let trusted = trusted_layer
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peer array");
+        assert_eq!(trusted.len(), 9);
+        for peer in network.all_peers() {
+            let expected = format!(
+                "{}@{}",
+                peer.network_peer_id(),
+                peer.p2p_address().to_literal()
+            );
+            assert!(
+                trusted
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(&expected))
+            );
+        }
+
+        let pop_keys = trusted_layer
+            .get("trusted_peers_pop")
+            .and_then(Value::as_array)
+            .expect("validator PoP array")
+            .iter()
+            .map(|entry| {
+                entry
+                    .get("public_key")
+                    .and_then(Value::as_str)
+                    .expect("PoP public key")
+                    .to_owned()
+            })
+            .collect::<BTreeSet<_>>();
+        assert_eq!(pop_keys, validator_keys);
+        assert!(pop_keys.is_disjoint(&observer_keys));
+
+        let resolved_layers = network
+            .config_layers()
+            .map(Cow::into_owned)
+            .collect::<Vec<_>>();
+        let resolved = resolve_actual_config(&network.validators()[0], &resolved_layers)
+            .expect("validator config accepts trusted observers without PoPs");
+        let resolved_trusted = resolved.common.trusted_peers.value();
+        assert_eq!(resolved_trusted.others.len(), 8);
+        assert_eq!(resolved_trusted.pops.len(), 4);
+
+        let role = observer_role_layer();
+        assert_eq!(
+            get_nested_value(&role, &["sumeragi", "role"]).and_then(Value::as_str),
+            Some("observer")
+        );
+    }
+
+    #[test]
+    fn observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets() {
+        let seed =
+            stringify!(observer_bootstrap_identities_are_stable_and_shared_layers_have_no_secrets);
+        let recipe = NetworkBuilder::new()
+            .with_peers(4)
+            .with_base_seed(seed)
+            .with_observer_p2p_bootstrap(
+                ObserverP2pBootstrap::new(5).expect("bounded observer recipe"),
+            )
+            .expect("bounded participant fanout");
+
+        let first = build_with_isolated_permit(recipe.clone());
+        let first_validators = first
+            .validators()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let first_observers = first
+            .observers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+        let serialized = first
+            .config_layers()
+            .map(|layer| toml::to_string(layer.as_ref()).expect("serialize shared test layer"))
+            .collect::<String>();
+        for peer in first.all_peers() {
+            let consensus_secret = ExposedPrivateKey(
+                peer.bls_key_pair()
+                    .expect("participant has a BLS keypair")
+                    .private_key()
+                    .clone(),
+            )
+            .to_string();
+            let streaming_secret =
+                ExposedPrivateKey(peer.streaming_key_pair().private_key().clone()).to_string();
+            assert!(!serialized.contains(&consensus_secret));
+            assert!(!serialized.contains(&streaming_secret));
+        }
+        drop(first);
+
+        let second = build_with_isolated_permit(recipe);
+        assert_eq!(
+            second
+                .validators()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            first_validators
+        );
+        assert_eq!(
+            second
+                .observers()
+                .iter()
+                .map(NetworkPeer::id)
+                .collect::<Vec<_>>(),
+            first_observers
+        );
+
+        let descriptor = ObserverP2pBootstrap::new(5).expect("bounded observer recipe");
+        assert_eq!(
+            format!("{descriptor:?}"),
+            "ObserverP2pBootstrap { observer_count: 5 }"
+        );
+    }
+
+    #[test]
+    fn observer_bootstrap_bounds_fail_closed() {
+        assert_eq!(
+            ObserverP2pBootstrap::new(0),
+            Err(ObserverP2pBootstrapError::ZeroObservers)
+        );
+        let capacity = ObserverP2pBootstrap::connection_capacity();
+        let above_capacity = capacity.checked_add(1).expect("test capacity fits usize");
+        assert_eq!(
+            ObserverP2pBootstrap::new(above_capacity),
+            Err(
+                ObserverP2pBootstrapError::ObserverCountExceedsConnectionCapacity {
+                    requested: above_capacity,
+                    maximum: capacity,
+                }
+            )
+        );
+
+        let bootstrap = ObserverP2pBootstrap::new(1).expect("one observer is valid alone");
+        assert_eq!(
+            bootstrap.validate_for_validators(usize::MAX, capacity),
+            Err(ObserverP2pBootstrapError::ParticipantCountOverflow {
+                validators: usize::MAX,
+                observers: 1,
+            })
+        );
+        assert_eq!(
+            bootstrap.validate_for_validators(above_capacity, capacity),
+            Err(ObserverP2pBootstrapError::FanoutExceedsConnectionCapacity {
+                validators: above_capacity,
+                observers: 1,
+                required: above_capacity,
+                capacity,
+            })
+        );
+        assert!(
+            NetworkBuilder::new()
+                .with_peers(capacity)
+                .with_observer_p2p_bootstrap(bootstrap)
+                .is_ok(),
+            "one validator-facing connection at the exact cap remains valid"
+        );
+        assert!(
+            NetworkBuilder::new()
+                .with_peers(above_capacity)
+                .with_observer_p2p_bootstrap(bootstrap)
+                .is_err(),
+            "one participant above the full-fanout cap must be rejected"
+        );
+    }
+
+    #[test]
+    fn observer_slow_reader_relay_rewrites_only_observer_addresses_without_leaking_targets() {
+        let config = ObserverSlowReaderRelayConfig::new(1_024, Duration::from_millis(2))
+            .expect("bounded relay config");
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    observer_slow_reader_relay_rewrites_only_observer_addresses_without_leaking_targets
+                ))
+                .with_observer_p2p_bootstrap(
+                    ObserverP2pBootstrap::new(5).expect("bounded observer recipe"),
+                )
+                .expect("bounded participant fanout")
+                .with_observer_slow_reader_relays(config)
+                .expect("observer bootstrap precedes relay config"),
+        );
+
+        let relays = network
+            .observer_slow_reader_relays
+            .as_ref()
+            .expect("relay harness is present");
+        assert!(network.set_observer_slow_reader_relays_paused(true));
+        assert!(*relays.paused.borrow());
+        assert!(network.set_observer_slow_reader_relays_paused(false));
+        assert!(!*relays.paused.borrow());
+        assert_eq!(relays.routes.len(), network.observers().len());
+        assert_eq!(
+            network.observer_slow_reader_relay_stats(),
+            Some(ObserverSlowReaderRelayStats::default())
+        );
+        for observer in network.observers() {
+            assert_eq!(
+                network.observer_slow_reader_relay_stats_for(&observer.id()),
+                Some(ObserverSlowReaderRelayStats::default())
+            );
+        }
+        assert_eq!(
+            network.observer_slow_reader_relay_stats_for(&network.validators()[0].id()),
+            None
+        );
+
+        let trusted_layer = network
+            .config_layers()
+            .next()
+            .expect("trusted peer layer")
+            .into_owned();
+        let trusted = trusted_layer
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peer array");
+        assert_eq!(trusted.len(), network.all_peers().count());
+
+        for (index, peer) in network.all_peers().enumerate() {
+            let advertised = network.advertised_p2p_address(peer);
+            let advertised_literal = advertised.to_literal();
+            let expected = format!("{}@{}", peer.network_peer_id(), advertised_literal);
+            assert_eq!(trusted[index].as_str(), Some(expected.as_str()));
+            if network.observers().contains(peer) {
+                assert_ne!(advertised, peer.p2p_address());
+                let real = peer.p2p_address().to_literal();
+                assert!(
+                    trusted.iter().all(|entry| {
+                        entry
+                            .as_str()
+                            .is_none_or(|literal| !literal.contains(&real))
+                    }),
+                    "real observer listener {real} leaked into trusted peers"
+                );
+
+                let observer_layer = network.observer_start_layer(peer);
+                assert_eq!(
+                    get_nested_value(&observer_layer, &["network", "public_address"])
+                        .and_then(Value::as_str),
+                    Some(advertised_literal.as_str())
+                );
+                assert_eq!(
+                    get_nested_value(&observer_layer, &["network", "connect_startup_delay_ms"])
+                        .and_then(Value::as_integer),
+                    Some(
+                        i64::try_from(OBSERVER_RELAY_OUTBOUND_DIAL_DELAY.as_millis())
+                            .expect("test delay fits i64")
+                    )
+                );
+            } else {
+                assert_eq!(advertised, peer.p2p_address());
+            }
+        }
+    }
+
+    #[test]
+    fn observer_slow_reader_relay_config_is_bounded_and_requires_observers() {
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(0, Duration::from_millis(1)),
+            Err(ObserverSlowReaderRelayError::ZeroReadChunkBytes)
+        );
+        let above_chunk = ObserverSlowReaderRelayConfig::maximum_read_chunk_bytes()
+            .checked_add(1)
+            .expect("chunk limit fits usize");
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(above_chunk, Duration::from_millis(1)),
+            Err(ObserverSlowReaderRelayError::ReadChunkBytesExceedsLimit {
+                requested: above_chunk,
+                maximum: ObserverSlowReaderRelayConfig::maximum_read_chunk_bytes(),
+            })
+        );
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(1, Duration::ZERO),
+            Err(ObserverSlowReaderRelayError::ZeroReadDelay)
+        );
+        let above_delay = ObserverSlowReaderRelayConfig::maximum_read_delay()
+            .checked_add(Duration::from_nanos(1))
+            .expect("delay limit can be incremented");
+        assert_eq!(
+            ObserverSlowReaderRelayConfig::new(1, above_delay),
+            Err(ObserverSlowReaderRelayError::ReadDelayExceedsLimit {
+                requested: above_delay,
+                maximum: ObserverSlowReaderRelayConfig::maximum_read_delay(),
+            })
+        );
+
+        let valid = ObserverSlowReaderRelayConfig::new(1, Duration::from_millis(1))
+            .expect("minimum bounded config");
+        assert!(matches!(
+            NetworkBuilder::new().with_observer_slow_reader_relays(valid),
+            Err(ObserverSlowReaderRelayError::MissingObserverBootstrap)
+        ));
+    }
+
+    #[tokio::test]
+    async fn observer_slow_reader_relay_is_byte_transparent_and_joins_active_connection() {
+        if skip_network_tests(
+            "observer_slow_reader_relay_is_byte_transparent_and_joins_active_connection",
+        ) {
+            return;
+        }
+
+        let upstream_listener = TokioTcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind mock observer listener");
+        let upstream_address = SocketAddr::from(
+            upstream_listener
+                .local_addr()
+                .expect("mock observer listener has an address"),
+        );
+        let published_port = AllocatedPort::new();
+        let published_address = socket_addr!(127.0.0.1:*published_port);
+        let config = ObserverSlowReaderRelayConfig::new(31, Duration::from_millis(1))
+            .expect("bounded relay config");
+        let counters = Arc::new(ObserverSlowReaderRelayCounters::default());
+        let peer_id = PeerId::new(PEER_KEYPAIR.public_key().clone());
+        let (paused, _) = watch::channel(false);
+        let relays = ObserverSlowReaderRelays {
+            config,
+            routes: vec![ObserverSlowReaderRelayRoute {
+                peer_id: peer_id.clone(),
+                published_address: published_address.clone(),
+                upstream_address,
+                counters: Arc::clone(&counters),
+                _published_port: published_port,
+            }],
+            published_addresses: HashMap::from([(peer_id.clone(), published_address.clone())]),
+            running: AtomicBool::new(false),
+            paused,
+            runtime: StdMutex::new(ObserverSlowReaderRelayRuntime::default()),
+        };
+        relays.start().await.expect("start transparent relay");
+        relays.start().await.expect("repeated start is idempotent");
+
+        let payload = (0_u32..4_096)
+            .map(|index| index.wrapping_mul(73).wrapping_add(19).to_le_bytes()[0])
+            .collect::<Vec<_>>();
+        let reply = vec![0x00, 0xFF, 0xC3, 0x28, 0x80, 0x01, 0xFE, 0x7F];
+        let expected_payload = payload.clone();
+        let expected_reply = reply.clone();
+        let upstream = tokio::spawn(async move {
+            let (mut socket, _) = upstream_listener
+                .accept()
+                .await
+                .expect("relay connects to mock observer");
+            let mut received = vec![0_u8; expected_payload.len()];
+            socket
+                .read_exact(&mut received)
+                .await
+                .expect("mock observer receives complete opaque payload");
+            assert_eq!(received, expected_payload);
+            socket
+                .write_all(&expected_reply)
+                .await
+                .expect("mock observer returns opaque response");
+            let mut trailing = [0_u8; 1];
+            assert_eq!(
+                socket
+                    .read(&mut trailing)
+                    .await
+                    .expect("observe relay connection shutdown"),
+                0,
+                "relay shutdown must close its active upstream connection",
+            );
+        });
+
+        let mut client = TcpStream::connect(published_address.to_string())
+            .await
+            .expect("connect validator side to relay");
+        relays.set_paused(true);
+        client
+            .write_all(&payload)
+            .await
+            .expect("send opaque validator payload");
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if counters.delayed_reads.load(Ordering::Relaxed) > 0 {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("relay reached its deterministic forwarding pause");
+        assert_eq!(
+            counters
+                .forwarded_to_observers_bytes
+                .load(Ordering::Relaxed),
+            0,
+            "paused relay must not forward a byte it has already read",
+        );
+        relays.set_paused(false);
+        let mut received_reply = vec![0_u8; reply.len()];
+        timeout(
+            Duration::from_secs(5),
+            client.read_exact(&mut received_reply),
+        )
+        .await
+        .expect("relay response stayed within the test bound")
+        .expect("receive complete opaque observer response");
+        assert_eq!(received_reply, reply);
+
+        timeout(Duration::from_secs(2), relays.shutdown())
+            .await
+            .expect("relay listener and active child joined within the shutdown bound");
+        timeout(Duration::from_secs(2), upstream)
+            .await
+            .expect("mock observer saw connection closure within the shutdown bound")
+            .expect("mock observer task did not panic");
+        assert!(!relays.running.load(Ordering::Acquire));
+        assert!(
+            TcpStream::connect(published_address.to_string())
+                .await
+                .is_err(),
+            "shutdown must release the published listener"
+        );
+
+        let stats = counters.snapshot();
+        assert_eq!(stats.accepted_connections, 1);
+        assert_eq!(stats.upstream_connections, 1);
+        assert!(stats.delayed_reads > 1);
+        assert_eq!(
+            stats.forwarded_to_observers_bytes,
+            u64::try_from(payload.len()).expect("test payload length fits u64")
+        );
+        assert_eq!(relays.stats_for(&peer_id), Some(stats));
+    }
+
+    #[test]
+    fn legacy_builder_has_no_observers_and_preserves_validator_peer_semantics() {
+        let network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        assert_eq!(network.peers().as_slice(), network.validators());
+        assert!(network.observers().is_empty());
+        assert!(!network.set_observer_slow_reader_relays_paused(true));
+        assert_eq!(network.all_peers().count(), network.peers().len());
+        assert_eq!(network.torii_urls().len(), network.peers().len());
+        assert_eq!(network.topology_entries().len(), network.peers().len());
+        assert!(network.observer_advertised_p2p_addresses.is_empty());
+        assert_eq!(network.observer_slow_reader_relay_stats(), None);
+        let trusted = network
+            .config_layers()
+            .next()
+            .expect("trusted layer")
+            .into_owned();
+        let entries = trusted
+            .get("trusted_peers")
+            .and_then(Value::as_array)
+            .expect("trusted peers");
+        for peer in network.peers() {
+            let expected = format!(
+                "{}@{}",
+                peer.network_peer_id(),
+                peer.p2p_address().to_literal()
+            );
+            assert!(
+                entries
+                    .iter()
+                    .any(|entry| entry.as_str() == Some(&expected))
+            );
+        }
+    }
+
+    #[test]
     fn config_layers_allow_local_preauth_bypass() {
         let network = NetworkBuilder::new().build();
         let layers: Vec<_> = network.config_layers().collect();
@@ -11003,7 +13424,7 @@ exit 0
     #[test]
     fn npos_bootstrap_adds_validator_instructions() {
         init_instruction_registry();
-        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
             .with_peers(2)
             .with_auto_populated_trusted_peers()
@@ -11160,8 +13581,11 @@ exit 0
     fn npos_bootstrap_clamps_to_min_self_bond() {
         init_instruction_registry();
         let mut npos_params = SumeragiNposParameters::default();
-        npos_params.min_self_bond = npos_params.min_self_bond().saturating_add(5_000);
-        let expected = npos_params.min_self_bond;
+        npos_params.min_self_bond = npos_params
+            .min_self_bond()
+            .try_add(&Quantity::from(5_000_u64))
+            .expect("test self-bond increment must remain representable");
+        let expected = npos_params.min_self_bond.clone();
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(1)
@@ -11182,8 +13606,7 @@ exit 0
                     {
                         seen = true;
                         assert_eq!(
-                            register.initial_stake,
-                            Numeric::from(expected),
+                            register.initial_stake, expected,
                             "bootstrap stake must honor min_self_bond"
                         );
                     }
@@ -11194,8 +13617,66 @@ exit 0
     }
 
     #[test]
+    fn npos_bootstrap_uses_post_topology_snapshot_min_self_bond() {
+        init_instruction_registry();
+        let mut npos_params = SumeragiNposParameters::default();
+        npos_params.min_self_bond = npos_params
+            .min_self_bond()
+            .try_add(&Quantity::from(5_000_u64))
+            .expect("test self-bond increment must remain representable");
+        let expected = npos_params.min_self_bond.clone();
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_auto_populated_trusted_peers()
+                .with_genesis_post_topology_isi(vec![
+                    SetParameter::new(Parameter::Custom(npos_params.into_custom_parameter()))
+                        .into(),
+                ])
+                .with_npos_consensus(),
+        );
+
+        let profile = network.consensus_bootstrap_profile();
+        assert_eq!(
+            profile.mode_tag, NPOS_TAG,
+            "signed profile must select NPoS"
+        );
+        let ConsensusGenesisModeParams::Npos(npos_profile) = &profile.params.mode else {
+            panic!("signed profile must include NPoS parameters");
+        };
+        assert_eq!(
+            npos_profile.min_self_bond, expected,
+            "signed profile must use the post-topology NPoS snapshot"
+        );
+
+        let expected_validator_count = network.peers().len();
+        let genesis = network.genesis();
+        let mut validator_count = 0;
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    if let Some(register) = instruction
+                        .as_any()
+                        .downcast_ref::<RegisterPublicLaneValidator>()
+                    {
+                        validator_count += 1;
+                        assert_eq!(
+                            register.initial_stake, expected,
+                            "every bootstrap validator must honor the post-topology min_self_bond"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            validator_count, expected_validator_count,
+            "bootstrap must register every network peer as a validator"
+        );
+    }
+
+    #[test]
     fn npos_bootstrap_overrides_stake_accounts_in_config() {
-        let stake_amount = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let network = NetworkBuilder::new()
             .with_peers(1)
             .with_auto_populated_trusted_peers()
@@ -11384,25 +13865,51 @@ exit 0
 
     #[test]
     fn default_block_cadence_matches_protocol_default() {
-        let network = NetworkBuilder::new().with_default_block_cadence().build();
-        assert_eq!(network.block_cadence(), DEFAULT_BLOCK_CADENCE);
-    }
-
-    #[test]
-    fn explicit_block_cadence_sets_signed_metadata() {
-        let duration = Duration::from_secs(3);
+        init_instruction_registry();
+        let expected_ms = defaults::sumeragi::BLOCK_CADENCE_MS;
+        assert_eq!(expected_ms, 1_000, "fresh-network cadence must remain 1 s");
+        let expected = Duration::from_millis(expected_ms);
         let network =
-            build_with_isolated_permit(NetworkBuilder::new().with_block_cadence(duration));
+            build_with_isolated_permit(NetworkBuilder::new().with_default_block_cadence());
 
-        assert_eq!(network.block_cadence(), duration);
-
+        assert_eq!(network.block_cadence(), expected);
         assert_eq!(
             network
                 .consensus_bootstrap_profile()
                 .params
                 .block_cadence_ms
                 .get(),
-            3_000
+            expected_ms,
+            "signed consensus profile must use the protocol cadence"
+        );
+        let metadata = consensus_handshake_metadata(&network.genesis())
+            .expect("genesis must contain decodable consensus handshake metadata");
+        assert_eq!(
+            metadata.block_cadence_ms.get(),
+            expected_ms,
+            "handshake metadata must advertise the protocol cadence"
+        );
+    }
+
+    #[test]
+    fn explicit_block_cadence_sets_signed_metadata() {
+        init_instruction_registry();
+        let duration = Duration::from_secs(3);
+        let network =
+            build_with_isolated_permit(NetworkBuilder::new().with_block_cadence(duration));
+        let genesis = network.genesis();
+        let profile = network.consensus_bootstrap_profile();
+
+        assert_eq!(network.block_cadence(), duration);
+        assert_eq!(profile.params.block_cadence_ms.get(), 3_000);
+        assert_exactly_one_consensus_handshake(&genesis, &consensus_handshake_parameter(&profile));
+        assert_eq!(
+            consensus_handshake_metadata(&genesis)
+                .expect("genesis must contain canonical consensus metadata")
+                .block_cadence_ms
+                .get(),
+            3_000,
+            "signed handshake metadata must carry the explicit cadence"
         );
     }
 
@@ -11686,6 +14193,60 @@ exit 0
         builder.build()
     }
 
+    #[test]
+    fn builder_stages_receiver_specific_initial_message_control_rules() {
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(stringify!(
+                    builder_stages_receiver_specific_initial_message_control_rules
+                ))
+                .with_initial_consensus_message_control_rules(17, |receiver_index, peer_ids| {
+                    vec![ConsensusMessageControlRule::exact(
+                        peer_ids[(receiver_index + 1) % peer_ids.len()].clone(),
+                        ConsensusMessageControlKind::CommitVote,
+                        2,
+                        0,
+                        ConsensusMessageControlAction::Drop,
+                    )]
+                }),
+        );
+        let peer_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::id)
+            .collect::<Vec<_>>();
+
+        for (receiver_index, peer) in network.peers().iter().enumerate() {
+            let control = peer
+                .consensus_message_control()
+                .expect("initializer provisions a controlled daemon");
+            let bytes = fs::read(control.root().join("command.norito.json"))
+                .expect("read staged initial command");
+            let command: JsonValue =
+                json::from_slice(&bytes).expect("parse staged initial command");
+            assert_eq!(command.get("revision").and_then(JsonValue::as_u64), Some(1));
+            assert_eq!(
+                command.get("queue_capacity").and_then(JsonValue::as_u64),
+                Some(17)
+            );
+            let rules = command
+                .get("rules")
+                .and_then(JsonValue::as_array)
+                .expect("staged rules array");
+            assert_eq!(rules.len(), 1);
+            let expected_sender = peer_ids[(receiver_index + 1) % peer_ids.len()].to_string();
+            assert_eq!(
+                rules[0].get("sender").and_then(JsonValue::as_str),
+                Some(expected_sender.as_str())
+            );
+            assert_eq!(
+                rules[0].get("action").and_then(JsonValue::as_str),
+                Some("drop")
+            );
+        }
+    }
+
     async fn build_with_isolated_permit_async(builder: NetworkBuilder) -> Network {
         let _guard = lock_env_guard_async(&NETWORK_PERMIT_ENV_GUARD).await;
         let dir = tempdir().expect("permit dir");
@@ -11871,22 +14432,14 @@ exit 0
             .expect("topology pops should be recorded");
         let expected = genesis_factory(Vec::new(), recorded, recorded_pops);
 
-        let produced_txs = produced.0.transactions_vec();
-        let expected_txs = expected.0.transactions_vec();
+        let produced_instructions = collect_non_handshake_instructions(&produced);
+        let expected_instructions = collect_non_handshake_instructions(&expected);
         assert!(
-            produced_txs.len() >= expected_txs.len(),
-            "network genesis must contain all transactions emitted by the custom builder"
-        );
-        assert_eq!(
-            &produced_txs[..expected_txs.len()],
-            expected_txs.as_slice(),
-            "custom genesis builder should dictate the initial transaction sequence"
+            produced_instructions.starts_with(&expected_instructions),
+            "custom genesis builder should dictate the initial non-handshake instruction sequence"
         );
         let expected_handshake = consensus_handshake_parameter(&network.consensus_profile);
-        assert!(
-            genesis_has_consensus_handshake(&produced, &expected_handshake),
-            "network genesis must include consensus handshake metadata so peers can start"
-        );
+        assert_exactly_one_consensus_handshake(&produced, &expected_handshake);
     }
 
     #[test]
@@ -11915,12 +14468,141 @@ exit 0
         );
 
         let produced = network.genesis();
+        assert_exactly_one_consensus_handshake(&produced, &consensus_handshake_parameter(&profile));
         let metadata = consensus_handshake_metadata(&produced)
             .expect("custom genesis should include consensus handshake metadata");
         assert_eq!(
             metadata.mode,
             SumeragiConsensusMode::Npos,
             "custom genesis handshake metadata should advertise NPoS mode",
+        );
+    }
+
+    #[test]
+    fn custom_genesis_binds_active_validator_projection_instead_of_normal_preview() {
+        init_instruction_registry();
+
+        const SEED: &str = "custom-genesis-active-validator-projection";
+        let baseline = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(SEED)
+                .with_npos_consensus()
+                .without_npos_genesis_bootstrap()
+                .with_config_layer(|layer| {
+                    layer.write(["nexus", "enabled"], true);
+                }),
+        );
+        let baseline_genesis = baseline.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&baseline, &baseline_genesis);
+        assert!(
+            baseline_genesis
+                .0
+                .transactions_vec()
+                .iter()
+                .filter_map(|transaction| match transaction.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions),
+                    _ => None,
+                })
+                .flat_map(|instructions| instructions.iter())
+                .all(|instruction| instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_none()),
+            "normal preview must not contain an active-validator bootstrap"
+        );
+        let baseline_context_hash = baseline
+            .consensus_bootstrap_profile()
+            .params
+            .v2_context
+            .nexus_amx_context_hash;
+        drop(baseline);
+
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_peers(4)
+                .with_base_seed(SEED)
+                .with_npos_consensus()
+                .without_npos_genesis_bootstrap()
+                .with_config_layer(|layer| {
+                    layer.write(["nexus", "enabled"], true);
+                })
+                .with_genesis_block(|topology, topology_entries| {
+                    let peer_id = topology
+                        .iter()
+                        .next()
+                        .expect("custom genesis topology must contain a peer")
+                        .clone();
+                    let nexus_domain =
+                        DomainId::try_new("nexus", "universal").expect("nexus domain");
+                    let stake_asset_id = AssetDefinitionId::new(
+                        nexus_domain.clone(),
+                        "xor".parse().expect("stake asset name"),
+                    );
+                    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
+                    let bootstrap = vec![
+                        Register::domain(Domain::new(nexus_domain)).into(),
+                        Register::asset_definition(
+                            AssetDefinition::new(stake_asset_id.clone(), NumericSpec::default())
+                                .with_name("Custom Genesis Stake".to_owned())
+                                .with_metadata(Metadata::default()),
+                        )
+                        .into(),
+                        Mint::asset_quantity(
+                            stake_amount.clone(),
+                            AssetId::new(stake_asset_id, ALICE_ID.clone()),
+                        )
+                        .into(),
+                    ];
+                    let validator = vec![
+                        RegisterPublicLaneValidator::new(
+                            LaneId::SINGLE,
+                            ALICE_ID.clone(),
+                            peer_id,
+                            ALICE_ID.clone(),
+                            stake_amount,
+                            Metadata::default(),
+                        )
+                        .into(),
+                        ActivatePublicLaneValidator::new(LaneId::SINGLE, ALICE_ID.clone()).into(),
+                    ];
+                    genesis_factory_with_post_topology(
+                        Vec::new(),
+                        vec![bootstrap, validator],
+                        topology,
+                        topology_entries,
+                    )
+                }),
+        );
+
+        let genesis = network.genesis();
+        assert_signed_nexus_amx_context_matches_preexecution(&network, &genesis);
+        let metadata = consensus_handshake_metadata(&genesis)
+            .expect("custom genesis must contain canonical consensus metadata");
+        assert_eq!(
+            metadata.sumeragi_v2,
+            network.consensus_bootstrap_profile().params.v2_context,
+            "cached custom genesis must carry the final runtime profile"
+        );
+        assert_ne!(
+            metadata.sumeragi_v2.nexus_amx_context_hash, baseline_context_hash,
+            "custom active-validator state must replace the normal preview projection"
+        );
+        assert!(
+            genesis
+                .0
+                .transactions_vec()
+                .iter()
+                .filter_map(|transaction| match transaction.instructions() {
+                    Executable::Instructions(instructions) => Some(instructions),
+                    _ => None,
+                })
+                .flat_map(|instructions| instructions.iter())
+                .any(|instruction| instruction
+                    .as_any()
+                    .downcast_ref::<ActivatePublicLaneValidator>()
+                    .is_some()),
+            "custom genesis must retain its active-validator bootstrap"
         );
     }
 

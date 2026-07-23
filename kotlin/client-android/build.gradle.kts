@@ -44,6 +44,15 @@ android {
             withSourcesJar()
         }
     }
+
+    packaging {
+        jniLibs {
+            // The mobile artifact verifier binds the published AAR to the exact
+            // authenticated native bridge bytes staged in src/main/jniLibs.
+            // Prevent AGP from stripping a different binary into the AAR.
+            keepDebugSymbols.add("**/libconnect_norito_bridge.so")
+        }
+    }
 }
 
 repositories {
@@ -62,10 +71,32 @@ publishing {
 
 dependencies {
     api(project(":core-jvm"))
+    implementation(libs.play.services.nearby)
     coreLibraryDesugaring(libs.desugar.jdk.libs)
+    testImplementation(kotlin("test"))
+    testImplementation(libs.junit.params)
+    testRuntimeOnly(libs.junit.jupiter.engine)
+    testRuntimeOnly(libs.junit.platform.launcher)
+}
+
+tasks.withType<Test>().configureEach {
+    useJUnitPlatform()
+    if (name == "testDebugUnitTest") {
+        dependsOn("processDebugManifest")
+        systemProperty(
+            "iroha.clientAndroid.mergedManifest",
+            layout.buildDirectory.file(
+                "intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml",
+            ).get().asFile.absolutePath,
+        )
+    }
 }
 
 val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
+val nativeBridgeLibraries = listOf(
+    jniLibsDir.file("arm64-v8a/libconnect_norito_bridge.so"),
+    jniLibsDir.file("x86_64/libconnect_norito_bridge.so"),
+)
 
 fun irohaDir(): String {
     val props = Properties()
@@ -74,9 +105,9 @@ fun irohaDir(): String {
     return props.getProperty("iroha.dir") ?: rootProject.file("..").absolutePath
 }
 
-tasks.register<Exec>("buildNativeLibs") {
+val compileNativeLibs = tasks.register<Exec>("compileNativeLibs") {
     group = "native"
-    description = "Build connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
+    description = "Compile connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
 
     // Pass -PprivacyProductionEnabled=true to enable real proving in the native bridge.
     // Default is off (fail-closed); flip only when all production gates have passed.
@@ -96,6 +127,38 @@ tasks.register<Exec>("buildNativeLibs") {
             addAll(cargoFeatureArgs)
         }
     )
+}
+
+val androidNdkRoot = providers.environmentVariable("ANDROID_NDK_HOME")
+    .orElse(providers.environmentVariable("ANDROID_NDK_ROOT"))
+    .orElse(androidComponents.sdkComponents.ndkDirectory.map { it.asFile.absolutePath })
+
+val stripNativeLibs = tasks.register<Exec>("stripNativeLibs") {
+    group = "native"
+    description = "Canonically strip the compiled Android native bridge libraries"
+    dependsOn(compileNativeLibs)
+
+    doFirst {
+        val prebuiltRoot = file(androidNdkRoot.get()).resolve("toolchains/llvm/prebuilt")
+        val stripExecutables = prebuiltRoot
+            .walkTopDown()
+            .filter { it.isFile && (it.name == "llvm-strip" || it.name == "llvm-strip.exe") }
+            .toList()
+        require(stripExecutables.size == 1) {
+            "Expected one Android NDK llvm-strip under $prebuiltRoot; found ${stripExecutables.size}"
+        }
+        commandLine(
+            stripExecutables.single().absolutePath,
+            "--strip-unneeded",
+            *nativeBridgeLibraries.map { it.asFile.absolutePath }.toTypedArray(),
+        )
+    }
+}
+
+tasks.register("buildNativeLibs") {
+    group = "native"
+    description = "Build and canonically strip connect_norito_bridge Android libraries"
+    dependsOn(stripNativeLibs)
 }
 
 afterEvaluate {

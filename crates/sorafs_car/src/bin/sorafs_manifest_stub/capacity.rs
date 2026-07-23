@@ -18,6 +18,7 @@ use sorafs_manifest::{
         ReplicationAssignmentV1, ReplicationOrderSlaV1, ReplicationOrderV1,
     },
     chunker_registry,
+    deal::XorQuantity,
     provider_advert::{CapabilityType, StakePointer},
 };
 
@@ -611,7 +612,7 @@ fn build_artefacts(
     let stake_amount_value = stake_value
         .get("stake_amount")
         .ok_or_else(|| "missing `stake.stake_amount` field".to_string())?;
-    let stake_amount = parse_u128_value(stake_amount_value, "stake.stake_amount")?;
+    let stake_amount = parse_xor_quantity_value(stake_amount_value, "stake.stake_amount")?;
 
     let committed_capacity =
         parse_u64_value(map.get("committed_capacity_gib"), "committed_capacity_gib")?;
@@ -1720,17 +1721,19 @@ fn parse_u32_value(value: &Value, context: &str) -> Result<u32, String> {
     Err(format!("`{context}` must be a number or string"))
 }
 
-fn parse_u128_value(value: &Value, context: &str) -> Result<u128, String> {
-    if let Some(num) = value.as_u64() {
-        return Ok(num as u128);
+fn parse_xor_quantity_value(value: &Value, context: &str) -> Result<XorQuantity, String> {
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("`{context}` must be a canonical decimal string"))?;
+    let quantity = text
+        .parse::<XorQuantity>()
+        .map_err(|err| format!("invalid `{context}`: {err}"))?;
+    if quantity.to_string() != text {
+        return Err(format!(
+            "`{context}` must use the canonical decimal spelling"
+        ));
     }
-    if let Some(text) = value.as_str() {
-        require_canonical_unsigned_decimal(context, text)?;
-        return text
-            .parse::<u128>()
-            .map_err(|err| format!("invalid `{context}`: {err}"));
-    }
-    Err(format!("`{context}` must be a number or string"))
+    Ok(quantity)
 }
 
 fn parse_u16_value(value: &Value, context: &str) -> Result<u16, String> {
@@ -1978,10 +1981,31 @@ mod tests {
             42
         );
         assert_eq!(
-            parse_u128_value(&Value::String("5000".into()), "stake.stake_amount")
-                .expect("string u128"),
-            5_000
+            parse_xor_quantity_value(&Value::String("0.000000001".into()), "stake.stake_amount")
+                .expect("sub-micro quantity")
+                .to_string(),
+            "0.000000001"
         );
+        assert_eq!(
+            parse_xor_quantity_value(
+                &Value::String("340282366920938463463374607431768211456".into()),
+                "stake.stake_amount"
+            )
+            .expect("quantity wider than u128")
+            .to_string(),
+            "340282366920938463463374607431768211456"
+        );
+        for value in [
+            Value::from(5_u64),
+            Value::String("01".into()),
+            Value::String("1.0".into()),
+            Value::String("+1".into()),
+            Value::String("-1".into()),
+            Value::String(" 1".into()),
+        ] {
+            parse_xor_quantity_value(&value, "stake.stake_amount")
+                .expect_err("noncanonical or non-string XOR quantity must fail");
+        }
 
         for value in ["", "01", "+1", "-1", "1 ", "1_000", "18446744073709551616"] {
             let err =

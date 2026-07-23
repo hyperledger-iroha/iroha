@@ -19,7 +19,6 @@ public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
     case invalidHash(field: String)
     case invalidRegistrationVersion(UInt16)
     case authorityMustBeOneUse
-    case invalidAuthorityPublicKeyLength(expected: Int, actual: Int)
     case deviceAttestationChallengeHashMismatch(expected: String, actual: String)
     case deviceAttestationHashMismatch(field: String)
     case invalidDigestLength(field: String, expected: Int, actual: Int)
@@ -36,8 +35,6 @@ public enum KagemushaDeviceAttestationError: Error, LocalizedError, Equatable {
             return "Kagemusha device-attestation registration version must be \(KagemushaDeviceAttestation.registrationVersion) (found \(version))."
         case .authorityMustBeOneUse:
             return "Kagemusha offline authority must be marked one-use."
-        case let .invalidAuthorityPublicKeyLength(expected, actual):
-            return "Kagemusha offline authority public key must be \(expected) bytes (found \(actual))."
         case let .deviceAttestationChallengeHashMismatch(expected, actual):
             return "Kagemusha device attestation challenge hash mismatch: expected \(expected), got \(actual)."
         case let .deviceAttestationHashMismatch(field):
@@ -64,7 +61,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let iosEnvironment: String?
     public let androidPackageName: String?
     public let androidSigningCertificateSha256: Data?
-    public let publicKey: Data
+    public let publicKey: KagemushaDevicePublicKeyV2
     public let assertionScheme: String
     public let assertionKeyAlgorithm: String
     public let assertionPublicKey: Data
@@ -78,6 +75,8 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
     public let recentBlockHeight: UInt64
     public let recentBlockHash: Data
     public let expiresAtMs: UInt64
+    /// Canonical chain registration identifier (`Hash(Norito(registration))`).
+    public private(set) var canonicalRegistrationId = Data()
 
     public init(version: UInt16 = KagemushaDeviceAttestation.registrationVersion,
                 platform: String,
@@ -90,7 +89,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
                 iosEnvironment: String? = nil,
                 androidPackageName: String? = nil,
                 androidSigningCertificateSha256: Data? = nil,
-                publicKey: Data,
+                publicKey: KagemushaDevicePublicKeyV2,
                 assertionScheme: String,
                 assertionKeyAlgorithm: String,
                 assertionPublicKey: Data,
@@ -226,6 +225,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
         self.recentBlockHeight = recentBlockHeight
         self.recentBlockHash = recentBlockHash
         self.expiresAtMs = expiresAtMs
+        self.canonicalRegistrationId = IrohaHash.hash(try noritoEncoded())
     }
 
     private static func validateAttestationProfile(platform: String,
@@ -262,7 +262,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
         iosEnvironment: String? = nil,
         androidPackageName: String? = nil,
         androidSigningCertificateSha256: Data? = nil,
-        publicKey: Data,
+        publicKey: KagemushaDevicePublicKeyV2,
         assertionScheme: String,
         assertionKeyAlgorithm: String,
         assertionUsageCountLimit: UInt32?,
@@ -344,7 +344,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
         iosEnvironment: String? = nil,
         androidPackageName: String,
         androidSigningCertificateSha256: Data,
-        publicKey: Data,
+        publicKey: KagemushaDevicePublicKeyV2,
         assertionScheme: String = KagemushaDeviceAttestation.androidKeyMintAssertionScheme,
         assertionKeyAlgorithm: String = KagemushaDeviceAttestation.androidKeyMintAssertionKeyAlgorithm,
         assertionUsageCountLimit: UInt32? = 1,
@@ -481,7 +481,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
                                              iosEnvironment: String?,
                                              androidPackageName: String?,
                                              androidSigningCertificateSha256: Data?,
-                                             publicKey: Data,
+                                             publicKey: KagemushaDevicePublicKeyV2,
                                              assertionScheme: String,
                                              assertionKeyAlgorithm: String,
                                              assertionUsageCountLimit: UInt32?,
@@ -544,7 +544,7 @@ public struct KagemushaDeviceAttestationRegistration: Equatable, Sendable {
         iosEnvironment: String?,
         androidPackageName: String?,
         androidSigningCertificateSha256: Data?,
-        publicKey: Data,
+        publicKey: KagemushaDevicePublicKeyV2,
         assertionScheme: String,
         assertionKeyAlgorithm: String,
         assertionUsageCountLimit: UInt32?,
@@ -588,7 +588,7 @@ fileprivate struct OfflineDeviceAttestationChallengePreimage {
     let iosEnvironment: String?
     let androidPackageName: String?
     let androidSigningCertificateSha256: Data?
-    let publicKey: Data
+    let publicKey: KagemushaDevicePublicKeyV2
     let assertionScheme: String
     let assertionKeyAlgorithm: String
     let assertionUsageCountLimit: UInt32?
@@ -615,7 +615,7 @@ fileprivate struct OfflineAndroidKeyMintChallengePreimage {
     let iosEnvironment: String?
     let androidPackageName: String?
     let androidSigningCertificateSha256: Data?
-    let publicKey: Data
+    let publicKey: KagemushaDevicePublicKeyV2
     let assertionScheme: String
     let assertionKeyAlgorithm: String
     let assertionUsageCountLimit: UInt32?
@@ -636,6 +636,7 @@ public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public let chainId: String
     public let authority: String
     public let registration: KagemushaDeviceAttestationRegistration
+    public let feePayment: FeePaymentIntent
     public let ttlMs: UInt64?
     public let nonce: UInt32?
     public let metadata: [String: ToriiJSONValue]
@@ -643,12 +644,14 @@ public struct RegisterKagemushaDeviceAttestationRequest: Sendable {
     public init(chainId: String,
                 authority: String,
                 registration: KagemushaDeviceAttestationRegistration,
+                feePayment: FeePaymentIntent,
                 ttlMs: UInt64? = nil,
                 nonce: UInt32? = nil,
                 metadata: [String: ToriiJSONValue] = [:]) {
         self.chainId = chainId
         self.authority = authority
         self.registration = registration
+        self.feePayment = feePayment
         self.ttlMs = ttlMs
         self.nonce = nonce
         self.metadata = metadata
@@ -703,7 +706,7 @@ enum KagemushaDeviceAttestationValidation {
 
     static func validateRegistrationCore(version: UInt16,
                                          accountId: String,
-                                         publicKey: Data,
+                                         publicKey: KagemushaDevicePublicKeyV2,
                                          oneUse: Bool) throws {
         guard version == KagemushaDeviceAttestation.registrationVersion else {
             throw KagemushaDeviceAttestationError.invalidRegistrationVersion(version)
@@ -711,13 +714,8 @@ enum KagemushaDeviceAttestationValidation {
         guard oneUse else {
             throw KagemushaDeviceAttestationError.authorityMustBeOneUse
         }
-        guard publicKey.count == 32 else {
-            throw KagemushaDeviceAttestationError.invalidAuthorityPublicKeyLength(
-                expected: 32,
-                actual: publicKey.count
-            )
-        }
-        _ = try CanonicalNorito.encodeAccountId(accountId)
+        _ = publicKey
+        _ = try AccountAddress.parseEncoded(accountId, expectedPrefix: 0x02F1)
     }
 
     static func validateAttestationIdentity(keyId: String, deviceId: String) throws {
@@ -900,7 +898,7 @@ enum KagemushaDeviceAttestationEncoding {
             registration.androidSigningCertificateSha256,
             encode: encodeBytesVec
         ))
-        writer.writeField(encodeBytesVec(registration.publicKey))
+        writer.writeField(registration.publicKey.sec1Bytes)
         writer.writeField(CompactNorito.encodeString(registration.assertionScheme))
         writer.writeField(CompactNorito.encodeString(registration.assertionKeyAlgorithm))
         writer.writeField(encodeBytesVec(registration.assertionPublicKey))
@@ -954,7 +952,7 @@ enum KagemushaDeviceAttestationEncoding {
             preimage.androidSigningCertificateSha256,
             encode: encodeBytesVec
         ))
-        writer.writeField(encodeBytesVec(preimage.publicKey))
+        writer.writeField(preimage.publicKey.sec1Bytes)
         writer.writeField(CompactNorito.encodeString(preimage.assertionScheme))
         writer.writeField(CompactNorito.encodeString(preimage.assertionKeyAlgorithm))
         writer.writeField(try CompactNorito.encodeOption(
@@ -1005,7 +1003,7 @@ enum KagemushaDeviceAttestationEncoding {
             preimage.androidSigningCertificateSha256,
             encode: encodeBytesVec
         ))
-        writer.writeField(encodeBytesVec(preimage.publicKey))
+        writer.writeField(preimage.publicKey.sec1Bytes)
         writer.writeField(CompactNorito.encodeString(preimage.assertionScheme))
         writer.writeField(CompactNorito.encodeString(preimage.assertionKeyAlgorithm))
         writer.writeField(try CompactNorito.encodeOption(
@@ -1020,7 +1018,12 @@ enum KagemushaDeviceAttestationEncoding {
     }
 
     private static func encodeAccountId(_ value: String) throws -> Data {
-        try CanonicalNorito.encodeAccountId(value)
+        do {
+            let address = try AccountAddress.parseEncoded(value, expectedPrefix: 0x02F1)
+            return try address.compactNoritoAccountControllerPayload()
+        } catch {
+            throw CanonicalNoritoError.invalidAccountId(value)
+        }
     }
 
     private static func encodeAssetDefinitionId(_ assetDefinitionId: String) throws -> Data {
@@ -1041,7 +1044,9 @@ enum KagemushaDeviceAttestationEncoding {
 
     private static func encodeBytesVec(_ bytes: Data) -> Data {
         var writer = CompactNoritoWriter()
-        writer.writeLength(UInt64(bytes.count))
+        // `Vec<u8>` retains its fixed-width u64 element count even when the
+        // enclosing struct uses COMPACT_LEN for field framing.
+        writer.writeUInt64LE(UInt64(bytes.count))
         writer.writeBytes(bytes)
         return writer.data
     }
@@ -1059,9 +1064,523 @@ public struct KagemushaDeviceAttestationUnsignedTransaction: Sendable {
     }
 }
 
+public enum KagemushaDeviceAttestationSignedTransactionError: Error, LocalizedError, Equatable {
+    case invalidCanonicalNorito(String)
+    case registrationIdMismatch
+    case chainIdMismatch
+    case authorityMismatch
+    case transactionHashMismatch
+    case statusTransactionHashMismatch
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidCanonicalNorito(reason):
+            return "Invalid canonical Kagemusha device-registration transaction: \(reason)"
+        case .registrationIdMismatch:
+            return "The embedded Kagemusha device registration does not match the expected registration id."
+        case .chainIdMismatch:
+            return "The embedded transaction chain id does not match the expected chain id."
+        case .authorityMismatch:
+            return "The embedded transaction authority does not match the expected authority."
+        case .transactionHashMismatch:
+            return "The signed transaction bytes do not match the expected transaction hash."
+        case .statusTransactionHashMismatch:
+            return "The pipeline status transaction hash does not match the persisted signed transaction."
+        }
+    }
+}
+
+/// Strict inspection of persisted bytes for a signed device-registration transaction.
+///
+/// This type is intended for crash-safe status-first replay. It retains the exact
+/// submitted bytes, recomputes their transaction hash, and proves that the sole
+/// embedded instruction carries the expected canonical device registration.
+public struct KagemushaDeviceAttestationSignedTransaction: Sendable {
+    public let envelope: SignedTransactionEnvelope
+    public let registrationId: Data
+    public let chainId: String
+    public let authority: String
+
+    public var registrationIdHex: String {
+        registrationId.hexLowercased()
+    }
+
+    public init(
+        canonicalNorito: Data,
+        expectedRegistrationId: Data,
+        expectedChainId: String? = nil,
+        expectedAuthority: String? = nil,
+        expectedTransactionHash: Data? = nil
+    ) throws {
+        try KagemushaDeviceAttestationValidation.validateHash(
+            expectedRegistrationId,
+            field: "expected_registration_id"
+        )
+        let inspected = try KagemushaDeviceAttestationSignedTransactionInspector.inspect(
+            canonicalNorito: canonicalNorito
+        )
+        guard inspected.registrationId == expectedRegistrationId else {
+            throw KagemushaDeviceAttestationSignedTransactionError.registrationIdMismatch
+        }
+        if let expectedChainId, inspected.chainId != expectedChainId {
+            throw KagemushaDeviceAttestationSignedTransactionError.chainIdMismatch
+        }
+        if let expectedAuthority, inspected.authority != expectedAuthority {
+            throw KagemushaDeviceAttestationSignedTransactionError.authorityMismatch
+        }
+        if let expectedTransactionHash {
+            guard expectedTransactionHash.count == 32,
+                  inspected.envelope.transactionHash == expectedTransactionHash else {
+                throw KagemushaDeviceAttestationSignedTransactionError.transactionHashMismatch
+            }
+        }
+        self.envelope = inspected.envelope
+        self.registrationId = inspected.registrationId
+        self.chainId = inspected.chainId
+        self.authority = inspected.authority
+    }
+
+    /// Require a pipeline/status response to name this exact persisted transaction.
+    public func validateStatusTransactionHash(_ hashHex: String) throws {
+        guard hashHex.count == 64,
+              hashHex == hashHex.lowercased(),
+              Data(hexString: hashHex) != nil,
+              hashHex == envelope.hashHex else {
+            throw KagemushaDeviceAttestationSignedTransactionError.statusTransactionHashMismatch
+        }
+    }
+}
+
+private enum KagemushaDeviceAttestationSignedTransactionInspector {
+    struct Inspection {
+        let envelope: SignedTransactionEnvelope
+        let registrationId: Data
+        let chainId: String
+        let authority: String
+    }
+
+    static func inspect(canonicalNorito: Data) throws -> Inspection {
+        guard canonicalNorito.first
+                == KagemushaDeviceAttestationTransactionEncoder.signedTransactionWireVersion,
+              canonicalNorito.count > 1 else {
+            throw invalid("wire version")
+        }
+        let signedTransaction = Data(canonicalNorito.dropFirst())
+        var signedReader = CanonicalNoritoReader(data: signedTransaction)
+        let signatureField = try field(&signedReader, "transaction signature")
+        let transactionPayload = try field(&signedReader, "transaction payload")
+        let feeAuthority = try field(&signedReader, "fee authority")
+        let reserved = try field(&signedReader, "reserved option")
+        try finish(signedReader, "signed transaction")
+        try validateTransactionSignature(signatureField)
+        guard feeAuthority == Data([0]), reserved == Data([0]) else {
+            throw invalid("signed transaction options")
+        }
+
+        var payloadReader = CanonicalNoritoReader(data: transactionPayload)
+        let chainField = try field(&payloadReader, "chain id")
+        let authorityField = try field(&payloadReader, "authority")
+        let creationTimeField = try field(&payloadReader, "creation time")
+        let executableField = try field(&payloadReader, "executable")
+        let ttlField = try field(&payloadReader, "ttl")
+        let nonceField = try field(&payloadReader, "nonce")
+        let feePaymentField = try field(&payloadReader, "fee payment")
+        let metadataField = try field(&payloadReader, "metadata")
+        try finish(payloadReader, "transaction payload")
+
+        let chainId = try canonicalString(chainField, field: "chain id")
+        let authority = try canonicalString(authorityField, field: "authority")
+        guard creationTimeField.count == 8 else {
+            throw invalid("creation time")
+        }
+        try validateOption(ttlField, valueLength: 8, field: "ttl")
+        try validateOption(nonceField, valueLength: 4, field: "nonce")
+        try validateFeePayment(feePaymentField)
+        try validateMetadata(metadataField)
+        let validated = try TransactionInputValidator.validate(
+            chainId: chainId,
+            authorityId: authority
+        )
+        guard validated.chainId == chainId, validated.authorityId == authority else {
+            throw invalid("non-canonical chain id or authority")
+        }
+
+        let registrationPayload = try registrationPayload(from: executableField)
+        let registrationArchive = noritoEncode(
+            typeName: KagemushaDeviceAttestationTypeNames.deviceAttestationRegistration,
+            payload: registrationPayload,
+            flags: NoritoHeader.compactLen
+        )
+        let registrationId = IrohaHash.hash(registrationArchive)
+
+        let canonicalSigned = KagemushaDeviceAttestationTransactionEncoder.encodeSignedTransaction(
+            signatureField: signatureField,
+            transactionPayload: transactionPayload
+        )
+        guard canonicalSigned == signedTransaction else {
+            throw invalid("non-canonical signed transaction")
+        }
+        var canonicalEnvelope = Data([
+            KagemushaDeviceAttestationTransactionEncoder.signedTransactionWireVersion
+        ])
+        canonicalEnvelope.append(canonicalSigned)
+        guard canonicalEnvelope == canonicalNorito else {
+            throw invalid("trailing envelope bytes")
+        }
+
+        let transactionHash = IrohaHash.hash(
+            KagemushaDeviceAttestationTransactionEncoder.encodeTransactionEntrypoint(
+                signedTransaction
+            )
+        )
+        let envelope = SignedTransactionEnvelope(
+            norito: canonicalNorito,
+            signedTransaction: signedTransaction,
+            payload: nil,
+            transactionHash: transactionHash
+        )
+        return Inspection(
+            envelope: envelope,
+            registrationId: registrationId,
+            chainId: chainId,
+            authority: authority
+        )
+    }
+
+    private static func registrationPayload(from executable: Data) throws -> Data {
+        var executableReader = CanonicalNoritoReader(data: executable)
+        guard try executableReader.readUInt32LE() == 0 else {
+            throw invalid("transaction executable")
+        }
+        let instructions = try field(&executableReader, "instructions")
+        try finish(executableReader, "transaction executable")
+
+        var instructionsReader = CanonicalNoritoReader(data: instructions)
+        guard try instructionsReader.readUInt64LE() == 1 else {
+            throw invalid("device registration instruction count")
+        }
+        let instruction = try field(&instructionsReader, "device registration instruction")
+        try finish(instructionsReader, "instructions")
+
+        var instructionReader = CanonicalNoritoReader(data: instruction)
+        let nameField = try field(&instructionReader, "instruction name")
+        let archiveField = try field(&instructionReader, "instruction archive")
+        try finish(instructionReader, "instruction")
+        let name = try canonicalString(nameField, field: "instruction name")
+        guard name == KagemushaDeviceAttestationTransactionEncoder.instructionWireName else {
+            throw invalid("instruction name")
+        }
+        let framedInstruction = try bytesVec(archiveField, field: "instruction archive")
+        guard let frame = noritoDecodeFrame(framedInstruction),
+              frame.header.schema == noritoSchemaHash(
+                  forTypeName: KagemushaDeviceAttestationTransactionEncoder.instructionWireName
+              ),
+              frame.header.compression == .none,
+              frame.header.flags == NoritoHeader.compactLen,
+              frame.paddingLength == 0,
+              noritoEncode(
+                  typeName: KagemushaDeviceAttestationTransactionEncoder.instructionWireName,
+                  payload: frame.payload,
+                  flags: NoritoHeader.compactLen
+              ) == framedInstruction else {
+            throw invalid("instruction Norito frame")
+        }
+        var concreteReader = CanonicalNoritoReader(data: frame.payload)
+        let registration = try compactField(&concreteReader, "registration")
+        try finish(concreteReader, "registration instruction")
+        guard !registration.isEmpty else {
+            throw invalid("empty registration")
+        }
+        return registration
+    }
+
+    private static func validateTransactionSignature(_ data: Data) throws {
+        var reader = CanonicalNoritoReader(data: data)
+        guard try reader.readUInt64LE() == 64 else {
+            throw invalid("transaction signature width")
+        }
+        var signature = Data()
+        signature.reserveCapacity(64)
+        for _ in 0..<64 {
+            let byte = try field(&reader, "transaction signature byte")
+            guard byte.count == 1, let value = byte.first else {
+                throw invalid("transaction signature element")
+            }
+            signature.append(value)
+        }
+        try finish(reader, "transaction signature")
+        guard signature.contains(where: { $0 != 0 }),
+              CanonicalNorito.encodeConstVec(signature) == data else {
+            throw invalid("transaction signature")
+        }
+    }
+
+    private static func validateOption(
+        _ data: Data,
+        valueLength: Int,
+        field name: String
+    ) throws {
+        var reader = CanonicalNoritoReader(data: data)
+        switch try reader.readUInt8() {
+        case 0:
+            try finish(reader, name)
+        case 1:
+            let value = try field(&reader, name)
+            guard value.count == valueLength else {
+                throw invalid(name)
+            }
+            try finish(reader, name)
+        default:
+            throw invalid(name)
+        }
+    }
+
+    private static func validateFeePayment(_ data: Data) throws {
+        var intent = CanonicalNoritoReader(data: data)
+        let tag = try intent.readUInt32LE()
+        let body = try field(&intent, "fee payment value")
+        try finish(intent, "fee payment")
+
+        var value = CanonicalNoritoReader(data: body)
+        switch tag {
+        case 0:
+            try validateFeeChargeLimits(field(&value, "fee payment charge limits"))
+            try validateFeeGasLimit(field(&value, "fee payment gas limit"))
+        case 1:
+            try validateFeeSponsorProgram(field(&value, "fee sponsor program"))
+            let revision = try field(&value, "fee sponsor program revision")
+            guard revision.count == 8 else { throw invalid("fee sponsor program revision") }
+            var revisionReader = CanonicalNoritoReader(data: revision)
+            guard try revisionReader.readUInt64LE() > 0 else {
+                throw invalid("fee sponsor program revision")
+            }
+            try finish(revisionReader, "fee sponsor program revision")
+            try validateFeeChargeLimits(field(&value, "fee payment charge limits"))
+            try validateFeeGasLimit(field(&value, "fee payment gas limit"))
+        default:
+            throw invalid("fee payment payer")
+        }
+        try finish(value, "fee payment value")
+    }
+
+    private static func validateFeeChargeLimits(_ data: Data) throws {
+        var limits = CanonicalNoritoReader(data: data)
+        let count = try limits.readUInt64LE()
+        guard count <= UInt64(FeeChargeKind.allCases.count) else {
+            throw invalid("fee payment charge limit count")
+        }
+        var previousKind: UInt32?
+        for _ in 0..<count {
+            var limit = CanonicalNoritoReader(
+                data: try field(&limits, "fee payment charge limit")
+            )
+            let kindField = try field(&limit, "fee payment charge kind")
+            guard kindField.count == 4 else { throw invalid("fee payment charge kind") }
+            var kind = CanonicalNoritoReader(data: kindField)
+            let rawKind = try kind.readUInt32LE()
+            guard FeeChargeKind(rawValue: rawKind) != nil,
+                  previousKind.map({ $0 < rawKind }) ?? true else {
+                throw invalid("fee payment charge kind")
+            }
+            previousKind = rawKind
+            try finish(kind, "fee payment charge kind")
+            try validateFeeAssetDefinition(
+                field(&limit, "fee payment asset definition")
+            )
+            try validateFeePositiveQuantity(
+                field(&limit, "fee payment maximum amount")
+            )
+            try finish(limit, "fee payment charge limit")
+        }
+        try finish(limits, "fee payment charge limits")
+    }
+
+    private static func validateFeeAssetDefinition(_ data: Data) throws {
+        var asset = CanonicalNoritoReader(data: data)
+        var bytes = Data()
+        bytes.reserveCapacity(16)
+        for _ in 0..<16 {
+            let byte = try field(&asset, "fee payment asset definition byte")
+            guard byte.count == 1, let value = byte.first else {
+                throw invalid("fee payment asset definition")
+            }
+            bytes.append(value)
+        }
+        guard AssetDefinitionAddress.encode(uuidBytes: bytes) != nil else {
+            throw invalid("fee payment asset definition")
+        }
+        try finish(asset, "fee payment asset definition")
+    }
+
+    private static func validateFeePositiveQuantity(_ data: Data) throws {
+        var quantity = CanonicalNoritoReader(data: data)
+        var mantissa = CanonicalNoritoReader(
+            data: try field(&quantity, "fee payment maximum mantissa")
+        )
+        let byteCount = try mantissa.readUInt32LE()
+        guard byteCount > 0, byteCount <= UInt32(CanonicalNorito.maxBigIntBytes) else {
+            throw invalid("fee payment maximum mantissa")
+        }
+        let bytes = try mantissa.readBytes(Int(byteCount))
+        guard bytes.contains(where: { $0 != 0 }),
+              let mostSignificant = bytes.last,
+              mostSignificant & 0x80 == 0,
+              bytes.count == 1 || mostSignificant != 0
+                  || (bytes[bytes.count - 2] & 0x80) != 0 else {
+            throw invalid("fee payment maximum mantissa")
+        }
+        try finish(mantissa, "fee payment maximum mantissa")
+
+        let scaleField = try field(&quantity, "fee payment maximum scale")
+        guard scaleField.count == 4 else { throw invalid("fee payment maximum scale") }
+        var scale = CanonicalNoritoReader(data: scaleField)
+        guard try scale.readUInt32LE() <= CanonicalNorito.maxNumericScale else {
+            throw invalid("fee payment maximum scale")
+        }
+        try finish(scale, "fee payment maximum scale")
+        try finish(quantity, "fee payment maximum amount")
+    }
+
+    private static func validateFeeGasLimit(_ data: Data) throws {
+        var gas = CanonicalNoritoReader(data: data)
+        switch try gas.readUInt8() {
+        case 0:
+            break
+        case 1:
+            let value = try field(&gas, "fee payment gas limit")
+            guard value.count == 8 else { throw invalid("fee payment gas limit") }
+            var valueReader = CanonicalNoritoReader(data: value)
+            guard try valueReader.readUInt64LE() > 0 else {
+                throw invalid("fee payment gas limit")
+            }
+            try finish(valueReader, "fee payment gas limit")
+        default:
+            throw invalid("fee payment gas limit")
+        }
+        try finish(gas, "fee payment gas limit")
+    }
+
+    private static func validateFeeSponsorProgram(_ data: Data) throws {
+        var program = CanonicalNoritoReader(data: data)
+        try validateFeeSponsorController(field(&program, "fee sponsor account"))
+        let name = try canonicalString(
+            field(&program, "fee sponsor program name"),
+            field: "fee sponsor program name"
+        )
+        guard !name.isEmpty,
+              name == name.precomposedStringWithCanonicalMapping,
+              name.unicodeScalars.allSatisfy({ scalar in
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
+              }) else {
+            throw invalid("fee sponsor program name")
+        }
+        try finish(program, "fee sponsor program")
+    }
+
+    private static func validateFeeSponsorController(_ data: Data) throws {
+        var controller = CanonicalNoritoReader(data: data)
+        let tag = try controller.readUInt32LE()
+        let body = try field(&controller, "fee sponsor account controller")
+        guard tag == 0 || tag == 1, !body.isEmpty else {
+            throw invalid("fee sponsor account controller")
+        }
+        try finish(controller, "fee sponsor account controller")
+    }
+
+    private static func validateMetadata(_ data: Data) throws {
+        var reader = CanonicalNoritoReader(data: data)
+        let count = try reader.readUInt64LE()
+        guard count <= 4_096 else {
+            throw invalid("metadata count")
+        }
+        var previousKey: String?
+        for _ in 0..<count {
+            let entry = try field(&reader, "metadata entry")
+            var entryReader = CanonicalNoritoReader(data: entry)
+            let key = try canonicalString(
+                field(&entryReader, "metadata key"),
+                field: "metadata key"
+            )
+            let jsonContainer = try field(&entryReader, "metadata value")
+            try finish(entryReader, "metadata entry")
+            var jsonReader = CanonicalNoritoReader(data: jsonContainer)
+            let json = try canonicalString(
+                field(&jsonReader, "metadata JSON"),
+                field: "metadata JSON"
+            )
+            try finish(jsonReader, "metadata JSON")
+            guard !key.isEmpty,
+                  previousKey.map({ $0 < key }) ?? true,
+                  let jsonData = json.data(using: .utf8),
+                  (try? JSONSerialization.jsonObject(
+                      with: jsonData,
+                      options: [.fragmentsAllowed]
+                  )) != nil else {
+                throw invalid("metadata")
+            }
+            previousKey = key
+        }
+        try finish(reader, "metadata")
+    }
+
+    private static func bytesVec(_ data: Data, field name: String) throws -> Data {
+        var reader = CanonicalNoritoReader(data: data)
+        let length = try reader.readUInt64LE()
+        guard length <= UInt64(Int.max) else {
+            throw invalid(name)
+        }
+        let bytes = try reader.readBytes(Int(length))
+        try finish(reader, name)
+        return bytes
+    }
+
+    private static func canonicalString(_ data: Data, field name: String) throws -> String {
+        let value = try CanonicalNorito.decodeString(data)
+        guard CanonicalNorito.encodeString(value) == data else {
+            throw invalid(name)
+        }
+        return value
+    }
+
+    private static func field(
+        _ reader: inout CanonicalNoritoReader,
+        _ name: String
+    ) throws -> Data {
+        do {
+            return try reader.readField()
+        } catch {
+            throw invalid(name)
+        }
+    }
+
+    private static func compactField(
+        _ reader: inout CanonicalNoritoReader,
+        _ name: String
+    ) throws -> Data {
+        do {
+            return try reader.readCompactField()
+        } catch {
+            throw invalid(name)
+        }
+    }
+
+    private static func finish(_ reader: CanonicalNoritoReader, _ name: String) throws {
+        guard reader.remaining() == 0 else {
+            throw invalid("trailing bytes in \(name)")
+        }
+    }
+
+    private static func invalid(
+        _ reason: String
+    ) -> KagemushaDeviceAttestationSignedTransactionError {
+        .invalidCanonicalNorito(reason)
+    }
+}
+
 private enum KagemushaDeviceAttestationTransactionEncoder {
-    private static let signedTransactionWireVersion: UInt8 = 1
-    private static let instructionWireName =
+    fileprivate static let signedTransactionWireVersion: UInt8 = 1
+    fileprivate static let instructionWireName =
         "iroha_data_model::isi::offline::RegisterOfflineDeviceAttestation"
 
     static func encodeUnsigned(
@@ -1079,6 +1598,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
             creationTimeMs: creationTimeMs,
             ttlMs: request.ttlMs,
             nonce: request.nonce,
+            feePayment: request.feePayment,
             instructionPayload: instruction,
             metadata: request.metadata
         )
@@ -1112,6 +1632,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         creationTimeMs: UInt64,
         ttlMs: UInt64?,
         nonce: UInt32?,
+        feePayment: FeePaymentIntent,
         instructionPayload: Data,
         metadata: [String: ToriiJSONValue]
     ) throws -> Data {
@@ -1122,6 +1643,7 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         payload.writeField(encodeExecutable(instructionPayload))
         payload.writeField(try CanonicalNorito.encodeOption(ttlMs, encode: CanonicalNorito.encodeUInt64))
         payload.writeField(try CanonicalNorito.encodeOption(nonce, encode: CanonicalNorito.encodeUInt32))
+        payload.writeField(try feePayment.canonicalNorito())
         payload.writeField(try CanonicalNorito.encodeMetadata(metadata))
         return payload.data
     }
@@ -1170,7 +1692,19 @@ private enum KagemushaDeviceAttestationTransactionEncoder {
         return signed.data
     }
 
-    private static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
+    fileprivate static func encodeSignedTransaction(
+        signatureField: Data,
+        transactionPayload: Data
+    ) -> Data {
+        var signed = CanonicalNoritoWriter()
+        signed.writeField(signatureField)
+        signed.writeField(transactionPayload)
+        signed.writeField(Data([0]))
+        signed.writeField(Data([0]))
+        return signed.data
+    }
+
+    fileprivate static func encodeTransactionEntrypoint(_ signedTransaction: Data) -> Data {
         var entrypoint = CompactNoritoWriter()
         entrypoint.writeUInt32LE(0)
         entrypoint.writeUInt32LE(0)

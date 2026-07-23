@@ -6,13 +6,14 @@ use iroha_crypto::Hash;
 use iroha_data_model::prelude::Name;
 use iroha_primitives::{
     json::Json,
-    numeric::{Quantity, RoundingMode},
+    numeric::{Numeric, Quantity, RoundingMode},
     numeric_abi::IntValueV1,
 };
 use ivm::{
     IVM, ProgramMetadata, encoding,
     host::DefaultHost,
     kotodama::compiler::{Compiler, benchmark::SourcePhase, encode_add},
+    kotodama::{parser, semantic::SemanticContext},
     pointer_abi::PointerType,
 };
 
@@ -97,6 +98,20 @@ fn bench_kotodama(c: &mut Criterion) {
     let code = kotodama_program();
     let pc = entrypoint_pc(&code, "add");
     let host = add_argument_host(&code);
+    let parsed = ProgramMetadata::parse(&code).expect("parse Kotodama metadata");
+    let argument_schema = parsed
+        .contract_interface
+        .as_ref()
+        .expect("Kotodama artifact has CNTR")
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "add")
+        .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+        .expect("benchmark entrypoint has an argument schema")
+        .clone();
+    let argument_json = Json::from(norito::json!({"a": "4", "b": "7"}));
+    let argument_record = ivm::encode_argument_record_from_json(&argument_schema, &argument_json)
+        .expect("encode canonical benchmark argument record");
     let prepared =
         ivm::prepare_contract(Arc::from(code.clone())).expect("prepare benchmark contract once");
     assert_eq!(prepared.entrypoint_pc("add"), Some(pc));
@@ -114,6 +129,96 @@ fn bench_kotodama(c: &mut Criterion) {
     verification_vm.run().expect("execute benchmark add");
     assert_eq!(int_result_i64(&verification_vm), 11);
 
+    c.bench_function("kotodama_runtime_phase_prepare_validate_predecode", |b| {
+        b.iter_batched(
+            || Arc::<[u8]>::from(code.clone()),
+            |artifact| {
+                std::hint::black_box(
+                    ivm::prepare_contract(artifact)
+                        .expect("prepare and predecode benchmark contract"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_runtime_phase_argument_decode", |b| {
+        b.iter_batched(
+            || Arc::<[u8]>::from(argument_record.clone()),
+            |record| {
+                std::hint::black_box(
+                    ivm::prepare_argument_record_with_gas_limit(&argument_schema, record, u64::MAX)
+                        .expect("decode canonical benchmark argument record"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_runtime_phase_load_prepared", |b| {
+        b.iter_batched(
+            || IVM::new(u64::MAX),
+            |mut vm| {
+                vm.load_prepared(&prepared)
+                    .expect("load prepared benchmark artifact");
+                std::hint::black_box(vm);
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_prepared(&prepared)
+        .expect("load warm prepared benchmark artifact");
+    vm.set_program_counter(pc)
+        .expect("select warm benchmark entrypoint");
+    let template = vm.runtime_template();
+
+    c.bench_function("kotodama_runtime_phase_dirty_reset", |b| {
+        b.iter_batched(
+            || {
+                let mut dirty = IVM::new(u64::MAX);
+                dirty
+                    .load_prepared(&prepared)
+                    .expect("load dirty-reset benchmark artifact");
+                dirty
+                    .set_program_counter(pc)
+                    .expect("select dirty-reset benchmark entrypoint");
+                dirty.set_host(host.clone());
+                dirty.run().expect("dirty benchmark runtime state");
+                dirty
+            },
+            |mut dirty| {
+                dirty
+                    .reset_from_runtime_template(&template)
+                    .expect("dirty-reset benchmark geometry must match");
+                std::hint::black_box(dirty.register(10));
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("kotodama_runtime_phase_execute_prepared", |b| {
+        b.iter_batched(
+            || {
+                let mut ready = IVM::new(u64::MAX);
+                ready
+                    .load_prepared(&prepared)
+                    .expect("load execution benchmark artifact");
+                ready
+                    .set_program_counter(pc)
+                    .expect("select execution benchmark entrypoint");
+                ready.set_host(host.clone());
+                ready
+            },
+            |mut ready| {
+                ready.run().expect("execute prepared benchmark contract");
+                std::hint::black_box(ready.register(10));
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
     c.bench_function("kotodama_runtime_cold_add", |b| {
         b.iter(|| {
             let mut vm = IVM::new(u64::MAX);
@@ -125,15 +230,10 @@ fn bench_kotodama(c: &mut Criterion) {
         })
     });
 
-    let mut vm = IVM::new(u64::MAX);
-    vm.load_prepared(&prepared)
-        .expect("load warm prepared benchmark artifact");
-    vm.set_program_counter(pc)
-        .expect("select warm benchmark entrypoint");
-    let template = vm.runtime_template();
     c.bench_function("kotodama_runtime_warm_add", |b| {
         b.iter(|| {
-            vm.reset_from_runtime_template(&template);
+            vm.reset_from_runtime_template(&template)
+                .expect("warm runtime benchmark geometry must match");
             vm.set_host(host.clone());
             vm.run().unwrap();
             std::hint::black_box(vm.register(10));
@@ -207,8 +307,6 @@ fn bench_compiler_phases(c: &mut Criterion) {
     let resolved = parsed
         .resolve()
         .expect("prepare resolved-HIR benchmark source");
-    // Preserve the pre-reset benchmark identity so existing semantic-analysis
-    // performance remains directly comparable across the V1 pipeline split.
     c.bench_function("kotodama_phase_semantic", |b| {
         b.iter_batched(
             || resolved.clone(),
@@ -217,6 +315,20 @@ fn bench_compiler_phases(c: &mut Criterion) {
                     resolved
                         .type_effect()
                         .expect("type/effect-check canonical benchmark source"),
+                )
+            },
+            BatchSize::SmallInput,
+        )
+    });
+    let interface_program = parser::parse(&source).expect("prepare interface benchmark source");
+    c.bench_function("kotodama_phase_interface_summary", |b| {
+        b.iter_batched(
+            || (SemanticContext::new(), interface_program.clone()),
+            |(semantic, program)| {
+                std::hint::black_box(
+                    semantic
+                        .resolve_function_signatures(&program)
+                        .expect("summarize canonical benchmark interfaces and effects"),
                 )
             },
             BatchSize::SmallInput,
@@ -374,7 +486,8 @@ fn warm_list_runtime(source: &str) -> (IVM, ivm::RuntimeTemplate) {
     let template = vm.runtime_template();
     vm.run().expect("verify bounded List runtime benchmark");
     assert_eq!(int_result_i64(&vm), 64);
-    vm.reset_from_runtime_template(&template);
+    vm.reset_from_runtime_template(&template)
+        .expect("bounded List benchmark geometry must match");
     (vm, template)
 }
 
@@ -382,7 +495,9 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut sugar_vm, sugar_template) = warm_list_runtime(&bounded_list_runtime_source(false));
     c.bench_function("kotodama_list_comprehension_runtime_64", |b| {
         b.iter(|| {
-            sugar_vm.reset_from_runtime_template(&sugar_template);
+            sugar_vm
+                .reset_from_runtime_template(&sugar_template)
+                .expect("List comprehension benchmark geometry must match");
             sugar_vm
                 .run()
                 .expect("execute List comprehension benchmark");
@@ -393,7 +508,9 @@ fn bench_compiled_bounded_list_runtime(c: &mut Criterion) {
     let (mut manual_vm, manual_template) = warm_list_runtime(&bounded_list_runtime_source(true));
     c.bench_function("kotodama_list_manual_runtime_64", |b| {
         b.iter(|| {
-            manual_vm.reset_from_runtime_template(&manual_template);
+            manual_vm
+                .reset_from_runtime_template(&manual_template)
+                .expect("manual List benchmark geometry must match");
             manual_vm.run().expect("execute manual List benchmark");
             std::hint::black_box(manual_vm.register(10));
         })
@@ -476,6 +593,76 @@ fn bench_bounded_lists(c: &mut Criterion) {
 
 fn quantity(value: &str) -> Quantity {
     value.parse().expect("benchmark quantity literal parses")
+}
+
+fn decimal(value: &str) -> Numeric {
+    value.parse().expect("benchmark decimal literal parses")
+}
+
+fn bench_decimal_arithmetic(c: &mut Criterion) {
+    let add_lhs = decimal("-1234567890123456789012345678901234567890.1234567890123456789012345678");
+    let add_rhs = decimal("0.8765432109876543210987654321");
+    let sub_rhs = decimal("-0.1234567890123456789012345678");
+    let mul_lhs = decimal("-1234567890123456789012345678901234567890.12345678901234");
+    let mul_rhs = decimal("98765432109876543210.87654321098765");
+    let exact_lhs = decimal("-123456789012345678901234567890.125");
+    let exact_divisor = decimal("8");
+    let rounded_divisor = decimal("7");
+
+    c.bench_function("kotodama_decimal_add", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                add_lhs
+                    .try_decimal_add(&add_rhs)
+                    .expect("benchmark decimal addition"),
+            )
+        })
+    });
+    c.bench_function("kotodama_decimal_sub", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                add_lhs
+                    .try_decimal_sub(&sub_rhs)
+                    .expect("benchmark decimal subtraction"),
+            )
+        })
+    });
+    c.bench_function("kotodama_decimal_mul", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                mul_lhs
+                    .try_decimal_mul(&mul_rhs)
+                    .expect("benchmark decimal multiplication"),
+            )
+        })
+    });
+    c.bench_function("kotodama_decimal_div_exact", |b| {
+        b.iter(|| {
+            std::hint::black_box(
+                exact_lhs
+                    .try_decimal_div_exact(&exact_divisor)
+                    .expect("benchmark exact decimal division"),
+            )
+        })
+    });
+    for (name, mode) in [
+        ("kotodama_decimal_div_round_floor", RoundingMode::Floor),
+        ("kotodama_decimal_div_round_ceil", RoundingMode::Ceil),
+        (
+            "kotodama_decimal_div_round_nearest_even",
+            RoundingMode::NearestEven,
+        ),
+    ] {
+        c.bench_function(name, |b| {
+            b.iter(|| {
+                std::hint::black_box(
+                    exact_lhs
+                        .try_decimal_div_round(&rounded_divisor, 28, mode)
+                        .expect("benchmark rounded decimal division"),
+                )
+            })
+        });
+    }
 }
 
 fn bench_quantity_arithmetic(c: &mut Criterion) {
@@ -567,6 +754,7 @@ fn main() {
     bench_compiler_phases(&mut c);
     bench_bounded_lists(&mut c);
     bench_compiled_bounded_list_runtime(&mut c);
+    bench_decimal_arithmetic(&mut c);
     bench_quantity_arithmetic(&mut c);
     bench_literal_heavy_compile(&mut c);
     c.final_summary();

@@ -224,7 +224,7 @@ mod tests {
 
     #[test]
     fn v2_execution_commitment_exposes_exact_bounded_topup_projection() {
-        let mut operation_key = vec![super::super::smt::KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        let mut operation_key = vec![super::super::smt::KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         operation_key.extend_from_slice(&[0xA1; 32]);
         let witness = ExecWitness {
             reads: vec![ExecKv {

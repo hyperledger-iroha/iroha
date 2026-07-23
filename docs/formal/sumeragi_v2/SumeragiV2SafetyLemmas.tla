@@ -115,7 +115,7 @@ PROOF
       BY <1>1, <2>4 DEF CertificateBackedBy
     <2>6. /\ vote.subject \in validSubjects
           /\ BodyHeldBy(durable, vote.signer,
-                        vote.context, vote.subject)
+                        vote.context, vote.view, vote.subject)
       BY <1>1, <2>4, <2>5 DEF HonestIntentSound, VoteBacksCertificate
     <2> QED BY <2>4, <2>5, <2>6
        DEF CertificateValidityAndAvailability, VoteBacksCertificate
@@ -195,33 +195,35 @@ PROOF
   <1> QED BY <1>1
 
 (***************************************************************************
-Grouped timeout protection.  TimeoutIntentProtectsCommits is the durable
-fence invariant: if one honest signer has both an old Commit intent and a TC
-timeout vote, that timeout reports a PrepareQC no lower than the Commit lock,
-and reports the same subject when ranks are equal.  The theorem combines that
-local fact with dual-quorum honest intersection and TC maximum selection.
+Grouped timeout protection.  StrictTimeoutIntentProtectsCommits is the
+pre-existing-intent kernel: if one honest signer has both an old Commit intent
+and a TC timeout vote, that timeout reports a PrepareQC no lower than the
+Commit lock, and reports the same subject when ranks are equal.  The theorem
+combines that local fact with dual-quorum honest intersection and TC maximum
+selection.  Exact Commits created only after a TC installs its selected lock
+require the separate cross-TC induction ledgered by SumeragiV2Proofs.
 ***************************************************************************)
 
 THEOREM GroupedTimeoutProtectsCommitQuorum ==
   \A epoch \in Epochs:
-    \A tc, commitIntents, protectedView, subject:
+    \A tc, commitIntentSet, protectedView, subject:
       (/\ QuorumConfiguration
        /\ TimeoutProtectionKernel(
-            epoch, tc, commitIntents, protectedView, subject))
+            epoch, tc, commitIntentSet, protectedView, subject))
       => TCProtectsViewSubject(tc, protectedView, subject)
 PROOF
   <1>1. ASSUME NEW epoch \in Epochs,
               NEW tc,
-              NEW commitIntents,
+              NEW commitIntentSet,
               NEW protectedView,
               NEW subject,
               QuorumConfiguration,
               TimeoutProtectionKernel(
-                epoch, tc, commitIntents, protectedView, subject)
+                epoch, tc, commitIntentSet, protectedView, subject)
          PROVE TCProtectsViewSubject(tc, protectedView, subject)
     <2> DEFINE CommitSigners ==
            CommitSignerSet(
-             commitIntents, tc.context, protectedView, subject)
+             commitIntentSet, tc.context, protectedView, subject)
     <2> DEFINE TimeoutSigners == TimeoutSignerSet(tc.votes)
     <2>1. /\ DualQuorum(epoch, CommitSigners)
           /\ DualQuorum(epoch, TimeoutSigners)
@@ -237,7 +239,7 @@ PROOF
     <2>5. PICK signer \in CommitSigners \cap TimeoutSigners \cap Honest:
              TRUE
       BY <2>4
-    <2>6. PICK commitVote \in commitIntents:
+    <2>6. PICK commitVote \in commitIntentSet:
              /\ commitVote.signer = signer
              /\ commitVote.context = tc.context
              /\ commitVote.view = protectedView
@@ -255,7 +257,9 @@ PROOF
           /\ (timeoutVote.highRank = protectedView
                 => timeoutVote.highSubject = subject)
       BY <1>1, <2>5, <2>6, <2>7, <2>8
-         DEF TimeoutProtectionKernel, TimeoutIntentProtectsCommits
+         DEF TimeoutProtectionKernel, StrictTimeoutIntentProtectsCommits,
+             StrictTimeoutVoteProtectsCommitSet,
+             TimeoutVoteStrictlyProtectsCommit
     <2>10. /\ TcHighRank(tc) >= timeoutVote.highRank
           /\ (TcHighRank(tc) = timeoutVote.highRank
                 => TcHighSubject(tc) = timeoutVote.highSubject)

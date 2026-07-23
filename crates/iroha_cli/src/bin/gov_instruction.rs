@@ -23,16 +23,14 @@ use iroha::{
         metadata::Metadata,
         name::Name,
         proof::VerifyingKeyId,
-        transaction::{SignedTransaction, TransactionBuilder},
+        transaction::{Executable, FeePaymentIntent, SignedTransaction},
     },
 };
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_sccp::{
     SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpPayloadV1, TransferPayloadV1,
     canonical_sccp_payload_bytes, hub_commitment_from_sccp_payload, verify_sccp_payload_structure,
 };
-
-const DEFAULT_LEDGER_GAS_LIMIT: u64 = 2_000_000;
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -47,7 +45,7 @@ enum Command {
         #[arg(long)]
         owner: String,
         #[arg(long)]
-        amount: u128,
+        amount: Quantity,
         #[arg(long, default_value_t = 369)]
         chain_discriminant: u16,
     },
@@ -104,10 +102,9 @@ enum Command {
         config: PathBuf,
         #[arg(long, default_value = "ivm_execution")]
         vk_name: String,
-        #[arg(long)]
-        gas_asset_id: Option<String>,
-        #[arg(long, default_value_t = DEFAULT_LEDGER_GAS_LIMIT)]
-        gas_limit: u64,
+        /// Canonical JSON file selecting authority or an exact sponsor-program revision.
+        #[arg(long, value_name = "PATH")]
+        fee_payment_json: PathBuf,
     },
     /// Apply one exact on-chain SCCP route-governance action from canonical JSON.
     ApplySccpRouteGovernance {
@@ -115,10 +112,9 @@ enum Command {
         config: PathBuf,
         #[arg(long)]
         action: PathBuf,
-        #[arg(long)]
-        gas_asset_id: Option<String>,
-        #[arg(long, default_value_t = DEFAULT_LEDGER_GAS_LIMIT)]
-        gas_limit: u64,
+        /// Canonical JSON file selecting authority or an exact sponsor-program revision.
+        #[arg(long, value_name = "PATH")]
+        fee_payment_json: PathBuf,
     },
 }
 
@@ -143,16 +139,15 @@ fn insert_string_metadata(
     Ok(())
 }
 
-fn tx_metadata(gas_asset_id: Option<&str>, gas_limit: u64) -> Result<Metadata> {
-    if gas_limit == 0 {
-        return Err(eyre!("gas_limit must be a positive integer"));
-    }
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id.filter(|value| !value.trim().is_empty()) {
-        insert_string_metadata(&mut metadata, "gas_asset_id", asset_id.trim().to_owned())?;
-    }
-    iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, gas_limit);
-    Ok(metadata)
+fn read_fee_payment(path: &Path) -> Result<FeePaymentIntent> {
+    let bytes = fs::read(path)
+        .wrap_err_with(|| format!("failed to read fee payment intent `{}`", path.display()))?;
+    let intent: FeePaymentIntent = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("failed to decode fee payment intent `{}`", path.display()))?;
+    intent
+        .validate()
+        .wrap_err("invalid signature-bound fee payment intent")?;
+    Ok(intent)
 }
 
 fn read_sccp_route_governance_action(path: &Path) -> Result<SccpRouteGovernanceActionV1> {
@@ -227,22 +222,53 @@ fn existing_compatible_ivm_execution_vk(client: &Client) -> Result<Option<Verify
     Ok(None)
 }
 
-fn sign_governance_transaction(
-    transaction: TransactionBuilder,
-    config: &Config,
+fn fee_payment_selection_matches(requested: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
+    match (requested, quoted) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    }
+}
+
+fn quote_and_sign_governance_transaction(
+    client: &Client,
+    instructions: Vec<InstructionBox>,
+    metadata: Metadata,
+    fee_payment: &FeePaymentIntent,
     context: &'static str,
 ) -> Result<SignedTransaction> {
-    transaction
-        .try_sign(config.key_pair.private_key())
+    let executable = Executable::Instructions(instructions.into());
+    let mut payload = client
+        .try_build_transaction_payload(executable, fee_payment.clone(), metadata)
+        .wrap_err("failed to build exact unsigned governance payload")?;
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact governance transaction fees")?;
+    if !fee_payment_selection_matches(fee_payment, &quote.intent) {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("fee quote returned an invalid payment intent")?;
+    payload.fee_payment = quote.intent;
+    client
+        .try_sign_transaction_payload(payload)
         .wrap_err(context)
 }
 
 fn ensure_ivm_execution_vk(
     client: &Client,
-    config: &Config,
     vk_name: &str,
-    gas_asset_id: Option<&str>,
-    gas_limit: u64,
+    fee_payment: &FeePaymentIntent,
 ) -> Result<VerifyingKeyId> {
     let id = ivm_execution_vk_id(vk_name);
     match client.get_zk_vk_json(id.backend.as_str(), &id.name) {
@@ -259,16 +285,14 @@ fn ensure_ivm_execution_vk(
 
     let record = iroha_core::zk::halo2_ipa_ivm_execution_vk_record("core", 1)
         .map_err(|err| eyre!("failed to build ivm-execution-v1 VK record: {err}"))?;
-    let metadata = tx_metadata(gas_asset_id, gas_limit)?;
-    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
-        .with_metadata(metadata)
-        .with_instructions([InstructionBox::from(verifying_keys::RegisterVerifyingKey {
+    let tx = quote_and_sign_governance_transaction(
+        client,
+        vec![InstructionBox::from(verifying_keys::RegisterVerifyingKey {
             id: id.clone(),
             record,
-        })]);
-    let tx = sign_governance_transaction(
-        tx,
-        config,
+        })],
+        Metadata::default(),
+        fee_payment,
         "failed to sign IVM execution VK registration transaction",
     )?;
     let hash = match client.submit_transaction_blocking(&tx) {
@@ -336,14 +360,13 @@ fn print_sccp_route_governance_output(
 fn apply_sccp_route_governance(
     config_path: &Path,
     action_path: &Path,
-    gas_asset_id: Option<&str>,
-    gas_limit: u64,
+    fee_payment: &FeePaymentIntent,
 ) -> Result<()> {
     let config = load_config(config_path)?;
     let client = Client::new(config.clone());
     let action = read_sccp_route_governance_action(action_path)?;
 
-    let mut metadata = tx_metadata(gas_asset_id, gas_limit)?;
+    let mut metadata = Metadata::default();
     insert_string_metadata(&mut metadata, "action", "apply_sccp_route_governance")?;
     insert_string_metadata(
         &mut metadata,
@@ -351,14 +374,13 @@ fn apply_sccp_route_governance(
         sccp_route_governance_action_label(&action),
     )?;
 
-    let tx = TransactionBuilder::new(config.chain.clone(), config.account.clone())
-        .with_metadata(metadata)
-        .with_instructions([InstructionBox::from(ApplySccpRouteGovernance::new(
+    let tx = quote_and_sign_governance_transaction(
+        &client,
+        vec![InstructionBox::from(ApplySccpRouteGovernance::new(
             action.clone(),
-        ))]);
-    let tx = sign_governance_transaction(
-        tx,
-        &config,
+        ))],
+        metadata,
+        fee_payment,
         "failed to sign SCCP route-governance transaction",
     )?;
     let versioned_tx_bytes =
@@ -420,6 +442,24 @@ fn parse_sccp_codec_argument(name: &str, codec: u8, value: &str) -> Result<Vec<u
             }
             Ok(bytes)
         }
+        iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32 => {
+            if value.len() != 64
+                || !value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+            {
+                return Err(eyre!(
+                    "{name} using solana_pubkey32 must be exactly 64 unprefixed lowercase hexadecimal characters"
+                ));
+            }
+            let bytes = hex::decode(value).wrap_err_with(|| format!("failed to decode {name}"))?;
+            if bytes.iter().all(|byte| *byte == 0) {
+                return Err(eyre!(
+                    "{name} using solana_pubkey32 must be a nonzero 32-byte public key"
+                ));
+            }
+            Ok(bytes)
+        }
         _ => Err(eyre!("{name} uses unsupported SCCP codec {codec}")),
     }
 }
@@ -455,7 +495,7 @@ fn record_sccp_transfer_payload_bytes(
     })?;
     if source != SccpNetworkV1::SoraTaira || !target.is_external() {
         return Err(eyre!(
-            "SCCP record context must select the exact sora-taira to Ethereum, BSC, or TRON lane"
+            "SCCP record context must select the exact sora-taira to Ethereum, BSC, Solana testnet, or TRON lane"
         ));
     }
     let (expected_route_id, expected_recipient_codec) = match target {
@@ -470,6 +510,10 @@ fn record_sccp_transfer_payload_bytes(
         SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta => (
             iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1,
             iroha_sccp::SCCP_CODEC_TRON_ADDRESS21,
+        ),
+        SccpNetworkV1::SolanaTestnet => (
+            iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
+            iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
         ),
         SccpNetworkV1::SoraTaira => {
             unreachable!("SORA target rejected above")
@@ -607,18 +651,12 @@ fn main() -> Result<()> {
         Command::EnsureIvmExecutionVk {
             config,
             vk_name,
-            gas_asset_id,
-            gas_limit,
+            fee_payment_json,
         } => {
             let config = load_config(&config)?;
             let client = Client::new(config.clone());
-            let id = ensure_ivm_execution_vk(
-                &client,
-                &config,
-                &vk_name,
-                gas_asset_id.as_deref(),
-                gas_limit,
-            )?;
+            let fee_payment = read_fee_payment(&fee_payment_json)?;
+            let id = ensure_ivm_execution_vk(&client, &vk_name, &fee_payment)?;
             let mut output = norito::json::Map::new();
             output.insert("backend".to_owned(), id.backend.as_str().into());
             output.insert("name".to_owned(), id.name.into());
@@ -627,9 +665,11 @@ fn main() -> Result<()> {
         Command::ApplySccpRouteGovernance {
             config,
             action,
-            gas_asset_id,
-            gas_limit,
-        } => apply_sccp_route_governance(&config, &action, gas_asset_id.as_deref(), gas_limit)?,
+            fee_payment_json,
+        } => {
+            let fee_payment = read_fee_payment(&fee_payment_json)?;
+            apply_sccp_route_governance(&config, &action, &fee_payment)?;
+        }
     }
     Ok(())
 }
@@ -724,10 +764,18 @@ mod tests {
     }
 
     #[test]
-    fn transaction_metadata_rejects_zero_gas_before_signing() {
-        let error = tx_metadata(Some("xor#sora"), 0)
-            .expect_err("zero gas must fail before transaction construction");
-        assert!(error.to_string().contains("positive"));
+    fn fee_quote_selection_preserves_payer_revision_and_gas_bound() {
+        let requested = FeePaymentIntent::authority(Vec::new(), None);
+        let quoted = FeePaymentIntent::authority(Vec::new(), None);
+        assert!(fee_payment_selection_matches(&requested, &quoted));
+
+        let key_pair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let sponsor = iroha::data_model::nexus::FeeSponsorProgramId::new(
+            AccountId::new(key_pair.public_key().clone()),
+            "governance".parse().expect("program name"),
+        );
+        let changed = FeePaymentIntent::sponsor(sponsor, 1, Vec::new(), None);
+        assert!(!fee_payment_selection_matches(&requested, &changed));
     }
 
     #[test]
@@ -745,13 +793,15 @@ mod tests {
     }
 
     #[test]
-    fn sign_governance_transaction_checked_helper_verifies() -> Result<()> {
+    fn exact_governance_payload_checked_signing_verifies() -> Result<()> {
         let config = test_config_with_chain_discriminant(369);
-        let tx_builder = TransactionBuilder::new(config.chain.clone(), config.account.clone())
-            .with_instructions(Vec::<InstructionBox>::new());
-
-        let tx =
-            sign_governance_transaction(tx_builder, &config, "sign test governance transaction")?;
+        let client = Client::new(config.clone());
+        let payload = client.try_build_transaction_payload(
+            Executable::Instructions(Vec::<InstructionBox>::new().into()),
+            FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        )?;
+        let tx = client.try_sign_transaction_payload(payload)?;
 
         tx.verify_signature()
             .wrap_err("verify governance helper signature")?;
@@ -826,6 +876,38 @@ mod tests {
             assert!(
                 parse_canonical_hex32_argument("--hash", &value).is_err(),
                 "noncanonical hash alias `{value}` must reject"
+            );
+        }
+    }
+
+    #[test]
+    fn solana_pubkey_codec_rejects_aliases_and_malformed_values() {
+        let valid = "ab".repeat(32);
+        assert_eq!(
+            parse_sccp_codec_argument(
+                "--recipient",
+                iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+                &valid,
+            )
+            .expect("canonical Solana public key"),
+            vec![0xab; 32]
+        );
+        for value in [
+            format!("0x{valid}"),
+            valid.to_uppercase(),
+            "12".repeat(31),
+            "12".repeat(33),
+            "00".repeat(32),
+            "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3zQawwpjk2NsNY".to_owned(),
+        ] {
+            assert!(
+                parse_sccp_codec_argument(
+                    "--recipient",
+                    iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+                    &value,
+                )
+                .is_err(),
+                "noncanonical Solana public-key alias `{value}` must reject"
             );
         }
     }
@@ -913,6 +995,34 @@ mod tests {
     }
 
     #[test]
+    fn record_sccp_transfer_payload_accepts_canonical_solana_recipient() {
+        let (message_id, context, payload_bytes) = record_sccp_transfer_payload_bytes(
+            "sora-taira",
+            "solana-testnet",
+            &"22".repeat(32),
+            &"23".repeat(32),
+            7,
+            1,
+            iroha_sccp::SCCP_DOMAIN_SORA,
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            iroha_sccp::SCCP_TAIRA_XOR_ASSET_KEY_V1,
+            42,
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            "sora:bridge",
+            iroha_sccp::SCCP_CODEC_SOLANA_PUBKEY32,
+            &"12".repeat(32),
+            iroha_sccp::SCCP_CODEC_CANONICAL_TEXT,
+            iroha_sccp::SCCP_TAIRA_SOL_XOR_ROUTE_ID_V1,
+        )
+        .expect("canonical Solana recipient should be accepted");
+
+        assert_eq!(message_id.len(), 64);
+        assert_eq!(context.lane.source, SccpNetworkV1::SoraTaira);
+        assert_eq!(context.lane.target, SccpNetworkV1::SolanaTestnet);
+        assert!(!payload_bytes.is_empty());
+    }
+
+    #[test]
     fn record_sccp_transfer_payload_rejects_cross_family_or_non_xor_identity() {
         let build =
             |target: &str, asset: &str, recipient_codec: u8, recipient: String, route: &str| {
@@ -988,14 +1098,14 @@ mod tests {
                 "exact canonical SCCP profile key",
             ),
             (
-                " sora-nexus",
+                " sora-taira",
                 "ethereum-mainnet",
                 "11".repeat(32),
                 "exact canonical SCCP profile key",
             ),
             (
                 "ethereum-mainnet",
-                "sora-nexus",
+                "sora-taira",
                 "11".repeat(32),
                 "exact sora-taira",
             ),
@@ -1003,11 +1113,17 @@ mod tests {
                 "sora-nexus",
                 "ethereum-mainnet",
                 "11".repeat(32),
-                "exact sora-taira",
+                "exact canonical SCCP profile key",
             ),
             (
                 "sora-taira",
                 "sora-nexus",
+                "11".repeat(32),
+                "exact canonical SCCP profile key",
+            ),
+            (
+                "sora-taira",
+                "sora-taira",
                 "11".repeat(32),
                 "exact sora-taira",
             ),

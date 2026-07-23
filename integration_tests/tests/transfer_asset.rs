@@ -124,7 +124,10 @@ fn simulate_transfer<T>(
         mint_asset.into(),
     ];
     iroha
-        .submit_all_blocking(instructions)
+        .submit_all_blocking(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to prepare state.");
     status = sync_after_submission(
         &network,
@@ -143,7 +146,10 @@ fn simulate_transfer<T>(
         mouse_id.clone(),
     );
     iroha
-        .submit_blocking(transfer_asset)
+        .submit_blocking(
+            transfer_asset,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect("Failed to transfer asset.");
     let _status = sync_after_submission(
         &network,
@@ -199,7 +205,10 @@ fn should_fail_if_asset_not_found() {
     let transfer_asset = Transfer::asset_quantity(asset_id.clone(), 20_u32, mouse_id.clone());
 
     let instructions: [InstructionBox; 2] = [create_asset_definition.into(), transfer_asset.into()];
-    let result = iroha.submit_all_blocking(instructions);
+    let result = iroha.submit_all_blocking(
+        instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    );
 
     assert!(result.is_err());
     assert!(

@@ -35,7 +35,9 @@ This index links the main design and reference documents for IVM, Kotodama, and 
 Usage tips
 - Check and build sources in `examples/` with the unified `koto` driver.
 - Exercise a named entrypoint with `iroha contract debug-call`, or a view
-  with `iroha contract debug-view`.
+  with `iroha contract debug-view`. Pair `--source-file` with the matching
+  hash-bound `--source-map-file` emitted by the same `koto build`; the debugger
+  rejects a source-map sidecar for a different artifact.
 - Optional integration tests (ignored by default) for examples and header checks live in `integration_tests/tests/`.
 
 Pipeline configuration
@@ -58,7 +60,8 @@ Docs sync checks
 - Pointer‑ABI tables (crates/ivm/docs/pointer_abi.md and ivm.md)
   - Check only: `cargo run -p ivm --bin gen_pointer_types_doc -- --check`
   - Update sections: `cargo run -p ivm --bin gen_pointer_types_doc -- --write`
-- IVM header policy and ABI hashes (docs/source/ivm_header.md)
+- IVM header policy, ABI hashes, and runtime hash samples
+  (`docs/source/ivm_header*.md`, `docs/source/samples/runtime_abi_hash*.md`)
   - Check only: `cargo run -p ivm --bin gen_header_doc -- --check` and `cargo run -p ivm --bin gen_abi_hash_doc -- --check`
   - Update sections: `cargo run -p ivm --bin gen_header_doc -- --write` and `cargo run -p ivm --bin gen_abi_hash_doc -- --write`
 

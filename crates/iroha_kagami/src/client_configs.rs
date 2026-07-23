@@ -11,6 +11,7 @@ use std::{
 use clap::Args as ClapArgs;
 use color_eyre::eyre::{Result, WrapErr as _, eyre};
 use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair};
+use zeroize::Zeroizing;
 
 use crate::{Outcome, RunArgs, tui};
 
@@ -43,8 +44,11 @@ pub struct Args {
     #[arg(long, default_value = "acme.universal", value_name = "SCOPE")]
     domain: String,
     /// Seed prefix for deterministic key generation (`<prefix>-<name>`).
-    #[arg(long, default_value = "demo", value_name = "SEED")]
-    seed_prefix: String,
+    #[arg(long, conflicts_with = "fresh_random_keys", value_name = "SEED")]
+    seed_prefix: Option<String>,
+    /// Generate an independent OS-random key for every requested client.
+    #[arg(long, conflicts_with = "seed_prefix")]
+    fresh_random_keys: bool,
     /// Comma-separated list of client names.
     #[arg(long, value_delimiter = ',', required = true, value_name = "NAME")]
     names: Vec<String>,
@@ -55,8 +59,13 @@ impl<T: Write> RunArgs<T> for Args {
         let base = load_base_config(&self.base_config)?;
         let out_dir = resolve_out_dir(&self.base_config, self.out_dir)?;
         let names = normalize_names(self.names)?;
-        fs::create_dir_all(&out_dir)
-            .wrap_err_with(|| format!("failed to create {}", out_dir.display()))?;
+        if self.fresh_random_keys {
+            crate::secure_fs::prepare_empty_private_directory(&out_dir)
+                .wrap_err("prepare fresh client-config private output directory")?;
+        } else {
+            fs::create_dir_all(&out_dir)
+                .wrap_err_with(|| format!("failed to create {}", out_dir.display()))?;
+        }
 
         tui::status(format!(
             "Generating {} client configs in {}",
@@ -65,13 +74,24 @@ impl<T: Write> RunArgs<T> for Args {
         ));
 
         for name in names {
-            let seed = format!("{}-{}", self.seed_prefix, name);
-            let key_pair = KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
-                .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))?;
+            let key_pair = if self.fresh_random_keys {
+                KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
+                    .wrap_err("failed to generate an OS-random client key pair")?
+            } else {
+                let prefix = self.seed_prefix.as_deref().unwrap_or("demo");
+                let seed = Zeroizing::new(format!("{prefix}-{name}"));
+                KeyPair::try_from_seed(seed.as_bytes().to_vec(), Algorithm::Ed25519)
+                    .wrap_err_with(|| format!("failed to derive key pair for client `{name}`"))?
+            };
             let rendered = render_client_config(&base, &self.domain, &key_pair);
             let path = out_dir.join(format!("{name}.toml"));
-            fs::write(&path, rendered)
-                .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+            if self.fresh_random_keys {
+                crate::secure_fs::write_private_file_atomic(&path, rendered.as_bytes())
+                    .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+            } else {
+                fs::write(&path, rendered.as_bytes())
+                    .wrap_err_with(|| format!("failed to write {}", path.display()))?;
+            }
             writeln!(writer, "wrote {}", path.display())?;
         }
 
@@ -162,11 +182,11 @@ fn normalize_names(raw: Vec<String>) -> Result<Vec<String>> {
     Ok(names)
 }
 
-fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> String {
+fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> Zeroizing<String> {
     let public_key = key_pair.public_key().to_string();
-    let private_key = ExposedPrivateKey(key_pair.private_key().clone()).to_string();
+    let private_key = Zeroizing::new(ExposedPrivateKey(key_pair.private_key().clone()).to_string());
 
-    let mut rendered = format!(
+    let mut rendered = Zeroizing::new(format!(
         concat!(
             "chain = \"{chain}\"\n",
             "torii_url = \"{torii_url}\"\n",
@@ -186,14 +206,14 @@ fn render_client_config(base: &BaseConfig, domain: &str, key_pair: &KeyPair) -> 
         ttl = DEFAULT_TTL_MS,
         status = DEFAULT_STATUS_TIMEOUT_MS,
         domain = domain,
-        private_key = private_key,
+        private_key = private_key.as_str(),
         public_key = public_key,
-    );
+    ));
 
     if let Some(auth) = &base.basic_auth {
         rendered.push_str("\n[basic_auth]\n");
-        let _ = writeln!(rendered, "password  = \"{}\"", auth.password);
-        let _ = writeln!(rendered, "web_login = \"{}\"", auth.web_login);
+        let _ = writeln!(&mut *rendered, "password  = \"{}\"", auth.password);
+        let _ = writeln!(&mut *rendered, "web_login = \"{}\"", auth.web_login);
     }
 
     rendered
@@ -363,7 +383,8 @@ web_login = "demo"
             base_config: base_path.clone(),
             out_dir: Some(out_dir.clone()),
             domain: "acme.universal".to_owned(),
-            seed_prefix: "demo".to_owned(),
+            seed_prefix: Some("demo".to_owned()),
+            fresh_random_keys: false,
             names: vec!["admin1".to_owned()],
         };
 
@@ -372,5 +393,83 @@ web_login = "demo"
 
         let config_path = out_dir.join("admin1.toml");
         assert!(config_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fresh_run_uses_distinct_keys_and_owner_only_atomic_outputs() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::tempdir().expect("temp dir");
+        let base_path = temp.path().join("client.toml");
+        write_base_config(&base_path);
+        let out_dir = temp.path().join("fresh-clients");
+        let args = Args {
+            base_config: base_path,
+            out_dir: Some(out_dir.clone()),
+            domain: "cbuae".to_owned(),
+            seed_prefix: None,
+            fresh_random_keys: true,
+            names: vec!["sender".to_owned(), "sponsor".to_owned()],
+        };
+        let mut writer = BufWriter::new(Vec::new());
+        args.run(&mut writer).expect("generate fresh clients");
+
+        assert_eq!(
+            fs::metadata(&out_dir)
+                .expect("out dir")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o700
+        );
+        let sender_path = out_dir.join("sender.toml");
+        let sponsor_path = out_dir.join("sponsor.toml");
+        for path in [&sender_path, &sponsor_path] {
+            assert_eq!(
+                fs::metadata(path)
+                    .expect("client config")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        let sender = fs::read_to_string(&sender_path).expect("sender config");
+        let sponsor = fs::read_to_string(&sponsor_path).expect("sponsor config");
+        let sender_toml: toml::Value = toml::from_str(&sender).expect("sender TOML");
+        let sponsor_toml: toml::Value = toml::from_str(&sponsor).expect("sponsor TOML");
+        let sender_public = sender_toml["account"]["public_key"]
+            .as_str()
+            .expect("sender public key");
+        let sponsor_public = sponsor_toml["account"]["public_key"]
+            .as_str()
+            .expect("sponsor public key");
+        assert_ne!(sender_public, sponsor_public);
+
+        let command_output = String::from_utf8(writer.into_inner().expect("writer bytes"))
+            .expect("UTF-8 command output");
+        assert!(
+            !command_output.contains(
+                sender_toml["account"]["private_key"]
+                    .as_str()
+                    .expect("sender private key")
+            )
+        );
+        assert!(
+            !command_output.contains(
+                sponsor_toml["account"]["private_key"]
+                    .as_str()
+                    .expect("sponsor private key")
+            )
+        );
+        assert!(!command_output.contains("secret"));
+        assert_eq!(
+            fs::read_dir(&out_dir)
+                .expect("fresh output inventory")
+                .filter_map(|entry| entry.ok())
+                .count(),
+            2
+        );
     }
 }

@@ -20,14 +20,21 @@ mod quorum;
 #[macro_use]
 #[path = "../../iroha_core/src/sumeragi/v2_core/refinement.rs"]
 mod refinement;
+#[allow(dead_code)]
 #[path = "../../iroha_core/src/sumeragi/v2_core/reducer.rs"]
 mod reducer;
+#[macro_use]
+#[path = "../../iroha_core/src/sumeragi/v2_core/scheduler.rs"]
+mod scheduler;
 #[path = "../../iroha_core/src/sumeragi/v2_core/types.rs"]
 mod types;
 #[cfg(all(verus_only, feature = "verus"))]
 mod verus_proofs;
 #[path = "../../iroha_core/src/sumeragi/v2_core/wal.rs"]
 mod wal;
+#[cfg(all(verus_only, feature = "verus"))]
+#[path = "effective_lock_verus_proofs.rs"]
+mod zz_effective_lock_verus_proofs;
 
 pub use quorum::{Quorum, QuorumError};
 pub use reducer::{
@@ -35,12 +42,14 @@ pub use reducer::{
     FinalizedHeight, IgnoreReason, Reducer, ReducerError, SignableMessage, StepDisposition,
     StepOutcome,
 };
+pub use scheduler::{ScheduleState, ScheduledWork};
 pub use types::{
     CertificateRef, ChainId, ConsensusMessageV2, ContextId, Digest, EventTag, Generation,
-    HeightContext, HeightContextError, OpaqueSignature, PROTOCOL_VERSION_V2, PayloadChunk,
-    PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate, Round,
-    SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject, TimeoutCertificate,
-    TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote, VotingMode, VotingPower,
+    HeightContext, HeightContextError, MAX_VOTING_ROSTER_LEN, OpaqueSignature, PROTOCOL_VERSION_V3,
+    PayloadChunk, PayloadManifest, Phase, Proposal, ProposalJustification, QuorumCertificate,
+    Round, SignatureShare, SignedProposal, SignedTimeoutVote, SignedVote, Subject,
+    TimeoutCertificate, TimeoutSignatureGroup, TimeoutVote, Validator, ValidatorId, Vote,
+    VotingMode, VotingPower,
 };
 pub use wal::{
     DurableState, EncodedWalFrame, PersistenceId, RecoveredWalRecord, ReplayError,

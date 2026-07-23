@@ -300,7 +300,7 @@ pub mod confidential {
             /// Account credited with the transparent amount.
             pub account: AccountId,
             /// Public amount credited as part of the unshield.
-            pub public_amount: u128,
+            pub public_amount: iroha_primitives::numeric::Quantity,
             /// Nullifiers consumed by the unshield operation.
             #[cfg_attr(
                 feature = "json",
@@ -2513,9 +2513,10 @@ mod event_routing_tests {
     use super::{
         DataEvent,
         asset::{AssetDefinitionEvent, StandaloneAssetDefinitionEvent},
+        confidential::ConfidentialUnshielded,
         domain::DomainEvent,
     };
-    use crate::{asset::AssetDefinitionId, domain::DomainId};
+    use crate::{account::AccountId, asset::AssetDefinitionId, domain::DomainId};
 
     #[test]
     fn opaque_asset_definition_events_route_without_domain_wrapper() {
@@ -2542,6 +2543,33 @@ mod event_routing_tests {
             DataEvent::from(scoped_event),
             DataEvent::Domain(DomainEvent::AssetDefinition(_))
         ));
+    }
+
+    #[test]
+    fn confidential_unshield_event_preserves_quantity_above_u64() {
+        const SIGNATORY: &str =
+            "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
+        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain");
+        let event = ConfidentialUnshielded {
+            asset_definition: AssetDefinitionId::new(
+                domain,
+                "rose".parse().expect("valid asset name"),
+            ),
+            account: AccountId::new(SIGNATORY.parse().expect("valid public key")),
+            public_amount: "18446744073709551616"
+                .parse()
+                .expect("quantity immediately above u64::MAX"),
+            nullifiers: vec![[0x11; 32]],
+            root_hint: None,
+            proof_hash: [0x22; 32],
+            envelope_hash: None,
+            call_hash: None,
+        };
+        let encoded = norito::to_bytes(&event).expect("encode unshield event");
+        let decoded: ConfidentialUnshielded =
+            norito::decode_from_bytes(&encoded).expect("decode unshield event");
+        assert_eq!(decoded, event);
+        assert_eq!(decoded.public_amount.to_string(), "18446744073709551616");
     }
 }
 

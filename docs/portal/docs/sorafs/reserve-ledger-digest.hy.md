@@ -52,10 +52,9 @@ CLI օգնականները գումարած `scripts/telemetry/reserve_ledger_di
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   Դիջեստի օգնականը նորմալացնում է micro-XOR-ի գումարները XOR-ի, արձանագրում, թե արդյոք
-   պրոյեկցիան համապատասխանում է տեղաբաշխմանը և թողարկում է **փոխանցման հոսք** չափումները
-   `sorafs_reserve_ledger_transfer_xor` և
-   `sorafs_reserve_ledger_instruction_total`. Երբ պետք է լինեն մի քանի մատյաններ
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    մշակված (օրինակ՝ մատակարարների խմբաքանակ), կրկնել `--ledger`/`--label` զույգերը և
    օգնականը գրում է մեկ NDJSON/Prometheus ֆայլ, որը պարունակում է յուրաքանչյուր ամփոփում
    վահանակները կլանում են ամբողջ ցիկլը առանց պատվիրված սոսինձի: `--out-prom`

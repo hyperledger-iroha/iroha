@@ -419,9 +419,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_aliases_by_account_tool());
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
-    tools.push(iroha_contracts_deploy_tool());
-    tools.push(iroha_contracts_deploy_bundle_tool());
-    tools.push(iroha_contracts_deploy_bundles_get_tool());
     tools.push(iroha_contracts_call_tool());
     tools.push(iroha_contracts_call_and_wait_tool());
     tools.push(iroha_contracts_state_get_tool());
@@ -429,6 +426,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_accounts_get_tool());
     tools.push(iroha_accounts_qr_tool());
     tools.push(iroha_accounts_query_tool());
+    tools.push(iroha_accounts_onboard_plan_tool());
     tools.push(iroha_accounts_onboard_tool());
     tools.push(iroha_accounts_faucet_tool());
     tools.push(iroha_account_transactions_tool());
@@ -685,6 +683,7 @@ fn is_manual_read_tool_name(name: &str) -> bool {
             | "iroha.accounts.qr"
             | "iroha.accounts.transactions"
             | "iroha.accounts.history"
+            | "iroha.accounts.onboard.plan"
             | "iroha.da.commitments.prove"
             | "iroha.da.pin_intents.prove"
             | "iroha.gov.council.derive_vrf"
@@ -1534,26 +1533,6 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.contracts.deploy" => {
-            match dispatch_iroha_contracts_deploy(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.deploy_bundle" => {
-            match dispatch_iroha_contracts_deploy_bundle(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.deploy_bundles.get" => {
-            match dispatch_iroha_contracts_deploy_bundles_get(&app, inbound_headers, &arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
         "iroha.contracts.call" => {
             match dispatch_iroha_contracts_call(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
@@ -1598,6 +1577,12 @@ async fn handle_tools_call(
         }
         "iroha.accounts.onboard" => {
             match dispatch_iroha_accounts_onboard(&app, inbound_headers, &arguments).await {
+                Ok(result) => mcp_tool_success(result),
+                Err(err) => mcp_tool_error(err),
+            }
+        }
+        "iroha.accounts.onboard.plan" => {
+            match dispatch_iroha_accounts_onboard_plan(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -5290,71 +5275,6 @@ async fn dispatch_iroha_contracts_code_bytes_get(
     .await
 }
 
-async fn dispatch_iroha_contracts_deploy(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/deploy").await
-}
-
-async fn dispatch_iroha_contracts_deploy_bundle(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let body = build_object_body_or_flat_shortcuts(
-        arguments,
-        &["body", "headers", "accept", "query", "dry_run"],
-    )?;
-    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
-    let query = deploy_bundle_query(arguments)?;
-    let route = append_query("/v1/contracts/deploy-bundle".to_owned(), query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::POST,
-        route.as_str(),
-        arguments.get("headers"),
-        body_bytes,
-        Some("application/json".to_owned()),
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
-async fn dispatch_iroha_contracts_deploy_bundles_get(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let bundle_digest = extract_bundle_digest_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("bundle_digest".into(), Value::String(bundle_digest));
-    let path_value = Value::Object(path_args);
-    let route = fill_path_template(
-        "/v1/contracts/deploy-bundles/{bundle_digest}",
-        Some(&path_value),
-    )?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
-}
-
 async fn dispatch_iroha_contracts_call(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
@@ -5548,13 +5468,36 @@ async fn dispatch_iroha_accounts_onboard(
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let body = build_accounts_onboard_body(arguments)?;
+    let body = build_accounts_onboard_apply_body(arguments)?;
     let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
     dispatch_route(
         app,
         inbound_headers,
         Method::POST,
         "/v1/accounts/onboard",
+        arguments.get("headers"),
+        body_bytes,
+        Some("application/json".to_owned()),
+        arguments
+            .get("accept")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    )
+    .await
+}
+
+async fn dispatch_iroha_accounts_onboard_plan(
+    app: &SharedAppState,
+    inbound_headers: &HeaderMap,
+    arguments: &Map,
+) -> Result<Value, String> {
+    let body = build_accounts_onboard_plan_body(arguments)?;
+    let body_bytes = json::to_vec(&body).map_err(|err| format!("encode request body: {err}"))?;
+    dispatch_route(
+        app,
+        inbound_headers,
+        Method::POST,
+        "/v1/accounts/onboard/plan",
         arguments.get("headers"),
         body_bytes,
         Some("application/json".to_owned()),
@@ -8031,43 +7974,6 @@ fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
         })
 }
 
-fn extract_bundle_digest_argument(arguments: &Map) -> Result<String, String> {
-    if let Some(path) = arguments.get("path") {
-        let path = path
-            .as_object()
-            .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(bundle_digest) = path.get("bundle_digest").and_then(Value::as_str) {
-            return Ok(bundle_digest.to_owned());
-        }
-    }
-    arguments
-        .get("bundle_digest")
-        .or_else(|| arguments.get("digest"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| {
-            "`bundle_digest` is required (provide `bundle_digest`, `digest`, or `path.bundle_digest`)".to_owned()
-        })
-}
-
-fn deploy_bundle_query(arguments: &Map) -> Result<Option<Value>, String> {
-    let mut query = Map::new();
-    if let Some(raw_query) = arguments.get("query") {
-        let raw_query = raw_query
-            .as_object()
-            .ok_or_else(|| "`query` must be an object".to_owned())?;
-        if let Some(dry_run) = raw_query.get("dry_run") {
-            query.insert("dry_run".to_owned(), dry_run.clone());
-        }
-    } else if let Some(dry_run) = arguments.get("dry_run") {
-        query.insert("dry_run".to_owned(), dry_run.clone());
-    }
-    if query.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(Value::Object(query)))
-}
-
 fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
@@ -8210,140 +8116,52 @@ fn build_object_body_or_flat_shortcuts(
     Ok(Value::Object(payload))
 }
 
-fn build_accounts_onboard_body(arguments: &Map) -> Result<Value, String> {
-    if let Some(body) = arguments.get("body") {
-        let body = body
-            .as_object()
-            .ok_or_else(|| "`body` must be an object".to_owned())?;
-        validate_accounts_onboard_raw_body(body)?;
-        return Ok(Value::Object(body.clone()));
-    }
-
-    let alias = arguments
-        .get("alias")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`alias` is required (or provide `body.alias`)".to_owned())?;
-    let account_id = arguments.get("account_id").and_then(Value::as_str);
-    let public_key_hex = arguments.get("public_key_hex").and_then(Value::as_str);
-    if account_id.is_none() && public_key_hex.is_none() {
-        return Err(
-            "`account_id` or `public_key_hex` is required (or provide a raw `body`)".to_owned(),
-        );
-    }
-    if account_id.is_some() && public_key_hex.is_some() {
-        return Err(
-            "`account_id` and `public_key_hex` are mutually exclusive (or provide a raw `body`)"
-                .to_owned(),
-        );
-    }
-    let uaid = arguments
-        .get("uaid")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`uaid` is required (or provide `body.uaid`)".to_owned())?;
-    if arguments.contains_key("identity") {
-        return Err(
-            "`identity` is not accepted; provide `identity_commitment_hex` instead".to_owned(),
-        );
-    }
-    if arguments.contains_key("identity_commitment_hex")
-        && arguments
-            .get("identity_commitment_hex")
-            .and_then(Value::as_str)
-            .is_none()
-    {
-        return Err("`identity_commitment_hex` must be a string when provided".to_owned());
-    }
-
-    let mut payload = Map::new();
-    payload.insert("alias".to_owned(), Value::String(alias.to_owned()));
-    payload.insert("uaid".to_owned(), Value::String(uaid.to_owned()));
-    if let Some(account_id) = account_id {
-        payload.insert(
-            "account_id".to_owned(),
-            Value::String(account_id.to_owned()),
-        );
-    }
-    if let Some(public_key_hex) = public_key_hex {
-        payload.insert(
-            "public_key_hex".to_owned(),
-            Value::String(public_key_hex.to_owned()),
-        );
-    }
-
-    if let Some(identity_commitment_hex) = arguments
-        .get("identity_commitment_hex")
-        .and_then(Value::as_str)
-    {
-        payload.insert(
-            "identity_commitment_hex".to_owned(),
-            Value::String(identity_commitment_hex.to_owned()),
-        );
-    }
-    if let Some(permissions) = arguments.get("permissions") {
-        let permissions_array = permissions
-            .as_array()
-            .ok_or_else(|| "`permissions` must be an array when provided".to_owned())?;
-        if !permissions_array.iter().all(Value::is_string) {
-            return Err("`permissions` must contain only strings".to_owned());
+fn build_accounts_onboard_exact_body(
+    arguments: &Map,
+    allowed_fields: &[&str],
+    required_fields: &[&str],
+) -> Result<Value, String> {
+    let body = if let Some(body) = arguments.get("body") {
+        body.as_object()
+            .cloned()
+            .ok_or_else(|| "`body` must be an object".to_owned())?
+    } else {
+        let mut payload = Map::new();
+        for (key, value) in arguments {
+            if matches!(key.as_str(), "headers" | "accept") || value.is_null() {
+                continue;
+            }
+            payload.insert(key.clone(), value.clone());
         }
-        payload.insert(
-            "permissions".to_owned(),
-            Value::Array(permissions_array.clone()),
-        );
+        payload
+    };
+    if let Some(field) = body
+        .keys()
+        .find(|field| !allowed_fields.contains(&field.as_str()))
+    {
+        return Err(format!(
+            "unsupported account onboarding field `{field}`; tokens, keys, and legacy identity fields are forbidden"
+        ));
     }
-
-    Ok(Value::Object(payload))
+    if let Some(field) = required_fields
+        .iter()
+        .find(|field| !body.contains_key(**field))
+    {
+        return Err(format!("`{field}` is required"));
+    }
+    Ok(Value::Object(body))
 }
 
-fn validate_accounts_onboard_raw_body(body: &Map) -> Result<(), String> {
-    if body.get("alias").and_then(Value::as_str).is_none() {
-        return Err("`body.alias` is required".to_owned());
-    }
+fn build_accounts_onboard_plan_body(arguments: &Map) -> Result<Value, String> {
+    build_accounts_onboard_exact_body(
+        arguments,
+        &["version", "alias", "account_id", "permissions"],
+        &["version", "alias", "account_id"],
+    )
+}
 
-    let account_id = body.get("account_id").and_then(Value::as_str);
-    if body.contains_key("account_id") && account_id.is_none() {
-        return Err("`body.account_id` must be a string".to_owned());
-    }
-    let public_key_hex = body.get("public_key_hex").and_then(Value::as_str);
-    if body.contains_key("public_key_hex") && public_key_hex.is_none() {
-        return Err("`body.public_key_hex` must be a string".to_owned());
-    }
-    if account_id.is_none() && public_key_hex.is_none() {
-        return Err("`body.account_id` or `body.public_key_hex` is required".to_owned());
-    }
-    if account_id.is_some() && public_key_hex.is_some() {
-        return Err(
-            "`body.account_id` and `body.public_key_hex` are mutually exclusive".to_owned(),
-        );
-    }
-
-    if body.get("uaid").and_then(Value::as_str).is_none() {
-        return Err("`body.uaid` is required".to_owned());
-    }
-    if body.contains_key("identity") {
-        return Err(
-            "`body.identity` is not accepted; provide `body.identity_commitment_hex` instead"
-                .to_owned(),
-        );
-    }
-    if body.contains_key("identity_commitment_hex")
-        && body
-            .get("identity_commitment_hex")
-            .and_then(Value::as_str)
-            .is_none()
-    {
-        return Err("`body.identity_commitment_hex` must be a string".to_owned());
-    }
-    if let Some(permissions) = body.get("permissions") {
-        let permissions = permissions
-            .as_array()
-            .ok_or_else(|| "`body.permissions` must be an array when provided".to_owned())?;
-        if !permissions.iter().all(Value::is_string) {
-            return Err("`body.permissions` must contain only strings".to_owned());
-        }
-    }
-
-    Ok(())
+fn build_accounts_onboard_apply_body(arguments: &Map) -> Result<Value, String> {
+    build_accounts_onboard_exact_body(arguments, &["receipt"], &["receipt"])
 }
 
 fn build_accounts_faucet_body(arguments: &Map) -> Result<Value, String> {
@@ -8510,14 +8328,14 @@ async fn dispatch_route_with_extra_header_policy(
     let dispatched_remote_ip = dispatched_remote_ip(inbound_headers);
     let dispatched_connect_addr = dispatched_connect_addr(dispatched_remote_ip);
     let mut request = Request::builder()
-        .method(method)
+        .method(method.clone())
         .uri(path_and_query)
         .body(Body::from(body))
         .map_err(|err| format!("build request: {err}"))?;
 
     {
         let headers = request.headers_mut();
-        forward_auth_headers(headers, inbound_headers);
+        forward_dispatch_auth_headers(headers, inbound_headers, &method, path_and_query)?;
         apply_extra_headers_with_policy(headers, extra_headers, extra_header_policy)?;
         if let Some(accept_value) = accept {
             let value = HeaderValue::from_str(&accept_value)
@@ -8700,6 +8518,47 @@ fn forward_auth_headers(out: &mut HeaderMap, inbound: &HeaderMap) {
     }
 }
 
+fn forward_dispatch_auth_headers(
+    out: &mut HeaderMap,
+    inbound: &HeaderMap,
+    method: &Method,
+    path_and_query: &str,
+) -> Result<(), String> {
+    forward_auth_headers(out, inbound);
+    if is_onboarding_dispatch_route(method, path_and_query) {
+        forward_onboarding_auth_header(out, inbound)?;
+    }
+    Ok(())
+}
+
+fn is_onboarding_dispatch_route(method: &Method, path_and_query: &str) -> bool {
+    let path = path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path);
+    (method == Method::POST
+        && (path == "/v1/accounts/onboard" || path == "/v1/accounts/onboard/plan"))
+        || (method == Method::GET && path == "/v1/accounts/onboarding/readiness")
+}
+
+fn forward_onboarding_auth_header(out: &mut HeaderMap, inbound: &HeaderMap) -> Result<(), String> {
+    let header_name = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+    let mut supplied = inbound.get_all(&header_name).iter();
+    let Some(value) = supplied.next() else {
+        return Ok(());
+    };
+    if supplied.next().is_some() {
+        return Err(format!(
+            "multiple {} headers are not allowed",
+            crate::HEADER_ONBOARDING_API_TOKEN
+        ));
+    }
+
+    let mut value = value.clone();
+    value.set_sensitive(true);
+    out.insert(header_name, value);
+    Ok(())
+}
+
 fn apply_extra_headers(out: &mut HeaderMap, value: Option<&Value>) -> Result<(), String> {
     apply_extra_headers_with_policy(out, value, ExtraHeaderPolicy::Default)
 }
@@ -8744,6 +8603,7 @@ fn is_reserved_extra_header(lowered: &str) -> bool {
     ) || lowered == HEADER_X_API_TOKEN
         || lowered == HEADER_X_IROHA_ACCOUNT
         || lowered == HEADER_X_IROHA_SIGNATURE
+        || lowered == crate::HEADER_ONBOARDING_API_TOKEN
         || lowered == limits::REMOTE_ADDR_HEADER
         || lowered.starts_with("x-iroha-internal-")
 }
@@ -11669,90 +11529,6 @@ fn iroha_contracts_code_bytes_get_tool() -> ToolSpec {
     }
 }
 
-fn iroha_contracts_deploy_tool() -> ToolSpec {
-    iroha_contracts_post_tool(
-        "iroha.contracts.deploy",
-        "Deploy contract code (`/v1/contracts/deploy`).",
-        "/v1/contracts/deploy",
-    )
-}
-
-fn iroha_contracts_deploy_bundle_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.contracts.deploy_bundle".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.contracts.deploy_bundle"),
-        description:
-            "Deploy a contract bundle (`/v1/contracts/deploy-bundle`; set `dry_run=true` for planning)."
-                .to_owned(),
-        method: Method::POST,
-        path_template: "/v1/contracts/deploy-bundle".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "body": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw DeployContractBundleDto payload. If provided, it takes precedence over flat top-level bundle fields."
-                },
-                "dry_run": {
-                    "type": "boolean",
-                    "description": "Convenience shortcut for `?dry_run=true`."
-                },
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true,
-                    "description": "Optional query object. Only `dry_run` is forwarded by this curated alias."
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
-fn iroha_contracts_deploy_bundles_get_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.contracts.deploy_bundles.get".to_owned(),
-        effect: manual_tool_effect_from_name("iroha.contracts.deploy_bundles.get"),
-        description:
-            "Fetch a persisted contract deploy-bundle receipt (`bundle_digest` shortcut supported)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/contracts/deploy-bundles/{bundle_digest}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": false,
-            "properties": {
-                "bundle_digest": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `path.bundle_digest`."
-                },
-                "digest": {
-                    "type": "string",
-                    "description": "Alias for `bundle_digest`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["bundle_digest"],
-                    "properties": {
-                        "bundle_digest": { "type": "string" }
-                    }
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
-}
-
 fn iroha_contracts_call_tool() -> ToolSpec {
     iroha_contracts_post_tool(
         "iroha.contracts.call",
@@ -11982,62 +11758,77 @@ fn iroha_accounts_query_tool() -> ToolSpec {
     }
 }
 
+fn iroha_accounts_onboard_plan_tool() -> ToolSpec {
+    ToolSpec {
+        name: "iroha.accounts.onboard.plan".to_owned(),
+        effect: manual_tool_effect_from_name("iroha.accounts.onboard.plan"),
+        description: "Plan sponsored onboarding without mutating state. Send the dedicated token only as the outer MCP X-Iroha-Onboarding-Token header."
+            .to_owned(),
+        method: Method::POST,
+        path_template: "/v1/accounts/onboard/plan".to_owned(),
+        input_schema: norito::json!({
+            "type": "object",
+            "additionalProperties": false,
+            "oneOf": [
+                { "required": ["body"] },
+                { "required": ["version", "alias", "account_id"] }
+            ],
+            "properties": {
+                "version": { "type": "integer", "const": 1 },
+                "alias": { "type": "string" },
+                "account_id": { "type": "string" },
+                "permissions": { "type": "array", "items": { "type": "string" } },
+                "body": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["version", "alias", "account_id"],
+                    "properties": {
+                        "version": { "type": "integer", "const": 1 },
+                        "alias": { "type": "string" },
+                        "account_id": { "type": "string" },
+                        "permissions": { "type": "array", "items": { "type": "string" } }
+                    }
+                },
+                "headers": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
+                },
+                "accept": { "type": "string" }
+            }
+        }),
+    }
+}
+
 fn iroha_accounts_onboard_tool() -> ToolSpec {
     ToolSpec {
         name: "iroha.accounts.onboard".to_owned(),
         effect: manual_tool_effect_from_name("iroha.accounts.onboard"),
-        description:
-            "Onboard an account (`alias` + `account_id` or `public_key_hex` shortcuts supported when `body` is omitted)."
-                .to_owned(),
+        description: "Apply a stateless receipt returned by iroha.accounts.onboard.plan. The dedicated onboarding token is accepted only from the outer MCP request."
+            .to_owned(),
         method: Method::POST,
         path_template: "/v1/accounts/onboard".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
+            "oneOf": [
                 { "required": ["body"] },
-                {
-                    "required": ["alias", "uaid"],
-                    "oneOf": [
-                        { "required": ["account_id"] },
-                        { "required": ["public_key_hex"] }
-                    ]
-                }
+                { "required": ["receipt"] }
             ],
             "properties": {
-                "alias": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `body.alias`."
-                },
-                "account_id": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `body.account_id`."
-                },
-                "public_key_hex": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `body.public_key_hex` for Ed25519 public key bytes."
-                },
-                "identity_commitment_hex": {
-                    "type": "string",
-                    "description": "Optional 64-hex digest commitment for off-chain identity metadata."
-                },
-                "uaid": {
-                    "type": "string",
-                    "description": "Required UAID literal for shortcut onboarding."
-                },
-                "permissions": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Optional permission literals to request during onboarding."
-                },
+                "receipt": { "type": "object", "additionalProperties": true },
                 "body": {
                     "type": "object",
-                    "additionalProperties": true,
-                    "description": "Raw onboarding request body. If provided, it takes precedence over shortcuts."
+                    "additionalProperties": false,
+                    "required": ["receipt"],
+                    "properties": {
+                        "receipt": { "type": "object", "additionalProperties": true }
+                    }
                 },
                 "headers": {
                     "type": "object",
-                    "additionalProperties": { "type": "string" }
+                    "additionalProperties": { "type": "string" },
+                    "description": "Non-authentication headers only; the onboarding token must be sent on the outer MCP request."
                 },
                 "accept": { "type": "string" }
             }
@@ -14901,6 +14692,7 @@ mod tests {
             "x-forwarded-client-cert": "present",
             "authorization": "Bearer injected",
             "x-api-token": "injected",
+            "x-iroha-onboarding-token": "injected",
             "x-iroha-account": "injected",
             "x-iroha-signature": "injected",
             "x-iroha-timestamp-ms": "injected",
@@ -14919,12 +14711,168 @@ mod tests {
         assert!(!out.contains_key("x-forwarded-client-cert"));
         assert!(!out.contains_key("authorization"));
         assert!(!out.contains_key("x-api-token"));
+        assert!(!out.contains_key("x-iroha-onboarding-token"));
         assert!(!out.contains_key("x-iroha-account"));
         assert!(!out.contains_key("x-iroha-signature"));
         assert!(!out.contains_key("x-iroha-timestamp-ms"));
         assert!(!out.contains_key("x-iroha-nonce"));
         assert!(!out.contains_key("x-iroha-witness"));
         assert!(!out.contains_key("x-iroha-internal-route"));
+    }
+
+    #[test]
+    fn onboarding_token_is_forwarded_only_to_exact_onboarding_routes() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let api_header = HeaderName::from_static(HEADER_X_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            onboarding_header.clone(),
+            HeaderValue::from_static("dedicated-onboarding-token-123456"),
+        );
+        inbound.insert(
+            api_header.clone(),
+            HeaderValue::from_static("global-api-token"),
+        );
+
+        for route in ["/v1/accounts/onboard/plan", "/v1/accounts/onboard"] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect("single onboarding token accepted");
+
+            let forwarded = out
+                .get(&onboarding_header)
+                .expect("onboarding token forwarded");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "dedicated-onboarding-token-123456"
+            );
+            assert!(forwarded.is_sensitive(), "forwarded token must stay secret");
+            assert_eq!(
+                out.get(&api_header).and_then(|value| value.to_str().ok()),
+                Some("global-api-token"),
+                "global API-token forwarding must remain intact"
+            );
+        }
+
+        for (method, route) in [
+            (Method::GET, "/v1/accounts/onboard"),
+            (Method::POST, "/v1/accounts/onboard/multisig"),
+            (Method::POST, "/v1/accounts/onboard/extra"),
+            (Method::POST, "/v1/accounts/faucet"),
+        ] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &method, route)
+                .expect("unprotected route forwarding succeeds");
+
+            assert!(
+                !out.contains_key(&onboarding_header),
+                "dedicated token must not leak to {method} {route}"
+            );
+            assert_eq!(
+                out.get(&api_header).and_then(|value| value.to_str().ok()),
+                Some("global-api-token")
+            );
+        }
+    }
+
+    #[test]
+    fn onboarding_token_cannot_be_injected_or_overridden_by_tool_headers() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let injected = norito::json!({
+            "X-Iroha-Onboarding-Token": "attacker-controlled-token"
+        });
+
+        for route in ["/v1/accounts/onboard"] {
+            let mut without_outer = HeaderMap::new();
+            forward_dispatch_auth_headers(
+                &mut without_outer,
+                &HeaderMap::new(),
+                &Method::POST,
+                route,
+            )
+            .expect("missing outer token is left for inner authentication to reject");
+            apply_extra_headers(&mut without_outer, Some(&injected)).expect("headers accepted");
+            assert!(
+                !without_outer.contains_key(&onboarding_header),
+                "tool arguments cannot manufacture the dedicated token"
+            );
+
+            let mut inbound = HeaderMap::new();
+            inbound.insert(
+                onboarding_header.clone(),
+                HeaderValue::from_static("trusted-outer-onboarding-token"),
+            );
+            let mut with_outer = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut with_outer, &inbound, &Method::POST, route)
+                .expect("outer token forwarded");
+            apply_extra_headers(&mut with_outer, Some(&injected)).expect("headers accepted");
+            let forwarded = with_outer
+                .get(&onboarding_header)
+                .expect("trusted outer token remains present");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "trusted-outer-onboarding-token"
+            );
+            assert!(forwarded.is_sensitive());
+        }
+    }
+
+    #[test]
+    fn wrong_onboarding_token_is_forwarded_unchanged_for_inner_rejection() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.insert(
+            onboarding_header.clone(),
+            HeaderValue::from_static("wrong-onboarding-token-value"),
+        );
+
+        for route in ["/v1/accounts/onboard"] {
+            let mut out = HeaderMap::new();
+            forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect("single syntactically valid header forwarded");
+            let forwarded = out
+                .get(&onboarding_header)
+                .expect("wrong token reaches authoritative inner auth gate");
+            assert_eq!(
+                forwarded.to_str().expect("ASCII token"),
+                "wrong-onboarding-token-value"
+            );
+            assert!(forwarded.is_sensitive());
+        }
+    }
+
+    #[test]
+    fn duplicate_outer_onboarding_tokens_fail_closed_without_secret_leakage() {
+        let onboarding_header = HeaderName::from_static(crate::HEADER_ONBOARDING_API_TOKEN);
+        let mut inbound = HeaderMap::new();
+        inbound.append(
+            onboarding_header.clone(),
+            HeaderValue::from_static("first-private-onboarding-token"),
+        );
+        inbound.append(
+            onboarding_header.clone(),
+            HeaderValue::from_static("second-private-onboarding-token"),
+        );
+
+        for route in ["/v1/accounts/onboard"] {
+            let mut out = HeaderMap::new();
+            let error = forward_dispatch_auth_headers(&mut out, &inbound, &Method::POST, route)
+                .expect_err("duplicates must fail before inner dispatch");
+            assert!(error.contains(crate::HEADER_ONBOARDING_API_TOKEN));
+            assert!(!error.contains("first-private-onboarding-token"));
+            assert!(!error.contains("second-private-onboarding-token"));
+            assert!(!out.contains_key(&onboarding_header));
+        }
+
+        let mut unrelated = HeaderMap::new();
+        forward_dispatch_auth_headers(
+            &mut unrelated,
+            &inbound,
+            &Method::POST,
+            "/v1/accounts/faucet",
+        )
+        .expect("unrelated routes neither consume nor forward the dedicated token");
+        assert!(!unrelated.contains_key(&onboarding_header));
     }
 
     #[test]
@@ -15910,21 +15858,16 @@ mod tests {
                 .iter()
                 .any(|tool| tool.name == "iroha.contracts.code.bytes.get")
         );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.deploy")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.deploy_bundle")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.deploy_bundles.get")
-        );
+        for retired in [
+            "iroha.contracts.deploy",
+            "iroha.contracts.deploy_bundle",
+            "iroha.contracts.deploy_bundles.get",
+        ] {
+            assert!(
+                tools.iter().all(|tool| tool.name != retired),
+                "retired server-side deployment tool leaked into MCP: {retired}"
+            );
+        }
         assert!(tools.iter().any(|tool| tool.name == "iroha.contracts.call"));
         assert!(
             tools
@@ -17119,157 +17062,76 @@ mod tests {
         let err = build_query_envelope_body(args.as_object().expect("object")).expect_err("error");
         assert!(err.contains("`body` must be an object"));
     }
-
     #[test]
-    fn build_accounts_onboard_body_collects_shortcut_fields() {
+    fn build_accounts_onboard_plan_body_accepts_only_secret_free_intent() {
         let args = norito::json!({
-            "alias": "alice",
-            "account_id": TEST_ACCOUNT_I105,
-            "identity_commitment_hex": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-            "permissions": ["CanRegisterDomain"]
+            "version": 1,
+            "alias": "alice@universal",
+            "account_id": TEST_ACCOUNT_I105
         });
-        let body = build_accounts_onboard_body(args.as_object().expect("object")).expect("body");
+        let body =
+            build_accounts_onboard_plan_body(args.as_object().expect("object")).expect("plan body");
         let body = body.as_object().expect("object");
-        assert_eq!(body.get("alias").and_then(Value::as_str), Some("alice"));
+        assert_eq!(body.get("version").and_then(Value::as_u64), Some(1));
+        assert_eq!(
+            body.get("alias").and_then(Value::as_str),
+            Some("alice@universal")
+        );
         assert_eq!(
             body.get("account_id").and_then(Value::as_str),
             Some(TEST_ACCOUNT_I105)
         );
-        assert_eq!(
-            body.get("identity_commitment_hex").and_then(Value::as_str),
-            Some("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")
-        );
-        assert!(body.get("uaid").is_some_and(Value::is_string));
-        assert!(body.get("permissions").is_some_and(Value::is_array));
     }
 
     #[test]
-    fn build_accounts_onboard_body_accepts_public_key_hex_shortcut() {
+    fn sponsored_onboarding_plan_is_read_only_and_apply_is_write() {
+        assert_eq!(iroha_accounts_onboard_plan_tool().effect, ToolEffect::Read);
+        assert_eq!(iroha_accounts_onboard_tool().effect, ToolEffect::Write);
+    }
+
+    #[test]
+    fn build_accounts_onboard_plan_body_rejects_secret_and_legacy_fields() {
+        for forbidden in ["private_key", "token", "uaid", "identity_commitment_hex"] {
+            let mut args = norito::json!({
+                "version": 1,
+                "alias": "alice@universal",
+                "account_id": TEST_ACCOUNT_I105
+            });
+            args.as_object_mut()
+                .expect("object")
+                .insert(forbidden.to_owned(), Value::String("secret".to_owned()));
+            let error = build_accounts_onboard_plan_body(args.as_object().expect("object"))
+                .expect_err("forbidden field");
+            assert!(error.contains(forbidden));
+        }
+    }
+
+    #[test]
+    fn build_accounts_onboard_plan_body_requires_version_alias_and_account() {
         let args = norito::json!({
-            "alias": "alice",
-            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-            "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111"
+            "version": 1,
+            "alias": "alice@universal"
         });
-        let body = build_accounts_onboard_body(args.as_object().expect("object")).expect("body");
-        let body = body.as_object().expect("object");
-        assert_eq!(
-            body.get("public_key_hex").and_then(Value::as_str),
-            Some("1111111111111111111111111111111111111111111111111111111111111111")
-        );
-        assert!(body.get("account_id").is_none());
+        let error = build_accounts_onboard_plan_body(args.as_object().expect("object"))
+            .expect_err("missing account");
+        assert!(error.contains("account_id"));
     }
 
     #[test]
-    fn build_accounts_onboard_body_rejects_missing_uaid_shortcut() {
-        let args = norito::json!({
-            "alias": "alice",
-            "account_id": TEST_ACCOUNT_I105
-        });
-        let err =
-            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
-        assert!(err.contains("`uaid` is required"));
-    }
-
-    #[test]
-    fn build_accounts_onboard_body_rejects_raw_identity_shortcut() {
-        let args = norito::json!({
-            "alias": "alice",
-            "account_id": TEST_ACCOUNT_I105,
-            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-            "identity": {}
-        });
-        let err =
-            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
-        assert!(err.contains("`identity` is not accepted"));
-    }
-
-    #[test]
-    fn build_accounts_onboard_body_rejects_ambiguous_account_material_shortcut() {
-        let args = norito::json!({
-            "alias": "alice",
-            "account_id": TEST_ACCOUNT_I105,
-            "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-            "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-        });
-        let err =
-            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
-        assert!(err.contains("mutually exclusive"));
-    }
-
-    #[test]
-    fn build_accounts_onboard_body_validates_raw_body_contract() {
-        let valid = norito::json!({
-            "body": {
-                "alias": "alice",
-                "account_id": TEST_ACCOUNT_I105,
-                "identity_commitment_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-                "permissions": ["CanRegisterDomain"]
-            }
-        });
-        let body =
-            build_accounts_onboard_body(valid.as_object().expect("object")).expect("valid body");
+    fn build_accounts_onboard_apply_body_accepts_only_receipt() {
+        let args =
+            norito::json!({ "receipt": { "body": {}, "plan_hash": "hash", "signature": {} } });
+        let body = build_accounts_onboard_apply_body(args.as_object().expect("object"))
+            .expect("apply body");
         assert!(
             body.as_object()
-                .is_some_and(|body| body.contains_key("uaid"))
+                .is_some_and(|body| body.contains_key("receipt"))
         );
 
-        let missing_uaid = norito::json!({
-            "body": {
-                "alias": "alice",
-                "account_id": TEST_ACCOUNT_I105
-            }
-        });
-        let err = build_accounts_onboard_body(missing_uaid.as_object().expect("object"))
-            .expect_err("missing uaid");
-        assert!(err.contains("`body.uaid` is required"));
-
-        let raw_identity = norito::json!({
-            "body": {
-                "alias": "alice",
-                "account_id": TEST_ACCOUNT_I105,
-                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-                "identity": {}
-            }
-        });
-        let err = build_accounts_onboard_body(raw_identity.as_object().expect("object"))
-            .expect_err("raw identity");
-        assert!(err.contains("`body.identity` is not accepted"));
-
-        let ambiguous = norito::json!({
-            "body": {
-                "alias": "alice",
-                "account_id": TEST_ACCOUNT_I105,
-                "public_key_hex": "1111111111111111111111111111111111111111111111111111111111111111",
-                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"
-            }
-        });
-        let err = build_accounts_onboard_body(ambiguous.as_object().expect("object"))
-            .expect_err("ambiguous account material");
-        assert!(err.contains("mutually exclusive"));
-
-        let invalid_permissions = norito::json!({
-            "body": {
-                "alias": "alice",
-                "account_id": TEST_ACCOUNT_I105,
-                "uaid": "uaid:00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-                "permissions": ["CanRegisterDomain", 7]
-            }
-        });
-        let err = build_accounts_onboard_body(invalid_permissions.as_object().expect("object"))
-            .expect_err("invalid permissions");
-        assert!(err.contains("`body.permissions` must contain only strings"));
-    }
-
-    #[test]
-    fn build_accounts_onboard_body_rejects_missing_required_shortcuts() {
-        let args = norito::json!({
-            "identity": {}
-        });
-        let err =
-            build_accounts_onboard_body(args.as_object().expect("object")).expect_err("error");
-        assert!(err.contains("`alias` is required"));
+        let forbidden = norito::json!({ "receipt": {}, "private_key": "secret" });
+        let error = build_accounts_onboard_apply_body(forbidden.as_object().expect("object"))
+            .expect_err("forbidden key");
+        assert!(error.contains("private_key"));
     }
 
     #[test]

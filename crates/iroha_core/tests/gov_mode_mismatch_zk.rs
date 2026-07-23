@@ -58,7 +58,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     let bundle = zk_testkit::vote_merkle8_bundle();
     let mut cfg = state.gov.clone();
     cfg.plain_voting_enabled = true;
-    cfg.min_bond_amount = 0;
+    cfg.min_bond_amount = 0_u64.into();
     cfg.min_enactment_delay = 0;
     cfg.window_span = 10;
     let vk_name = bundle.vk_id.name.clone();

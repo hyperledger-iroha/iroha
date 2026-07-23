@@ -9,7 +9,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    env, fs, io,
+    fs, io,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
@@ -77,6 +77,7 @@ use iroha::{
             encode_uploaded_model_finalize_provenance_payload,
         },
         sorafs::pin_registry::StorageClass,
+        transaction::{Executable, FeePaymentIntent},
     },
 };
 use iroha_core::soracloud_runtime::{
@@ -84,7 +85,7 @@ use iroha_core::soracloud_runtime::{
     build_soracloud_hf_generated_agent_manifest, build_soracloud_hf_generated_service_bundle,
 };
 use iroha_crypto::{Hash, KeyPair, Signature};
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::Quantity};
 use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
     to_bytes,
@@ -139,6 +140,7 @@ const HEADER_IROHA_WITNESS: &str = "X-Iroha-Witness";
 
 thread_local! {
     static SORACLOUD_SUBMISSION_CONFIG: RefCell<Option<ClientConfig>> = const { RefCell::new(None) };
+    static SORACLOUD_FEE_PAYMENT: RefCell<Option<Result<FeePaymentIntent, String>>> = const { RefCell::new(None) };
 }
 
 /// Soracloud control-plane commands.
@@ -407,6 +409,13 @@ impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
             *slot.borrow_mut() = Some(context.config().clone());
+        });
+        SORACLOUD_FEE_PAYMENT.with(|slot| {
+            *slot.borrow_mut() = Some(
+                context
+                    .transaction_fee_payment()
+                    .map_err(|error| format!("{error:#}")),
+            );
         });
         match self {
             Command::App(command) => command.run(context),
@@ -5130,9 +5139,9 @@ pub struct AgentWalletSpendArgs {
     /// Asset definition identifier (canonical unprefixed Base58 address).
     #[arg(long, value_name = "ASSET")]
     asset_definition: String,
-    /// Spend amount in nanos.
-    #[arg(long, value_name = "NANOS")]
-    amount_nanos: u64,
+    /// Exact, positive spend amount.
+    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+    amount: Quantity,
     /// Torii base URL for authoritative `agent/wallet/spend`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5146,15 +5155,11 @@ pub struct AgentWalletSpendArgs {
 
 impl AgentWalletSpendArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.amount_nanos == 0 {
-            return Err(eyre!("--amount-nanos must be greater than zero"));
-        }
-
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_wallet_spend_request(
             &self.apartment_name,
             &self.asset_definition,
-            self.amount_nanos,
+            &self.amount,
             authority,
             key_pair,
         )?;
@@ -6527,9 +6532,9 @@ pub struct HfDeployArgs {
     /// Settlement asset definition identifier.
     #[arg(long, value_name = "ASSET")]
     lease_asset_definition: String,
-    /// Base lease fee, charged in nanos of the settlement asset.
-    #[arg(long, value_name = "NANOS")]
-    base_fee_nanos: u128,
+    /// Exact, positive base lease fee in the settlement asset.
+    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+    base_fee: Quantity,
     /// Torii base URL for authoritative `hf/deploy`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -6561,7 +6566,7 @@ impl HfDeployArgs {
             self.storage_class.to_storage_class(),
             self.lease_term_ms,
             &self.lease_asset_definition,
-            self.base_fee_nanos,
+            &self.base_fee,
             authority,
             key_pair,
         )?;
@@ -6760,9 +6765,9 @@ pub struct HfLeaseRenewArgs {
     /// Settlement asset definition identifier.
     #[arg(long, value_name = "ASSET")]
     lease_asset_definition: String,
-    /// Base lease fee, charged in nanos of the settlement asset.
-    #[arg(long, value_name = "NANOS")]
-    base_fee_nanos: u128,
+    /// Exact, positive base lease fee in the settlement asset.
+    #[arg(long, value_name = "QUANTITY", value_parser = parse_positive_quantity)]
+    base_fee: Quantity,
     /// Torii base URL for authoritative `hf/lease/renew`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -6794,7 +6799,7 @@ impl HfLeaseRenewArgs {
             self.storage_class.to_storage_class(),
             self.lease_term_ms,
             &self.lease_asset_definition,
-            self.base_fee_nanos,
+            &self.base_fee,
             authority,
             key_pair,
         )?;
@@ -8477,7 +8482,7 @@ struct HfDeployPayload {
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: Quantity,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8548,7 +8553,7 @@ struct HfLeaseRenewPayload {
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition_id: AssetDefinitionId,
-    base_fee_nanos: u128,
+    base_fee: Quantity,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -8692,7 +8697,7 @@ struct SignedAgentPolicyRevokeRequest {
 struct AgentWalletSpendPayload {
     apartment_name: String,
     asset_definition: String,
-    amount_nanos: u64,
+    amount: Quantity,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -11186,6 +11191,19 @@ fn parse_asset_definition_arg(
         .wrap_err_with(|| format!("invalid {flag_name}"))
 }
 
+fn parse_positive_quantity(value: &str) -> std::result::Result<Quantity, String> {
+    let quantity = value
+        .parse::<Quantity>()
+        .map_err(|error| format!("must be a canonical non-negative quantity: {error}"))?;
+    if quantity.to_string() != value {
+        return Err(format!("must use canonical quantity spelling `{quantity}`"));
+    }
+    if quantity.is_zero() {
+        return Err("quantity must be greater than zero".to_owned());
+    }
+    Ok(quantity)
+}
+
 fn hf_source_hash(repo_id: &str, resolved_revision: &str) -> Result<Hash> {
     let payload = norito::to_bytes(&(repo_id, resolved_revision))
         .wrap_err("failed to encode hf source id payload")?;
@@ -11231,15 +11249,15 @@ fn signed_hf_deploy_request(
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition: &str,
-    base_fee_nanos: u128,
+    base_fee: &Quantity,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedHfDeployRequest> {
     if lease_term_ms == 0 {
         return Err(eyre!("--lease-term-ms must be greater than zero"));
     }
-    if base_fee_nanos == 0 {
-        return Err(eyre!("--base-fee-nanos must be greater than zero"));
+    if base_fee.is_zero() {
+        return Err(eyre!("--base-fee must be greater than zero"));
     }
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let revision = revision.map(parse_hf_revision_arg).transpose()?;
@@ -11264,7 +11282,7 @@ fn signed_hf_deploy_request(
             "--lease-asset-definition",
             lease_asset_definition,
         )?,
-        base_fee_nanos,
+        base_fee: base_fee.clone(),
     };
     let encoded = encode_hf_deploy_signature_payload(&payload)
         .wrap_err("failed to encode hf deploy payload for signing")?;
@@ -11352,15 +11370,15 @@ fn signed_hf_lease_renew_request(
     storage_class: StorageClass,
     lease_term_ms: u64,
     lease_asset_definition: &str,
-    base_fee_nanos: u128,
+    base_fee: &Quantity,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedHfLeaseRenewRequest> {
     if lease_term_ms == 0 {
         return Err(eyre!("--lease-term-ms must be greater than zero"));
     }
-    if base_fee_nanos == 0 {
-        return Err(eyre!("--base-fee-nanos must be greater than zero"));
+    if base_fee.is_zero() {
+        return Err(eyre!("--base-fee must be greater than zero"));
     }
     let repo_id = parse_hf_repo_id_arg(repo_id)?;
     let revision = revision.map(parse_hf_revision_arg).transpose()?;
@@ -11385,7 +11403,7 @@ fn signed_hf_lease_renew_request(
             "--lease-asset-definition",
             lease_asset_definition,
         )?,
-        base_fee_nanos,
+        base_fee: base_fee.clone(),
     };
     let encoded = encode_hf_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode hf lease renew payload for signing")?;
@@ -11612,7 +11630,7 @@ fn signed_agent_policy_revoke_request(
 fn signed_agent_wallet_spend_request(
     apartment_name: &str,
     asset_definition: &str,
-    amount_nanos: u64,
+    amount: &Quantity,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentWalletSpendRequest> {
@@ -11622,13 +11640,13 @@ fn signed_agent_wallet_spend_request(
     if asset_definition.trim().is_empty() {
         return Err(eyre!("--asset-definition must not be empty"));
     }
-    if amount_nanos == 0 {
-        return Err(eyre!("--amount-nanos must be greater than zero"));
+    if amount.is_zero() {
+        return Err(eyre!("--amount must be greater than zero"));
     }
     let payload = AgentWalletSpendPayload {
         apartment_name: apartment_name.to_owned(),
         asset_definition: asset_definition.to_owned(),
-        amount_nanos,
+        amount: amount.clone(),
     };
     let encoded = encode_agent_wallet_spend_signature_payload(&payload)
         .wrap_err("failed to encode agent wallet spend payload for signing")?;
@@ -12345,7 +12363,7 @@ fn encode_agent_wallet_spend_signature_payload(
     encode_agent_wallet_spend_provenance_payload(
         payload.apartment_name.as_str(),
         payload.asset_definition.as_str(),
-        payload.amount_nanos,
+        &payload.amount,
     )
     .wrap_err("failed to encode agent wallet spend signature payload tuple")
 }
@@ -12416,7 +12434,7 @@ fn encode_hf_deploy_signature_payload(payload: &HfDeployPayload) -> Result<Vec<u
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
-        payload.base_fee_nanos,
+        &payload.base_fee,
     )
     .wrap_err("failed to encode hf deploy signature payload tuple")
 }
@@ -12445,7 +12463,7 @@ fn encode_hf_lease_renew_signature_payload(payload: &HfLeaseRenewPayload) -> Res
         payload.storage_class,
         payload.lease_term_ms,
         &payload.lease_asset_definition_id,
-        payload.base_fee_nanos,
+        &payload.base_fee,
     )
     .wrap_err("failed to encode hf lease renew signature payload tuple")
 }
@@ -12580,6 +12598,16 @@ fn soracloud_submission_config() -> Result<ClientConfig> {
         slot.borrow()
             .clone()
             .ok_or_else(|| eyre!("Soracloud submission config is not initialized"))
+    })
+}
+
+fn soracloud_fee_payment() -> Result<FeePaymentIntent> {
+    SORACLOUD_FEE_PAYMENT.with(|slot| match slot.borrow().as_ref() {
+        Some(Ok(intent)) => Ok(intent.clone()),
+        Some(Err(error)) => Err(eyre!(error.clone())),
+        None => Err(eyre!(
+            "Soracloud fee payment selection is not initialized; pass --fee-payer authority or an exact sponsor program and revision"
+        )),
     })
 }
 
@@ -12753,33 +12781,47 @@ fn submit_soracloud_draft_transaction(
         .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
     config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
     let client = Client::new(config);
+    let requested_fee_payment = soracloud_fee_payment()?;
+    let executable = Executable::Instructions(instructions.into());
+    let mut payload = client
+        .try_build_transaction_payload(
+            executable,
+            requested_fee_payment.clone(),
+            Metadata::default(),
+        )
+        .wrap_err("failed to build exact unsigned Soracloud mutation payload")?;
+    let quote = client
+        .quote_fees(&payload)
+        .wrap_err("failed to quote exact Soracloud mutation fees")?;
+    let selection_matches = match (&requested_fee_payment, &quote.intent) {
+        (FeePaymentIntent::Authority(requested), FeePaymentIntent::Authority(quoted)) => {
+            requested.gas_limit == quoted.gas_limit
+        }
+        (FeePaymentIntent::Sponsor(requested), FeePaymentIntent::Sponsor(quoted)) => {
+            requested.program_id == quoted.program_id
+                && requested.program_revision == quoted.program_revision
+                && requested.gas_limit == quoted.gas_limit
+        }
+        _ => false,
+    };
+    if !selection_matches {
+        return Err(eyre!(
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        ));
+    }
+    quote
+        .intent
+        .validate()
+        .wrap_err("fee quote returned an invalid Soracloud payment intent")?;
+    payload.fee_payment = quote.intent;
     let transaction = client
-        .try_build_transaction(instructions, soracloud_submission_metadata())
-        .wrap_err("failed to build Soracloud mutation transaction")?;
+        .try_sign_transaction_payload(payload)
+        .wrap_err("failed to sign the exact quoted Soracloud mutation payload")?;
     client
         .submit_transaction_blocking(&transaction)
         .map(Into::into)
         .map(Some)
         .wrap_err("failed to submit Soracloud mutation transaction")
-}
-
-fn soracloud_submission_metadata() -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(gas_asset_id) = soracloud_submission_gas_asset_id() {
-        let gas_asset_key = "gas_asset_id"
-            .parse::<Name>()
-            .expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(gas_asset_id));
-    }
-    metadata
-}
-
-fn soracloud_submission_gas_asset_id() -> Option<String> {
-    ["IROHA_SORACLOUD_GAS_ASSET_ID", "IROHA_GAS_ASSET_ID"]
-        .into_iter()
-        .find_map(|name| env::var(name).ok())
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
 }
 
 fn extract_json_field(payload: &json::Value, field: &str) -> Result<Option<json::Value>> {
@@ -19469,7 +19511,7 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
     return json {{
       authenticated: false,
       observed_height: observed_height,
-      wallet: null
+      wallet: Json::parse("null")
     }};
   }}
 
@@ -20728,6 +20770,39 @@ mod tests {
     }
 
     #[test]
+    fn positive_quantity_parser_accepts_exact_sub_nano_and_wide_values() {
+        for canonical in [
+            "0.0000000000000000000000000001",
+            "340282366920938463463374607431768211456.0000000001",
+        ] {
+            let quantity = parse_positive_quantity(canonical).expect("canonical quantity");
+            assert_eq!(quantity.to_string(), canonical);
+        }
+    }
+
+    #[test]
+    fn positive_quantity_parser_rejects_zero_and_noncanonical_values() {
+        for invalid in [
+            "",
+            " 1",
+            "1 ",
+            "+1",
+            "01",
+            "1.0",
+            ".5",
+            "1.",
+            "-1",
+            "0",
+            "0.00000000000000000000000000001",
+        ] {
+            assert!(
+                parse_positive_quantity(invalid).is_err(),
+                "invalid quantity must be rejected: {invalid:?}"
+            );
+        }
+    }
+
+    #[test]
     fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
         for (name, source) in [
             ("single-api", single_api_contract_ko("travel_ops")),
@@ -21645,6 +21720,9 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
             *slot.borrow_mut() = Some(config);
         });
+        SORACLOUD_FEE_PAYMENT.with(|slot| {
+            *slot.borrow_mut() = Some(Ok(FeePaymentIntent::authority(Vec::new(), None)));
+        });
     }
 
     fn mock_control_plane_status_payload(service_names: &[&str]) -> norito::json::Value {
@@ -22514,7 +22592,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             storage_class: HfStorageClassArg::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition: hf_shared_lease_asset_definition().to_string(),
-            base_fee_nanos: 10_000,
+            base_fee: "0.00001".parse().expect("canonical exact base fee"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -22538,6 +22616,17 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        let deploy_payload = deploy_body
+            .get("payload")
+            .and_then(norito::json::Value::as_object)
+            .expect("HF deploy payload object");
+        assert_eq!(
+            deploy_payload
+                .get("base_fee")
+                .and_then(norito::json::Value::as_str),
+            Some("0.00001")
+        );
+        assert!(!deploy_payload.contains_key("base_fee_nanos"));
     }
 
     #[test]
@@ -22760,7 +22849,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             storage_class: HfStorageClassArg::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition: hf_shared_lease_asset_definition().to_string(),
-            base_fee_nanos: 10_000,
+            base_fee: "0.00001".parse().expect("canonical exact base fee"),
             torii_url: Some(server.base_url.clone()),
             api_token: None,
             timeout_secs: 5,
@@ -22786,6 +22875,17 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        let renew_payload = renew_body
+            .get("payload")
+            .and_then(norito::json::Value::as_object)
+            .expect("HF renew payload object");
+        assert_eq!(
+            renew_payload
+                .get("base_fee")
+                .and_then(norito::json::Value::as_str),
+            Some("0.00001")
+        );
+        assert!(!renew_payload.contains_key("base_fee_nanos"));
     }
 
     #[test]
@@ -23797,6 +23897,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     fn signed_hf_deploy_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x28);
         let authority = AccountId::new(key_pair.public_key().clone());
+        let base_fee = "0.00001".parse().expect("canonical exact base fee");
         let request = signed_hf_deploy_request(
             "openai/gpt-oss",
             None,
@@ -23806,7 +23907,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             StorageClass::Warm,
             604_800_000,
             &hf_shared_lease_asset_definition().to_string(),
-            10_000,
+            &base_fee,
             &authority,
             &key_pair,
         )
@@ -23880,6 +23981,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     fn signed_hf_lease_renew_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2A);
         let authority = AccountId::new(key_pair.public_key().clone());
+        let base_fee = "0.00001".parse().expect("canonical exact base fee");
         let request = signed_hf_lease_renew_request(
             "openai/gpt-oss",
             None,
@@ -23889,7 +23991,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             StorageClass::Warm,
             604_800_000,
             &hf_shared_lease_asset_definition().to_string(),
-            10_000,
+            &base_fee,
             &authority,
             &key_pair,
         )
@@ -24003,10 +24105,11 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
     fn signed_agent_wallet_spend_request_uses_verifiable_signature() {
         let key_pair = soracloud_fixture_key_pair(0x2E);
         let authority = AccountId::new(key_pair.public_key().clone());
+        let amount = "0.001".parse().expect("canonical exact amount");
         let request = signed_agent_wallet_spend_request(
             "ops_agent",
             "61CtjvNd9T3THAR65GsMVHr82Bjc",
-            1_000_000,
+            &amount,
             &authority,
             &key_pair,
         )
@@ -24447,17 +24550,27 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
         let payload = AgentWalletSpendPayload {
             apartment_name: "ops_agent".to_owned(),
             asset_definition: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
-            amount_nanos: 1_000_000,
+            amount: "340282366920938463463374607431768211456.0000000001"
+                .parse()
+                .expect("wide exact amount"),
         };
         let encoded = encode_agent_wallet_spend_signature_payload(&payload)
             .expect("encode signature payload");
         let expected = norito::to_bytes(&(
             payload.apartment_name.as_str(),
             payload.asset_definition.as_str(),
-            payload.amount_nanos,
+            payload.amount.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+
+        let value = json::to_value(&payload).expect("serialize wallet spend payload");
+        let object = value.as_object().expect("wallet spend payload object");
+        assert_eq!(
+            object.get("amount").and_then(norito::json::Value::as_str),
+            Some("340282366920938463463374607431768211456.0000000001")
+        );
+        assert!(!object.contains_key("amount_nanos"));
     }
 
     #[test]
@@ -24582,7 +24695,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             storage_class: StorageClass::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition_id: asset_definition.clone(),
-            base_fee_nanos: 10_000,
+            base_fee: "0.0000000001".parse().expect("sub-nano exact base fee"),
         };
         let encoded =
             encode_hf_deploy_signature_payload(&payload).expect("encode signature payload");
@@ -24595,10 +24708,18 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             payload.storage_class,
             payload.lease_term_ms,
             asset_definition,
-            payload.base_fee_nanos,
+            payload.base_fee.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
+
+        let value = json::to_value(&payload).expect("serialize HF deploy payload");
+        let object = value.as_object().expect("HF deploy payload object");
+        assert_eq!(
+            object.get("base_fee").and_then(norito::json::Value::as_str),
+            Some("0.0000000001")
+        );
+        assert!(!object.contains_key("base_fee_nanos"));
     }
 
     #[test]
@@ -24637,7 +24758,9 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             storage_class: StorageClass::Warm,
             lease_term_ms: 604_800_000,
             lease_asset_definition_id: asset_definition.clone(),
-            base_fee_nanos: 10_000,
+            base_fee: "340282366920938463463374607431768211456.0000000001"
+                .parse()
+                .expect("wide exact base fee"),
         };
         let encoded =
             encode_hf_lease_renew_signature_payload(&payload).expect("encode signature payload");
@@ -24650,7 +24773,7 @@ await import(`${pathToFileURL(CORE_MODULE_PATH).href}?auth-core=__SCENARIO__`);
             payload.storage_class,
             payload.lease_term_ms,
             asset_definition,
-            payload.base_fee_nanos,
+            payload.base_fee.clone(),
         ))
         .expect("encode canonical tuple");
         assert_eq!(encoded, expected);
@@ -35014,7 +35137,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35233,7 +35356,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };
@@ -35357,7 +35480,7 @@ function resCapture() {
     end(body = "") {
       this.body += body ?? "";
     },
-    Json::parse() {
+    json() {
       return this.body.length > 0 ? JSON.parse(this.body) : null;
     }
   };

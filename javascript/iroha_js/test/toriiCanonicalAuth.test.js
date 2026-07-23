@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createServer } from "node:net";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -11,9 +11,9 @@ import {
 } from "../src/index.js";
 import { AccountAddress } from "../src/address.js";
 
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
+const AUTH_ALIAS = "operator-1@hbl.sbp";
 
-test("ToriiClient attaches canonical signing headers for app endpoints", async () => {
+test("ToriiClient emits an exact ASCII alias credential and a verifiable signature", async () => {
   const captured = [];
   const fetchImpl = async (url, init) => {
     captured.push({ url, init });
@@ -22,32 +22,25 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
-  const client = new ToriiClient("https://localhost:8080", {
-    fetchImpl,
-  });
+  const client = new ToriiClient("https://localhost:8080", { fetchImpl });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 9) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
+  const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
 
-  await client.listAccountAssets(accountId, {
-    canonicalAuth: { accountId, privateKey },
+  await client.listAccountAssets(targetAccountId, {
+    canonicalAuth: { accountId: AUTH_ALIAS, privateKey },
     limit: 1,
   });
 
   assert.equal(captured.length, 1);
   const { url, init } = captured[0];
-  assert.equal(init.headers["X-Iroha-Account"], accountId);
-  assert.deepEqual(init.__irohaRawUtf8Headers, {
-    "X-Iroha-Account": accountId,
-  });
-  const signatureB64 = init.headers["X-Iroha-Signature"];
-  assert.ok(typeof signatureB64 === "string" && signatureB64.length > 0);
-  const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
-  const nonce = init.headers["X-Iroha-Nonce"];
-  assert.ok(Number.isFinite(timestampMs));
-  assert.ok(typeof nonce === "string" && nonce.length > 0);
+  assert.equal(init.headers["X-Iroha-Account"], AUTH_ALIAS);
+  const retiredRawHeaderInitKey = ["__iroha", "RawUtf8Headers"].join("");
+  assert.equal(Object.hasOwn(init, retiredRawHeaderInitKey), false);
+  assert.deepEqual(Object.keys(init).sort(), ["body", "headers", "method", "signal"]);
 
   const parsed = new URL(url);
+  const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
+  const nonce = init.headers["X-Iroha-Nonce"];
   const message = canonicalRequestSignatureMessage({
     method: init.method,
     path: parsed.pathname,
@@ -56,169 +49,46 @@ test("ToriiClient attaches canonical signing headers for app endpoints", async (
     timestampMs,
     nonce,
   });
-  const signature = Buffer.from(signatureB64, "base64");
-  assert.ok(verifyEd25519(message, signature, publicKey));
+  const signature = Buffer.from(init.headers["X-Iroha-Signature"], "base64");
+  assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
 
-test("ToriiClient canonical auth uses raw Node transport for UTF-8 account headers", async (t) => {
-  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
-  const quoteId = "12".repeat(32);
-  const paymentTxHash = "34".repeat(32);
-  const meteringPublicKeyHex = "56".repeat(32);
-  const requests = [];
-  const server = createServer({ allowHalfOpen: true }, (socket) => {
-    const chunks = [];
-    let responded = false;
-    const tryRespond = () => {
-      if (responded) {
-        return;
-      }
-      const request = Buffer.concat(chunks);
-      const headerTerminator = request.indexOf(Buffer.from("\r\n\r\n", "ascii"));
-      if (headerTerminator === -1) {
-        return;
-      }
-      const headerBlock = request.subarray(0, headerTerminator).toString("latin1");
-      const contentLengthMatch = /(?:^|\r\n)content-length:\s*(\d+)/iu.exec(headerBlock);
-      const contentLength = contentLengthMatch ? Number.parseInt(contentLengthMatch[1], 10) : 0;
-      const totalLength = headerTerminator + 4 + contentLength;
-      if (request.length < totalLength) {
-        return;
-      }
-      responded = true;
-      requests.push(request.subarray(0, totalLength));
-      const responseBody = Buffer.from(
-        JSON.stringify({
-          session_id: "sess_utf8",
-          account_id: accountId,
-          exit_class: "standard",
-          relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
-          lease_secs: 600,
-          expires_at_ms: 1_700_000_000_000,
-          connected_at_ms: 1_699_999_400_000,
-          meter_family: "soranet.vpn.standard",
-          quote_id: quoteId,
-          payment_reference: quoteId,
-          payment_tx_hash: paymentTxHash,
-          fee_asset_id: "xor#universal.universal",
-          escrow_account_id: "vpn_escrow",
-          operator_account_id: accountId,
-          lease_fee_nanos: "1000000",
-          flow_label_bits: 20,
-          padding_budget_ms: 80,
-          relay_tls_spki_sha256_hex: "78".repeat(32),
-          route_pushes: [],
-          excluded_routes: [],
-          dns_servers: ["1.1.1.1"],
-          tunnel_addresses: ["10.208.0.2/32"],
-          mtu_bytes: 1280,
-          helper_ticket_hex: SAMPLE_VPN_HELPER_TICKET_HEX,
-          bytes_in: 123,
-          bytes_out: 456,
-          status: "active",
-        }),
-        "utf8",
-      );
-      socket.end(
-        Buffer.concat([
-          Buffer.from(
-            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n",
-            "ascii",
-          ),
-          Buffer.from(responseBody.length.toString(16), "ascii"),
-          Buffer.from("\r\n", "ascii"),
-          responseBody,
-          Buffer.from("\r\n0\r\n\r\n", "ascii"),
-        ]),
-      );
-    };
-    socket.on("data", (chunk) => {
-      chunks.push(Buffer.from(chunk));
-      tryRespond();
-    });
-  });
-  await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  t.after(
-    () =>
-      new Promise((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      }),
-  );
-  const address = server.address();
-  assert(address && typeof address === "object");
-  let fetchCalled = false;
-  const client = new ToriiClient(`http://127.0.0.1:${address.port}`, {
-    allowInsecure: true,
-    fetchImpl: async () => {
-      fetchCalled = true;
-      throw new Error("fetch should not run");
-    },
-  });
-
-  const session = await client.createVpnSession(
-    { exitClass: "standard", quoteId, paymentTxHash, meteringPublicKeyHex },
-    { canonicalAuth: { accountId, privateKey } },
-  );
-
-  assert.equal(fetchCalled, false);
-  assert.equal(requests.length, 1);
-  const request = requests[0];
-  assert.ok(
-    request.includes(Buffer.from(`X-Iroha-Account: ${accountId}\r\n`, "utf8")),
-    "expected raw request to carry the UTF-8 account header bytes",
-  );
-  assert.ok(
-    request.includes(Buffer.from("X-Iroha-Signature: ", "ascii")),
-    "expected canonical signature header on the raw request",
-  );
-  const headerTerminator = request.indexOf(Buffer.from("\r\n\r\n", "ascii"));
-  assert.notEqual(headerTerminator, -1);
-  assert.deepEqual(
-    JSON.parse(request.subarray(headerTerminator + 4).toString("utf8")),
-    {
-      exit_class: "standard",
-      quote_id: quoteId,
-      payment_tx_hash: paymentTxHash,
-      metering_public_key_hex: meteringPublicKeyHex,
-    },
-  );
-  assert.equal(session.sessionId, "sess_utf8");
-  assert.equal(session.accountId, accountId);
-});
-
-test("ToriiClient canonical auth rejects UTF-8 account headers when no supported transport is available", async () => {
-  const client = new ToriiClient("wss://localhost:8080", {
-    fetchImpl: async () =>
-      new Response(JSON.stringify({ items: [], total: 0 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-  });
+test("ToriiClient rejects every noncanonical canonical-auth credential before fetch", async () => {
+  let fetchCalls = 0;
+  const fetchImpl = async () => {
+    fetchCalls += 1;
+    throw new Error("fetch must not run for invalid canonical auth");
+  };
+  const client = new ToriiClient("https://localhost:8080", { fetchImpl });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 11) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const invalidCredentials = [
+    targetAccountId,
+    ` ${AUTH_ALIAS}`,
+    `${AUTH_ALIAS} `,
+    "Operator-1@hbl.sbp",
+    "operator-1@HBL.SBP",
+    "opérator-1@hbl.sbp",
+    "operator-1%40hbl.sbp",
+    Buffer.from(AUTH_ALIAS, "utf8").toString("base64"),
+  ];
 
-  await assert.rejects(
-    () =>
-      client.listAccountAssets(accountId, {
-        canonicalAuth: { accountId, privateKey },
-        limit: 1,
-      }),
-    (error) =>
-      error?.name === "ValidationError" &&
-      error?.code === ValidationErrorCode.INVALID_OBJECT &&
-      error?.path === "canonicalAuth.accountId" &&
-      /raw utf-8 header support/i.test(error.message),
-  );
+  for (const accountId of invalidCredentials) {
+    await assert.rejects(
+      () =>
+        client.listAccountAssets(targetAccountId, {
+          canonicalAuth: { accountId, privateKey },
+          limit: 1,
+        }),
+      (error) =>
+        error?.name === "ValidationError" &&
+        error?.code === ValidationErrorCode.INVALID_OBJECT &&
+        error?.path === "canonicalAuth.accountId" &&
+        /exact canonical ASCII account alias/u.test(error.message),
+      accountId,
+    );
+  }
+  assert.equal(fetchCalls, 0);
 });
 
 test("ToriiClient canonical auth accepts byte-array private keys", async () => {
@@ -230,59 +100,42 @@ test("ToriiClient canonical auth accepts byte-array private keys", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
-  const client = new ToriiClient("https://localhost:8080", {
-    fetchImpl,
-  });
+  const client = new ToriiClient("https://localhost:8080", { fetchImpl });
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 3) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
-  await client.listAccountAssets(accountId, {
-    canonicalAuth: { accountId, privateKey: Array.from(privateKey) },
+  await client.listAccountAssets(targetAccountId, {
+    canonicalAuth: { accountId: AUTH_ALIAS, privateKey: Array.from(privateKey) },
     limit: 1,
   });
 
   assert.equal(captured.length, 1);
-  const { url, init } = captured[0];
-  const parsed = new URL(url);
-  const timestampMs = Number(init.headers["X-Iroha-Timestamp-Ms"]);
-  const nonce = init.headers["X-Iroha-Nonce"];
-  assert.ok(Number.isFinite(timestampMs));
-  assert.ok(typeof nonce === "string" && nonce.length > 0);
-  const message = canonicalRequestSignatureMessage({
-    method: init.method,
-    path: parsed.pathname,
-    query: parsed.search ? parsed.search.slice(1) : "",
-    body: "",
-    timestampMs,
-    nonce,
-  });
-  const signature = Buffer.from(init.headers["X-Iroha-Signature"], "base64");
-  assert.ok(verifyEd25519(message, signature, publicKey));
+  assert.equal(captured[0].init.headers["X-Iroha-Account"], AUTH_ALIAS);
 });
 
 test("ToriiClient canonical auth rejects non-byte private key arrays", async () => {
   const client = new ToriiClient("https://localhost:8080", {
-    fetchImpl: async () =>
-      new Response(JSON.stringify({ items: [], total: 0 }), {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
+    fetchImpl: async () => {
+      throw new Error("fetch must not run");
+    },
   });
   const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 7) });
-  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
+  const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
 
   await assert.rejects(
     () =>
-      client.listAccountAssets(accountId, {
-        canonicalAuth: { accountId, privateKey: [256] },
+      client.listAccountAssets(targetAccountId, {
+        canonicalAuth: { accountId: AUTH_ALIAS, privateKey: [256] },
         limit: 1,
       }),
-    (error) => error?.name === "ValidationError" && /privateKey\[0\]/i.test(error.message),
+    (error) => error?.name === "ValidationError" && /privateKey\[0\]/u.test(error.message),
   );
 });
 
-function markFetchSupportsRawUtf8Headers(fetchImpl) {
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
-  return fetchImpl;
-}
+test("ToriiClient canonical auth has no raw-header or socket transport escape hatch", () => {
+  const source = readFileSync(new URL("../src/toriiClient.js", import.meta.url), "utf8");
+  assert.equal(source.includes(["__iroha", "RawUtf8Headers"].join("")), false);
+  assert.equal(source.includes(["__iroha", "SupportsRawUtf8Headers"].join("")), false);
+  assert.doesNotMatch(source, /node:(?:net|tls)/u);
+  assert.equal(source.includes(["performNode", "RawUtf8Request"].join("")), false);
+});

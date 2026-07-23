@@ -1116,8 +1116,12 @@ pub(crate) mod tests {
             .map(|index| {
                 let key_pair = KeyPair::random();
                 let authority = AccountId::new(key_pair.public_key().clone());
-                let mut builder = TransactionBuilder::new(chain_id.clone(), authority)
-                    .with_instructions::<InstructionBox>([]);
+                let mut builder = TransactionBuilder::new(
+                    chain_id.clone(),
+                    authority,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+                .with_instructions::<InstructionBox>([]);
                 builder.set_creation_time(Duration::from_millis(
                     epoch.saturating_mul(10).saturating_add(index),
                 ));
@@ -1193,10 +1197,10 @@ pub(crate) mod tests {
             lane_incarnation,
             dataspace_id: DataSpaceId::UNIVERSAL,
             tx_count: 0,
-            total_local_micro: 0,
-            total_xor_due_micro: 0,
-            total_xor_after_haircut_micro: 0,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),

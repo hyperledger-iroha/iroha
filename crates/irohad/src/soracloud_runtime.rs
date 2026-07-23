@@ -50,16 +50,16 @@ use iroha_core::soracloud_runtime::{
     soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{State, StateView, WorldReadOnly};
-use iroha_core::{queue::Queue, tx::AcceptedTransaction};
+use iroha_core::{
+    executor::quote_nexus_fee_admission_draft, queue::Queue, tx::AcceptedTransaction,
+};
 use iroha_crypto::{Hash, KeyPair};
 #[cfg(test)]
 use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
-    asset::{AssetDefinitionAlias, AssetDefinitionId},
     isi::{self, InstructionBox},
-    metadata::Metadata,
     name::Name,
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
@@ -76,14 +76,14 @@ use iroha_data_model::{
         SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraNetworkPolicyV1,
         SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
         SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRuntimeStateV1,
-        SoraServiceStateEntryV1, SoraStateBindingV1, SoraStateMutationOperationV1,
-        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
-        SoracloudAppendJournalResponseV1, SoracloudEgressFetchRequestV1,
-        SoracloudEgressFetchResponseV1, SoracloudEmitMailboxMessageRequestV1,
-        SoracloudEmitMailboxMessageResponseV1, SoracloudEmitStateMutationRequestV1,
-        SoracloudEmitStateMutationResponseV1, SoracloudHostOperationV1,
-        SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
+        SoraServiceLeaseStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
+        SoraStateMutationOperationV1, SoraUploadedModelKeyEncapsulationV1,
+        SoraUploadedModelKeyWrapAeadV1, SoracloudAppendJournalResponseV1,
+        SoracloudEgressFetchRequestV1, SoracloudEgressFetchResponseV1,
+        SoracloudEmitMailboxMessageRequestV1, SoracloudEmitMailboxMessageResponseV1,
+        SoracloudEmitStateMutationRequestV1, SoracloudEmitStateMutationResponseV1,
+        SoracloudHostOperationV1, SoracloudHostRequestEnvelopeV1, SoracloudHostRequestPayloadV1,
         SoracloudHostResponseEnvelopeV1, SoracloudHostResponsePayloadV1,
         SoracloudPublishCheckpointResponseV1, SoracloudReadCommittedStateResponseV1,
         SoracloudReadConfigResponseV1, SoracloudReadCredentialResponseV1,
@@ -92,10 +92,10 @@ use iroha_data_model::{
         encode_model_host_heartbeat_provenance_payload,
     },
     sorafs::pin_registry::ManifestDigest,
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{SignedTransaction, TransactionBuilder, TransactionPayload},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_primitives::json::Json;
+use iroha_primitives::{json::Json, numeric::NumericOperationError};
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
     api::{StorageManifestResponseDto, StorageStoredFileDto},
@@ -208,7 +208,7 @@ pub(crate) struct QueuedSoracloudRuntimeMutationSink {
     state: Arc<State>,
     authority: AccountId,
     key_pair: KeyPair,
-    gas_asset_id: Option<String>,
+    submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
 }
 
 impl QueuedSoracloudRuntimeMutationSink {
@@ -219,7 +219,7 @@ impl QueuedSoracloudRuntimeMutationSink {
         state: Arc<State>,
         authority: AccountId,
         key_pair: KeyPair,
-        gas_asset_id: Option<String>,
+        submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission,
     ) -> Self {
         Self {
             chain_id,
@@ -227,7 +227,7 @@ impl QueuedSoracloudRuntimeMutationSink {
             state,
             authority,
             key_pair,
-            gas_asset_id,
+            submission,
         }
     }
 }
@@ -238,14 +238,45 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
         instruction: InstructionBox,
         endpoint: &'static str,
     ) -> eyre::Result<()> {
-        let tx = sign_soracloud_runtime_submission_transaction(
+        let mut payload = build_soracloud_runtime_submission_payload(
             (*self.chain_id).clone(),
             self.authority.clone(),
             instruction,
-            soracloud_runtime_submission_metadata(&self.state, self.gas_asset_id.as_deref()),
-            &self.key_pair,
+            self.submission.fee_payment_intent(),
             endpoint,
         )?;
+        let route = self
+            .queue
+            .route_payload_with_state(&payload, self.state.as_ref())
+            .wrap_err_with(|| {
+                format!("route internal Soracloud runtime mutation at `{endpoint}`")
+            })?;
+        let latest_header = self.state.latest_block_header_fast();
+        let observation_time_ms = latest_header
+            .as_ref()
+            .map_or(0, |header| header.creation_time_ms);
+        let next_block_height = latest_header
+            .as_ref()
+            .map_or(1, |header| header.height().get().saturating_add(1));
+        let nexus = self.state.nexus_snapshot();
+        let pipeline = self.state.pipeline_snapshot();
+        let quote = {
+            let world = self.state.world_view();
+            quote_nexus_fee_admission_draft(
+                &world,
+                &nexus,
+                &pipeline,
+                &payload,
+                observation_time_ms,
+                next_block_height,
+                Some(route.dataspace_id),
+            )
+        }
+        .map_err(|error| {
+            eyre::eyre!("quote internal Soracloud runtime mutation at `{endpoint}`: {error}")
+        })?;
+        payload.fee_payment = quote.recommended_intent;
+        let tx = sign_soracloud_runtime_submission_payload(payload, &self.key_pair, endpoint)?;
         let (max_clock_drift, transaction_params, crypto) = {
             let world = self.state.world_view();
             let params = world.parameters();
@@ -336,17 +367,28 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
     }
 }
 
-fn sign_soracloud_runtime_submission_transaction(
+fn build_soracloud_runtime_submission_payload(
     chain_id: ChainId,
     authority: AccountId,
     instruction: InstructionBox,
-    metadata: Metadata,
+    fee_payment: iroha_data_model::transaction::FeePaymentIntent,
+    endpoint: &'static str,
+) -> eyre::Result<TransactionPayload> {
+    TransactionBuilder::new(chain_id, authority, fee_payment)
+        .with_instructions([instruction])
+        .into_payload()
+        .wrap_err_with(|| format!("build internal Soracloud runtime mutation at `{endpoint}`"))
+}
+
+fn sign_soracloud_runtime_submission_payload(
+    payload: TransactionPayload,
     key_pair: &KeyPair,
     endpoint: &'static str,
 ) -> eyre::Result<SignedTransaction> {
-    TransactionBuilder::new(chain_id, authority)
-        .with_instructions([instruction])
-        .with_metadata(metadata)
+    TransactionBuilder::from_payload(payload)
+        .wrap_err_with(|| {
+            format!("rebuild quoted internal Soracloud runtime mutation at `{endpoint}`")
+        })?
         .try_sign(key_pair.private_key())
         .wrap_err_with(|| format!("sign internal Soracloud runtime mutation at `{endpoint}`"))
 }
@@ -357,52 +399,6 @@ fn sign_soracloud_runtime_provenance(
     context: &'static str,
 ) -> eyre::Result<iroha_crypto::Signature> {
     iroha_crypto::Signature::try_new(key_pair.private_key(), payload).wrap_err(context)
-}
-
-fn soracloud_runtime_submission_metadata(state: &State, gas_asset_id: Option<&str>) -> Metadata {
-    let mut metadata = Metadata::default();
-    if let Some(asset_id) = gas_asset_id
-        .map(str::trim)
-        .filter(|asset_id| !asset_id.is_empty())
-        .map(|asset_id| canonicalize_or_preserve_runtime_gas_asset_id(state, asset_id.to_owned()))
-    {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        metadata.insert(gas_asset_key, Json::new(asset_id));
-    }
-
-    metadata
-}
-
-fn canonicalize_or_preserve_runtime_gas_asset_id(state: &State, asset_id: String) -> String {
-    let trimmed = asset_id.trim();
-    if trimmed.is_empty() {
-        return asset_id;
-    }
-
-    let world = state.world_view();
-    if let Ok(definition_id) = trimmed.parse::<AssetDefinitionId>() {
-        if world.asset_definition(&definition_id).is_ok() {
-            return definition_id.to_string();
-        }
-        return trimmed.to_owned();
-    }
-
-    if let Ok(alias) = trimmed.parse::<AssetDefinitionAlias>() {
-        let now_ms = state
-            .latest_block_header_fast()
-            .map(|header| header.creation_time_ms)
-            .unwrap_or(0);
-        if let Some(definition_id) = world.asset_definition_id_by_alias_at(&alias, now_ms) {
-            return definition_id.to_string();
-        }
-    }
-
-    iroha_logger::warn!(
-        asset = %trimmed,
-        "failed to canonicalize Soracloud runtime gas asset id; preserving configured value"
-    );
-    trimmed.to_owned()
 }
 
 fn current_host_inrou_guest_isa() -> SoraInrouGuestIsaV1 {
@@ -1248,7 +1244,9 @@ impl Drop for SoracloudIvmRuntimeLease<'_> {
         let Some(mut vm) = self.vm.take() else {
             return;
         };
-        vm.reset_from_runtime_template(&self.template);
+        if vm.reset_from_runtime_template(&self.template).is_err() {
+            return;
+        }
         SoracloudPreparedRuntimeCounters::increment(&self.cache.counters.dirty_resets);
         self.cache.return_runtime(self.key, self.generation, vm);
     }
@@ -3705,8 +3703,9 @@ impl SoracloudRuntimeManager {
             let bundle_registry = collect_service_revision_registry(&view);
             let inrou_host_capability_refresh =
                 self.local_inrou_host_capability_refresh_candidate(&view);
-            let inrou_placement_reconcile_needed =
-                self.inrou_placement_reconcile_needed(&view, &bundle_registry);
+            let inrou_placement_reconcile_needed = self
+                .inrou_placement_reconcile_needed(&view, &bundle_registry)
+                .wrap_err("calculate whether Inrou placement reconciliation is needed")?;
             let initial_snapshot = build_runtime_snapshot(
                 &view,
                 &bundle_registry,
@@ -4277,14 +4276,14 @@ impl SoracloudRuntimeManager {
         &self,
         view: &StateView<'_>,
         bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
-    ) -> bool {
+    ) -> Result<bool, NumericOperationError> {
         let world = view.world();
         let current_sequence = current_soracloud_service_sequence(world);
         let now_ms = soracloud_runtime_observed_at_ms();
         let mut desired_records = BTreeMap::<(String, String), u16>::new();
 
         for (service_name, deployment) in world.soracloud_service_deployments().iter() {
-            if !deployment.hosted_service_lease_active_at(current_sequence) {
+            if !deployment.hosted_service_lease_active_at(current_sequence)? {
                 continue;
             }
 
@@ -4312,19 +4311,19 @@ impl SoracloudRuntimeManager {
                 let key = (service_name.as_ref().to_owned(), service_version.clone());
                 desired_records.insert(key.clone(), bundle.service.replicas.get());
                 let Some(record) = world.soracloud_inrou_service_placements().get(&key) else {
-                    return true;
+                    return Ok(true);
                 };
                 if record.desired_replica_count != bundle.service.replicas.get()
                     || record.placements.len() > usize::from(record.desired_replica_count)
                 {
-                    return true;
+                    return Ok(true);
                 }
                 for placement in &record.placements {
                     let Some(capability) = world
                         .soracloud_inrou_host_capabilities()
                         .get(&placement.validator_account_id)
                     else {
-                        return true;
+                        return Ok(true);
                     };
                     if !capability.can_host_replicas_at(now_ms)
                         || capability.peer_id != placement.peer_id
@@ -4335,13 +4334,13 @@ impl SoracloudRuntimeManager {
                             .supported_guest_isas
                             .contains(&placement.selected_guest_isa)
                     {
-                        return true;
+                        return Ok(true);
                     }
                 }
             }
         }
 
-        world
+        Ok(world
             .soracloud_inrou_service_placements()
             .iter()
             .any(|(key, record)| {
@@ -4350,7 +4349,7 @@ impl SoracloudRuntimeManager {
                     .is_none_or(|desired_replica_count| {
                         *desired_replica_count != record.desired_replica_count
                     })
-            })
+            }))
     }
 
     fn request_inrou_placement_reconcile_if_needed(&self, needed: bool) {
@@ -10384,9 +10383,13 @@ fn build_runtime_snapshot(
                 &service_name,
                 &service_version,
             );
+            let service_lease_status =
+                deployment.hosted_service_lease_status_at(current_sequence)?;
+            let remaining_runtime_balance =
+                deployment.hosted_service_remaining_balance(current_sequence)?;
             let hosted_http_lease_active = bundle.service.execution_plane
                 != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
-                || (deployment.hosted_service_lease_active_at(current_sequence)
+                || (service_lease_status == Some(SoraServiceLeaseStatusV1::Active)
                     && lease_volumes
                         .iter()
                         .all(|volume| current_sequence < volume.lease_expires_sequence));
@@ -10448,19 +10451,18 @@ fn build_runtime_snapshot(
                     lease.lease_expires_sequence.to_string(),
                 );
                 effective_env.insert(
-                    "SORACLOUD_SERVICE_PREPAID_BALANCE_NANOS".to_owned(),
-                    lease.prepaid_runtime_balance_nanos.to_string(),
+                    "SORACLOUD_SERVICE_PREPAID_BALANCE".to_owned(),
+                    lease.prepaid_runtime_balance.to_string(),
                 );
                 effective_env.insert(
                     "SORACLOUD_SERVICE_QUOTA_CLASS".to_owned(),
                     lease.quota_class.clone(),
                 );
                 effective_env.insert(
-                    "SORACLOUD_SERVICE_REMAINING_BALANCE_NANOS".to_owned(),
-                    deployment
-                        .hosted_service_remaining_balance_nanos(current_sequence)
-                        .unwrap_or_default()
-                        .to_string(),
+                    "SORACLOUD_SERVICE_REMAINING_BALANCE".to_owned(),
+                    remaining_runtime_balance
+                        .as_ref()
+                        .map_or_else(|| "0".to_owned(), ToString::to_string),
                 );
             }
             for volume in &lease_volumes {
@@ -10566,13 +10568,12 @@ fn build_runtime_snapshot(
                     .service_lease
                     .as_ref()
                     .map(|lease| lease.quota_class.clone()),
-                service_lease_status: deployment.hosted_service_lease_status_at(current_sequence),
+                service_lease_status,
                 lease_expires_sequence: deployment
                     .service_lease
                     .as_ref()
                     .map(|lease| lease.lease_expires_sequence),
-                remaining_runtime_balance_nanos: deployment
-                    .hosted_service_remaining_balance_nanos(current_sequence),
+                remaining_runtime_balance,
                 config_entry_count: u32::try_from(deployment.service_configs.len())
                     .unwrap_or(u32::MAX),
                 secret_entry_count: u32::try_from(deployment.service_secrets.len())
@@ -11243,9 +11244,20 @@ fn vm_error_label(error: &VMError) -> &'static str {
         VMError::HostUnavailable => "host_unavailable",
         VMError::NotImplemented { .. } => "not_implemented",
         VMError::SyscallGasQuoteExceeded { .. } => "syscall_gas_quote_exceeded",
+        VMError::SyscallMeteringModeMismatch { .. } => "syscall_metering_mode_mismatch",
+        VMError::GasCostOverflow => "gas_cost_overflow",
+        VMError::SyscallOutOfGas { .. } => "syscall_out_of_gas",
+        VMError::NumericFault(_) => "numeric_fault",
+        VMError::PointerAbiFault(_) => "pointer_abi_fault",
         VMError::AssertionFailed => "assertion_failed",
         VMError::ExceededMaxCycles => "exceeded_max_cycles",
         VMError::InvalidMetadata => "invalid_metadata",
+        VMError::UnsupportedProgramVersion { .. } => "unsupported_program_version",
+        VMError::UnsupportedProgramFeatureBits { .. } => "unsupported_program_feature_bits",
+        VMError::UnsupportedProgramAbiVersion { .. } => "unsupported_program_abi_version",
+        VMError::ProgramVectorLengthTooLarge { .. } => "program_vector_length_too_large",
+        VMError::ArtifactAbiHashMismatch { .. } => "artifact_abi_hash_mismatch",
+        VMError::GenericSyscallNotAllowed { .. } => "generic_syscall_not_allowed",
         VMError::InvalidVectorLength { .. } => "invalid_vector_length",
         VMError::MissingHalt => "missing_halt",
         VMError::VectorExtensionDisabled => "vector_disabled",
@@ -14961,7 +14973,7 @@ mod tests {
             ReplicationOrderStatus,
         },
     };
-    use iroha_primitives::json::Json;
+    use iroha_primitives::{json::Json, numeric::Quantity};
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
@@ -14977,8 +14989,8 @@ mod tests {
         ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
         ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderVrfPublicKeyV1,
         QosHints, RendezvousTopic, SignatureAlgorithm, StakePointer, StreamBudgetV1,
-        TransportHintV1, compute_advert_body_digest, compute_envelope_authorization_digest,
-        compute_proposal_digest,
+        TransportHintV1, XorQuantity, compute_advert_body_digest,
+        compute_envelope_authorization_digest, compute_proposal_digest,
     };
 
     fn encoded_soracloud_response_len(
@@ -15460,11 +15472,15 @@ mod tests {
     #[test]
     fn runtime_submission_transaction_checked_signing_verifies() -> Result<()> {
         let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
-        let tx = sign_soracloud_runtime_submission_transaction(
+        let payload = build_soracloud_runtime_submission_payload(
             ChainId::from("soracloud-runtime-sign-test"),
             authority.clone(),
             InstructionBox::from(Log::new(Level::INFO, "checked runtime signing".into())),
-            Metadata::default(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            "/internal/soracloud/runtime/test",
+        )?;
+        let tx = sign_soracloud_runtime_submission_payload(
+            payload,
             &ALICE_KEYPAIR,
             "/internal/soracloud/runtime/test",
         )?;
@@ -15580,31 +15596,44 @@ mod tests {
     }
 
     #[test]
-    fn soracloud_runtime_submission_metadata_uses_explicit_gas_asset() -> Result<()> {
-        let state = test_state()?;
+    fn soracloud_runtime_submission_payload_binds_fee_intent_without_legacy_metadata() -> Result<()>
+    {
+        let authority = AccountId::new(ALICE_KEYPAIR.public_key().clone());
+        let intent = iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None);
+        let payload = build_soracloud_runtime_submission_payload(
+            ChainId::from("soracloud-runtime-fee-intent-test"),
+            authority,
+            InstructionBox::from(Log::new(Level::INFO, "fee intent".into())),
+            intent.clone(),
+            "/internal/soracloud/runtime/test",
+        )?;
 
-        let metadata =
-            soracloud_runtime_submission_metadata(state.as_ref(), Some("  configured-gas  "));
-
-        assert_eq!(
-            metadata
-                .get("gas_asset_id")
-                .expect("gas metadata")
-                .as_ref()
-                .to_string(),
-            "configured-gas"
-        );
+        assert_eq!(payload.fee_payment, intent);
+        assert!(payload.metadata.get("gas_asset_id").is_none());
+        assert!(payload.metadata.get("fee_sponsor").is_none());
         Ok(())
     }
 
     #[test]
-    fn soracloud_runtime_submission_metadata_omits_missing_gas_asset() -> Result<()> {
-        let state = test_state()?;
+    fn soracloud_runtime_submission_builds_exact_sponsor_revision() {
+        let program_id = iroha_data_model::nexus::FeeSponsorProgramId::new(
+            AccountId::new(ALICE_KEYPAIR.public_key().clone()),
+            "runtime".parse().expect("program name"),
+        );
+        let submission = iroha_config::parameters::actual::SoracloudRuntimeSubmission {
+            fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Sponsor {
+                program_id: program_id.clone(),
+                program_revision: 7,
+            },
+        };
 
-        let metadata = soracloud_runtime_submission_metadata(state.as_ref(), None);
-
-        assert!(metadata.get("gas_asset_id").is_none());
-        Ok(())
+        let iroha_data_model::transaction::FeePaymentIntent::Sponsor(intent) =
+            submission.fee_payment_intent()
+        else {
+            panic!("sponsor config must create a sponsor fee intent");
+        };
+        assert_eq!(intent.program_id, program_id);
+        assert_eq!(intent.program_revision, 7);
     }
 
     fn sample_hf_resource_profile_for_tests() -> SoraHfResourceProfileV1 {
@@ -15673,11 +15702,11 @@ mod tests {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
                 status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
                 quota_class: "taira-open".to_owned(),
-                deployment_deposit_nanos: 1_000_000_000,
-                prepaid_runtime_balance_nanos: 50_000_000_000,
-                runtime_nanos_per_sequence: 250_000,
-                storage_nanos_per_gib_sequence: 25_000,
-                egress_nanos_per_mib: 5_000,
+                deployment_deposit: "1".parse().expect("deployment deposit"),
+                prepaid_runtime_balance: "50".parse().expect("runtime balance"),
+                runtime_price_per_sequence: "0.00025".parse().expect("runtime price"),
+                storage_price_per_gib_sequence: "0.000025".parse().expect("storage price"),
+                egress_price_per_mib: "0.000005".parse().expect("egress price"),
                 lease_started_sequence: 0,
                 lease_expires_sequence: 100,
                 last_billed_sequence: 0,
@@ -16820,7 +16849,8 @@ mod tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: [0x21; 32],
-                stake_amount: 1_000,
+                stake_amount: XorQuantity::try_from_micro(1_000)
+                    .expect("fixture stake is representable"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -16990,8 +17020,8 @@ mod tests {
             for fixture in fixtures {
                 let policy = PinPolicy::default();
                 let content_length = fixture.payload.len() as u64;
-                let amount_nano = pricing
-                    .public_pin_fee_nano(
+                let amount = pricing
+                    .public_pin_fee(
                         policy.storage_class,
                         content_length,
                         policy.min_replicas,
@@ -17016,7 +17046,7 @@ mod tests {
                     paid_by: (*ALICE_ID).clone(),
                     fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
                     treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
-                    amount_nano,
+                    amount,
                 });
                 record.approve(fixture.issued_epoch, None);
                 pin_manifests.insert(fixture.manifest_digest, record);
@@ -17353,7 +17383,7 @@ mod tests {
                     source_id,
                     storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
                     lease_asset_definition_id,
-                    base_fee_nanos: 10_000,
+                    base_fee: "0.00001".parse().expect("base fee"),
                     lease_term_ms: 60_000,
                     window_started_at_ms: 10,
                     window_expires_at_ms: 60_010,
@@ -17374,12 +17404,12 @@ mod tests {
                     status: SoraHfSharedLeaseMemberStatusV1::Active,
                     joined_at_ms: 10,
                     updated_at_ms: 20,
-                    total_paid_nanos: 10_000,
-                    total_refunded_nanos: 0,
-                    last_charge_nanos: 10_000,
-                    total_compute_paid_nanos: 0,
-                    total_compute_refunded_nanos: 0,
-                    last_compute_charge_nanos: 0,
+                    total_paid: "0.00001".parse().expect("total paid"),
+                    total_refunded: Quantity::zero(),
+                    last_charge: "0.00001".parse().expect("last charge"),
+                    total_compute_paid: Quantity::zero(),
+                    total_compute_refunded: Quantity::zero(),
+                    last_compute_charge: Quantity::zero(),
                     service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                     apartment_bindings: BTreeSet::new(),
                 },
@@ -17481,7 +17511,7 @@ mod tests {
                     adaptive_target_host_count: u16::try_from(assigned_hosts.len())
                         .expect("assigned host count fits in u16"),
                     assigned_hosts,
-                    total_reservation_fee_nanos: 20_000,
+                    total_reservation_fee: "0.00002".parse().expect("total reservation fee"),
                     last_rebalance_at_ms: 20,
                     last_error: None,
                 },
@@ -17649,8 +17679,8 @@ mod tests {
             let policy = PinPolicy::default();
             let submitted_epoch = 1;
             let content_length = manifest.content_length();
-            let amount_nano = pricing
-                .public_pin_fee_nano(
+            let amount = pricing
+                .public_pin_fee(
                     policy.storage_class,
                     content_length,
                     policy.min_replicas,
@@ -17681,7 +17711,7 @@ mod tests {
                 paid_by: (*ALICE_ID).clone(),
                 fee_asset_id: state.gov.sorafs_pin_fee_asset_id.clone(),
                 treasury_account_id: state.gov.sorafs_pin_fee_treasury_account.clone(),
-                amount_nano,
+                amount,
             });
             record.approve(submitted_epoch, None);
             pin_manifests.insert(digest, record);
@@ -17715,7 +17745,7 @@ mod tests {
                 proxy_only: false,
             },
             submission: iroha_config::parameters::actual::SoracloudRuntimeSubmission {
-                gas_asset_id: Some("xor#wonderland".to_owned()),
+                fee_payer: iroha_config::parameters::actual::SoracloudRuntimeFeePayer::Authority,
             },
             egress: iroha_config::parameters::actual::SoracloudRuntimeEgress {
                 default_allow: false,
@@ -17761,7 +17791,6 @@ mod tests {
             ..Default::default()
         };
         runtime.inrou.enabled = true;
-        runtime.submission.gas_asset_id = Some("xor#wonderland".to_owned());
         runtime.egress.default_allow = true;
         runtime.egress.rate_per_minute = std::num::NonZeroU32::new(60);
         runtime.egress.max_bytes_per_minute = std::num::NonZeroU64::new(1_048_576);
@@ -18498,7 +18527,7 @@ mod tests {
                         source_id,
                         storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
                         lease_asset_definition_id,
-                        base_fee_nanos: 10_000,
+                        base_fee: "0.00001".parse().expect("base fee"),
                         lease_term_ms: 60_000,
                         window_started_at_ms: 10,
                         window_expires_at_ms: 60_010,
@@ -18519,12 +18548,12 @@ mod tests {
                         status: SoraHfSharedLeaseMemberStatusV1::Active,
                         joined_at_ms: 10,
                         updated_at_ms: 20,
-                        total_paid_nanos: 10_000,
-                        total_refunded_nanos: 0,
-                        last_charge_nanos: 10_000,
-                        total_compute_paid_nanos: 0,
-                        total_compute_refunded_nanos: 0,
-                        last_compute_charge_nanos: 0,
+                        total_paid: "0.00001".parse().expect("total paid"),
+                        total_refunded: Quantity::zero(),
+                        last_charge: "0.00001".parse().expect("last charge"),
+                        total_compute_paid: Quantity::zero(),
+                        total_compute_refunded: Quantity::zero(),
+                        last_compute_charge: Quantity::zero(),
                         service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                         apartment_bindings: BTreeSet::new(),
                     },
@@ -18700,7 +18729,7 @@ mod tests {
                         source_id,
                         storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
                         lease_asset_definition_id,
-                        base_fee_nanos: 10_000,
+                        base_fee: "0.00001".parse().expect("base fee"),
                         lease_term_ms: 60_000,
                         window_started_at_ms: 10,
                         window_expires_at_ms: 60_010,
@@ -18721,12 +18750,12 @@ mod tests {
                         status: SoraHfSharedLeaseMemberStatusV1::Active,
                         joined_at_ms: 10,
                         updated_at_ms: 20,
-                        total_paid_nanos: 10_000,
-                        total_refunded_nanos: 0,
-                        last_charge_nanos: 10_000,
-                        total_compute_paid_nanos: 0,
-                        total_compute_refunded_nanos: 0,
-                        last_compute_charge_nanos: 0,
+                        total_paid: "0.00001".parse().expect("total paid"),
+                        total_refunded: Quantity::zero(),
+                        last_charge: "0.00001".parse().expect("last charge"),
+                        total_compute_paid: Quantity::zero(),
+                        total_compute_refunded: Quantity::zero(),
+                        last_compute_charge: Quantity::zero(),
                         service_bindings: BTreeSet::from([bundle.service.service_name.to_string()]),
                         apartment_bindings: BTreeSet::from([apartment_manifest
                             .apartment_name
@@ -22400,7 +22429,7 @@ mod tests {
                         quota_class: None,
                         service_lease_status: None,
                         lease_expires_sequence: None,
-                        remaining_runtime_balance_nanos: None,
+                        remaining_runtime_balance: None,
                         config_entry_count: 0,
                         secret_entry_count: 0,
                         config_exports: Vec::new(),

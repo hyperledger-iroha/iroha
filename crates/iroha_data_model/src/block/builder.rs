@@ -320,12 +320,20 @@ mod tests {
                 .unwrap();
 
         // Two txs
-        let tx1 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(&private_key);
-        let tx2 = TransactionBuilder::new(chain.clone(), authority.clone())
-            .with_instructions(core::iter::empty::<InstructionBox>())
-            .sign(&private_key);
+        let tx1 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(&private_key);
+        let tx2 = TransactionBuilder::new(
+            chain.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(core::iter::empty::<InstructionBox>())
+        .sign(&private_key);
         // One trigger
         let trig = TimeTriggerEntrypoint {
             id: "test_trigger".parse().unwrap(),

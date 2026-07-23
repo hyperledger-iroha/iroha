@@ -6,17 +6,14 @@
 
 use std::cmp::Ordering;
 
+use iroha_primitives::numeric::{Numeric, NumericOperationError, Quantity, RoundingMode};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
     metadata::Metadata,
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::StorageClass,
-        pricing::{PricingComputationError, checked_mul_div_floor_u128},
-    },
+    sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
 
 /// Client identifier (BLAKE3-256 digest allocated during admission).
@@ -104,26 +101,28 @@ impl TicketId {
 pub const GIB_HOURS_PER_MONTH: u128 = 720;
 /// Bytes per gibibyte (2³⁰).
 pub const BYTES_PER_GIB: u128 = 1 << 30;
+/// Ledger precision used by XOR-denominated deal charges.
+pub const XOR_QUANTITY_SCALE: u32 = 9;
 /// Maximum micropayment tickets accepted in one usage report.
 pub const MAX_DEAL_USAGE_TICKETS: usize = 4_096;
 
 /// Commercial terms negotiated for a deal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DealTerms {
-    /// Storage price in nano-XOR per GiB-month.
-    pub storage_price_nano_per_gib_month: u64,
-    /// Egress price in nano-XOR per gibibyte.
-    pub egress_price_nano_per_gib: u64,
+    /// Nominal storage price per GiB-month.
+    pub storage_price_per_gib_month: Quantity,
+    /// Nominal egress price per gibibyte.
+    pub egress_price_per_gib: Quantity,
     /// Number of epochs in a settlement window.
     pub settlement_window_epochs: u64,
     /// Probability (basis points) that an individual ticket pays out.
     pub micropayment_probability_bps: u16,
-    /// Payout when a ticket wins, denominated in nano-XOR.
-    pub micropayment_payout_nano: u64,
+    /// Nominal payout when a ticket wins.
+    pub micropayment_payout: Quantity,
 }
 
 impl DealTerms {
@@ -134,10 +133,10 @@ impl DealTerms {
     /// Returns [`DealTermsValidationError`] when any monetary or timing term is
     /// zero, or the ticket probability is outside `1..=10_000` basis points.
     pub fn validate(&self) -> Result<(), DealTermsValidationError> {
-        if self.storage_price_nano_per_gib_month == 0 {
+        if self.storage_price_per_gib_month.is_zero() {
             return Err(DealTermsValidationError::ZeroStoragePrice);
         }
-        if self.egress_price_nano_per_gib == 0 {
+        if self.egress_price_per_gib.is_zero() {
             return Err(DealTermsValidationError::ZeroEgressPrice);
         }
         if self.settlement_window_epochs == 0 {
@@ -148,7 +147,7 @@ impl DealTerms {
                 self.micropayment_probability_bps,
             ));
         }
-        if self.micropayment_payout_nano == 0 {
+        if self.micropayment_payout.is_zero() {
             return Err(DealTermsValidationError::ZeroMicropaymentPayout);
         }
         Ok(())
@@ -157,52 +156,48 @@ impl DealTerms {
     /// Compute the bond requirement (3× monthly storage earnings).
     ///
     /// # Errors
-    ///
-    /// Returns [`DealComputationError`] if the exact requirement exceeds
-    /// `u128` or the deal terms are invalid.
-    pub fn bond_requirement_nano(&self, capacity_gib: u64) -> Result<u128, DealComputationError> {
+    /// Returns [`DealComputationError`] if the exact requirement exceeds the
+    /// bounded quantity domain or the deal terms are invalid.
+    pub fn bond_requirement(&self, capacity_gib: u64) -> Result<Quantity, DealComputationError> {
         self.validate()?;
         if capacity_gib == 0 {
             return Err(DealComputationError::ZeroCapacity);
         }
-        let monthly_storage = u128::from(self.storage_price_nano_per_gib_month)
-            .checked_mul(u128::from(capacity_gib))
-            .ok_or(PricingComputationError::ArithmeticOverflow(
-                "deal monthly storage bond",
-            ))?;
-        Ok(monthly_storage
-            .checked_mul(3)
-            .ok_or(PricingComputationError::ArithmeticOverflow(
-                "deal bond requirement",
-            ))?)
+        let factor = Numeric::new(u128::from(capacity_gib) * 3, 0);
+        Ok(self.storage_price_per_gib_month.try_mul_decimal(&factor)?)
     }
 
     /// Compute the deterministic storage charge for `gib_hours`.
     ///
-    /// # Errors
+    /// Fractional asset units are rounded toward zero at the rate's canonical
+    /// scale; the rounding policy is explicit and consensus-visible.
     ///
-    /// Returns [`DealComputationError`] if exact arithmetic fails or the
-    /// deal terms are invalid.
-    pub fn storage_charge_nano(&self, gib_hours: u128) -> Result<u128, DealComputationError> {
+    /// # Errors
+    /// Returns [`DealComputationError`] if arithmetic fails or the deal terms
+    /// are invalid.
+    pub fn storage_charge(&self, gib_hours: u128) -> Result<Quantity, DealComputationError> {
         self.validate()?;
-        let price = u128::from(self.storage_price_nano_per_gib_month);
-        Ok(checked_mul_div_floor_u128(
-            price,
-            gib_hours,
-            GIB_HOURS_PER_MONTH,
+        Ok(self.storage_price_per_gib_month.try_mul_div_decimal_round(
+            &Numeric::new(gib_hours, 0),
+            &Numeric::new(GIB_HOURS_PER_MONTH, 0),
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
         )?)
     }
 
     /// Compute the deterministic egress charge for the supplied bytes.
     ///
     /// # Errors
-    ///
-    /// Returns [`DealComputationError`] if exact arithmetic fails or the
-    /// deal terms are invalid.
-    pub fn egress_charge_nano(&self, bytes: u128) -> Result<u128, DealComputationError> {
+    /// Returns [`DealComputationError`] if arithmetic fails or the deal terms
+    /// are invalid.
+    pub fn egress_charge(&self, bytes: u128) -> Result<Quantity, DealComputationError> {
         self.validate()?;
-        let price = u128::from(self.egress_price_nano_per_gib);
-        Ok(checked_mul_div_floor_u128(price, bytes, BYTES_PER_GIB)?)
+        Ok(self.egress_price_per_gib.try_mul_div_decimal_round(
+            &Numeric::new(bytes, 0),
+            &Numeric::new(BYTES_PER_GIB, 0),
+            XOR_QUANTITY_SCALE,
+            RoundingMode::TowardZero,
+        )?)
     }
 }
 
@@ -227,14 +222,14 @@ pub enum DealTermsValidationError {
 }
 
 /// Errors raised while computing charges from validated deal terms.
-#[derive(Clone, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
 pub enum DealComputationError {
     /// The deal terms are structurally invalid.
     #[error("invalid deal terms: {0}")]
     InvalidTerms(#[from] DealTermsValidationError),
     /// Exact deterministic arithmetic failed.
     #[error("deal arithmetic failed: {0}")]
-    Arithmetic(#[from] PricingComputationError),
+    Arithmetic(#[from] NumericOperationError),
     /// Bond calculations require positive committed capacity.
     #[error("deal capacity must be positive")]
     ZeroCapacity,
@@ -623,7 +618,7 @@ pub enum DealUsageValidationError {
 }
 
 /// Settlement ledger entry recorded after a billing cycle completes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -648,15 +643,15 @@ pub struct DealSettlementRecord {
     /// Total egress bytes billed within the window.
     pub billed_egress_bytes: u128,
     /// Expected deterministic charge.
-    pub expected_charge_nano: u128,
+    pub expected_charge: Quantity,
     /// Credit obtained through micropayments.
-    pub micropayment_credit_nano: u128,
+    pub micropayment_credit: Quantity,
     /// Client credit debited during settlement.
-    pub client_credit_debit_nano: u128,
+    pub client_credit_debit: Quantity,
     /// Bond amount slashed to cover arrears.
-    pub bond_slash_nano: u128,
+    pub bond_slash: Quantity,
     /// Outstanding balance carried forward.
-    pub outstanding_nano: u128,
+    pub outstanding: Quantity,
 }
 
 impl DealSettlementRecord {
@@ -693,14 +688,14 @@ impl DealSettlementRecord {
             });
         }
         let accounted = self
-            .micropayment_credit_nano
-            .checked_add(self.client_credit_debit_nano)
-            .and_then(|total| total.checked_add(self.bond_slash_nano))
-            .and_then(|total| total.checked_add(self.outstanding_nano))
-            .ok_or(DealSettlementValidationError::AccountingOverflow)?;
-        if accounted != self.expected_charge_nano {
+            .micropayment_credit
+            .checked_add(&self.client_credit_debit)
+            .and_then(|total| total.checked_add(&self.bond_slash))
+            .and_then(|total| total.checked_add(&self.outstanding))
+            .map_err(|_| DealSettlementValidationError::AccountingOverflow)?;
+        if accounted != self.expected_charge {
             return Err(DealSettlementValidationError::ChargeConservation {
-                expected: self.expected_charge_nano,
+                expected: self.expected_charge.clone(),
                 accounted,
             });
         }
@@ -709,7 +704,7 @@ impl DealSettlementRecord {
 }
 
 /// Errors raised while validating a settlement ledger record.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum DealSettlementValidationError {
     /// Provider identifiers must be nonzero.
     #[error("settlement provider identifier must be nonzero")]
@@ -746,9 +741,9 @@ pub enum DealSettlementValidationError {
     #[error("settlement accounted charge {accounted} does not equal expected {expected}")]
     ChargeConservation {
         /// Expected deterministic charge.
-        expected: u128,
+        expected: Quantity,
         /// Sum of all settlement destinations.
-        accounted: u128,
+        accounted: Quantity,
     },
 }
 
@@ -776,7 +771,7 @@ impl Ord for DealSettlementRecord {
 }
 
 /// Provider bond ledger entry tracked by governance.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -784,14 +779,14 @@ impl Ord for DealSettlementRecord {
 pub struct ProviderBondLedgerEntry {
     /// Provider identifier.
     pub provider_id: ProviderId,
-    /// Total nano-XOR currently bonded.
-    pub bonded_nano: u128,
+    /// Total nominal quantity currently bonded.
+    pub bonded: Quantity,
     /// Portion of the bond locked against active deals.
-    pub locked_nano: u128,
-    /// Total nano-XOR slashed to date.
-    pub slashed_nano: u128,
-    /// Total nano-XOR released back to the provider.
-    pub released_nano: u128,
+    pub locked: Quantity,
+    /// Total nominal quantity slashed to date.
+    pub slashed: Quantity,
+    /// Total nominal quantity released back to the provider.
+    pub released: Quantity,
     /// Epoch when the ledger was last updated.
     pub last_updated_epoch: u64,
 }
@@ -804,37 +799,31 @@ impl ProviderBondLedgerEntry {
     /// Returns [`BondLedgerMutationError::LockedExceedsBonded`] when persisted
     /// state is internally inconsistent.
     pub fn validate(&self) -> Result<(), BondLedgerMutationError> {
-        if self.locked_nano > self.bonded_nano {
+        if self.locked > self.bonded {
             return Err(BondLedgerMutationError::LockedExceedsBonded {
-                locked: self.locked_nano,
-                bonded: self.bonded_nano,
+                locked: self.locked.clone(),
+                bonded: self.bonded.clone(),
             });
         }
         Ok(())
     }
 
-    /// Lock an additional `amount` of nano-XOR against active deals.
+    /// Lock an additional nominal `amount` against active deals.
     ///
     /// # Errors
     ///
     /// Returns [`BondLedgerMutationError`] without mutation for inconsistent
     /// state, a backdated epoch, or arithmetic overflow.
-    pub fn lock(&mut self, amount: u128, epoch: u64) -> Result<(), BondLedgerMutationError> {
+    pub fn lock(&mut self, amount: &Quantity, epoch: u64) -> Result<(), BondLedgerMutationError> {
         self.validate()?;
         self.ensure_epoch(epoch)?;
-        if amount == 0 {
+        if amount.is_zero() {
             return Ok(());
         }
-        let locked_nano = self
-            .locked_nano
-            .checked_add(amount)
-            .ok_or(BondLedgerMutationError::CounterOverflow("locked bond"))?;
-        let bonded_nano = self
-            .bonded_nano
-            .checked_add(amount)
-            .ok_or(BondLedgerMutationError::CounterOverflow("total bond"))?;
-        self.locked_nano = locked_nano;
-        self.bonded_nano = bonded_nano;
+        let locked = self.locked.checked_add(amount)?;
+        let bonded = self.bonded.checked_add(amount)?;
+        self.locked = locked;
+        self.bonded = bonded;
         self.last_updated_epoch = epoch;
         Ok(())
     }
@@ -842,37 +831,27 @@ impl ProviderBondLedgerEntry {
     /// Slash a portion of the locked bond.
     ///
     /// # Errors
-    ///
     /// Returns [`BondLedgerMutationError`] without mutation when the requested
     /// slash exceeds locked collateral, the epoch is backdated, or accounting
     /// would overflow.
-    pub fn slash(&mut self, amount: u128, epoch: u64) -> Result<(), BondLedgerMutationError> {
+    pub fn slash(&mut self, amount: &Quantity, epoch: u64) -> Result<(), BondLedgerMutationError> {
         self.validate()?;
         self.ensure_epoch(epoch)?;
-        if amount == 0 {
+        if amount.is_zero() {
             return Ok(());
         }
-        if amount > self.locked_nano {
+        if amount > &self.locked {
             return Err(BondLedgerMutationError::AmountExceedsLocked {
-                requested: amount,
-                locked: self.locked_nano,
+                requested: amount.clone(),
+                locked: self.locked.clone(),
             });
         }
-        let locked_nano = self
-            .locked_nano
-            .checked_sub(amount)
-            .ok_or(BondLedgerMutationError::CounterUnderflow("locked bond"))?;
-        let bonded_nano = self
-            .bonded_nano
-            .checked_sub(amount)
-            .ok_or(BondLedgerMutationError::CounterUnderflow("total bond"))?;
-        let slashed_nano = self
-            .slashed_nano
-            .checked_add(amount)
-            .ok_or(BondLedgerMutationError::CounterOverflow("slashed bond"))?;
-        self.locked_nano = locked_nano;
-        self.bonded_nano = bonded_nano;
-        self.slashed_nano = slashed_nano;
+        let locked = self.locked.checked_sub(amount)?;
+        let bonded = self.bonded.checked_sub(amount)?;
+        let slashed = self.slashed.checked_add(amount)?;
+        self.locked = locked;
+        self.bonded = bonded;
+        self.slashed = slashed;
         self.last_updated_epoch = epoch;
         Ok(())
     }
@@ -880,37 +859,31 @@ impl ProviderBondLedgerEntry {
     /// Release a portion of the locked bond back to the provider.
     ///
     /// # Errors
-    ///
     /// Returns [`BondLedgerMutationError`] without mutation when the requested
     /// release exceeds locked collateral, the epoch is backdated, or accounting
     /// would overflow.
-    pub fn release(&mut self, amount: u128, epoch: u64) -> Result<(), BondLedgerMutationError> {
+    pub fn release(
+        &mut self,
+        amount: &Quantity,
+        epoch: u64,
+    ) -> Result<(), BondLedgerMutationError> {
         self.validate()?;
         self.ensure_epoch(epoch)?;
-        if amount == 0 {
+        if amount.is_zero() {
             return Ok(());
         }
-        if amount > self.locked_nano {
+        if amount > &self.locked {
             return Err(BondLedgerMutationError::AmountExceedsLocked {
-                requested: amount,
-                locked: self.locked_nano,
+                requested: amount.clone(),
+                locked: self.locked.clone(),
             });
         }
-        let locked_nano = self
-            .locked_nano
-            .checked_sub(amount)
-            .ok_or(BondLedgerMutationError::CounterUnderflow("locked bond"))?;
-        let bonded_nano = self
-            .bonded_nano
-            .checked_sub(amount)
-            .ok_or(BondLedgerMutationError::CounterUnderflow("total bond"))?;
-        let released_nano = self
-            .released_nano
-            .checked_add(amount)
-            .ok_or(BondLedgerMutationError::CounterOverflow("released bond"))?;
-        self.locked_nano = locked_nano;
-        self.bonded_nano = bonded_nano;
-        self.released_nano = released_nano;
+        let locked = self.locked.checked_sub(amount)?;
+        let bonded = self.bonded.checked_sub(amount)?;
+        let released = self.released.checked_add(amount)?;
+        self.locked = locked;
+        self.bonded = bonded;
+        self.released = released;
         self.last_updated_epoch = epoch;
         Ok(())
     }
@@ -927,23 +900,23 @@ impl ProviderBondLedgerEntry {
 }
 
 /// Errors raised while mutating provider bond accounting.
-#[derive(Clone, Copy, Debug, Error, PartialEq, Eq)]
+#[derive(Clone, Debug, Error, PartialEq, Eq)]
 pub enum BondLedgerMutationError {
     /// Locked collateral cannot exceed the current bond.
     #[error("locked collateral {locked} exceeds bonded collateral {bonded}")]
     LockedExceedsBonded {
         /// Locked collateral.
-        locked: u128,
+        locked: Quantity,
         /// Current bonded collateral.
-        bonded: u128,
+        bonded: Quantity,
     },
     /// Slash/release requests cannot exceed the locked amount.
     #[error("bond mutation amount {requested} exceeds locked collateral {locked}")]
     AmountExceedsLocked {
         /// Requested mutation.
-        requested: u128,
+        requested: Quantity,
         /// Available locked collateral.
-        locked: u128,
+        locked: Quantity,
     },
     /// A cumulative counter overflowed.
     #[error("bond ledger counter overflow while updating {0}")]
@@ -959,85 +932,144 @@ pub enum BondLedgerMutationError {
         /// Proposed update epoch.
         proposed: u64,
     },
+    /// Exact nominal arithmetic exceeded the bounded quantity domain.
+    #[error("bond ledger arithmetic failed: {0}")]
+    Arithmetic(#[from] NumericOperationError),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(value, 9))
+            .expect("u128 nano-XOR fixture fits Quantity")
+    }
+
+    fn maximum_quantity() -> Quantity {
+        "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed 512-bit maximum quantity")
+    }
+
+    #[derive(Encode)]
+    struct ForgedDealTerms {
+        storage_price_per_gib_month: Numeric,
+        egress_price_per_gib: Quantity,
+        settlement_window_epochs: u64,
+        micropayment_probability_bps: u16,
+        micropayment_payout: Quantity,
+    }
+
     #[test]
     fn bond_requirement_scales_with_capacity() {
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 500_000_000,
-            egress_price_nano_per_gib: 50_000_000,
+            storage_price_per_gib_month: quantity_nanos(500_000_000),
+            egress_price_per_gib: quantity_nanos(50_000_000),
             settlement_window_epochs: 7,
             micropayment_probability_bps: 500,
-            micropayment_payout_nano: 10_000_000,
+            micropayment_payout: quantity_nanos(10_000_000),
         };
 
-        let requirement = terms
-            .bond_requirement_nano(4)
-            .expect("valid bond requirement");
-        assert_eq!(requirement, 6_000_000_000);
+        let requirement = terms.bond_requirement(4).expect("bounded bond");
+        assert_eq!(requirement, quantity_nanos(6_000_000_000));
     }
 
     #[test]
     fn storage_charge_uses_gib_hours() {
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 720_000_000,
-            egress_price_nano_per_gib: 50_000_000,
+            storage_price_per_gib_month: quantity_nanos(720_000_000),
+            egress_price_per_gib: quantity_nanos(50_000_000),
             settlement_window_epochs: 7,
             micropayment_probability_bps: 500,
-            micropayment_payout_nano: 10_000_000,
+            micropayment_payout: quantity_nanos(10_000_000),
         };
 
-        let charge = terms
-            .storage_charge_nano(720)
-            .expect("valid storage charge");
-        assert_eq!(charge, 720_000_000);
+        let charge = terms.storage_charge(720).expect("bounded charge");
+        assert_eq!(charge, quantity_nanos(720_000_000));
+    }
+
+    #[test]
+    fn deal_charges_bound_only_the_final_ratio_result() {
+        let maximum = maximum_quantity();
+        let terms = DealTerms {
+            storage_price_per_gib_month: maximum.clone(),
+            egress_price_per_gib: maximum.clone(),
+            settlement_window_epochs: 7,
+            micropayment_probability_bps: 500,
+            micropayment_payout: Quantity::one(),
+        };
+
+        assert_eq!(
+            terms
+                .storage_charge(GIB_HOURS_PER_MONTH)
+                .expect("equal storage ratio cancels a wide product"),
+            maximum
+        );
+        assert_eq!(
+            terms
+                .egress_charge(BYTES_PER_GIB)
+                .expect("equal egress ratio cancels a wide product"),
+            terms.egress_price_per_gib
+        );
     }
 
     #[test]
     fn egress_charge_scales_with_bytes() {
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 720_000_000,
-            egress_price_nano_per_gib: 90_000_000,
+            storage_price_per_gib_month: quantity_nanos(720_000_000),
+            egress_price_per_gib: quantity_nanos(90_000_000),
             settlement_window_epochs: 7,
             micropayment_probability_bps: 500,
-            micropayment_payout_nano: 10_000_000,
+            micropayment_payout: quantity_nanos(10_000_000),
         };
 
-        let charge = terms
-            .egress_charge_nano(BYTES_PER_GIB)
-            .expect("valid egress charge");
-        assert_eq!(charge, 90_000_000);
+        let charge = terms.egress_charge(BYTES_PER_GIB).expect("bounded charge");
+        assert_eq!(charge, quantity_nanos(90_000_000));
+    }
+
+    #[test]
+    fn deal_terms_reject_forged_negative_price() {
+        let forged = ForgedDealTerms {
+            storage_price_per_gib_month: Numeric::new(-1_i32, 0),
+            egress_price_per_gib: quantity_nanos(1),
+            settlement_window_epochs: 7,
+            micropayment_probability_bps: 500,
+            micropayment_payout: quantity_nanos(1),
+        };
+        let encoded = forged.encode();
+        let mut input = encoded.as_slice();
+        assert!(
+            <DealTerms as Decode>::decode(&mut input).is_err(),
+            "deal terms must reject a forged negative storage price"
+        );
     }
 
     #[test]
     fn deal_terms_reject_zero_and_out_of_range_values() {
         let base = DealTerms {
-            storage_price_nano_per_gib_month: 1,
-            egress_price_nano_per_gib: 1,
+            storage_price_per_gib_month: quantity_nanos(1),
+            egress_price_per_gib: quantity_nanos(1),
             settlement_window_epochs: 1,
             micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
+            micropayment_payout: quantity_nanos(1),
         };
 
-        let mut candidate = base;
-        candidate.storage_price_nano_per_gib_month = 0;
+        let mut candidate = base.clone();
+        candidate.storage_price_per_gib_month = Quantity::zero();
         assert_eq!(
             candidate.validate(),
             Err(DealTermsValidationError::ZeroStoragePrice)
         );
 
-        candidate = base;
-        candidate.egress_price_nano_per_gib = 0;
+        candidate = base.clone();
+        candidate.egress_price_per_gib = Quantity::zero();
         assert_eq!(
             candidate.validate(),
             Err(DealTermsValidationError::ZeroEgressPrice)
         );
 
-        candidate = base;
+        candidate = base.clone();
         candidate.settlement_window_epochs = 0;
         assert_eq!(
             candidate.validate(),
@@ -1045,7 +1077,7 @@ mod tests {
         );
 
         for probability in [0, 10_001] {
-            candidate = base;
+            candidate = base.clone();
             candidate.micropayment_probability_bps = probability;
             assert_eq!(
                 candidate.validate(),
@@ -1056,7 +1088,7 @@ mod tests {
         }
 
         candidate = base;
-        candidate.micropayment_payout_nano = 0;
+        candidate.micropayment_payout = Quantity::zero();
         assert_eq!(
             candidate.validate(),
             Err(DealTermsValidationError::ZeroMicropaymentPayout)
@@ -1066,27 +1098,25 @@ mod tests {
     #[test]
     fn deal_arithmetic_rejects_overflow_instead_of_saturating() {
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: u64::MAX,
-            egress_price_nano_per_gib: u64::MAX,
+            storage_price_per_gib_month: maximum_quantity(),
+            egress_price_per_gib: maximum_quantity(),
             settlement_window_epochs: 1,
             micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
+            micropayment_payout: Quantity::one(),
         };
         assert!(matches!(
-            terms.bond_requirement_nano(u64::MAX),
-            Err(DealComputationError::Arithmetic(
-                PricingComputationError::ArithmeticOverflow(_)
-            ))
+            terms.bond_requirement(u64::MAX),
+            Err(DealComputationError::Arithmetic(_))
         ));
 
         assert_eq!(
-            terms.storage_charge_nano(0),
-            Ok(0),
+            terms.storage_charge(0),
+            Ok(Quantity::zero()),
             "zero usage remains a valid zero charge"
         );
-        assert_eq!(terms.egress_charge_nano(0), Ok(0));
+        assert_eq!(terms.egress_charge(0), Ok(Quantity::zero()));
         assert_eq!(
-            terms.bond_requirement_nano(0),
+            terms.bond_requirement(0),
             Err(DealComputationError::ZeroCapacity)
         );
     }
@@ -1094,11 +1124,11 @@ mod tests {
     #[test]
     fn deal_proposal_rejects_inert_identity_capacity_and_window() {
         let terms = DealTerms {
-            storage_price_nano_per_gib_month: 1,
-            egress_price_nano_per_gib: 1,
+            storage_price_per_gib_month: quantity_nanos(1),
+            egress_price_per_gib: quantity_nanos(1),
             settlement_window_epochs: 1,
             micropayment_probability_bps: 1,
-            micropayment_payout_nano: 1,
+            micropayment_payout: quantity_nanos(1),
         };
         let base = DealProposal {
             provider_id: ProviderId::new([1; 32]),
@@ -1246,15 +1276,15 @@ mod tests {
             window_end_epoch: 20,
             billed_storage_gib_hours: 1,
             billed_egress_bytes: 1,
-            expected_charge_nano: 100,
-            micropayment_credit_nano: 10,
-            client_credit_debit_nano: 20,
-            bond_slash_nano: 30,
-            outstanding_nano: 40,
+            expected_charge: quantity_nanos(100),
+            micropayment_credit: quantity_nanos(10),
+            client_credit_debit: quantity_nanos(20),
+            bond_slash: quantity_nanos(30),
+            outstanding: quantity_nanos(40),
         };
         assert_eq!(base.validate(), Ok(()));
 
-        let mut one_epoch = base;
+        let mut one_epoch = base.clone();
         one_epoch.window_end_epoch = one_epoch.window_start_epoch;
         one_epoch.settled_epoch = one_epoch.window_end_epoch;
         assert_eq!(
@@ -1274,15 +1304,15 @@ mod tests {
             Err(DealSettlementValidationError::InvalidWindow { .. })
         ));
 
-        let mut mismatch = base;
-        mismatch.outstanding_nano = 39;
+        let mut mismatch = base.clone();
+        mismatch.outstanding = quantity_nanos(39);
         assert!(matches!(
             mismatch.validate(),
             Err(DealSettlementValidationError::ChargeConservation { .. })
         ));
 
-        let mut overflow = base;
-        overflow.micropayment_credit_nano = u128::MAX;
+        let mut overflow = base.clone();
+        overflow.micropayment_credit = maximum_quantity();
         assert_eq!(
             overflow.validate(),
             Err(DealSettlementValidationError::AccountingOverflow)
@@ -1299,64 +1329,66 @@ mod tests {
     #[test]
     fn bond_ledger_mutations_are_checked_and_conservative() {
         let mut ledger = ProviderBondLedgerEntry::default();
-        ledger.lock(100, 1).expect("lock bond");
-        assert_eq!(ledger.bonded_nano, 100);
-        assert_eq!(ledger.locked_nano, 100);
+        ledger.lock(&quantity_nanos(100), 1).expect("lock bond");
+        assert_eq!(ledger.bonded, quantity_nanos(100));
+        assert_eq!(ledger.locked, quantity_nanos(100));
 
-        ledger.slash(30, 2).expect("slash bond");
-        ledger.release(20, 2).expect("release bond");
-        assert_eq!(ledger.bonded_nano, 50);
-        assert_eq!(ledger.locked_nano, 50);
-        assert_eq!(ledger.slashed_nano, 30);
-        assert_eq!(ledger.released_nano, 20);
+        ledger.slash(&quantity_nanos(30), 2).expect("slash bond");
+        ledger
+            .release(&quantity_nanos(20), 2)
+            .expect("release bond");
+        assert_eq!(ledger.bonded, quantity_nanos(50));
+        assert_eq!(ledger.locked, quantity_nanos(50));
+        assert_eq!(ledger.slashed, quantity_nanos(30));
+        assert_eq!(ledger.released, quantity_nanos(20));
     }
 
     #[test]
     fn bond_ledger_rejects_overdraw_backdating_and_overflow_atomically() {
         let mut ledger = ProviderBondLedgerEntry::default();
-        ledger.lock(10, 5).expect("lock bond");
-        let committed = ledger;
+        ledger.lock(&quantity_nanos(10), 5).expect("lock bond");
+        let committed = ledger.clone();
 
         assert!(matches!(
-            ledger.slash(11, 6),
+            ledger.slash(&quantity_nanos(11), 6),
             Err(BondLedgerMutationError::AmountExceedsLocked { .. })
         ));
         assert_eq!(ledger, committed);
         assert!(matches!(
-            ledger.release(1, 4),
+            ledger.release(&quantity_nanos(1), 4),
             Err(BondLedgerMutationError::BackdatedEpoch { .. })
         ));
         assert_eq!(ledger, committed);
 
-        ledger.slashed_nano = u128::MAX;
-        let slash_overflow = ledger;
+        ledger.slashed = maximum_quantity();
+        let slash_overflow = ledger.clone();
         assert!(matches!(
-            ledger.slash(1, 6),
-            Err(BondLedgerMutationError::CounterOverflow("slashed bond"))
+            ledger.slash(&quantity_nanos(1), 6),
+            Err(BondLedgerMutationError::Arithmetic(_))
         ));
         assert_eq!(ledger, slash_overflow);
 
         let mut corrupt = ProviderBondLedgerEntry {
-            bonded_nano: 1,
-            locked_nano: 2,
+            bonded: quantity_nanos(1),
+            locked: quantity_nanos(2),
             ..ProviderBondLedgerEntry::default()
         };
-        let corrupt_before = corrupt;
+        let corrupt_before = corrupt.clone();
         assert!(matches!(
-            corrupt.lock(1, 1),
+            corrupt.lock(&quantity_nanos(1), 1),
             Err(BondLedgerMutationError::LockedExceedsBonded { .. })
         ));
         assert_eq!(corrupt, corrupt_before);
 
         let mut lock_overflow = ProviderBondLedgerEntry {
-            bonded_nano: u128::MAX,
-            locked_nano: u128::MAX,
+            bonded: maximum_quantity(),
+            locked: maximum_quantity(),
             ..ProviderBondLedgerEntry::default()
         };
-        let lock_before = lock_overflow;
+        let lock_before = lock_overflow.clone();
         assert!(matches!(
-            lock_overflow.lock(1, 1),
-            Err(BondLedgerMutationError::CounterOverflow("locked bond"))
+            lock_overflow.lock(&quantity_nanos(1), 1),
+            Err(BondLedgerMutationError::Arithmetic(_))
         ));
         assert_eq!(lock_overflow, lock_before);
     }

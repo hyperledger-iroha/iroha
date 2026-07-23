@@ -7,6 +7,7 @@ import org.hyperledger.iroha.sdk.client.ClientResponse
 import org.hyperledger.iroha.sdk.client.IrohaClient
 import org.hyperledger.iroha.sdk.client.PipelineStatusOptions
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
 import org.hyperledger.iroha.sdk.core.model.instructions.TransferWirePayloadEncoder
@@ -70,6 +71,7 @@ data class NexusTransferInput @JvmOverloads constructor(
     @JvmField val sourceAssetId: String,
     @JvmField val quantity: String,
     @JvmField val destinationAccountId: String,
+    @JvmField val feePayment: FeePaymentIntent,
     @JvmField val authority: String? = null,
     @JvmField val signingPublicKey: ByteArray? = null,
     @JvmField val creationTimeMs: Long? = null,
@@ -86,7 +88,8 @@ data class NexusTransferInput @JvmOverloads constructor(
         sourceAssetId: String,
         quantity: KotodamaQuantity,
         destinationAccountId: String,
-    ) : this(sourceAssetId, quantity.toString(), destinationAccountId)
+        feePayment: FeePaymentIntent,
+    ) : this(sourceAssetId, quantity.toString(), destinationAccountId, feePayment)
 }
 
 /** Canonical transaction payload to be signed by a wallet. */
@@ -206,6 +209,7 @@ class NexusAppClient @JvmOverloads constructor(
             executable = Executable.instructions(listOf(instruction)),
             timeToLiveMs = normalized.ttlMs,
             nonce = normalized.nonce,
+            feePayment = normalized.feePayment,
             metadata = normalized.metadata.mapValues { JsonValue.string(it.value) },
         )
         val payloadBytes = codecAdapter.encodeTransaction(payload)

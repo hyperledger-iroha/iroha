@@ -17,7 +17,8 @@ use std::{collections::BTreeMap, str::FromStr};
 use hex;
 use iroha_crypto::PublicKey;
 use iroha_data_model::{
-    Level, compute::ComputePriceWeights, name::Name, soranet::vpn::VpnExitClassV1,
+    Level, compute::ComputePriceWeights, name::Name, prelude::Quantity,
+    soranet::vpn::VpnExitClassV1,
 };
 use norito::{
     Error as NoritoError,
@@ -170,8 +171,8 @@ impl FastJsonWrite for SoranetVpnSummary {
         out.push_str("\"operator_account_id\":");
         json::write_json_string(&self.operator_account_id, out);
         out.push(',');
-        out.push_str("\"lease_fee_nanos\":");
-        let _ = write!(out, "{}", self.lease_fee_nanos);
+        out.push_str("\"lease_fee\":");
+        json::write_json_string(&self.lease_fee.to_string(), out);
         out.push(',');
         out.push_str("\"settlement_grace_secs\":");
         let _ = write!(out, "{}", self.settlement_grace_secs);
@@ -1822,7 +1823,7 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let mut fee_asset_id = None;
         let mut escrow_account_id = None;
         let mut operator_account_id = None;
-        let mut lease_fee_nanos = None;
+        let mut lease_fee = None;
         let mut settlement_grace_secs = None;
         let mut route_pushes = None;
         let mut excluded_routes = None;
@@ -1845,7 +1846,7 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
         let kh_fee_asset = norito::json::key_hash_const("fee_asset_id");
         let kh_escrow = norito::json::key_hash_const("escrow_account_id");
         let kh_operator = norito::json::key_hash_const("operator_account_id");
-        let kh_lease_fee = norito::json::key_hash_const("lease_fee_nanos");
+        let kh_lease_fee = norito::json::key_hash_const("lease_fee");
         let kh_settlement_grace = norito::json::key_hash_const("settlement_grace_secs");
         let kh_route_pushes = norito::json::key_hash_const("route_pushes");
         let kh_excluded_routes = norito::json::key_hash_const("excluded_routes");
@@ -1925,8 +1926,11 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                 x if x == kh_operator && w.last_key() == "operator_account_id" => {
                     operator_account_id = Some(w.parse_string_ref_inline(arena)?.to_string());
                 }
-                x if x == kh_lease_fee && w.last_key() == "lease_fee_nanos" => {
-                    lease_fee_nanos = Some(w.parse_u64_inline()?);
+                x if x == kh_lease_fee && w.last_key() == "lease_fee" => {
+                    let s_in = w.input();
+                    let mut parser = norito::json::Parser::new_at(s_in, w.raw_pos());
+                    lease_fee = Some(Quantity::json_deserialize(&mut parser)?);
+                    w.sync_to_raw(parser.position());
                 }
                 x if x == kh_settlement_grace && w.last_key() == "settlement_grace_secs" => {
                     settlement_grace_secs = Some(w.parse_u64_inline()?);
@@ -2005,7 +2009,7 @@ impl<'a> FastFromJson<'a> for SoranetVpnSummary {
                 .unwrap_or_else(defaults::soranet::vpn::escrow_account_id),
             operator_account_id: operator_account_id
                 .unwrap_or_else(defaults::soranet::vpn::operator_account_id),
-            lease_fee_nanos: lease_fee_nanos.unwrap_or(defaults::soranet::vpn::LEASE_FEE_NANOS),
+            lease_fee: lease_fee.unwrap_or_else(defaults::soranet::vpn::lease_fee),
             settlement_grace_secs: settlement_grace_secs
                 .unwrap_or(defaults::soranet::vpn::SETTLEMENT_GRACE_SECS),
             route_pushes: route_pushes.unwrap_or_else(defaults::soranet::vpn::route_pushes),
@@ -2846,8 +2850,8 @@ pub struct SoranetVpnSummary {
     pub escrow_account_id: String,
     /// Relay operator account eligible for receipt settlement.
     pub operator_account_id: String,
-    /// Fixed prepaid lease fee in nano-XOR.
-    pub lease_fee_nanos: u64,
+    /// Fixed prepaid XOR lease fee.
+    pub lease_fee: Quantity,
     /// Grace window after disconnect before unearned escrow can be refunded.
     pub settlement_grace_secs: u64,
     /// Routes pushed to VPN clients.
@@ -2883,7 +2887,7 @@ impl From<&'_ base::SoranetVpn> for SoranetVpnSummary {
             fee_asset_id: value.fee_asset_id.clone(),
             escrow_account_id: value.escrow_account_id.to_string(),
             operator_account_id: value.operator_account_id.to_string(),
-            lease_fee_nanos: value.lease_fee_nanos,
+            lease_fee: value.lease_fee.clone(),
             settlement_grace_secs: value.settlement_grace.as_secs(),
             route_pushes: value.route_pushes.clone(),
             excluded_routes: value.excluded_routes.clone(),
@@ -3660,7 +3664,7 @@ mod test {
                   "fee_asset_id": "xor#universal.universal",
                   "escrow_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                   "operator_account_id": "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-                  "lease_fee_nanos": 1000000,
+                  "lease_fee": "0.001",
                   "settlement_grace_secs": 60,
                   "route_pushes": [
                     "0.0.0.0/0",

@@ -119,7 +119,7 @@ fn repair_slash_proposal(
         provider_id,
         manifest_digest,
         auditor_account,
-        proposed_penalty_nano: 1,
+        proposed_penalty: "0.000000001".parse().expect("valid quantity"),
         submitted_at_unix,
         rationale: "replayed auditor nonce must be rejected before scheduling".to_string(),
         approval: None,

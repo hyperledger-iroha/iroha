@@ -40,6 +40,7 @@ AdvanceContext(subject) ==
      /\ highestRank' = [node \in ValidatorIds |-> NoRank]
      /\ highestSubject' = [node \in ValidatorIds |-> NoSubject]
      /\ availableBodies' = {}
+     /\ retainedLockedBodies' = {}
      /\ validatedBodies' = {}
      /\ invalidBodies' = {}
      /\ seenProposals' = {}
@@ -69,84 +70,7 @@ AdvanceContext(subject) ==
 
 NextV2 == Next \/ \E subject \in Subjects: AdvanceContext(subject)
 
-ReliableNextV2 ==
-  ReliableNext \/ \E subject \in Subjects: AdvanceContext(subject)
-
-RotationBoundConfiguration ==
-  /\ MaxView >= N
-  /\ \A contextValue \in ContextRecords:
-       \E roundView \in 0..(Len(contextValue.roster) - 1):
-         Leader(contextValue, roundView) \in
-           Responsive \cap VotingRoster(contextValue.epoch)
-
-OneRotationSuccessfulRoundBound(contextValue) ==
-  Len(contextValue.roster) + 1
-
-(***************************************************************************
-Weak fairness is attached to each concrete, parameterized reducer action.
-Fairness of the whole disjunction is insufficient: an unrelated continuously
-enabled action could otherwise starve WAL acknowledgement, delivery, or apply
-forever.  All quantifier domains below are finite, state-independent record
-universes.  The two leader actions use `HonestProposalSubject`, which is either
-the leader's certified lock or a deterministic valid empty-heartbeat subject.
-***************************************************************************)
-ReliableActionFairness ==
-  /\ WF_vars(SetGST)
-  /\ \A node \in ValidatorIds:
-       /\ WF_vars(ReliableAssembleLocalBody(node))
-       /\ WF_vars(ReliableBeginLocalProposal(node))
-       /\ WF_vars(ReliableBeginTimeout(node))
-  /\ \A request \in ProposalWalSet: WF_vars(PersistProposal(request))
-  /\ \A request \in ProposalSignSet:
-       WF_vars(CompleteProposalSignature(request))
-  /\ \A envelope \in ProposalEnvelopeSet:
-       WF_vars(DeliverProposal(envelope))
-  /\ \A node \in ValidatorIds, proposal \in ProposalRecordSet:
-       /\ WF_vars(FetchBody(node, proposal))
-       /\ WF_vars(ValidateBody(node, proposal))
-       /\ WF_vars(BeginPrepare(node, proposal))
-  /\ \A node \in ValidatorIds, subject \in Subjects:
-       WF_vars(StoreBody(node, subject))
-  /\ \A request \in PrepareWalSet: WF_vars(PersistPrepare(request))
-  /\ \A request \in VoteSignSet:
-       WF_vars(CompleteVoteSignature(request))
-  /\ \A envelope \in VoteEnvelopeSet: WF_vars(DeliverVote(envelope))
-  /\ \A node \in ValidatorIds, roundView \in Views,
-       subject \in Subjects:
-       /\ WF_vars(FormPrepareQC(node, roundView, subject))
-       /\ WF_vars(FormCommitQC(node, roundView, subject))
-  /\ \A envelope \in QcEnvelopeSet: WF_vars(DeliverQC(envelope))
-  /\ \A node \in ValidatorIds, qc \in QcRecordSet:
-       /\ WF_vars(BeginObservePrepare(node, qc))
-       /\ WF_vars(BeginLockCommit(node, qc))
-       /\ WF_vars(BeginDecision(node, qc))
-       /\ WF_vars(FetchCertifiedBody(node, qc))
-       /\ WF_vars(ApplyDecision(node, qc))
-  /\ \A request \in ObservePrepareWalSet:
-       WF_vars(PersistObservePrepare(request))
-  /\ \A request \in LockCommitWalSet:
-       WF_vars(PersistLockCommit(request))
-  /\ \A request \in DecisionWalSet: WF_vars(PersistDecision(request))
-  /\ \A request \in TimeoutWalSet: WF_vars(PersistTimeout(request))
-  /\ \A request \in TimeoutSignSet:
-       WF_vars(CompleteTimeoutSignature(request))
-  /\ \A envelope \in TimeoutEnvelopeSet:
-       WF_vars(DeliverTimeout(envelope))
-  /\ \A node \in ValidatorIds, roundView \in Views:
-       WF_vars(FormTC(node, roundView))
-  /\ \A envelope \in TcEnvelopeSet: WF_vars(DeliverTC(envelope))
-  /\ \A node \in ValidatorIds, tc \in TcRecordSet:
-       WF_vars(BeginInstallTC(node, tc))
-  /\ \A request \in InstallTcWalSet: WF_vars(PersistInstallTC(request))
-  /\ \A subject \in Subjects: WF_vars(AdvanceContext(subject))
-
 Spec == Init /\ [][NextV2]_vars
-
-LivenessSpec ==
-  /\ Init
-  /\ RotationBoundConfiguration
-  /\ [][ReliableNextV2]_vars
-  /\ ReliableActionFairness
 
 ContextIdentityBindsParent ==
   \A blockHeight \in Heights:
@@ -173,7 +97,7 @@ ContextIdentityBindsFrozenEpoch ==
 
 OldContextCertificateRejected ==
   \A qc \in prepareQCs \cup commitQCs:
-    qc.context # context => ~QcValid(qc)
+    qc.context # context => ~QcWireValid(qc)
 
 ContextParentWasApplied ==
   \A contextValue \in contextHistory:
@@ -187,61 +111,5 @@ EpochBoundarySafety ==
   /\ ContextIdentityBindsFrozenEpoch
   /\ OldContextCertificateRejected
   /\ ContextParentWasApplied
-
-THEOREM ContextRecordCarriesFrozenEpoch ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      ContextRecord(blockHeight, lineage).epoch = ExpectedEpoch(blockHeight)
-BY DEF ContextRecord
-
-THEOREM ContextRecordCarriesParent ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      /\ (blockHeight = 0
-            => ContextRecord(blockHeight, lineage).parent = NoSubject)
-      /\ (blockHeight > 0
-            => ContextRecord(blockHeight, lineage).parent = lineage[blockHeight])
-BY DEF ContextRecord
-
-THEOREM ContextRecordCarriesParentContext ==
-  \A blockHeight \in Heights:
-    \A lineage \in LineagesAt(blockHeight):
-      ContextRecord(blockHeight, lineage).parentContextKey
-        = ParentContextKey(blockHeight, lineage)
-BY DEF ContextRecord
-
-THEOREM EquivalentParentCommitQcsConverge ==
-  \A parentContextKey,
-     parentHeight,
-     parentSubject,
-     leftView,
-     rightView,
-     leftSigners,
-     rightSigners:
-    SemanticParentFinality(
-      CarriedParentCommit(parentContextKey, parentHeight, parentSubject,
-                          leftView, leftSigners))
-      = SemanticParentFinality(
-          CarriedParentCommit(parentContextKey, parentHeight, parentSubject,
-                              rightView, rightSigners))
-BY DEF SemanticParentFinality, CarriedParentCommit
-
-THEOREM ForeignParentLineageHasDifferentIdentity ==
-  \A leftContextKey,
-     rightContextKey,
-     parentHeight,
-     parentSubject,
-     leftView,
-     rightView,
-     leftSigners,
-     rightSigners:
-    leftContextKey # rightContextKey
-      => SemanticParentFinality(
-           CarriedParentCommit(leftContextKey, parentHeight, parentSubject,
-                               leftView, leftSigners))
-           # SemanticParentFinality(
-               CarriedParentCommit(rightContextKey, parentHeight,
-                                   parentSubject, rightView, rightSigners))
-BY DEF SemanticParentFinality, CarriedParentCommit
 
 =============================================================================

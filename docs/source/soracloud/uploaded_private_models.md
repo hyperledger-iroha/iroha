@@ -50,10 +50,10 @@ prepare the storage, runtime, and signing surfaces as one controlled change.
    report an active approved manifest. Treat the approved
    `sorafs_manifest_digest`, content length, chunker profile, policy, and
    approval sequence as release evidence for the model bundle.
-3. Configure the Soracloud runtime submission gas asset before accepting
-   production traffic. The gas asset must be present in runtime configuration
-   and funded for the accounts that will submit the returned receipt-recording
-   transaction.
+3. Configure the Soracloud runtime fee payer before accepting production
+   traffic. Select either the validator authority or one exact sponsor-program
+   revision. Runtime mutations are quoted against current ledger state, then
+   only the returned `FeePaymentIntent` limits are inserted before signing.
 4. Submit the signed `POST /v1/soracloud/model/upload/register` request with
    the uploaded bundle, model artifact metadata, weight-version metadata, and
    provenance signatures. The bundle provenance and final registry provenance
@@ -144,9 +144,10 @@ transaction signing pipeline.
 
 Soracloud production deployments must enable `soracloud_runtime.production_mode`
 and build `irohad` with `embedded-soracloud-runtime`. Production mode rejects
-configs that leave Inrou disabled, use proxy-only Inrou host posture, omit the
-runtime submission gas asset, leave broad runtime egress open, omit fail-closed
-egress budgets, or enable Hugging Face inference-bridge fallback.
+configs that leave Inrou disabled, use proxy-only Inrou host posture, leave
+broad runtime egress open, omit fail-closed egress budgets, or enable Hugging
+Face inference-bridge fallback. Production profiles should state the runtime
+fee payer explicitly; `authority` is the deterministic development default.
 
 Production behavior is sourced from configuration, not environment variables.
 Zero-backend or disabled Inrou hosts must not advertise runtime host placement.

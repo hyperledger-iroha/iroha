@@ -4,9 +4,10 @@ Summarise `sorafs reserve ledger` output for dashboards and evidence bundles.
 
 The CLI emits JSON describing the rent that must be paid, the reserve top-up,
 and the sequence of Norito `Transfer` instructions that treasury automation
-should apply. This helper normalises those values (micro XOR → XOR), computes a
-digest, and optionally writes Markdown/JSON summaries that can be attached to
-runbooks or piped into automation.
+should apply. Amounts are canonical exact XOR decimal strings. This helper
+validates that public contract without a legacy micro-XOR conversion, computes
+a digest, and optionally writes Markdown/JSON summaries that can be attached
+to runbooks or piped into automation.
 """
 
 from __future__ import annotations
@@ -14,11 +15,13 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import json
+import re
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
-MICRO_PER_XOR = Decimal("1000000")
+_CANONICAL_XOR = re.compile(r"(?:0|[1-9][0-9]*)(?:\.([0-9]{1,9}))?\Z")
+_MAX_QUANTITY_MANTISSA = (1 << 511) - 1
 
 
 def _current_timestamp() -> str:
@@ -28,36 +31,53 @@ def _current_timestamp() -> str:
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
+    def reject_duplicate_keys(pairs: List[tuple[str, Any]]) -> Dict[str, Any]:
+        result: Dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON field `{key}`")
+            result[key] = value
+        return result
+
+    def reject_nonfinite(token: str) -> Any:
+        raise ValueError(f"non-finite JSON number `{token}`")
+
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            value = json.load(
+                handle,
+                object_pairs_hook=reject_duplicate_keys,
+                parse_constant=reject_nonfinite,
+            )
     except FileNotFoundError as err:
         raise SystemExit(f"ledger JSON `{path}` is missing") from err
-    except json.JSONDecodeError as err:
+    except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as err:
         raise SystemExit(f"ledger JSON `{path}` is invalid: {err}") from err
+    if type(value) is not dict:
+        raise SystemExit(f"ledger JSON `{path}` must be an object")
+    return value
 
 
-def _convert_micro(value: Any) -> Optional[Decimal]:
+def _parse_xor_quantity(value: Any, field: str) -> Optional[Decimal]:
+    """Parse one canonical, non-negative XOR quantity with at most nine decimals."""
+
     if value is None:
         return None
-    if isinstance(value, str):
-        value = value.strip()
-        if not value:
-            return None
-        micro = Decimal(value)
-    elif isinstance(value, (int, float)):
-        micro = Decimal(str(value))
-    else:
-        raise SystemExit(f"unexpected micro XOR value type `{type(value)}`: {value!r}")
-    return micro / MICRO_PER_XOR
+    if type(value) is not str:
+        raise SystemExit(f"ledger `{field}` must be a canonical XOR decimal string")
+    match = _CANONICAL_XOR.fullmatch(value)
+    if match is None or (match.group(1) is not None and match.group(1).endswith("0")):
+        raise SystemExit(f"ledger `{field}` is not a canonical XOR decimal string")
+    mantissa = int(value.replace(".", ""))
+    if mantissa > _MAX_QUANTITY_MANTISSA:
+        raise SystemExit(f"ledger `{field}` exceeds the bounded XOR quantity domain")
+    return Decimal(value)
 
 
 def _format_decimal(value: Optional[Decimal]) -> Optional[str]:
     if value is None:
         return None
-    quantised = value.quantize(Decimal("0.000001"))
-    # Remove trailing zeros for readability.
-    return format(quantised.normalize(), "f")
+    return format(value, "f")
 
 
 def _default_label(path: Path) -> str:
@@ -73,9 +93,17 @@ def _summarise(
     *,
     generated_at: Optional[str] = None,
 ) -> Dict[str, Any]:
-    rent_xor = _convert_micro(ledger.get("rent_due_micro_xor"))
-    reserve_shortfall_xor = _convert_micro(ledger.get("reserve_shortfall_micro_xor"))
-    top_up_shortfall_xor = _convert_micro(ledger.get("top_up_shortfall_micro_xor"))
+    required_amounts = ("rent_due", "reserve_shortfall", "top_up_shortfall")
+    missing = [field for field in required_amounts if field not in ledger]
+    if missing:
+        raise SystemExit(f"ledger JSON is missing required field `{missing[0]}`")
+    rent_xor = _parse_xor_quantity(ledger["rent_due"], "rent_due")
+    reserve_shortfall_xor = _parse_xor_quantity(
+        ledger["reserve_shortfall"], "reserve_shortfall"
+    )
+    top_up_shortfall_xor = _parse_xor_quantity(
+        ledger["top_up_shortfall"], "top_up_shortfall"
+    )
     instructions = ledger.get("instructions") or []
     transfers = _build_transfer_entries(rent_xor, reserve_shortfall_xor)
     timestamp = generated_at or _current_timestamp()
@@ -234,14 +262,14 @@ def _format_labels(summary: Dict[str, Any]) -> str:
     return ",".join(labels)
 
 
-def _write_prometheus(path: Path, summary: Dict[str, Any]) -> None:
+def _prometheus_lines(summary: Dict[str, Any]) -> List[str]:
     """Emit a textfile-friendly Prometheus snapshot for dashboards/alerts."""
 
-    def _value(key: str) -> float:
+    def _value(key: str) -> str:
         raw = summary.get(key)
         if raw is None:
-            return 0.0
-        return float(Decimal(str(raw)))
+            return "0"
+        return format(Decimal(str(raw)), "f")
 
     labels = _format_labels(summary)
     prom_lines = [
@@ -277,9 +305,9 @@ def _write_prometheus(path: Path, summary: Dict[str, Any]) -> None:
     for transfer in transfers:
         amount = transfer.get("amount_xor")
         try:
-            value = float(Decimal(str(amount))) if amount is not None else 0.0
+            value = format(Decimal(str(amount)), "f") if amount is not None else "0"
         except Exception:  # pragma: no cover - defensive
-            value = 0.0
+            value = "0"
         transfer_labels = f'{labels},transfer="{_escape_label(transfer.get("kind", "unknown"))}"'
         prom_lines.append(
             f"sorafs_reserve_ledger_transfer_xor{{{transfer_labels}}} {value}"

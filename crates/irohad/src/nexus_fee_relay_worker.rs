@@ -27,44 +27,40 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{
     ChainId,
     account::{AccountId, ParsedAccountId},
-    asset::{
-        AssetDefinitionAlias,
-        id::{AssetDefinitionId, AssetId},
-    },
+    asset::id::AssetDefinitionId,
     isi::{
         InstructionBox,
-        nexus::{RegisterVerifiedLaneRelay, RegisterVerifiedNexusFeeBudget},
+        nexus::{RegisterVerifiedFeeSponsorVaultAllocation, RegisterVerifiedLaneRelay},
     },
     metadata::Metadata,
     name::Name,
     nexus::{
-        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId,
-        LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
-        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedLaneRelayRecord,
-        VerifiedNexusFeeBudgetRecord, lane_relay_fastpq_claim_digest,
-        nexus_fee_budget_claim_digest,
+        AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, DataSpaceId, FeeSponsorEligibility,
+        FeeSponsorProgramId, FeeSponsorProgramLifecycle, FeeSponsorProgramRevisionKey,
+        FeeSponsorVaultAllocationClaim, FeeSponsorVaultKey, LANE_RELAY_FASTPQ_EFFECT_TYPE,
+        LaneFastpqProofMaterial, LaneRelayEnvelope, ProofBlob,
+        VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX,
+        VERIFIED_LANE_RELAY_STATE_KEY_PREFIX, VerifiedFeeSponsorVaultAllocation,
+        VerifiedLaneRelayRecord, fee_sponsor_vault_allocation_claim_digest,
+        fee_sponsor_vault_source_state_root, lane_relay_fastpq_claim_digest,
     },
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
-use iroha_primitives::{json::Json, numeric::Quantity};
+use iroha_primitives::{
+    json::Json,
+    numeric::{MAX_DECIMAL_SCALE, Numeric, Quantity, RoundingMode},
+};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 
 const WORKER_STATE_FILE: &str = "nexus_fee_relay_worker_state.norito";
-const FEE_BUDGET_EFFECT_TYPE: &str = "nexus_fee_budget";
-
-fn quantity_asset_balance(world: &impl WorldReadOnly, asset_id: &AssetId) -> Quantity {
-    world
-        .asset(asset_id)
-        .map(|asset| asset.value().clone().into_inner())
-        .unwrap_or_else(|_| Quantity::zero())
-}
+const FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE: &str = "fee_sponsor_vault_allocation";
 
 #[derive(Clone, Debug, Default, Decode, Encode)]
 struct DurableWorkerState {
     relays: BTreeMap<String, DurableRelayWork>,
-    budget: Option<DurableBudgetWork>,
+    allocations: BTreeMap<String, DurableAllocationWork>,
 }
 
 #[derive(Clone, Debug, Decode, Encode)]
@@ -82,15 +78,33 @@ enum RelayAttemptDecision {
 }
 
 #[derive(Clone, Debug, Decode, Encode)]
-struct DurableBudgetWork {
-    sponsor_account_id: AccountId,
-    fee_asset_id: String,
-    verified_balance: Quantity,
+struct DurableAllocationWork {
+    program_id: FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: AssetDefinitionId,
+    verified_allocation: Quantity,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
+    source_state_root: Hash,
+    expires_at_height: u64,
+    lease_id: Hash,
     manifest_root: [u8; 32],
     proof_blob: Option<ProofBlob>,
     status: DurableWorkStatus,
     attempts: u32,
     last_height: u64,
+}
+
+#[derive(Encode)]
+struct FeeSponsorVaultLeaseBinding {
+    version: u8,
+    program_id: FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: AssetDefinitionId,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
+    source_state_root: Hash,
+    expires_at_height: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
@@ -212,11 +226,11 @@ impl NexusFeeRelayWorker {
             return Ok(());
         }
 
-        self.mark_accepted_budget_if_present()?;
+        self.mark_accepted_allocations()?;
         self.announce_verified_relays()?;
         self.enqueue_status_relays()?;
         self.submit_pending_relays()?;
-        self.refresh_budget_if_due()?;
+        self.refresh_allocations_if_due()?;
         Ok(())
     }
 
@@ -464,189 +478,313 @@ impl NexusFeeRelayWorker {
             .is_some())
     }
 
-    fn refresh_budget_if_due(&self) -> Result<()> {
-        let Some(sponsor) = self.canonical_sponsor()? else {
-            return Ok(());
-        };
-        let fee_asset_id = self.state.view().nexus.fees.fee_asset_id.trim().to_owned();
-        if fee_asset_id.is_empty() {
-            return Ok(());
-        }
+    fn refresh_allocations_if_due(&self) -> Result<()> {
         let current_height = self.committed_height();
-        if let Some(record) = self.verified_budget_record(&sponsor, &fee_asset_id)?
-            && current_height.saturating_sub(record.verified_at_height)
-                < self.config.budget_refresh_interval_blocks.get()
-        {
+        if current_height == 0 {
             return Ok(());
         }
 
-        let mut budget_work = self.prepare_budget_work(&sponsor, &fee_asset_id)?;
-        if budget_work.attempts >= self.config.max_retry_attempts.get() {
-            budget_work.status = DurableWorkStatus::Rejected;
-            self.store_budget_work(budget_work)?;
-            return Ok(());
-        }
-        budget_work.status = DurableWorkStatus::Proving;
-        budget_work.attempts = budget_work.attempts.saturating_add(1);
-        budget_work.last_height = current_height;
-        self.store_budget_work(budget_work.clone())?;
-
-        let expiry_slot =
-            current_height.saturating_add(self.state.view().nexus.axt.replay_retention_slots.get());
-        let proof_blob = match prove_fee_budget(
-            &budget_work.sponsor_account_id,
-            &budget_work.fee_asset_id,
-            &budget_work.verified_balance,
-            budget_work.manifest_root,
-            expiry_slot,
-            &self.fastpq,
-        ) {
-            Ok(proof) => proof,
-            Err(error) => {
-                budget_work.status = if budget_work.attempts >= self.config.max_retry_attempts.get()
-                {
-                    DurableWorkStatus::Rejected
-                } else {
-                    DurableWorkStatus::Pending
-                };
-                self.store_budget_work(budget_work)?;
-                iroha_logger::warn!(
-                    ?error,
-                    "Nexus fee relay worker failed to prove sponsor fee budget"
-                );
-                return Ok(());
+        for candidate in self.allocation_candidates(current_height)? {
+            if self
+                .latest_verified_allocation_for(&candidate)?
+                .is_some_and(|record| current_height <= record.expires_at_height)
+            {
+                // A lease is a source lock, not a replaceable balance snapshot.
+                // Refresh only after expiry so two independently valid proofs
+                // can never authorize the same vault capacity concurrently.
+                continue;
             }
-        };
-        budget_work.status = DurableWorkStatus::Submitted;
-        budget_work.proof_blob = Some(proof_blob.clone());
-        budget_work.last_height = current_height;
-        self.store_budget_work(budget_work.clone())?;
-        self.submit_instruction(
-            InstructionBox::from(RegisterVerifiedNexusFeeBudget {
-                sponsor_account_id: budget_work.sponsor_account_id,
-                fee_asset_id: budget_work.fee_asset_id,
-                verified_balance: budget_work.verified_balance,
-                manifest_root: budget_work.manifest_root,
-                proof_blob,
-            }),
-            "/internal/nexus/fee-relay/register-verified-fee-budget",
-        )
-    }
 
-    fn prepare_budget_work(
-        &self,
-        sponsor: &AccountId,
-        fee_asset_id: &str,
-    ) -> Result<DurableBudgetWork> {
-        let existing = self.durable.lock().budget.clone();
-        if let Some(work) = existing
-            && work.sponsor_account_id == *sponsor
-            && work.fee_asset_id == fee_asset_id
-            && matches!(
-                work.status,
-                DurableWorkStatus::Pending
-                    | DurableWorkStatus::Proving
-                    | DurableWorkStatus::Submitted
-            )
-        {
-            return Ok(work);
-        }
+            let key = allocation_work_key(&candidate);
+            let mut work = self.prepare_allocation_work(key.clone(), candidate);
+            if self.verified_allocation_for_work(&work)?.is_some() {
+                work.status = DurableWorkStatus::Accepted;
+                work.last_height = current_height;
+                self.store_allocation_work(key, work)?;
+                continue;
+            }
+            if work.attempts >= self.config.max_retry_attempts.get() {
+                work.status = DurableWorkStatus::Rejected;
+                self.store_allocation_work(key, work)?;
+                continue;
+            }
 
-        let manifest_root = self
-            .manifest_root_for(DataSpaceId::UNIVERSAL)
-            .ok_or_else(|| {
-                eyre::eyre!("no non-zero universal AXT manifest root for Nexus fee budget proof")
-            })?;
-        let verified_balance = self.sponsor_fee_balance(sponsor, fee_asset_id)?;
-        Ok(DurableBudgetWork {
-            sponsor_account_id: sponsor.clone(),
-            fee_asset_id: fee_asset_id.to_owned(),
-            verified_balance,
-            manifest_root,
-            proof_blob: None,
-            status: DurableWorkStatus::Pending,
-            attempts: 0,
-            last_height: self.committed_height(),
-        })
-    }
+            work.status = DurableWorkStatus::Proving;
+            work.attempts = work.attempts.saturating_add(1);
+            work.last_height = current_height;
+            self.store_allocation_work(key.clone(), work.clone())?;
 
-    fn store_budget_work(&self, work: DurableBudgetWork) -> Result<()> {
-        let mut durable = self.durable.lock();
-        durable.budget = Some(work);
-        persist_durable_state(&self.state_path, &durable)
-    }
-
-    fn mark_accepted_budget_if_present(&self) -> Result<()> {
-        let Some(work) = self.durable.lock().budget.clone() else {
-            return Ok(());
-        };
-        if self
-            .verified_budget_record(&work.sponsor_account_id, &work.fee_asset_id)?
-            .is_some()
-        {
-            let mut updated = work;
-            updated.status = DurableWorkStatus::Accepted;
-            updated.last_height = self.committed_height();
-            self.store_budget_work(updated)?;
+            let proof_blob = match prove_fee_sponsor_vault_allocation(&work, &self.fastpq) {
+                Ok(proof) => proof,
+                Err(error) => {
+                    work.status = if work.attempts >= self.config.max_retry_attempts.get() {
+                        DurableWorkStatus::Rejected
+                    } else {
+                        DurableWorkStatus::Pending
+                    };
+                    self.store_allocation_work(key, work)?;
+                    iroha_logger::warn!(
+                        ?error,
+                        "Nexus fee relay worker failed to prove sponsor-program vault allocation"
+                    );
+                    continue;
+                }
+            };
+            work.status = DurableWorkStatus::Submitted;
+            work.proof_blob = Some(proof_blob.clone());
+            work.last_height = current_height;
+            self.store_allocation_work(key, work.clone())?;
+            self.submit_instruction(
+                InstructionBox::from(RegisterVerifiedFeeSponsorVaultAllocation {
+                    program_id: work.program_id,
+                    program_revision: work.program_revision,
+                    asset_definition_id: work.asset_definition_id,
+                    verified_allocation: work.verified_allocation,
+                    source_dataspace_id: work.source_dataspace_id,
+                    source_height: work.source_height,
+                    source_state_root: work.source_state_root,
+                    expires_at_height: work.expires_at_height,
+                    lease_id: work.lease_id,
+                    manifest_root: work.manifest_root,
+                    proof_blob,
+                }),
+                "/internal/nexus/fee-relay/register-verified-fee-sponsor-vault-allocation",
+            )?;
         }
         Ok(())
     }
 
-    fn verified_budget_record(
+    fn allocation_candidates(&self, current_height: u64) -> Result<Vec<DurableAllocationWork>> {
+        let view = self.state.view();
+        let replay_retention_slots = view.nexus.axt.replay_retention_slots.get();
+        let mut candidates = Vec::new();
+
+        for (program_id, program) in view.world().fee_sponsor_programs().iter() {
+            if program.lifecycle != FeeSponsorProgramLifecycle::Active {
+                continue;
+            }
+            let Some(program_revision) = program.active_revision else {
+                continue;
+            };
+            let Some(expiry_height) = fee_sponsor_allocation_expiry_height(
+                current_height,
+                replay_retention_slots,
+                program
+                    .scheduled_activation
+                    .map(|activation| activation.activate_at_height),
+            ) else {
+                // A worker submission cannot execute before the scheduled
+                // switch, so an old-revision proof would be stale on arrival.
+                continue;
+            };
+            let revision_key =
+                FeeSponsorProgramRevisionKey::new(program_id.clone(), program_revision);
+            let Some(revision) = view
+                .world()
+                .fee_sponsor_program_revisions()
+                .get(&revision_key)
+            else {
+                iroha_logger::warn!(
+                    program_id = %program_id,
+                    program_revision,
+                    "active fee sponsor program revision is missing; allocation refresh skipped"
+                );
+                continue;
+            };
+
+            let has_enrollment = view
+                .world()
+                .fee_sponsor_enrollments()
+                .iter()
+                .any(|(key, _)| &key.program_id == program_id);
+            let mut routes = view
+                .nexus
+                .dataspace_catalog
+                .entries()
+                .iter()
+                .filter_map(|entry| {
+                    let route_default = view.nexus.dataspace_fee_sponsor_program_ids.get(&entry.id)
+                        == Some(program_id);
+                    let eligible = fee_sponsor_route_allocation_eligible(
+                        has_enrollment,
+                        revision.eligibility,
+                        route_default,
+                    );
+                    eligible
+                        .then(|| {
+                            self.manifest_root_for(entry.id)
+                                .map(|root| (entry.id, root))
+                        })
+                        .flatten()
+                })
+                .collect::<Vec<_>>();
+            routes.sort_by_key(|(dataspace_id, _)| *dataspace_id);
+            if routes.is_empty() {
+                iroha_logger::warn!(
+                    program_id = %program_id,
+                    "active fee sponsor program has no eligible dataspace with a non-zero AXT manifest root"
+                );
+                continue;
+            }
+
+            for budget in &revision.asset_budgets {
+                let vault_key = FeeSponsorVaultKey {
+                    program_id: program_id.clone(),
+                    asset_definition_id: budget.asset_definition_id.clone(),
+                };
+                let Some(vault) = view.world().fee_sponsor_vaults().get(&vault_key) else {
+                    continue;
+                };
+                if vault.balance.is_zero() {
+                    continue;
+                }
+                let output_scale = view
+                    .world()
+                    .asset_definitions()
+                    .get(&budget.asset_definition_id)
+                    .and_then(|definition| definition.spec().scale())
+                    .unwrap_or(MAX_DECIMAL_SCALE);
+                let allocations =
+                    partition_fee_sponsor_vault(&vault.balance, routes.len(), output_scale)?;
+                for ((source_dataspace_id, manifest_root), verified_allocation) in
+                    routes.iter().copied().zip(allocations)
+                {
+                    if verified_allocation.is_zero() {
+                        continue;
+                    }
+                    let source_state_root = fee_sponsor_vault_source_state_root(
+                        program_id,
+                        program_revision,
+                        &budget.asset_definition_id,
+                        &vault.balance,
+                        source_dataspace_id,
+                        current_height,
+                    );
+                    let lease_id = fee_sponsor_vault_lease_id(
+                        program_id,
+                        program_revision,
+                        &budget.asset_definition_id,
+                        source_dataspace_id,
+                        current_height,
+                        source_state_root,
+                        expiry_height,
+                    )?;
+                    candidates.push(DurableAllocationWork {
+                        program_id: program_id.clone(),
+                        program_revision,
+                        asset_definition_id: budget.asset_definition_id.clone(),
+                        verified_allocation,
+                        source_dataspace_id,
+                        source_height: current_height,
+                        source_state_root,
+                        expires_at_height: expiry_height,
+                        lease_id,
+                        manifest_root,
+                        proof_blob: None,
+                        status: DurableWorkStatus::Pending,
+                        attempts: 0,
+                        last_height: current_height,
+                    });
+                }
+            }
+        }
+        Ok(candidates)
+    }
+
+    fn prepare_allocation_work(
         &self,
-        sponsor: &AccountId,
-        fee_asset_id: &str,
-    ) -> Result<Option<VerifiedNexusFeeBudgetRecord>> {
-        let key = Name::from_str(&VerifiedNexusFeeBudgetRecord::state_key_for(
-            sponsor,
-            fee_asset_id,
+        key: String,
+        candidate: DurableAllocationWork,
+    ) -> DurableAllocationWork {
+        self.durable
+            .lock()
+            .allocations
+            .get(&key)
+            .filter(|work| {
+                matches!(
+                    work.status,
+                    DurableWorkStatus::Pending
+                        | DurableWorkStatus::Proving
+                        | DurableWorkStatus::Submitted
+                ) && work.expires_at_height <= candidate.expires_at_height
+            })
+            .cloned()
+            .unwrap_or(candidate)
+    }
+
+    fn store_allocation_work(&self, key: String, work: DurableAllocationWork) -> Result<()> {
+        let mut durable = self.durable.lock();
+        durable.allocations.insert(key, work);
+        persist_durable_state(&self.state_path, &durable)
+    }
+
+    fn mark_accepted_allocations(&self) -> Result<()> {
+        let works = self.durable.lock().allocations.clone();
+        let mut accepted = Vec::new();
+        for (key, work) in works {
+            if self.verified_allocation_for_work(&work)?.is_some() {
+                accepted.push((key, work));
+            }
+        }
+        if accepted.is_empty() {
+            return Ok(());
+        }
+
+        let current_height = self.committed_height();
+        let mut durable = self.durable.lock();
+        for (key, mut work) in accepted {
+            work.status = DurableWorkStatus::Accepted;
+            work.last_height = current_height;
+            durable.allocations.insert(key, work);
+        }
+        persist_durable_state(&self.state_path, &durable)
+    }
+
+    fn verified_allocation_for_work(
+        &self,
+        work: &DurableAllocationWork,
+    ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>> {
+        let key = Name::from_str(&VerifiedFeeSponsorVaultAllocation::state_key_for(
+            &work.program_id,
+            &work.asset_definition_id,
+            &work.lease_id,
         ))
-        .wrap_err("parse verified Nexus fee budget state key")?;
+        .wrap_err("parse verified fee sponsor vault allocation state key")?;
         let view = self.state.view();
         let Some(payload) = view.world().smart_contract_state().get(&key) else {
             return Ok(None);
         };
-        let json: Json = norito::decode_from_bytes(payload)
-            .wrap_err("decode verified Nexus fee budget record JSON payload")?;
-        norito::json::from_slice(json.get().as_bytes())
-            .map(Some)
-            .wrap_err("decode verified Nexus fee budget record")
+        decode_verified_allocation_record(payload).map(Some)
     }
 
-    fn canonical_sponsor(&self) -> Result<Option<AccountId>> {
+    fn latest_verified_allocation_for(
+        &self,
+        work: &DurableAllocationWork,
+    ) -> Result<Option<VerifiedFeeSponsorVaultAllocation>> {
         let view = self.state.view();
-        let Some(raw) = view
-            .nexus
-            .fees
-            .canonical_sponsor_account_id
-            .as_deref()
-            .map(str::trim)
-            .filter(|raw| !raw.is_empty())
-        else {
-            iroha_logger::warn!(
-                "Nexus fee relay worker enabled without nexus.fees.canonical_sponsor_account_id"
-            );
-            return Ok(None);
-        };
-        parse_canonical_account_id(raw)
-            .map(Some)
-            .wrap_err_with(|| format!("parse canonical sponsor account id `{raw}`"))
-    }
-
-    fn sponsor_fee_balance(&self, sponsor: &AccountId, fee_asset_id: &str) -> Result<Quantity> {
-        let view = self.state.view();
-        let now_ms = self
-            .state
-            .latest_block_header_fast()
-            .map(|header| header.creation_time_ms)
-            .unwrap_or(0);
-        let Some(asset_definition_id) =
-            parse_asset_definition_selector(view.world(), fee_asset_id, now_ms)
-        else {
-            eyre::bail!("invalid or unresolved Nexus fee asset selector `{fee_asset_id}`");
-        };
-        let asset_id = AssetId::new(asset_definition_id, sponsor.clone());
-        Ok(quantity_asset_balance(view.world(), &asset_id))
+        let mut latest = None;
+        for (key, payload) in view.world().smart_contract_state().iter() {
+            if !key
+                .to_string()
+                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX)
+            {
+                continue;
+            }
+            let record = decode_verified_allocation_record(payload)?;
+            if record.program_id == work.program_id
+                && record.program_revision == work.program_revision
+                && record.asset_definition_id == work.asset_definition_id
+                && record.source_dataspace_id == work.source_dataspace_id
+                && latest
+                    .as_ref()
+                    .is_none_or(|current: &VerifiedFeeSponsorVaultAllocation| {
+                        record.verified_at_height > current.verified_at_height
+                    })
+            {
+                latest = Some(record);
+            }
+        }
+        Ok(latest)
     }
 
     fn manifest_root_for(&self, dsid: DataSpaceId) -> Option<[u8; 32]> {
@@ -724,11 +862,15 @@ fn sign_nexus_fee_relay_submission_transaction(
     key_pair: &KeyPair,
     endpoint: &'static str,
 ) -> Result<SignedTransaction> {
-    TransactionBuilder::new(chain_id, authority)
-        .with_instructions([instruction])
-        .with_metadata(metadata)
-        .try_sign(key_pair.private_key())
-        .wrap_err_with(|| format!("sign internal Nexus fee relay mutation at `{endpoint}`"))
+    TransactionBuilder::new(
+        chain_id,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction])
+    .with_metadata(metadata)
+    .try_sign(key_pair.private_key())
+    .wrap_err_with(|| format!("sign internal Nexus fee relay mutation at `{endpoint}`"))
 }
 
 fn durable_pending_relay_count(durable: &DurableWorkerState) -> usize {
@@ -746,6 +888,108 @@ fn durable_pending_relay_count(durable: &DurableWorkerState) -> usize {
 
 fn relay_work_key(envelope: &LaneRelayEnvelope) -> String {
     envelope.relay_ref().relay_state_key()
+}
+
+fn allocation_work_key(work: &DurableAllocationWork) -> String {
+    format!(
+        "{}|{}|{}|{}",
+        work.source_dataspace_id.as_u64(),
+        work.program_id,
+        work.program_revision,
+        work.asset_definition_id,
+    )
+}
+
+fn fee_sponsor_route_allocation_eligible(
+    has_enrollment: bool,
+    eligibility: FeeSponsorEligibility,
+    route_default: bool,
+) -> bool {
+    has_enrollment
+        || (eligibility == FeeSponsorEligibility::EnrolledOrRouteDefault && route_default)
+}
+
+fn fee_sponsor_allocation_expiry_height(
+    current_height: u64,
+    replay_retention_slots: u64,
+    scheduled_activation_height: Option<u64>,
+) -> Option<u64> {
+    let normal_expiry = current_height.saturating_add(replay_retention_slots);
+    let Some(activation_height) = scheduled_activation_height else {
+        return Some(normal_expiry);
+    };
+    let earliest_execution_height = current_height.checked_add(1)?;
+    if earliest_execution_height >= activation_height {
+        return None;
+    }
+    Some(normal_expiry.min(activation_height.checked_sub(1)?))
+}
+
+fn partition_fee_sponsor_vault(
+    vault_balance: &Quantity,
+    route_count: usize,
+    output_scale: u32,
+) -> Result<Vec<Quantity>> {
+    let route_count_u64 =
+        u64::try_from(route_count).wrap_err("fee sponsor allocation route count exceeds u64")?;
+    if route_count_u64 == 0 {
+        return Ok(Vec::new());
+    }
+    let share = vault_balance
+        .try_div_decimal_round(
+            &Numeric::from(route_count_u64),
+            output_scale,
+            RoundingMode::TowardZero,
+        )
+        .wrap_err("partition fee sponsor vault across eligible dataspaces")?;
+    let mut allocations = Vec::with_capacity(route_count);
+    let mut allocated = Quantity::zero();
+    for index in 0..route_count {
+        let allocation = if index + 1 == route_count {
+            vault_balance
+                .checked_sub(&allocated)
+                .wrap_err("compute final fee sponsor vault allocation remainder")?
+        } else {
+            share.clone()
+        };
+        allocated = allocated
+            .checked_add(&allocation)
+            .wrap_err("sum partitioned fee sponsor vault allocation")?;
+        allocations.push(allocation);
+    }
+    debug_assert_eq!(&allocated, vault_balance);
+    Ok(allocations)
+}
+
+fn fee_sponsor_vault_lease_id(
+    program_id: &FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: &AssetDefinitionId,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
+    source_state_root: Hash,
+    expires_at_height: u64,
+) -> Result<Hash> {
+    let binding = FeeSponsorVaultLeaseBinding {
+        version: 1,
+        program_id: program_id.clone(),
+        program_revision,
+        asset_definition_id: asset_definition_id.clone(),
+        source_dataspace_id,
+        source_height,
+        source_state_root,
+        expires_at_height,
+    };
+    let encoded =
+        norito::to_bytes(&binding).wrap_err("encode fee sponsor vault spend-lease binding")?;
+    Ok(Hash::new(encoded))
+}
+
+fn decode_verified_allocation_record(payload: &[u8]) -> Result<VerifiedFeeSponsorVaultAllocation> {
+    let json: Json = norito::decode_from_bytes(payload)
+        .wrap_err("decode verified fee sponsor vault allocation JSON payload")?;
+    norito::json::from_slice(json.get().as_bytes())
+        .wrap_err("decode verified fee sponsor vault allocation")
 }
 
 fn load_durable_state(path: &Path) -> Result<DurableWorkerState> {
@@ -770,21 +1014,6 @@ fn parse_canonical_account_id(raw: &str) -> Result<AccountId> {
     AccountId::parse_encoded(raw)
         .map(ParsedAccountId::into_account_id)
         .map_err(|error| eyre::eyre!("{error}"))
-}
-
-fn parse_asset_definition_selector(
-    world: &impl WorldReadOnly,
-    raw: &str,
-    now_ms: u64,
-) -> Option<AssetDefinitionId> {
-    let trimmed = raw.trim();
-    AssetDefinitionId::parse_address_literal(trimmed)
-        .ok()
-        .or_else(|| {
-            AssetDefinitionAlias::from_str(trimmed)
-                .ok()
-                .and_then(|alias| world.asset_definition_id_by_alias_at(&alias, now_ms))
-        })
 }
 
 fn worker_submission_metadata(endpoint: &'static str) -> Metadata {
@@ -901,78 +1130,92 @@ fn prove_lane_relay_envelope(
     Ok((proven_envelope, proof_blob))
 }
 
-fn prove_fee_budget(
-    sponsor: &AccountId,
-    fee_asset_id: &str,
-    verified_balance: &Quantity,
-    manifest_root: [u8; 32],
-    expiry_slot: u64,
+fn prove_fee_sponsor_vault_allocation(
+    work: &DurableAllocationWork,
     fastpq: &Fastpq,
 ) -> Result<ProofBlob> {
-    if manifest_root.iter().all(|byte| *byte == 0) {
-        eyre::bail!("fee budget proof manifest_root is zero");
+    if work.manifest_root.iter().all(|byte| *byte == 0) {
+        eyre::bail!("fee sponsor vault allocation proof manifest_root is zero");
     }
-    let fee_asset_id = fee_asset_id.trim();
-    let sponsor_text = sponsor.to_string();
-    let balance_text = verified_balance.to_string();
+    if work.program_revision == 0
+        || work.verified_allocation.is_zero()
+        || work.source_height == 0
+        || work.expires_at_height < work.source_height
+    {
+        eyre::bail!("fee sponsor vault allocation proof inputs are invalid");
+    }
+
+    let claim = FeeSponsorVaultAllocationClaim {
+        program_id: work.program_id.clone(),
+        program_revision: work.program_revision,
+        asset_definition_id: work.asset_definition_id.clone(),
+        verified_allocation: work.verified_allocation.clone(),
+        source_dataspace_id: work.source_dataspace_id,
+        source_height: work.source_height,
+        source_state_root: work.source_state_root,
+        expires_at_height: work.expires_at_height,
+        lease_id: work.lease_id,
+    };
+    let claim_bytes = norito::to_bytes(&claim).wrap_err("encode sponsor vault allocation claim")?;
     let source_tx_commitment = worker_digest(
-        b"nexus-fee-relay:budget-source-tx:v1",
-        &[sponsor_text.as_bytes(), fee_asset_id.as_bytes()],
+        b"nexus-fee-relay:sponsor-vault-source-tx:v1",
+        &[claim_bytes.as_slice()],
     );
-    let claim_digest = nexus_fee_budget_claim_digest(sponsor, fee_asset_id, verified_balance);
+    let claim_digest = fee_sponsor_vault_allocation_claim_digest(&claim);
     let witness_commitment = worker_digest(
-        b"nexus-fee-relay:budget-witness:v1",
-        &[sponsor_text.as_bytes(), balance_text.as_bytes()],
+        b"nexus-fee-relay:sponsor-vault-witness:v1",
+        &[work.source_state_root.as_ref(), work.lease_id.as_ref()],
     );
-    let policy_commitment = worker_digest(b"nexus-fee-relay:budget-policy:v1", &[&manifest_root]);
-    let dsid = DataSpaceId::UNIVERSAL;
+    let policy_commitment = worker_digest(
+        b"nexus-fee-relay:sponsor-vault-policy:v1",
+        &[&work.manifest_root],
+    );
+    let program_text = work.program_id.to_string();
+    let asset_text = work.asset_definition_id.to_string();
     let binding = AxtFastpqBinding {
         parameter: fastpq_prover::AXT_DEFAULT_PARAMETER.to_owned(),
-        source_dsid: dsid.as_u64(),
-        source_dataspace: "universal".to_owned(),
-        source_receipt_id: format!("budget-{}", hex::encode(source_tx_commitment.as_ref())),
+        source_dsid: work.source_dataspace_id.as_u64(),
+        source_dataspace: format!("dataspace-{}", work.source_dataspace_id.as_u64()),
+        source_receipt_id: format!("fee-sponsor-vault-{}", hex::encode(work.lease_id.as_ref())),
         source_tx_commitment: hex::encode(source_tx_commitment.as_ref()),
         claim_type: "authorization".to_owned(),
         claim_digest: hex::encode(claim_digest.as_ref()),
         witness_commitment: hex::encode(witness_commitment.as_ref()),
         policy_commitment: hex::encode(policy_commitment.as_ref()),
-        verified_effect_type: FEE_BUDGET_EFFECT_TYPE.to_owned(),
-        corridor: "nexus-fee-budget".to_owned(),
+        verified_effect_type: FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE.to_owned(),
+        corridor: format!("fee-sponsor-program:{program_text}"),
         verifier_id: "fastpq".to_owned(),
         verifier_version: "v1".to_owned(),
-        target_dsids: vec![dsid.as_u64()],
+        target_dsids: vec![DataSpaceId::UNIVERSAL.as_u64()],
         effect_binding: Some(AxtEffectBinding {
             destination_domain: None,
-            destination_account_id: Some(sponsor_text.clone()),
+            destination_account_id: Some(work.program_id.sponsor.to_string()),
             vault_account_id: None,
             issuance_account_id: None,
-            source_asset_definition_id: Some(fee_asset_id.to_owned()),
+            source_asset_definition_id: Some(asset_text.clone()),
             destination_asset_definition_id: None,
             source_amount_i64: None,
             destination_amount_i64: None,
         }),
     };
     let mut batch = transition_batch(
-        dsid,
-        expiry_slot,
+        work.source_dataspace_id,
+        work.expires_at_height,
+        work.source_state_root,
+        work.source_state_root,
         worker_digest(
-            b"nexus-fee-relay:budget-old-root:v1",
-            &[fee_asset_id.as_bytes()],
-        ),
-        Hash::new(manifest_root),
-        worker_digest(
-            b"nexus-fee-relay:budget-perm-root:v1",
-            &[sponsor_text.as_bytes()],
+            b"nexus-fee-relay:sponsor-vault-perm-root:v1",
+            &[program_text.as_bytes()],
         ),
         worker_digest(
-            b"nexus-fee-relay:budget-tx-set:v1",
-            &[balance_text.as_bytes()],
+            b"nexus-fee-relay:sponsor-vault-tx-set:v1",
+            &[claim_digest.as_ref()],
         ),
     );
     batch.push(fastpq_prover::StateTransition::new(
-        b"axt/nexus/fee-budget".to_vec(),
-        sponsor_text.as_bytes().to_vec(),
-        balance_text.as_bytes().to_vec(),
+        b"axt/nexus/fee-sponsor-vault-allocation".to_vec(),
+        work.lease_id.as_ref().to_vec(),
+        claim_digest.as_ref().to_vec(),
         fastpq_prover::OperationKind::MetaSet,
     ));
     batch.sort();
@@ -980,24 +1223,26 @@ fn prove_fee_budget(
         "entry_hash".to_owned(),
         source_tx_commitment.as_ref().to_vec(),
     );
-    fastpq_prover::bind_axt_batch(&mut batch, &binding).wrap_err("bind fee budget AXT batch")?;
+    fastpq_prover::bind_axt_batch(&mut batch, &binding)
+        .wrap_err("bind fee sponsor vault allocation AXT batch")?;
     let proof = prover_from_config(fastpq)?
         .prove(&batch)
-        .wrap_err("prove fee budget AXT batch")?;
+        .wrap_err("prove fee sponsor vault allocation AXT batch")?;
     let payload =
         fastpq_prover::encode_axt_fastpq_payload(&batch, proof).wrap_err("encode AXT payload")?;
     let proof_envelope = AxtProofEnvelope {
-        dsid,
-        manifest_root,
+        dsid: work.source_dataspace_id,
+        manifest_root: work.manifest_root,
         da_commitment: None,
         proof: payload,
         fastpq_binding: Some(binding),
-        committed_amount: integer_mantissa(verified_balance),
+        committed_amount: integer_mantissa(&work.verified_allocation),
         amount_commitment: None,
     };
     Ok(ProofBlob {
-        payload: norito::to_bytes(&proof_envelope).wrap_err("encode fee budget proof envelope")?,
-        expiry_slot: Some(expiry_slot),
+        payload: norito::to_bytes(&proof_envelope)
+            .wrap_err("encode fee sponsor vault allocation proof envelope")?,
+        expiry_slot: Some(work.expires_at_height),
     })
 }
 
@@ -1073,15 +1318,13 @@ mod tests {
 
     use iroha_crypto::Algorithm;
     use iroha_data_model::{
-        Level, Registrable,
-        account::Account,
-        asset::{Asset, AssetDefinition},
+        Level,
         block::{BlockHeader, consensus::LaneBlockCommitment},
-        domain::Domain,
+        domain::DomainId,
         isi::Log,
         nexus::{LaneId, LaneRelayEnvelope},
     };
-    use iroha_primitives::numeric::{NumericSpec, Quantity};
+    use iroha_primitives::numeric::Quantity;
 
     fn test_fastpq() -> Fastpq {
         Fastpq {
@@ -1121,39 +1364,6 @@ mod tests {
         assert_eq!(algorithm, Algorithm::default());
     }
 
-    #[test]
-    fn quantity_asset_balance_defaults_missing_assets_to_zero() {
-        let owner = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
-        let missing_owner =
-            AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
-        let domain_id = iroha_data_model::domain::DomainId::try_new("fees", "universal")
-            .expect("valid fee-balance test domain");
-        let definition_id =
-            AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("valid asset name"));
-        let asset_id = AssetId::new(definition_id.clone(), owner.clone());
-        let missing_asset_id = AssetId::new(definition_id.clone(), missing_owner.clone());
-        let world = iroha_core::state::World::with_assets(
-            [Domain::new(domain_id).build(&owner)],
-            [
-                Account::new(owner.clone()).build(&owner),
-                Account::new(missing_owner).build(&owner),
-            ],
-            [AssetDefinition::new(definition_id, NumericSpec::integer()).build(&owner)],
-            [Asset::new(asset_id.clone(), Quantity::from(42_u32))],
-            [],
-        );
-        let world = world.view();
-
-        assert_eq!(
-            quantity_asset_balance(&world, &asset_id),
-            Quantity::from(42_u32)
-        );
-        assert_eq!(
-            quantity_asset_balance(&world, &missing_asset_id),
-            Quantity::zero()
-        );
-    }
-
     fn sample_envelope(manifest_root: [u8; 32]) -> LaneRelayEnvelope {
         let header = BlockHeader::new(
             NonZeroU64::new(7).expect("non-zero block height"),
@@ -1169,10 +1379,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(10),
             tx_count: 1,
-            total_local_micro: 76,
-            total_xor_due_micro: 1,
-            total_xor_after_haircut_micro: 1,
-            total_xor_variance_micro: 0,
+            total_local_amount: "0.000076".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000001".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -1291,6 +1501,65 @@ mod tests {
     }
 
     #[test]
+    fn fee_sponsor_vault_partition_never_duplicates_capacity_across_dataspaces() -> Result<()> {
+        let balance: Quantity = "10.000000001".parse()?;
+        let allocations = partition_fee_sponsor_vault(&balance, 2, 9)?;
+
+        assert_eq!(allocations.len(), 2);
+        assert_eq!(
+            allocations[0].checked_add(&allocations[1])?,
+            balance,
+            "two dataspace leases must partition, not duplicate, the source vault"
+        );
+        assert!(allocations.iter().all(|allocation| allocation < &balance));
+        Ok(())
+    }
+
+    #[test]
+    fn enrolled_program_gets_allocation_for_explicit_non_default_route() {
+        assert!(fee_sponsor_route_allocation_eligible(
+            true,
+            FeeSponsorEligibility::EnrolledOnly,
+            false,
+        ));
+        assert!(!fee_sponsor_route_allocation_eligible(
+            false,
+            FeeSponsorEligibility::EnrolledOnly,
+            true,
+        ));
+        assert!(fee_sponsor_route_allocation_eligible(
+            false,
+            FeeSponsorEligibility::EnrolledOrRouteDefault,
+            true,
+        ));
+    }
+
+    #[test]
+    fn fee_sponsor_allocation_expiry_respects_scheduled_revision_boundary() {
+        assert_eq!(fee_sponsor_allocation_expiry_height(10, 20, None), Some(30));
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(25)),
+            Some(24),
+            "an old-revision lease must drain before the scheduled activation"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 5, Some(25)),
+            Some(15),
+            "a later activation must not extend the ordinary lease"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(12)),
+            Some(11),
+            "the last executable pre-activation block remains eligible"
+        );
+        assert_eq!(
+            fee_sponsor_allocation_expiry_height(10, 20, Some(11)),
+            None,
+            "work that cannot execute before activation must not be emitted"
+        );
+    }
+
+    #[test]
     fn lane_relay_worker_proof_verifies_and_binds_claim() -> Result<()> {
         let envelope = sample_envelope([0x42; 32]);
         let (proven, proof_blob) = prove_lane_relay_envelope(&envelope, 20, 7, &test_fastpq())?;
@@ -1310,27 +1579,75 @@ mod tests {
     }
 
     #[test]
-    fn fee_budget_worker_proof_verifies() -> Result<()> {
+    fn fee_sponsor_vault_allocation_worker_proof_verifies() -> Result<()> {
         let sponsor = AccountId::new(checked_nexus_fee_relay_key_fixture().public_key().clone());
-        let verified_balance = Quantity::from(50_u32);
-        let proof_blob = prove_fee_budget(
-            &sponsor,
-            "xor#universal",
-            &verified_balance,
-            [0x63; 32],
-            20,
-            &test_fastpq(),
+        let program_id = FeeSponsorProgramId::new(
+            sponsor,
+            "relay".parse().expect("valid sponsor program name"),
+        );
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("universal", "universal").expect("valid universal domain"),
+            "xor".parse().expect("valid fee asset name"),
+        );
+        let verified_allocation = Quantity::from(50_u32);
+        let source_dataspace_id = DataSpaceId::new(10);
+        let source_height = 7;
+        let expires_at_height = 20;
+        let source_state_root = fee_sponsor_vault_source_state_root(
+            &program_id,
+            3,
+            &asset_definition_id,
+            &verified_allocation,
+            source_dataspace_id,
+            source_height,
+        );
+        let lease_id = fee_sponsor_vault_lease_id(
+            &program_id,
+            3,
+            &asset_definition_id,
+            source_dataspace_id,
+            source_height,
+            source_state_root,
+            expires_at_height,
         )?;
+        let work = DurableAllocationWork {
+            program_id: program_id.clone(),
+            program_revision: 3,
+            asset_definition_id: asset_definition_id.clone(),
+            verified_allocation: verified_allocation.clone(),
+            source_dataspace_id,
+            source_height,
+            source_state_root,
+            expires_at_height,
+            lease_id,
+            manifest_root: [0x63; 32],
+            proof_blob: None,
+            status: DurableWorkStatus::Pending,
+            attempts: 0,
+            last_height: source_height,
+        };
+        let proof_blob = prove_fee_sponsor_vault_allocation(&work, &test_fastpq())?;
         let proof_envelope: AxtProofEnvelope = norito::decode_from_bytes(&proof_blob.payload)?;
         fastpq_prover::verify_axt_proof_envelope(&proof_envelope)?;
         let binding = proof_envelope.fastpq_binding.expect("fastpq binding");
-        assert_eq!(binding.verified_effect_type, FEE_BUDGET_EFFECT_TYPE);
+        assert_eq!(
+            binding.verified_effect_type,
+            FEE_SPONSOR_VAULT_ALLOCATION_EFFECT_TYPE
+        );
+        let claim = FeeSponsorVaultAllocationClaim {
+            program_id,
+            program_revision: 3,
+            asset_definition_id,
+            verified_allocation,
+            source_dataspace_id,
+            source_height,
+            source_state_root,
+            expires_at_height,
+            lease_id,
+        };
         assert_eq!(
             binding.claim_digest,
-            hex::encode(
-                nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &verified_balance)
-                    .as_ref()
-            )
+            hex::encode(fee_sponsor_vault_allocation_claim_digest(&claim).as_ref())
         );
         assert_eq!(proof_envelope.committed_amount, Some(50));
         Ok(())

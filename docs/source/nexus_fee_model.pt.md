@@ -21,19 +21,30 @@ reconciliem os debitos de gas com o modelo de taxas Nexus.
   um `liquidity_profile` (`tier1`, `tier2`, ou `tier3`), e um `volatility_class` (`stable`,
   `elevated`, `dislocated`). Esses flags alimentam o settlement router para que a cotacao XOR resultante
   coincida com o TWAP canonico e o tier de haircut da lane.
-- As transacoes IVM devem incluir o metadado `gas_limit` (`u64`, > 0) para limitar a exposicao a taxas.
-  O endpoint `/v1/contracts/call` exige `gas_limit` explicitamente e valores invalidos sao rejeitados.
-- Quando uma transacao define o metadado `fee_sponsor`, o sponsor deve conceder
-  `CanUseFeeSponsor { sponsor }` ao chamador. Tentativas de sponsorship nao autorizadas sao rejeitadas
-  e registradas.
+- Cada transacao deve levar o campo tipado e vinculado a assinatura
+  `fee_payment` (`FeePaymentIntent`). Ele escolhe como pagador a autoridade
+  ou um programa sponsor exato com a sua revisao imutavel, e inclui maximos
+  assinados por componente e um limite de gas positivo quando necessario. As
+  chaves de metadados antigas `fee_sponsor`, `gas_limit` e
+  `gas_asset_id` sao rejeitadas.
+- Obtenha a cotacao antes de assinar: construa o payload nao assinado exato,
+  faca sua autoridade autenticar `POST /v1/fees/quote`, confira o intent
+  recomendado, substitua apenas `payload.fee_payment` e assine e envie esse
+  mesmo payload. A cotacao e uma observacao, nao uma reserva; a admission
+  verifica novamente o estado atual.
+- O settlement direto aceita a autoridade ou um programa sponsor exato. O
+  settlement por receipts (`lane_relay_burn`) aceita somente um sponsor
+  exato: taxas Nexus pagas pela autoridade sao rejeitadas com
+  `relay_capacity_unavailable`, pois o saldo da autoridade nao e um source
+  lock de receipt autenticado.
 - Cada transacao que paga gas registra um `LaneSettlementReceipt`. Cada recibo armazena o
   identificador de origem fornecido pelo chamador, o micro-montante local, o XOR devido
   imediatamente, o XOR esperado apos o haircut, a margem de seguranca realizada
-  (`xor_variance_micro`), e o timestamp do bloco em milissegundos.
+  (`xor_variance`), e o timestamp do bloco em milissegundos.
 - A execucao do bloco agrega recibos por lane/dataspace e os publica via `lane_settlement_commitments`
-  em `/v1/sumeragi/status`. Os totais exibem `total_local_micro`, `total_xor_due_micro`, e
-  `total_xor_after_haircut_micro` somados sobre o bloco para exportes noturnos de reconciliacao.
-- Um novo contador `total_xor_variance_micro` acompanha quanto de margem de seguranca foi consumida
+  em `/v1/sumeragi/status`. Os totais exibem `total_local_amount`, `total_xor_due`, e
+  `total_xor_after_haircut` somados sobre o bloco para exportes noturnos de reconciliacao.
+- Um novo contador `total_xor_variance` acompanha quanto de margem de seguranca foi consumida
   (diferenca entre o XOR devido e a expectativa pos-haircut), e `swap_metadata` documenta os
   parametros deterministas de conversao (TWAP, epsilon, liquidity profile, e volatility_class) para
   que auditores possam verificar os insumos da cotacao independentemente da configuracao de runtime.

@@ -10,6 +10,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::{Parser, ValueEnum};
 use iroha_crypto::{Algorithm, KeyPair, Signature};
+use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json,
@@ -76,7 +77,7 @@ struct VpnSettlementSpoolRecord {
     session_id_hex: String,
     quote_id_hex: String,
     payment_tx_hash_hex: String,
-    earned_fee_nanos: u64,
+    earned_fee: Quantity,
     torii_receipt_path: String,
     submit_receipt_request: VpnSettlementSubmitRequestArtifact,
 }
@@ -289,7 +290,7 @@ mod tests {
             session_id_hex: "aa".repeat(16),
             quote_id_hex: "11".repeat(32),
             payment_tx_hash_hex: "22".repeat(32),
-            earned_fee_nanos: 55,
+            earned_fee: "0.000000055".parse().expect("canonical XOR quantity"),
             torii_receipt_path: DEFAULT_PATH.to_owned(),
             submit_receipt_request: VpnSettlementSubmitRequestArtifact {
                 relay_receipt_hex: "33".repeat(4),

@@ -85,7 +85,7 @@ internal object OfflineDeviceAttestationCodec {
                 value.assetDefinitionId,
                 requireNotNull(value.androidPackageName),
                 requireNotNull(value.androidSigningCertificateSha256),
-                value.publicKey,
+                value.publicKey.sec1Bytes(),
                 value.recentBlockHeight,
                 value.recentBlockHash,
                 value.expiresAtMs,
@@ -122,7 +122,7 @@ internal object OfflineDeviceAttestationCodec {
             assetDefinitionId,
             androidPackageName,
             androidSigningCertificateSha256,
-            publicKey,
+            KagemushaP256Codec.requireUncompressedPublicKey(publicKey),
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs,
@@ -154,7 +154,7 @@ internal object OfflineDeviceAttestationCodec {
             field(encoder) { optionString(it, value.iosEnvironment) }
             field(encoder) { optionString(it, value.androidPackageName) }
             field(encoder) { optionBytes(it, value.androidSigningCertificateSha256) }
-            field(encoder) { bytes(it, value.publicKey) }
+            field(encoder) { p256PublicKey(it, value.publicKey.sec1Bytes()) }
             field(encoder) { string(it, value.assertionScheme) }
             field(encoder) { string(it, value.assertionKeyAlgorithm) }
             field(encoder) { bytes(it, value.assertionPublicKey) }
@@ -189,7 +189,7 @@ internal object OfflineDeviceAttestationCodec {
                 iosEnvironment = readField(decoder, ::readOptionString),
                 androidPackageName = readField(decoder, ::readOptionString),
                 androidSigningCertificateSha256 = readField(decoder, ::readOptionBytes),
-                publicKey = readField(decoder, ::readBytes),
+                publicKey = KagemushaDevicePublicKeyV2(readField(decoder, ::readP256PublicKey)),
                 assertionScheme = readField(decoder, ::readString),
                 assertionKeyAlgorithm = readField(decoder, ::readString),
                 assertionPublicKey = readField(decoder, ::readBytes),
@@ -230,7 +230,7 @@ internal object OfflineDeviceAttestationCodec {
             field(encoder) { optionString(it, registration.iosEnvironment) }
             field(encoder) { optionString(it, registration.androidPackageName) }
             field(encoder) { optionBytes(it, registration.androidSigningCertificateSha256) }
-            field(encoder) { bytes(it, registration.publicKey) }
+            field(encoder) { p256PublicKey(it, registration.publicKey.sec1Bytes()) }
             field(encoder) { string(it, registration.assertionScheme) }
             field(encoder) { string(it, registration.assertionKeyAlgorithm) }
             field(encoder) { optionU32(it, registration.assertionUsageCountLimit) }
@@ -257,7 +257,7 @@ internal object OfflineDeviceAttestationCodec {
             field(encoder) { optionString(it, null) }
             field(encoder) { optionString(it, value.androidPackageName) }
             field(encoder) { optionBytes(it, value.androidSigningCertificateSha256) }
-            field(encoder) { bytes(it, value.publicKey) }
+            field(encoder) { p256PublicKey(it, value.publicKey) }
             field(encoder) { string(it, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME) }
             field(encoder) { string(it, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM) }
             field(encoder) { optionU32(it, 1) }
@@ -297,7 +297,7 @@ internal object OfflineDeviceAttestationCodec {
             require(this.androidSigningCertificateSha256.size == 32) {
                 "android_signing_certificate_sha256 must be 32 bytes"
             }
-            require(this.publicKey.size == 32) { "public_key must be 32 bytes" }
+            KagemushaP256Codec.requireUncompressedPublicKey(this.publicKey)
             require(recentBlockHeight > 0 && expiresAtMs > 0) {
                 "challenge lifetime fields must be positive"
             }
@@ -344,6 +344,20 @@ internal object OfflineDeviceAttestationCodec {
 
     private fun readBytes(decoder: NoritoDecoder): ByteArray =
         decoder.readBytes(checkedLength(decoder.readUInt(64), "byte vector"))
+
+    private fun p256PublicKey(encoder: NoritoEncoder, value: ByteArray) {
+        val key = KagemushaP256Codec.requireUncompressedPublicKey(value)
+        encoder.writeBytes(key)
+    }
+
+    private fun readP256PublicKey(decoder: NoritoDecoder): ByteArray {
+        require(decoder.remaining() == KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+            "P-256 public key must contain exactly 65 bytes"
+        }
+        return KagemushaP256Codec.requireUncompressedPublicKey(
+            decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES),
+        )
+    }
 
     private fun optionString(encoder: NoritoEncoder, value: String?) {
         option(encoder, value) { string(it, requireNotNull(value)) }

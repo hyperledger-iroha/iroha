@@ -158,9 +158,9 @@ public enum KagemushaNFCError: Error, Equatable, LocalizedError, Sendable {
 public enum KagemushaNFCEvent: Equatable, Sendable {
     case sessionStarted
     case peerConnected
-    case receiveRequestRead(KagemushaRecipientPaymentRequest)
-    case paymentPrepared(KagemushaRecursiveSpendPeerPayment)
-    case paymentCommitted(KagemushaRecursiveSpendPeerPayment)
+    case receiveRequestRead(KagemushaRecipientReceiveOfferV2)
+    case paymentPrepared(KagemushaRecursiveSpendPeerPaymentV4)
+    case paymentCommitted(KagemushaRecursiveSpendPeerPaymentV4)
     case acknowledgementReady(KagemushaReceiverAcknowledgement)
     case acknowledgementRead
     case bytesTransferred(completed: Int, total: Int)
@@ -188,10 +188,10 @@ public enum KagemushaNFCCommand: Equatable, Sendable {
 
 /// Pure ISO-7816 framing shared by the iOS reader/card adapters and test peers.
 public enum KagemushaNFCProtocol {
-    /// Version 2 carries the typed Norito archive directly. Version 1 encoded
-    /// the same archive as `PKK2?.` text and therefore could not carry every
-    /// protocol-valid 32 KiB peer payload.
-    public static let rawTransportVersion: UInt8 = 2
+    /// First-release V4 carries typed Norito bytes with an explicit 32-bit
+    /// offset inside every read/write command body. Retired P1/P2 16-bit
+    /// offset commands are rejected as non-canonical.
+    public static let rawTransportVersion: UInt8 = 4
     public static let minimumApplicationIdentifierBytes = 5
     public static let maximumApplicationIdentifierBytes = 16
     public static let safeChunkBytes = 220
@@ -212,6 +212,8 @@ public enum KagemushaNFCProtocol {
     static let instructionWriteMetadata: UInt8 = 0x20
     static let instructionWriteChunk: UInt8 = 0x21
     static let instructionCommit: UInt8 = 0x22
+    static let offsetBytes = 4
+    static let readRequestBytes = offsetBytes + 2
 
     public static var defaultApplicationIdentifier: Data {
         // The constant is compile-time controlled and tested below; force-free
@@ -271,33 +273,29 @@ public enum KagemushaNFCProtocol {
     }
 
     public static func getInfoCommand() -> Data {
-        Data([instructionClass, instructionGetInfo, 0x00, 0x00, 0x00])
+        Data([
+            instructionClass,
+            instructionGetInfo,
+            rawTransportVersion,
+            0x00,
+            0x00,
+        ])
     }
 
     public static func readChunkCommand(
         offset: Int,
         length: Int = safeChunkBytes
     ) throws -> Data {
-        try requireOffset(offset)
         try requireChunkLength(length, maximum: maximumExtendedReadChunkBytes)
-        if length <= Int(UInt8.max) {
-            return Data([
-                instructionClass,
-                instructionReadChunk,
-                UInt8((offset >> 8) & 0xFF),
-                UInt8(offset & 0xFF),
-                UInt8(length),
-            ])
-        }
-        return Data([
-            instructionClass,
-            instructionReadChunk,
-            UInt8((offset >> 8) & 0xFF),
-            UInt8(offset & 0xFF),
-            0,
-            UInt8((length >> 8) & 0xFF),
-            UInt8(length & 0xFF),
-        ])
+        try requireTransferRange(
+            offset: offset,
+            length: length,
+            maximumChunkLength: maximumExtendedReadChunkBytes
+        )
+        return try dataCommand(
+            instruction: instructionReadChunk,
+            data: uint32(offset) + uint16(length)
+        )
     }
 
     public static func writeMetadataCommand(
@@ -308,37 +306,24 @@ public enum KagemushaNFCProtocol {
         let metadata = Data([rawTransportVersion, kind.rawValue])
             + uint32(payloadBytes.count)
             + sha256(payloadBytes)
-        return Data([
-            instructionClass,
-            instructionWriteMetadata,
-            0,
-            0,
-            UInt8(metadata.count),
-        ]) + metadata
+        return try dataCommand(instruction: instructionWriteMetadata, data: metadata)
     }
 
     public static func writeChunkCommand(offset: Int, bytes: Data) throws -> Data {
-        try requireOffset(offset)
         try requireChunkLength(bytes.count, maximum: maximumExtendedWriteChunkBytes)
-        var result = Data([
-            instructionClass,
-            instructionWriteChunk,
-            UInt8((offset >> 8) & 0xFF),
-            UInt8(offset & 0xFF),
-        ])
-        if bytes.count <= Int(UInt8.max) {
-            result.append(UInt8(bytes.count))
-        } else {
-            result.append(0)
-            result.append(UInt8((bytes.count >> 8) & 0xFF))
-            result.append(UInt8(bytes.count & 0xFF))
-        }
-        result.append(bytes)
-        return result
+        try requireTransferRange(
+            offset: offset,
+            length: bytes.count,
+            maximumChunkLength: maximumExtendedWriteChunkBytes
+        )
+        return try dataCommand(
+            instruction: instructionWriteChunk,
+            data: uint32(offset) + bytes
+        )
     }
 
     public static func commitCommand() -> Data {
-        Data([instructionClass, instructionCommit, 0, 0, 0])
+        Data([instructionClass, instructionCommit, rawTransportVersion, 0, 0])
     }
 
     public static func writePayloadCommands(
@@ -375,15 +360,24 @@ public enum KagemushaNFCProtocol {
         if isSelectCommand(command) { return .selectOtherApplication }
         guard command[0] == instructionClass else { return .unsupported }
         let instruction = command[1]
-        let offset = Int(command[2]) << 8 | Int(command[3])
+        let canonicalParameters = command[2] == rawTransportVersion && command[3] == 0
         switch instruction {
         case instructionGetInfo:
-            return offset == 0 && isNoDataCommand(command) ? .getInfo : .invalid
+            return canonicalParameters && isNoDataCommand(command) ? .getInfo : .invalid
         case instructionReadChunk:
-            guard let length = readCommandLength(command) else { return .invalid }
+            guard canonicalParameters,
+                  let data = commandData(command),
+                  data.count == readRequestBytes else { return .invalid }
+            let offset = Int(data.uint32BE(at: 0))
+            let length = Int(data.uint16BE(at: offsetBytes))
+            guard transferRangeIsValid(
+                offset: offset,
+                length: length,
+                maximumChunkLength: maximumExtendedReadChunkBytes
+            ) else { return .invalid }
             return .readChunk(offset: offset, requestedLength: length)
         case instructionWriteMetadata:
-            guard offset == 0,
+            guard canonicalParameters,
                   let data = commandData(command),
                   data.count == 38,
                   data[0] == rawTransportVersion,
@@ -401,14 +395,22 @@ public enum KagemushaNFCProtocol {
                 sha256: data.subdata(in: 6..<38)
             )
         case instructionWriteChunk:
-            guard let data = commandData(command),
-                  !data.isEmpty,
-                  data.count <= maximumExtendedWriteChunkBytes else {
+            guard canonicalParameters,
+                  let data = commandData(command),
+                  data.count > offsetBytes,
+                  data.count <= offsetBytes + maximumExtendedWriteChunkBytes else {
                 return .invalid
             }
-            return .writeChunk(offset: offset, bytes: data)
+            let offset = Int(data.uint32BE(at: 0))
+            let chunk = data.subdata(in: offsetBytes..<data.count)
+            guard transferRangeIsValid(
+                offset: offset,
+                length: chunk.count,
+                maximumChunkLength: maximumExtendedWriteChunkBytes
+            ) else { return .invalid }
+            return .writeChunk(offset: offset, bytes: chunk)
         case instructionCommit:
-            return offset == 0 && isNoDataCommand(command) ? .commit : .invalid
+            return canonicalParameters && isNoDataCommand(command) ? .commit : .invalid
         default:
             return .unsupported
         }
@@ -514,15 +516,6 @@ public enum KagemushaNFCProtocol {
         command.count == 4 || (command.count == 5 && command[4] == 0)
     }
 
-    private static func readCommandLength(_ command: Data) -> Int? {
-        if command.count == 5, command[4] > 0 {
-            return Int(command[4])
-        }
-        guard command.count == 7, command[4] == 0 else { return nil }
-        let length = Int(command[5]) << 8 | Int(command[6])
-        return (1...maximumExtendedReadChunkBytes).contains(length) ? length : nil
-    }
-
     private static func commandData(_ command: Data) -> Data? {
         guard command.count >= 5 else { return nil }
         if command[4] > 0 {
@@ -536,8 +529,52 @@ public enum KagemushaNFCProtocol {
         return command.subdata(in: 7..<command.count)
     }
 
-    private static func requireOffset(_ offset: Int) throws {
-        guard (0...Int(UInt16.max)).contains(offset) else {
+    private static func dataCommand(instruction: UInt8, data: Data) throws -> Data {
+        guard !data.isEmpty, data.count <= Int(UInt16.max) else {
+            throw KagemushaNFCError.invalidChunkLength
+        }
+        if data.count <= Int(UInt8.max) {
+            return Data([
+                instructionClass,
+                instruction,
+                rawTransportVersion,
+                0,
+                UInt8(data.count),
+            ]) + data
+        }
+        return Data([
+            instructionClass,
+            instruction,
+            rawTransportVersion,
+            0,
+            0,
+            UInt8((data.count >> 8) & 0xFF),
+            UInt8(data.count & 0xFF),
+        ]) + data
+    }
+
+    private static func transferRangeIsValid(
+        offset: Int,
+        length: Int,
+        maximumChunkLength: Int
+    ) -> Bool {
+        guard offset >= 0,
+              (1...maximumChunkLength).contains(length),
+              offset < maximumPayloadBytes else { return false }
+        let (end, overflow) = offset.addingReportingOverflow(length)
+        return !overflow && end <= maximumPayloadBytes
+    }
+
+    private static func requireTransferRange(
+        offset: Int,
+        length: Int,
+        maximumChunkLength: Int
+    ) throws {
+        guard transferRangeIsValid(
+            offset: offset,
+            length: length,
+            maximumChunkLength: maximumChunkLength
+        ) else {
             throw KagemushaNFCError.invalidOffset
         }
     }
@@ -614,7 +651,7 @@ public final class KagemushaNFCCardStateMachine: @unchecked Sendable {
 
     public init(
         applicationIdentifier: Data = KagemushaNFCProtocol.defaultApplicationIdentifier,
-        receiveRequest: KagemushaRecipientPaymentRequest
+        receiveRequest: KagemushaRecipientReceiveOfferV2
     ) throws {
         self.applicationIdentifier = try KagemushaNFCProtocol
             .validateApplicationIdentifier(applicationIdentifier)
@@ -934,12 +971,12 @@ public final class KagemushaNFCReader: NSObject, @unchecked Sendable {
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
-        ) async throws -> KagemushaRecursiveSpendPeerPayment
+            KagemushaRecipientReceiveOfferV2
+        ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         let connection = KagemushaNFCTagConnection()
         lock.withLock { self.connection = connection }
-        var committedPayment: KagemushaRecursiveSpendPeerPayment?
+        var committedPayment: KagemushaRecursiveSpendPeerPaymentV4?
         defer { lock.withLock { self.connection = nil } }
         do {
             let tag = try await connection.connect(
@@ -1212,12 +1249,12 @@ public final class KagemushaNFCCardSession: @unchecked Sendable {
     }
 
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
-            KagemushaRecursiveSpendPeerPayment
+            KagemushaRecursiveSpendPeerPaymentV4
         ) async throws -> KagemushaReceiverAcknowledgement
-    ) async throws -> KagemushaRecursiveSpendPeerPayment {
+    ) async throws -> KagemushaRecursiveSpendPeerPaymentV4 {
         guard configuration.cardSessionEnabled else {
             throw KagemushaNFCError.missingEntitlementOrProfile
         }
@@ -1240,17 +1277,17 @@ private final class KagemushaNFCCardRuntime {
     private let stateMachine: KagemushaNFCCardStateMachine
     private let onEvent: @Sendable (KagemushaNFCEvent) -> Void
     private let acceptPayment: @Sendable (
-        KagemushaRecursiveSpendPeerPayment
+        KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaReceiverAcknowledgement
     private var session: CardSession?
-    private var acceptedPayment: KagemushaRecursiveSpendPeerPayment?
+    private var acceptedPayment: KagemushaRecursiveSpendPeerPaymentV4?
 
     init(
         configuration: KagemushaNFCConfiguration,
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void,
         acceptPayment: @escaping @Sendable (
-            KagemushaRecursiveSpendPeerPayment
+            KagemushaRecursiveSpendPeerPaymentV4
         ) async throws -> KagemushaReceiverAcknowledgement
     ) throws {
         self.configuration = configuration
@@ -1264,7 +1301,7 @@ private final class KagemushaNFCCardRuntime {
 
     func cancel() { session?.invalidate() }
 
-    func run() async throws -> KagemushaRecursiveSpendPeerPayment {
+    func run() async throws -> KagemushaRecursiveSpendPeerPaymentV4 {
         guard CardSession.isSupported else { throw KagemushaNFCError.unavailable }
         guard await CardSession.isEligible else { throw KagemushaNFCError.ineligibleDevice }
         let session: CardSession
@@ -1344,8 +1381,8 @@ public final class KagemushaNFCReader: @unchecked Sendable {
     public func sendPayment(
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         createPayment: @escaping @Sendable (
-            KagemushaRecipientPaymentRequest
-        ) async throws -> KagemushaRecursiveSpendPeerPayment
+            KagemushaRecipientReceiveOfferV2
+        ) async throws -> KagemushaRecursiveSpendPeerPaymentV4
     ) async throws -> KagemushaPeerSendResult {
         _ = onEvent
         _ = createPayment
@@ -1363,12 +1400,12 @@ public final class KagemushaNFCCardSession: @unchecked Sendable {
     }
     public func cancel() {}
     public func receivePayment(
-        receiveRequest: KagemushaRecipientPaymentRequest,
+        receiveRequest: KagemushaRecipientReceiveOfferV2,
         onEvent: @escaping @Sendable (KagemushaNFCEvent) -> Void = { _ in },
         acceptPayment: @escaping @Sendable (
-            KagemushaRecursiveSpendPeerPayment
+            KagemushaRecursiveSpendPeerPaymentV4
         ) async throws -> KagemushaReceiverAcknowledgement
-    ) async throws -> KagemushaRecursiveSpendPeerPayment {
+    ) async throws -> KagemushaRecursiveSpendPeerPaymentV4 {
         _ = receiveRequest
         _ = onEvent
         _ = acceptPayment

@@ -377,7 +377,8 @@ fn make_signed_advert(
         profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
         stake: StakePointer {
             pool_id: stake_pool_id,
-            stake_amount: 5_000_000,
+            stake_amount: sorafs_manifest::XorQuantity::try_from_micro(5_000_000)
+                .expect("fixture stake is representable"),
         },
         qos: QosHints {
             availability: AvailabilityTier::Hot,

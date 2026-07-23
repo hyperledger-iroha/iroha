@@ -2985,7 +2985,7 @@ mod tests {
         EndpointMetadataKey, GovernanceProofs, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
         PathDiversityPolicy, PinPolicy, ProviderAdvertBodyV1, ProviderCapabilityRangeV1, QosHints,
         RendezvousTopic, SignatureAlgorithm, StakePointer, StorageClass, StreamBudgetV1,
-        TransportHintV1, TransportProtocol, hybrid_envelope::HybridKemBundleV1,
+        TransportHintV1, TransportProtocol, deal::XorQuantity, hybrid_envelope::HybridKemBundleV1,
         provider_advert::ProviderCapabilitySoranetPqV1,
     };
     use tempfile::{NamedTempFile, TempDir, tempdir};
@@ -2996,6 +2996,10 @@ mod tests {
         let temp = tempdir().expect("tempdir");
         let path = temp.path().canonicalize().expect("canonical tempdir");
         (temp, path)
+    }
+
+    fn xor_micro(value: u128) -> XorQuantity {
+        XorQuantity::try_from_micro(value).expect("test micro-XOR amount is representable")
     }
 
     fn plan_chunks(payload: &[u8], plan: &CarBuildPlan) -> Vec<Vec<u8>> {
@@ -3218,7 +3222,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle]),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 1_000_000,
+                stake_amount: xor_micro(1_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4079,7 +4083,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 1_000_000,
+                stake_amount: xor_micro(1_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4279,7 +4283,7 @@ mod tests {
             profile_aliases: Some(profile_aliases.clone()),
             stake: StakePointer {
                 pool_id: [0x55; 32],
-                stake_amount: 750_000,
+                stake_amount: xor_micro(750_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4421,7 +4425,7 @@ mod tests {
             profile_aliases: Some(profile_aliases.clone()),
             stake: StakePointer {
                 pool_id: [0x01; 32],
-                stake_amount: 600_000,
+                stake_amount: xor_micro(600_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4455,7 +4459,7 @@ mod tests {
             profile_aliases: Some(profile_aliases.clone()),
             stake: StakePointer {
                 pool_id: [0x02; 32],
-                stake_amount: 900_000,
+                stake_amount: xor_micro(900_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4598,7 +4602,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0xBB; 32],
-                stake_amount: 1_500_000,
+                stake_amount: xor_micro(1_500_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -4853,7 +4857,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x24; 32],
-                stake_amount: 2_000_000,
+                stake_amount: xor_micro(2_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Warm,
@@ -4952,7 +4956,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x31; 32],
-                stake_amount: 2_000_000,
+                stake_amount: xor_micro(2_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -5046,7 +5050,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x51; 32],
-                stake_amount: 2_500_000,
+                stake_amount: xor_micro(2_500_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Warm,
@@ -5168,7 +5172,7 @@ mod tests {
             profile_aliases: Some(profile_aliases.clone()),
             stake: StakePointer {
                 pool_id: [0x41; 32],
-                stake_amount: 1_500_000,
+                stake_amount: xor_micro(1_500_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -5294,7 +5298,7 @@ mod tests {
             profile_aliases: Some(vec![profile_handle.clone(), "sorafs-sf1".into()]),
             stake: StakePointer {
                 pool_id: [0x71; 32],
-                stake_amount: 1_000_000,
+                stake_amount: xor_micro(1_000_000),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Warm,

@@ -1244,7 +1244,6 @@ fn expected_ivm_exec_public_inputs(
 
 #[test]
 fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
-    use std::str::FromStr;
     use std::sync::Arc;
 
     use iroha_crypto::Hash;
@@ -1253,8 +1252,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         account::Account,
         confidential::ConfidentialStatus,
         domain::Domain,
-        metadata::Metadata,
-        name::Name,
         prelude::{AccountId, IvmBytecode, TransactionBuilder},
         proof::{
             ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId, VerifyingKeyRecord,
@@ -1262,7 +1259,6 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
         transaction::{Executable, IvmProved},
         zk::{BackendTag, OpenVerifyEnvelope, StarkFriOpenProofV1},
     };
-    use iroha_primitives::json::Json;
 
     let backend = "stark/fri/sha256-goldilocks";
     let circuit_id = "ivm-execution-v1";
@@ -1322,17 +1318,18 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
     const TEST_GAS_LIMIT: u64 = 50_000_000;
-    let mut metadata = Metadata::default();
-    metadata.insert(
-        Name::from_str("gas_limit").expect("static gas_limit key"),
-        Json::new(TEST_GAS_LIMIT),
-    );
 
     // Derive the proved payload by executing the IVM program once.
-    let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-        .with_metadata(metadata.clone())
-        .with_executable(Executable::Ivm(bytecode.clone()))
-        .sign(kp.private_key());
+    let tx = TransactionBuilder::new(
+        state.chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            core::num::NonZeroU64::new(TEST_GAS_LIMIT),
+        ),
+    )
+    .with_executable(Executable::Ivm(bytecode.clone()))
+    .sign(kp.private_key());
     let proved = iroha_core::pipeline::overlay::derive_ivm_proved_payload_from_ivm_execution(
         &state.view(),
         &tx,
@@ -1392,16 +1389,22 @@ fn stark_ivm_proved_execution_admission_rejects_synthetic_air_proof() {
     let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
     let attachments = ProofAttachmentList(vec![attachment]);
 
-    let tx_proved = TransactionBuilder::new(state.chain_id.clone(), authority)
-        .with_metadata(metadata)
-        .with_executable(Executable::IvmProved(IvmProved {
-            bytecode: proved.bytecode.clone(),
-            overlay: proved.overlay.clone(),
-            events_commitment: proved.events_commitment,
-            gas_policy_commitment: proved.gas_policy_commitment,
-        }))
-        .with_attachments(attachments)
-        .sign(kp.private_key());
+    let tx_proved = TransactionBuilder::new(
+        state.chain_id.clone(),
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(
+            Vec::new(),
+            core::num::NonZeroU64::new(TEST_GAS_LIMIT),
+        ),
+    )
+    .with_executable(Executable::IvmProved(IvmProved {
+        bytecode: proved.bytecode.clone(),
+        overlay: proved.overlay.clone(),
+        events_commitment: proved.events_commitment,
+        gas_policy_commitment: proved.gas_policy_commitment,
+    }))
+    .with_attachments(attachments)
+    .sign(kp.private_key());
 
     let err =
         iroha_core::pipeline::overlay::build_overlay_for_transaction(&tx_proved, &state.view())
@@ -1460,8 +1463,8 @@ fn stark_governance_submit_rejects_synthetic_air_proof() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = false;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    state.gov.citizenship_bond_amount = 0;
-    state.gov.min_bond_amount = 0;
+    state.gov.citizenship_bond_amount = 0_u64.into();
+    state.gov.min_bond_amount = 0_u64.into();
 
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),
@@ -1868,8 +1871,8 @@ fn governance_accepts_halo2_and_rejects_synthetic_stark_ballot() {
     state.zk.stark.enabled = true;
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = std::time::Duration::ZERO;
-    state.gov.citizenship_bond_amount = 0;
-    state.gov.min_bond_amount = 0;
+    state.gov.citizenship_bond_amount = 0_u64.into();
+    state.gov.min_bond_amount = 0_u64.into();
 
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("non-zero"),

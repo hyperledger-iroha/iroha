@@ -80,7 +80,15 @@ async fn submit_instruction_and_wait(
     client.transaction_status_timeout = network.sync_timeout();
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || client.submit_blocking(instruction).wrap_err(context)).await??;
+    spawn_blocking(move || {
+        client
+            .submit_blocking(
+                instruction,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .wrap_err(context)
+    })
+    .await??;
     Ok(())
 }
 
@@ -452,9 +460,15 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     .min(std::time::Duration::from_secs(120));
                 let bad_trigger_id = bad_trigger_id.clone();
                 move || {
-                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
-                        ExecuteTrigger::new(bad_trigger_id),
-                    )))
+                    client.submit_blocking(
+                        Instruction::into_instruction_box(Box::new(ExecuteTrigger::new(
+                            bad_trigger_id,
+                        ))),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await?
@@ -582,9 +596,13 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             let error = spawn_blocking({
                 let client = test_client.clone();
                 move || {
-                    client.submit_blocking(Instruction::into_instruction_box(Box::new(
-                        execute_trigger,
-                    )))
+                    client.submit_blocking(
+                        Instruction::into_instruction_box(Box::new(execute_trigger)),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await?
@@ -810,7 +828,15 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             let err = spawn_blocking({
                 let client = rabbit_client.clone();
                 let trigger = trigger.clone();
-                move || client.submit_blocking(Register::trigger(trigger))
+                move || {
+                    client.submit_blocking(
+                        Register::trigger(trigger),
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
+                }
             })
             .await?
             .expect_err("Trigger should not be registered!");
@@ -1132,12 +1158,18 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             let err = spawn_blocking({
                 let client = test_client.clone();
                 move || {
-                    client.submit_all_blocking([
-                        Instruction::into_instruction_box(Box::new(execute_trigger_unregister)),
-                        Instruction::into_instruction_box(Box::new(
-                            execute_trigger_should_be_unregistered,
-                        )),
-                    ])
+                    client.submit_all_blocking(
+                        [
+                            Instruction::into_instruction_box(Box::new(execute_trigger_unregister)),
+                            Instruction::into_instruction_box(Box::new(
+                                execute_trigger_should_be_unregistered,
+                            )),
+                        ],
+                        iroha_data_model::transaction::FeePaymentIntent::authority(
+                            Vec::new(),
+                            None,
+                        ),
+                    )
                 }
             })
             .await?
@@ -1305,8 +1337,11 @@ async fn trigger_burn_repetitions() -> Result<()> {
         // by observing the pipeline event instead of waiting on the confirmation stream.
         let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
         let instruction = Instruction::into_instruction_box(Box::new(execute_trigger));
-        let transaction =
-            test_client.build_transaction_from_items([instruction], Metadata::default());
+        let transaction = test_client.build_transaction_from_items(
+            [instruction],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        );
         let hash = transaction.hash();
         let mut events = timeout(
             network.sync_timeout(),

@@ -35,12 +35,22 @@ fn skip_if_no_tcp_bind() -> bool {
 
 /// Allocate a local TCP port for tests to avoid clashes when they run in parallel.
 fn next_port() -> u16 {
-    static NEXT_PORT: AtomicU16 = AtomicU16::new(12_000);
+    static NEXT_PORT: OnceLock<AtomicU16> = OnceLock::new();
+    // Cargo/nextest can run several integration binaries concurrently. A
+    // process-specific starting point prevents every binary from probing the
+    // same fixed port range while retaining deterministic monotonic allocation
+    // within one test process.
+    let next_port = NEXT_PORT.get_or_init(|| {
+        const BASE: u32 = 12_000;
+        const PROCESS_SPAN: u32 = 40_000;
+        let start = BASE + std::process::id() % PROCESS_SPAN;
+        AtomicU16::new(u16::try_from(start).expect("test port seed fits u16"))
+    });
 
     let mut attempts = 0u32;
     let mut last_err = None;
     loop {
-        let port = NEXT_PORT.fetch_add(1, Ordering::Relaxed);
+        let port = next_port.fetch_add(1, Ordering::Relaxed);
         let addr = SocketAddr::from(([127, 0, 0, 1], port));
         match TcpListener::bind(addr) {
             Ok(listener) => {
@@ -61,7 +71,7 @@ fn next_port() -> u16 {
         attempts = attempts.wrapping_add(1);
         assert!(
             u16::try_from(attempts).is_ok(),
-            "exhausted test ports starting at 12000; last bind error: {last_err:?}"
+            "exhausted process-local test port range; last bind error: {last_err:?}"
         );
     }
 }

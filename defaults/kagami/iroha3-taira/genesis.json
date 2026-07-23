@@ -39,10 +39,23 @@
         {
           "Register": {
             "Account": {
-              "id": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "id": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "label": null,
               "metadata": {
                 "key": "value"
+              },
+              "opaque_ids": [],
+              "uaid": null
+            }
+          }
+        },
+        {
+          "Register": {
+            "Account": {
+              "id": "testuﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT",
+              "label": null,
+              "metadata": {
+                "purpose": "fee_sponsor_vault_custody"
               },
               "opaque_ids": [],
               "uaid": null
@@ -271,7 +284,7 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "13"
             }
           }
@@ -279,8 +292,241 @@
         {
           "Mint": {
             "Asset": {
-              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "5CJ6HCMxWw9xhuHmxDrzEfWGeE7M#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "44"
+            }
+          }
+        },
+        {
+          "Mint": {
+            "Asset": {
+              "destination": "6TEAJqbb8oEPmLncoNiMRbLEK6tw#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "100000000"
+            }
+          }
+        },
+        {
+          "CreateFeeSponsorProgram": {
+            "program": {
+              "id": {
+                "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "name": "default"
+              },
+              "lifecycle": {
+                "state": "staged"
+              }
+            }
+          }
+        },
+        {
+          "StageFeeSponsorProgramRevision": {
+            "revision": {
+              "program_id": {
+                "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                "name": "default"
+              },
+              "revision": 1,
+              "eligibility": {
+                "mode": "enrolled_or_route_default"
+              },
+              "rules": [
+                {
+                  "id": "taira_writes",
+                  "effect": {
+                    "effect": "allow"
+                  },
+                  "selectors": [
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.log"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.register"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.grant"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.alias.ensure"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "nexus::EnrollFeeSponsorBeneficiary"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::space_directory::PublishSpaceDirectoryManifest"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.account.alias.primary.compare_and_set"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::smart_contract_code::UploadSmartContractCodeChunk"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::smart_contract_code::FinalizeSmartContractCodeUpload"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::smart_contract_code::RegisterSmartContractCode"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.contract.alias.set"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::sorafs::RegisterCapacityDeclaration"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha.set_key_value"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::HeartbeatSoracloudModelHost"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::AdvertiseSoracloudInrouHost"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::ReconcileSoracloudInrouPlacements"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::SetSoracloudInrouReplicaRuntimeState"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::ClearSoracloudInrouReplicaRuntimeState"
+                      }
+                    },
+                    {
+                      "kind": "native_instruction",
+                      "value": {
+                        "wire_id": "soracloud::ReportSoracloudServiceLeaseUsage"
+                      }
+                    }
+                  ]
+                }
+              ],
+              "asset_budgets": [
+                {
+                  "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+                  "per_transaction": "1000000",
+                  "per_block": "10000000",
+                  "per_program_epoch": "1000000000",
+                  "per_beneficiary_epoch": "50000000",
+                  "reserve_floor": "10000000",
+                  "epoch_length_blocks": 3600
+                }
+              ]
+            }
+          }
+        },
+        {
+          "EnrollFeeSponsorBeneficiary": {
+            "program_id": {
+              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "name": "default"
+            },
+            "beneficiary": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"
+          }
+        },
+        {
+          "FundFeeSponsorProgram": {
+            "program_id": {
+              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "name": "default"
+            },
+            "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
+            "amount": "100000000"
+          }
+        },
+        {
+          "ActivateFeeSponsorProgramRevision": {
+            "program_id": {
+              "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "name": "default"
+            },
+            "revision": 1,
+            "activate_at_height": 1
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": {
+                "name": "CanEnrollFeeSponsorProgram",
+                "payload": {
+                  "program_id": {
+                    "sponsor": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    "name": "default"
+                  }
+                }
+              }
             }
           }
         },
@@ -295,7 +541,7 @@
         {
           "Transfer": {
             "AssetDefinition": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
               "source": "testuﾛ1PｵﾖｱFﾃoiﾈﾌomﾂｶｵG9ｷﾄZe36JﾅﾖﾂﾎﾙuGQULﾂ2Mﾘｳ894YPT"
             }
@@ -304,7 +550,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanSetParameters"
               }
@@ -314,17 +560,7 @@
         {
           "Grant": {
             "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-              "object": {
-                "name": "CanRegisterDomain"
-              }
-            }
-          }
-        },
-        {
-          "Grant": {
-            "Permission": {
-              "destination": "testuﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+              "destination": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
               "object": {
                 "name": "CanRegisterAccount"
               }

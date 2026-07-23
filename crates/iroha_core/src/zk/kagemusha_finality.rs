@@ -26,9 +26,10 @@ use iroha_data_model::{
     },
     offline::{
         KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_MAX_BYTES_V2,
-        KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorRefV2,
-        KagemushaRecursiveSpendTopUpAnchorV2, KagemushaTopUpFinalityProofV2,
-        KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
+        KagemushaRecursiveSpendArtifactManifestV4, KagemushaRecursiveSpendTopUpAnchorRefV2,
+        KagemushaRecursiveSpendTopUpAnchorV4, KagemushaTopUpAnchorMerkleProofV2,
+        KagemushaTopUpFinalityProofV2, KagemushaTopUpFinalityRosterArtifactV2,
+        KagemushaTopUpFinalityRosterWindowV2,
     },
 };
 use parking_lot::Mutex;
@@ -36,9 +37,64 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 
 use crate::sumeragi::smt::{
-    KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
-    verify_kagemusha_topup_write_inclusion,
+    KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG, KagemushaTopUpMerkleProof, KvPair,
+    build_kagemusha_topup_block_commitment, verify_kagemusha_topup_write_inclusion,
 };
+
+/// Consensus execution-commitment material for a block containing one
+/// finalized Kagemusha top-up anchor and no unrelated writes.
+///
+/// This narrow producer-side projection deliberately reuses the live
+/// Sumeragi commitment builder. Release qualification and portable SDK
+/// acceptance generators can therefore construct a real QC-authenticated
+/// anchor without duplicating the consensus leaf tag, sparse-tree rules, or
+/// balanced top-up tree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KagemushaSingleTopUpExecutionCommitmentV2 {
+    /// Root of the (empty) ordinary-write set.
+    pub ordinary_writes_root: Hash,
+    /// Post-state root combining ordinary writes and the top-up root.
+    pub post_state_root: Hash,
+    /// Root of the one-leaf block-local top-up tree.
+    pub topup_anchor_root: Hash,
+    /// Inclusion path consumed by [`KagemushaTopUpFinalityProofV2`].
+    pub anchor_path: KagemushaTopUpAnchorMerkleProofV2,
+}
+
+/// Build the exact consensus commitment for one finalized top-up anchor.
+///
+/// # Errors
+///
+/// Returns an error for a zero operation id/digest or if the live consensus
+/// commitment builder unexpectedly rejects or omits the supplied leaf.
+pub fn build_single_kagemusha_topup_execution_commitment_v2(
+    operation_id: [u8; 32],
+    anchor_digest: [u8; 32],
+) -> Result<KagemushaSingleTopUpExecutionCommitmentV2, &'static str> {
+    if operation_id == [0; 32] || anchor_digest == [0; 32] {
+        return Err("Kagemusha top-up operation id and anchor digest must be non-zero");
+    }
+    let mut witness_key = Vec::with_capacity(33);
+    witness_key.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+    witness_key.extend_from_slice(&operation_id);
+    let commitment =
+        build_kagemusha_topup_block_commitment(&[KvPair::new(witness_key, anchor_digest)])?
+            .ok_or("single Kagemusha top-up commitment unexpectedly has no leaf")?;
+    let proof = commitment
+        .proofs
+        .first()
+        .ok_or("single Kagemusha top-up commitment unexpectedly has no proof")?;
+    Ok(KagemushaSingleTopUpExecutionCommitmentV2 {
+        ordinary_writes_root: commitment.ordinary_writes_root,
+        post_state_root: commitment.post_state_root,
+        topup_anchor_root: commitment.topup_anchor_root,
+        anchor_path: KagemushaTopUpAnchorMerkleProofV2 {
+            leaf_index: proof.leaf_index,
+            leaf_count: proof.leaf_count,
+            siblings: proof.siblings.iter().copied().map(Into::into).collect(),
+        },
+    })
+}
 
 /// Number of exact authenticated roster archives whose successful full PoP
 /// validation is retained by one verifier instance.
@@ -166,36 +222,75 @@ impl KagemushaTopUpFinalityVerifier {
         Self::default()
     }
 
-    /// Verify one proof against a complete anchor and authenticated V3 release.
-    ///
-    /// `expected_manifest_sha256` must come from the caller's authenticated
-    /// release envelope. The manifest then selects the exact roster digest and
-    /// byte length. All digest, context, anchor, window, and Merkle checks run
-    /// before any BLS pairing work.
-    ///
-    /// # Errors
-    ///
-    /// Fails closed for any malformed structure, content-address mismatch,
-    /// cross-context substitution, invalid proof of possession, aggregate
-    /// signature mutation, or anchor-path mutation.
-    pub fn verify(
+    /// Verify one proof against a complete ABI-20 anchor and its exact
+    /// authenticated V4 release. The V4 receipt and manifest are validated in
+    /// place; this path never projects either value into an older release carrier.
+    pub fn verify_v4(
         &self,
         proof: &KagemushaTopUpFinalityProofV2,
         roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
-        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-        manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
         expected_manifest_sha256: [u8; 32],
     ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
-        // Phase 1: bounded structural and authenticated-content checks only.
+        self.verify_v4_with_manifest_state(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+            true,
+        )
+    }
+
+    /// Verify the same live finality proof against a clean, unsigned ABI-20
+    /// candidate in an explicitly selected non-shipping evidence-lab build.
+    #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+    pub fn verify_candidate_evidence_lab_v4(
+        &self,
+        proof: &KagemushaTopUpFinalityProofV2,
+        roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_manifest_sha256: [u8; 32],
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+        self.verify_v4_with_manifest_state(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+            false,
+        )
+    }
+
+    fn verify_v4_with_manifest_state(
+        &self,
+        proof: &KagemushaTopUpFinalityProofV2,
+        roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+        expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+        expected_manifest_sha256: [u8; 32],
+        finalized_release: bool,
+    ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
         proof
             .validate_structure()
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
         expected_anchor
             .validate_public_binding()
             .map_err(|_| KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
-        manifest
-            .validate()
-            .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+        if finalized_release {
+            manifest
+                .validate()
+                .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+        } else {
+            #[cfg(feature = "kagemusha-candidate-evidence-lab")]
+            manifest
+                .validate_unsigned_candidate()
+                .map_err(|_| KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch)?;
+            #[cfg(not(feature = "kagemusha-candidate-evidence-lab"))]
+            return Err(KagemushaTopUpFinalityVerifyError::ManifestDigestMismatch);
+        }
         if expected_manifest_sha256 == [0; 32]
             || canonical_sha256(manifest)? != expected_manifest_sha256
         {
@@ -272,8 +367,6 @@ impl KagemushaTopUpFinalityVerifier {
         }
         verify_anchor_inclusion(proof)?;
 
-        // Phase 2: expensive cryptography. The fully authenticated roster PoPs
-        // are validated once per exact bounded cache identity.
         self.validate_roster_cryptography(roster_artifact, roster_reference.sha256)?;
         verify_commit_aggregate(proof, window)?;
         if let Some(snapshot) = &complete_context.next_epoch_snapshot {
@@ -344,20 +437,41 @@ impl KagemushaTopUpFinalityVerifier {
     }
 }
 
-/// Verify one proof using the process-wide bounded exact-roster cache.
-///
-/// See [`KagemushaTopUpFinalityVerifier::verify`] for the trust contract.
-pub fn verify_kagemusha_topup_finality_v2(
+/// Verify one ABI-20 top-up proof using a process-wide bounded exact-roster
+/// cache and the complete V4 anchor/manifest types.
+pub fn verify_kagemusha_topup_finality_v4(
     proof: &KagemushaTopUpFinalityProofV2,
     roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
-    expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV2,
-    manifest: &KagemushaRecursiveSpendArtifactManifestV3,
+    expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
     expected_manifest_sha256: [u8; 32],
 ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
     static VERIFIER: OnceLock<KagemushaTopUpFinalityVerifier> = OnceLock::new();
     VERIFIER
         .get_or_init(KagemushaTopUpFinalityVerifier::new)
-        .verify(
+        .verify_v4(
+            proof,
+            roster_artifact,
+            expected_anchor,
+            manifest,
+            expected_manifest_sha256,
+        )
+}
+
+/// Verify one ABI-20 top-up proof against a clean candidate using the same
+/// cryptographic verifier and bounded roster cache as production.
+#[cfg(feature = "kagemusha-candidate-evidence-lab")]
+pub fn verify_kagemusha_topup_finality_candidate_evidence_lab_v4(
+    proof: &KagemushaTopUpFinalityProofV2,
+    roster_artifact: &KagemushaTopUpFinalityRosterArtifactV2,
+    expected_anchor: &KagemushaRecursiveSpendTopUpAnchorV4,
+    manifest: &KagemushaRecursiveSpendArtifactManifestV4,
+    expected_manifest_sha256: [u8; 32],
+) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
+    static VERIFIER: OnceLock<KagemushaTopUpFinalityVerifier> = OnceLock::new();
+    VERIFIER
+        .get_or_init(KagemushaTopUpFinalityVerifier::new)
+        .verify_candidate_evidence_lab_v4(
             proof,
             roster_artifact,
             expected_anchor,
@@ -386,6 +500,7 @@ fn verify_commit_aggregate(
         .ok_or(KagemushaTopUpFinalityVerifyError::InvalidStructure)?;
     let preimage = Vote {
         round: certificate.round,
+        proposal_round: certificate.proposal_round,
         phase: certificate.phase,
         subject: certificate.subject,
         execution_commitment: certificate.execution_commitment,
@@ -422,7 +537,7 @@ fn verify_anchor_inclusion(
     proof: &KagemushaTopUpFinalityProofV2,
 ) -> Result<(), KagemushaTopUpFinalityVerifyError> {
     let mut key = Vec::with_capacity(33);
-    key.push(KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG);
+    key.push(KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG);
     key.extend_from_slice(&proof.anchor.topup_operation_id);
     let leaf = KvPair::new(key, proof.anchor.anchor_digest);
     let path = KagemushaTopUpMerkleProof {
@@ -472,33 +587,37 @@ mod tests {
         },
         domain::DomainId,
         offline::{
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
-            KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2, KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
+            KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2,
+            KAGEMUSHA_TOPUP_FINALITY_PROOF_VERSION_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2,
             KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
-            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2, KagemushaPastaCycleArtifactKindV3,
-            KagemushaPastaCycleArtifactV3, KagemushaPastaCycleParityV3,
-            KagemushaPastaCycleProofProfileV3, KagemushaRecursiveSpendArtifactBindingV3,
-            KagemushaRecursiveSpendArtifactManifestV3, KagemushaRecursiveSpendTopUpAnchorV2,
-            KagemushaScaledAmountV2, KagemushaSpendableNoteDescriptorV2,
+            KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4, KagemushaPastaCycleArtifactKindV4,
+            KagemushaPastaCycleArtifactV4, KagemushaPastaCycleParityV1,
+            KagemushaPastaCycleProofProfileV4, KagemushaPastaPublicLayoutV4,
+            KagemushaRecursiveSpendArtifactBindingV4, KagemushaRecursiveSpendArtifactManifestV4,
+            KagemushaRecursiveSpendTopUpAnchorV4, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaStepCircuitParamsV4,
             KagemushaTopUpAnchorMerkleProofV2, KagemushaTopUpFinalityCompactQcV2,
             KagemushaTopUpFinalityHeightContextV2, KagemushaTopUpFinalityProofV2,
-            KagemushaTopUpFinalityRosterArtifactReferenceV2,
+            KagemushaTopUpFinalityRosterArtifactReferenceV4,
             KagemushaTopUpFinalityRosterArtifactV2, KagemushaTopUpFinalityRosterWindowV2,
         },
         peer::PeerId,
@@ -511,19 +630,19 @@ mod tests {
     struct Fixture {
         proof: KagemushaTopUpFinalityProofV2,
         roster: KagemushaTopUpFinalityRosterArtifactV2,
-        anchor: KagemushaRecursiveSpendTopUpAnchorV2,
-        manifest: KagemushaRecursiveSpendArtifactManifestV3,
+        anchor: KagemushaRecursiveSpendTopUpAnchorV4,
+        manifest: KagemushaRecursiveSpendArtifactManifestV4,
         manifest_digest: [u8; 32],
         finality_artifact: V2FinalityArtifact,
         signing_keys: Vec<KeyPair>,
     }
 
     fn artifact(
-        kind: KagemushaPastaCycleArtifactKindV3,
+        kind: KagemushaPastaCycleArtifactKindV4,
         file_name: &str,
         tag: u8,
-    ) -> KagemushaPastaCycleArtifactV3 {
-        KagemushaPastaCycleArtifactV3 {
+    ) -> KagemushaPastaCycleArtifactV4 {
+        KagemushaPastaCycleArtifactV4 {
             kind,
             file_name: file_name.to_owned(),
             size_bytes: 128,
@@ -533,57 +652,120 @@ mod tests {
         }
     }
 
-    fn profile(
-        parity: KagemushaPastaCycleParityV3,
-        circuit_id: &str,
-        names: [&str; 3],
-        tag: u8,
-    ) -> KagemushaPastaCycleProofProfileV3 {
-        KagemushaPastaCycleProofProfileV3 {
+    fn circuit_params() -> KagemushaStepCircuitParamsV4 {
+        let k = KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4;
+        let layout =
+            KagemushaPastaPublicLayoutV4::for_ipa_round_count(k).expect("test V4 public layout");
+        KagemushaStepCircuitParamsV4 {
+            version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+            k,
+            num_advice_per_phase: vec![8, 1, 1],
+            num_lookup_advice_per_phase: vec![1, 0, 0],
+            num_fixed: 1,
+            lookup_bits: k - 1,
+            num_instance_columns: 1,
+            public_input_limbs: layout.instance_column_limbs,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
+            max_parent_proof_bytes: 4_096,
+        }
+    }
+
+    fn profile(parity: KagemushaPastaCycleParityV1, tag: u8) -> KagemushaPastaCycleProofProfileV4 {
+        let (circuit_id, names) = match parity {
+            KagemushaPastaCycleParityV1::StepEq => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMS_IPA_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+            KagemushaPastaCycleParityV1::StepEp => (
+                KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+                [
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V4,
+                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
+                ],
+            ),
+        };
+        let params = circuit_params();
+        let artifacts = [
+            KagemushaPastaCycleArtifactKindV4::ParamsIpa,
+            KagemushaPastaCycleArtifactKindV4::ProvingKey,
+            KagemushaPastaCycleArtifactKindV4::VerifyingKey,
+            KagemushaPastaCycleArtifactKindV4::BootstrapWitness,
+        ]
+        .into_iter()
+        .zip(names)
+        .enumerate()
+        .map(|(index, (kind, name))| {
+            let index = u8::try_from(index).expect("four artifact roles fit u8");
+            artifact(kind, name, tag + index * 2)
+        })
+        .collect();
+        KagemushaPastaCycleProofProfileV4 {
             parity,
             circuit_id: circuit_id.to_owned(),
             parameter_generation: "params-generation-1".to_owned(),
-            ipa_k: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_IPA_K_V3,
-            artifacts: vec![
-                artifact(KagemushaPastaCycleArtifactKindV3::Parameters, names[0], tag),
-                artifact(
-                    KagemushaPastaCycleArtifactKindV3::ProvingKey,
-                    names[1],
-                    tag + 2,
-                ),
-                artifact(
-                    KagemushaPastaCycleArtifactKindV3::VerifyingKey,
-                    names[2],
-                    tag + 4,
-                ),
-            ],
+            ipa_k: params.k,
+            circuit_params: params.clone(),
+            compiled_protocol_structure_sha256: [tag.wrapping_add(0x40); 32],
+            step_proof_size_bytes: params.max_parent_proof_bytes,
+            artifacts,
         }
     }
 
     fn fixture() -> Fixture {
-        let keys = (1_u8..=4)
+        fixture_with_release_window(1, 100)
+    }
+
+    fn fixture_with_release_window(activation_height: u64, withdrawal_height: u64) -> Fixture {
+        fixture_with_release_window_and_roster(activation_height, withdrawal_height, |_| {})
+    }
+
+    fn fixture_with_roster(
+        mutate_roster: impl FnOnce(&mut KagemushaTopUpFinalityRosterArtifactV2),
+    ) -> Fixture {
+        fixture_with_release_window_and_roster(1, 100, mutate_roster)
+    }
+
+    fn fixture_with_release_window_and_roster(
+        activation_height: u64,
+        withdrawal_height: u64,
+        mutate_roster: impl FnOnce(&mut KagemushaTopUpFinalityRosterArtifactV2),
+    ) -> Fixture {
+        let mut validators = (1_u8..=4)
             .map(|seed| {
-                KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
-                    .expect("deterministic BLS key")
+                let key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
+                    .expect("deterministic BLS key");
+                let validator = ValidatorPower {
+                    validator: PeerId::new(key.public_key().clone()),
+                    power: 1,
+                };
+                let pop = iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("fixture proof of possession");
+                (validator, pop, key)
             })
             .collect::<Vec<_>>();
-        let validator_set = keys
+        validators.sort_unstable_by(|lhs, rhs| lhs.0.validator.cmp(&rhs.0.validator));
+        let validator_set = validators
             .iter()
-            .map(|key| ValidatorPower {
-                validator: PeerId::new(key.public_key().clone()),
-                power: 1,
-            })
+            .map(|(validator, _, _)| validator.clone())
             .collect::<Vec<_>>();
-        let pops = keys
+        let pops = validators
             .iter()
-            .map(|key| {
-                iroha_crypto::bls_normal_pop_prove(key.private_key())
-                    .expect("fixture proof of possession")
-            })
+            .map(|(_, pop, _)| pop.clone())
             .collect::<Vec<_>>();
         let fixed_pops = pops
             .iter()
             .map(|pop| <[u8; 96]>::try_from(pop.as_slice()).expect("96-byte PoP"))
+            .collect::<Vec<_>>();
+        let keys = validators
+            .into_iter()
+            .map(|(_, _, key)| key)
             .collect::<Vec<_>>();
         let chain_id = ChainId::from("kagemusha-finality-chain");
         let asset = AssetDefinitionId::new(
@@ -601,59 +783,44 @@ mod tests {
             validator_set: validator_set.clone(),
             validator_set_pops: fixed_pops.clone(),
         };
-        let roster = KagemushaTopUpFinalityRosterArtifactV2 {
+        let mut roster = KagemushaTopUpFinalityRosterArtifactV2 {
             version: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_VERSION_V2,
             chain_id: chain_id.clone(),
             artifact_generation: "release-generation-1".to_owned(),
             windows: vec![window],
         };
+        mutate_roster(&mut roster);
         let roster_bytes = norito::to_bytes(&roster).expect("roster bytes");
         let roster_digest = Sha256::digest(&roster_bytes).into();
-        let manifest = KagemushaRecursiveSpendArtifactManifestV3 {
-            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V3.to_owned(),
-            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V3,
-            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
-            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V3.to_owned(),
-            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V3.to_owned(),
+        let manifest = KagemushaRecursiveSpendArtifactManifestV4 {
+            schema: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_SCHEMA_V4.to_owned(),
+            version: KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MANIFEST_VERSION_V4,
+            bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
+            proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+            transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4.to_owned(),
             generation: "release-generation-1".to_owned(),
             source_commit: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+            source_tree_sha256: [0x52; 32],
+            source_repo_dirty: true,
             chain_id: chain_id.clone(),
             asset: asset.clone(),
             asset_scale: 2,
-            activation_height: 1,
-            withdrawal_height: 100,
-            max_proof_bytes: KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROOF_BYTES_V3,
+            activation_height,
+            withdrawal_height,
+            max_proof_bytes: 9_000,
             profiles: vec![
-                profile(
-                    KagemushaPastaCycleParityV3::StepEq,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V3,
-                    [
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PARAMETERS_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_PROVING_KEY_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V3,
-                    ],
-                    0x20,
-                ),
-                profile(
-                    KagemushaPastaCycleParityV3::StepEp,
-                    KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V3,
-                    [
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMETERS_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V3,
-                        KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_VERIFYING_KEY_FILE_NAME_V3,
-                    ],
-                    0x30,
-                ),
+                profile(KagemushaPastaCycleParityV1::StepEq, 0x20),
+                profile(KagemushaPastaCycleParityV1::StepEp, 0x30),
             ],
-            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV2 {
-                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V2.to_owned(),
+            topup_finality_roster_artifact: KagemushaTopUpFinalityRosterArtifactReferenceV4 {
+                file_name: KAGEMUSHA_TOPUP_FINALITY_ROSTER_FILE_NAME_V4.to_owned(),
                 size_bytes: u64::try_from(roster_bytes.len()).expect("roster size"),
                 sha256: roster_digest,
                 artifact_generation: "release-generation-1".to_owned(),
                 circuit_id: KAGEMUSHA_TOPUP_FINALITY_CIRCUIT_ID_V2.to_owned(),
                 purpose: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_PURPOSE_V2.to_owned(),
                 artifact_type: KAGEMUSHA_TOPUP_FINALITY_ROSTER_ARTIFACT_TYPE_V2.to_owned(),
-                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V3,
+                required_bridge_abi_version: KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
             },
             benchmark_evidence_sha256: [0x71; 32],
             cryptographic_review_sha256: [0x72; 32],
@@ -669,8 +836,8 @@ mod tests {
             spend_nullifier: [0x32; 32],
             amount: KagemushaScaledAmountV2::new(500, 2).expect("amount"),
         };
-        let anchor = KagemushaRecursiveSpendTopUpAnchorV2 {
-            version: 2,
+        let anchor = KagemushaRecursiveSpendTopUpAnchorV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_TOPUP_ANCHOR_VERSION_V4,
             chain_id: chain_id.clone(),
             payer: payer.clone(),
             asset: AssetId::new(asset.clone(), payer),
@@ -683,7 +850,8 @@ mod tests {
             topup_operation_id: operation_id,
             shield_verifier_id: VerifyingKeyId::new("halo2/ipa", "topup-shield-v2"),
             shield_verifier_commitment: [0x14; 32],
-            artifact_binding: KagemushaRecursiveSpendArtifactBindingV3 {
+            artifact_binding: KagemushaRecursiveSpendArtifactBindingV4 {
+                version: iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
                 generation: manifest.generation.clone(),
                 manifest_sha256: manifest_digest,
             },
@@ -693,9 +861,9 @@ mod tests {
         }
         .finalize_digest()
         .expect("anchor");
-        let mut witness_key = vec![KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        let mut witness_key = vec![KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         witness_key.extend_from_slice(&operation_id);
-        let mut other_key = vec![KAGEMUSHA_V2_TOPUP_ANCHOR_WITNESS_KEY_TAG];
+        let mut other_key = vec![KAGEMUSHA_V4_TOPUP_ANCHOR_WITNESS_KEY_TAG];
         other_key.extend_from_slice(&[0xB6; 32]);
         let commitment = build_kagemusha_topup_block_commitment(&[
             KvPair::new(witness_key, anchor.anchor_digest),
@@ -714,6 +882,13 @@ mod tests {
             mode: ConsensusMode::Permissioned,
             parent_commit_qc: Some(QuorumCertificate {
                 round: ConsensusRound {
+                    context_id: iroha_data_model::block::consensus_v2::HeightContextId(
+                        HashOf::from_untyped_unchecked(Hash::new(b"parent context")),
+                    ),
+                    height: height - 1,
+                    view: 0,
+                },
+                proposal_round: ConsensusRound {
                     context_id: iroha_data_model::block::consensus_v2::HeightContextId(
                         HashOf::from_untyped_unchecked(Hash::new(b"parent context")),
                     ),
@@ -768,12 +943,14 @@ mod tests {
             Hash::new(b"finalized executed block wire"),
         )
         .expect("execution commitment");
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: 3,
+        };
         let mut certificate = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height,
-                view: 3,
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -782,6 +959,7 @@ mod tests {
         };
         let preimage = Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -854,7 +1032,7 @@ mod tests {
         verifier: &KagemushaTopUpFinalityVerifier,
         fixture: &Fixture,
     ) -> Result<VerifiedKagemushaTopUpFinalityV2, KagemushaTopUpFinalityVerifyError> {
-        verifier.verify(
+        verifier.verify_v4(
             &fixture.proof,
             &fixture.roster,
             &fixture.anchor,
@@ -944,8 +1122,10 @@ mod tests {
         };
         let certificate = &mut proof.commit_qc.certificate;
         certificate.round.context_id = context.id();
+        certificate.proposal_round.context_id = context.id();
         let preimage = Vote {
             round: certificate.round,
+            proposal_round: certificate.proposal_round,
             phase: certificate.phase,
             subject: certificate.subject,
             execution_commitment: certificate.execution_commitment,
@@ -986,6 +1166,31 @@ mod tests {
     }
 
     #[test]
+    fn aggregate_signature_authenticates_proposal_origin() {
+        let fixture = fixture();
+        let mut changed_origin = fixture.proof.clone();
+        changed_origin.commit_qc.certificate.proposal_round.view = changed_origin
+            .commit_qc
+            .certificate
+            .proposal_round
+            .view
+            .saturating_sub(1);
+
+        assert_eq!(
+            KagemushaTopUpFinalityVerifier::new()
+                .verify_v4(
+                    &changed_origin,
+                    &fixture.roster,
+                    &fixture.anchor,
+                    &fixture.manifest,
+                    fixture.manifest_digest,
+                )
+                .expect_err("a tampered proposal origin must fail aggregate verification"),
+            KagemushaTopUpFinalityVerifyError::InvalidAggregateSignature
+        );
+    }
+
+    #[test]
     fn rejects_anchor_chain_asset_scale_generation_height_and_release_substitution() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let fixture = fixture();
@@ -995,7 +1200,7 @@ mod tests {
         other_anchor = other_anchor.finalize_digest().expect("alternate anchor");
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &fixture.roster,
                     &other_anchor,
@@ -1011,7 +1216,7 @@ mod tests {
         let digest = canonical_sha256(&manifest).expect("digest");
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1030,7 +1235,7 @@ mod tests {
         let digest = canonical_sha256(&manifest).expect("digest");
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1046,7 +1251,7 @@ mod tests {
         let digest = canonical_sha256(&manifest).expect("digest");
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1066,7 +1271,7 @@ mod tests {
         proof.anchor = anchor.compact_ref().unwrap();
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &proof,
                     &fixture.roster,
                     &anchor,
@@ -1086,7 +1291,7 @@ mod tests {
         proof.anchor = anchor.compact_ref().unwrap();
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &proof,
                     &fixture.roster,
                     &anchor,
@@ -1104,7 +1309,7 @@ mod tests {
         proof.anchor = anchor.compact_ref().unwrap();
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &proof,
                     &fixture.roster,
                     &anchor,
@@ -1113,22 +1318,6 @@ mod tests {
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::HeightMismatch
-        );
-
-        let mut manifest = fixture.manifest.clone();
-        manifest.withdrawal_height = fixture.proof.commit_qc.height_context.height;
-        let digest = canonical_sha256(&manifest).expect("digest");
-        assert_eq!(
-            verifier
-                .verify(
-                    &fixture.proof,
-                    &fixture.roster,
-                    &fixture.anchor,
-                    &manifest,
-                    digest
-                )
-                .unwrap_err(),
-            KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch
         );
     }
 
@@ -1141,7 +1330,7 @@ mod tests {
         context.commit_qc.height_context.leader_seed[0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &context,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1152,31 +1341,35 @@ mod tests {
             KagemushaTopUpFinalityVerifyError::RosterContextMismatch
         );
 
-        let mut roster = fixture.roster.clone();
-        roster.windows[0].validator_set.swap(0, 1);
-        let mut manifest = fixture.manifest.clone();
-        let bytes = norito::to_bytes(&roster).unwrap();
-        manifest.topup_finality_roster_artifact.size_bytes = bytes.len() as u64;
-        manifest.topup_finality_roster_artifact.sha256 = Sha256::digest(bytes).into();
-        let digest = canonical_sha256(&manifest).unwrap();
+        let swapped_roster = fixture_with_roster(|roster| {
+            roster.windows[0].validator_set.swap(0, 1);
+        });
         assert_eq!(
             verifier
-                .verify(&fixture.proof, &roster, &fixture.anchor, &manifest, digest)
+                .verify_v4(
+                    &swapped_roster.proof,
+                    &swapped_roster.roster,
+                    &swapped_roster.anchor,
+                    &swapped_roster.manifest,
+                    swapped_roster.manifest_digest,
+                )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::RosterContextMismatch
         );
 
-        let mut roster = fixture.roster.clone();
-        roster.windows[0].consensus_mode = ConsensusMode::Npos;
-        roster.windows[0].validator_set[0].power = 2;
-        let mut manifest = fixture.manifest.clone();
-        let bytes = norito::to_bytes(&roster).unwrap();
-        manifest.topup_finality_roster_artifact.size_bytes = bytes.len() as u64;
-        manifest.topup_finality_roster_artifact.sha256 = Sha256::digest(bytes).into();
-        let digest = canonical_sha256(&manifest).unwrap();
+        let changed_power = fixture_with_roster(|roster| {
+            roster.windows[0].consensus_mode = ConsensusMode::Npos;
+            roster.windows[0].validator_set[0].power = 2;
+        });
         assert_eq!(
             verifier
-                .verify(&fixture.proof, &roster, &fixture.anchor, &manifest, digest)
+                .verify_v4(
+                    &changed_power.proof,
+                    &changed_power.roster,
+                    &changed_power.anchor,
+                    &changed_power.manifest,
+                    changed_power.manifest_digest,
+                )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::RosterContextMismatch
         );
@@ -1190,7 +1383,7 @@ mod tests {
         signature.commit_qc.certificate.aggregate_signature[0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &signature,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1206,7 +1399,7 @@ mod tests {
         path.anchor_path.siblings[0][0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &path,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1224,7 +1417,7 @@ mod tests {
         let fixture = fixture();
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1240,7 +1433,7 @@ mod tests {
         roster.windows[0].validator_set_pops[0][0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &fixture.proof,
                     &roster,
                     &fixture.anchor,
@@ -1252,19 +1445,17 @@ mod tests {
         );
         assert_eq!(verifier.roster_crypto_verification_count(), 0);
 
-        let mut manifest = fixture.manifest.clone();
-        let bytes = norito::to_bytes(&roster).expect("mutated roster bytes");
-        manifest.topup_finality_roster_artifact.size_bytes = bytes.len() as u64;
-        manifest.topup_finality_roster_artifact.sha256 = Sha256::digest(bytes).into();
-        let manifest_digest = canonical_sha256(&manifest).expect("mutated manifest digest");
+        let invalid_roster = fixture_with_roster(|roster| {
+            roster.windows[0].validator_set_pops[0][0] ^= 1;
+        });
         assert_eq!(
             verifier
-                .verify(
-                    &fixture.proof,
-                    &roster,
-                    &fixture.anchor,
-                    &manifest,
-                    manifest_digest,
+                .verify_v4(
+                    &invalid_roster.proof,
+                    &invalid_roster.roster,
+                    &invalid_roster.anchor,
+                    &invalid_roster.manifest,
+                    invalid_roster.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::InvalidRosterCryptography
@@ -1272,12 +1463,12 @@ mod tests {
         assert_eq!(verifier.roster_crypto_verification_count(), 1);
         assert_eq!(
             verifier
-                .verify(
-                    &fixture.proof,
-                    &roster,
-                    &fixture.anchor,
-                    &manifest,
-                    manifest_digest,
+                .verify_v4(
+                    &invalid_roster.proof,
+                    &invalid_roster.roster,
+                    &invalid_roster.anchor,
+                    &invalid_roster.manifest,
+                    invalid_roster.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::InvalidRosterCryptography
@@ -1333,7 +1524,7 @@ mod tests {
         for (field, proof) in mutations {
             assert_eq!(
                 verifier
-                    .verify(
+                    .verify_v4(
                         &proof,
                         &fixture.roster,
                         &fixture.anchor,
@@ -1355,7 +1546,7 @@ mod tests {
         protocol.commit_qc.height_context.protocol_version += 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &protocol,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1376,7 +1567,7 @@ mod tests {
         sibling[Hash::LENGTH - 1] &= !1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &noncanonical,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1391,7 +1582,7 @@ mod tests {
         canonical_wrong.anchor_path.siblings[0][0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &canonical_wrong,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1406,50 +1597,40 @@ mod tests {
     #[test]
     fn release_window_is_inclusive_at_activation_and_exclusive_at_withdrawal() {
         let verifier = KagemushaTopUpFinalityVerifier::new();
-        let fixture = fixture();
-        let height = fixture.anchor.finalized_height;
-
-        let mut boundary = fixture.manifest.clone();
-        boundary.activation_height = height;
-        boundary.withdrawal_height = height + 1;
-        let digest = canonical_sha256(&boundary).expect("boundary manifest digest");
+        let boundary = fixture_with_release_window(42, 43);
         verifier
-            .verify(
-                &fixture.proof,
-                &fixture.roster,
-                &fixture.anchor,
-                &boundary,
-                digest,
+            .verify_v4(
+                &boundary.proof,
+                &boundary.roster,
+                &boundary.anchor,
+                &boundary.manifest,
+                boundary.manifest_digest,
             )
             .expect("activation height and withdrawal minus one are accepted");
 
-        let mut before_activation = fixture.manifest.clone();
-        before_activation.activation_height = height + 1;
-        let digest = canonical_sha256(&before_activation).expect("pre-activation digest");
+        let before_activation = fixture_with_release_window(43, 100);
         assert_eq!(
             verifier
-                .verify(
-                    &fixture.proof,
-                    &fixture.roster,
-                    &fixture.anchor,
-                    &before_activation,
-                    digest,
+                .verify_v4(
+                    &before_activation.proof,
+                    &before_activation.roster,
+                    &before_activation.anchor,
+                    &before_activation.manifest,
+                    before_activation.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch
         );
 
-        let mut at_withdrawal = fixture.manifest.clone();
-        at_withdrawal.withdrawal_height = height;
-        let digest = canonical_sha256(&at_withdrawal).expect("withdrawal digest");
+        let at_withdrawal = fixture_with_release_window(1, 42);
         assert_eq!(
             verifier
-                .verify(
-                    &fixture.proof,
-                    &fixture.roster,
-                    &fixture.anchor,
-                    &at_withdrawal,
-                    digest,
+                .verify_v4(
+                    &at_withdrawal.proof,
+                    &at_withdrawal.roster,
+                    &at_withdrawal.anchor,
+                    &at_withdrawal.manifest,
+                    at_withdrawal.manifest_digest,
                 )
                 .unwrap_err(),
             KagemushaTopUpFinalityVerifyError::ReleaseWindowMismatch
@@ -1462,7 +1643,7 @@ mod tests {
         let verifier = KagemushaTopUpFinalityVerifier::new();
         let valid = epoch_boundary_proof(&fixture, false);
         verifier
-            .verify(
+            .verify_v4(
                 &valid,
                 &fixture.roster,
                 &fixture.anchor,
@@ -1474,7 +1655,7 @@ mod tests {
         let invalid = epoch_boundary_proof(&fixture, true);
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &invalid,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1489,7 +1670,7 @@ mod tests {
         invalid_qc_and_pop.commit_qc.certificate.aggregate_signature[0] ^= 1;
         assert_eq!(
             verifier
-                .verify(
+                .verify_v4(
                     &invalid_qc_and_pop,
                     &fixture.roster,
                     &fixture.anchor,
@@ -1516,7 +1697,7 @@ mod tests {
             bad.commit_qc.certificate.aggregate_signature[0] ^= 1 << bit;
             assert_eq!(
                 verifier
-                    .verify(
+                    .verify_v4(
                         &bad,
                         &fixture.roster,
                         &fixture.anchor,

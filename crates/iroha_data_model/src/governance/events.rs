@@ -6,6 +6,7 @@
 
 use std::string::String;
 
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -95,7 +96,7 @@ pub struct ReferendumProposed {
     /// Account that submitted the proposal.
     pub proposer: AccountId,
     /// Deposit locked while the referendum is active.
-    pub deposit: u128,
+    pub deposit: Quantity,
 }
 
 /// Referendum opened for voting.
@@ -288,7 +289,7 @@ pub struct DepositSlashed {
     /// Referendum identifier associated with the slash.
     pub referendum_id: ProposalId,
     /// Amount forfeited from the deposit.
-    pub amount: u128,
+    pub amount: Quantity,
     /// Deterministic reason for the slash.
     pub reason: String,
 }

@@ -53,19 +53,17 @@ Endpoints
     - `mode`, when supplied, must be `Zk` or `Plain`.
   - Submission model: this endpoint is draft-first. `authority`/`private_key` are only accepted as a legacy pair and currently fail closed because governance server-side signing is disabled, so clients should consume `tx_instructions`, sign locally, and submit via `/v1/pipeline/transactions`.
 
-Contracts API (deploy)
-- POST `/v1/contracts/deploy`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…", "code_b64": "…", "contract_alias": "router::universal", "lease_expiry_ms": 1735689600000? }
-  - Behavior: Verifies the embedded `CNTR` contract interface, derives the canonical manifest from the artifact, computes the domain-separated `code_hash` over the complete artifact including the fixed IVM execution header and `abi_hash` from the enforced ABI policy, derives a fresh immutable `contract_address` from `(chain_discriminant, authority, deploy_nonce, dataspace(contract_alias))`, then submits `RegisterSmartContractCode`, `RegisterSmartContractBytes`, `ActivateContractInstance`, `SetContractAlias::bind`, and the deploy-nonce bump on behalf of `authority`.
-  - Redeploying the same `contract_alias` is the public `kaizen`/`改善` path: Torii clears the old alias binding, deactivates the retired address, binds the alias to the new address, and reports `previous_contract_address` plus `kaizen = true`.
-  - Response: `DeployContractBundleReceiptDto`; the single-contract shortcut returns the canonical bundle receipt with one entry in `contracts[]`.
-  - Related:
-    - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
-    - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
-  - Notes:
-    - this public shortcut is alias-first and is intended for public/unprotected dataspaces;
-    - runtime calls no longer resend bytecode or manifests on each invocation; once deployed, `/v1/contracts/call` references the active contract by address; and
-    - protected-namespace deployment remains governed by the proposal/metadata flow (`gov_contract_address`, enacted proposal tuple, quorum metadata) rather than by a separate public `/v1/contracts/instance*` shortcut.
+Contracts API (locally signed deployment)
+- Torii does not expose a server-side deployment endpoint and never accepts a
+  deployment private key.
+- Clients upload/finalize bytecode, register a locally signed manifest, and
+  submit `CommitContractDeployment` through the standard transaction pipeline.
+- The commit instruction atomically checks the expected deployment nonce and
+  previous alias target before activation or rotation.
+- Related reads:
+  - GET `/v1/contracts/code/{code_hash}` → stored manifest
+  - GET `/v1/contracts/code-bytes/{code_hash}` → `{ code_b64 }`
+
 Alias Service
 - POST `/v1/aliases/resolve`
   - Request: { "alias": "GB82 WEST 1234 5698 7654 32" }

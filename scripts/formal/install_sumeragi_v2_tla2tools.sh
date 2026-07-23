@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# v1.8.0 is a rolling pre-release whose asset is overwritten by upstream
+# master builds. Use the immutable stable release so this checksum remains
+# reproducible.
 readonly VERSION="1.7.4"
 readonly JAR_SHA256="936a262061c914694dfd669a543be24573c45d5aa0ff20a8b96b23d01e050e88"
 readonly URL="https://github.com/tlaplus/tlaplus/releases/download/v${VERSION}/tla2tools.jar"

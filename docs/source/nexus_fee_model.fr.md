@@ -22,20 +22,30 @@ operateurs puissent reconciler les debits de gas avec le modele de frais Nexus.
   un `liquidity_profile` (`tier1`, `tier2`, ou `tier3`), et une `volatility_class` (`stable`,
   `elevated`, `dislocated`). Ces drapeaux alimentent le settlement router pour que le quote XOR
   resultant corresponde au TWAP canonique et au tier de haircut de la lane.
-- Les transactions IVM doivent inclure les metadonnees `gas_limit` (`u64`, > 0) pour limiter l'exposition
-  aux frais. L'endpoint `/v1/contracts/call` exige `gas_limit` explicitement et les valeurs invalides
-  sont rejetees.
-- Quand une transaction definit les metadonnees `fee_sponsor`, le sponsor doit accorder
-  `CanUseFeeSponsor { sponsor }` a l'appelant. Les tentatives de sponsorship non autorisees sont
-  rejetees et enregistrees.
+- Chaque transaction doit porter le champ type et lie a la signature
+  `fee_payment` (`FeePaymentIntent`). Il choisit comme payeur l'autorite ou
+  un programme sponsor exact avec sa revision immuable, et contient les maxima
+  signes par composant ainsi qu'une limite de gas positive si necessaire. Les
+  anciennes cles de metadonnees `fee_sponsor`, `gas_limit` et
+  `gas_asset_id` sont rejetees.
+- Demandez un devis avant de signer : construisez le payload non signe exact,
+  faites authentifier `POST /v1/fees/quote` par son autorite, inspectez
+  l'intent recommande, remplacez uniquement `payload.fee_payment`, puis
+  signez et soumettez ce meme payload. Le devis est une observation, pas une
+  reservation ; l'admission reverifie l'etat courant.
+- Le settlement direct accepte l'autorite ou un programme sponsor exact. Le
+  settlement par receipts (`lane_relay_burn`) est reserve a un sponsor exact :
+  les frais Nexus payes par l'autorite sont rejetes avec
+  `relay_capacity_unavailable`, car son solde n'est pas un verrou de source
+  de receipt authentifie.
 - Chaque transaction qui paye du gas enregistre un `LaneSettlementReceipt`. Chaque recu stocke
   l'identifiant de source fourni par l'appelant, le micro-montant local, le XOR a payer
   immediatement, le XOR attendu apres le haircut, la marge de securite realisee
-  (`xor_variance_micro`), et l'horodatage du bloc en millisecondes.
+  (`xor_variance`), et l'horodatage du bloc en millisecondes.
 - L'execution du bloc agrege les recus par lane/dataspace et les publie via `lane_settlement_commitments`
-  dans `/v1/sumeragi/status`. Les totaux exposent `total_local_micro`, `total_xor_due_micro`, et
-  `total_xor_after_haircut_micro` additionnes sur le bloc pour les exports nocturnes de reconciliation.
-- Un nouveau compteur `total_xor_variance_micro` suit la marge de securite consommee (difference entre
+  dans `/v1/sumeragi/status`. Les totaux exposent `total_local_amount`, `total_xor_due`, et
+  `total_xor_after_haircut` additionnes sur le bloc pour les exports nocturnes de reconciliation.
+- Un nouveau compteur `total_xor_variance` suit la marge de securite consommee (difference entre
   le XOR du et l'attendu post-haircut), et `swap_metadata` documente les parametres deterministes de
   conversion (TWAP, epsilon, liquidity profile, et volatility_class) afin que les auditeurs puissent
   verifier les entrees du quote independamment de la configuration runtime.

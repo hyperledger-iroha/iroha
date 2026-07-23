@@ -155,6 +155,17 @@ test('verifyOpenApiVersions validates recorded metadata', async () => {
   await verifyOpenApiVersions(context);
 });
 
+test('verifyOpenApiVersions rejects malformed manifest timestamps through its returned promise', async () => {
+  const context = await setupFixture((manifest) => {
+    manifest.generatedAt = 'not-an-iso-timestamp';
+  });
+
+  await assert.rejects(
+    () => verifyOpenApiVersions(context),
+    /versions\.json generatedAt must be an ISO-8601 timestamp/i,
+  );
+});
+
 test('verifyOpenApiVersions fails when the recorded digest is stale', async () => {
   const context = await setupFixture((manifest) => {
     for (const entry of manifest.entries) {

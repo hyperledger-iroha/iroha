@@ -33,14 +33,14 @@ import sys
 from pathlib import Path
 
 output_path = None
-gas_asset_id = None
+faucet_asset_id = None
 skip_faucet = False
 args = sys.argv[1:]
 for index, value in enumerate(args):
     if value == "--output-config" and index + 1 < len(args):
         output_path = args[index + 1]
-    elif value == "--gas-asset-id" and index + 1 < len(args):
-        gas_asset_id = args[index + 1]
+    elif value == "--faucet-asset-id" and index + 1 < len(args):
+        faucet_asset_id = args[index + 1]
     elif value == "--skip-faucet":
         skip_faucet = True
 
@@ -51,9 +51,9 @@ state_dir = os.environ.get("MOCK_STATE_DIR")
 if state_dir:
     state = Path(state_dir)
     state.joinpath("bootstrap_seen").write_text("1\n", encoding="utf-8")
-    if gas_asset_id is not None:
-        state.joinpath("bootstrap_gas_asset_seen").write_text(
-            gas_asset_id + "\n", encoding="utf-8"
+    if faucet_asset_id is not None:
+        state.joinpath("bootstrap_faucet_asset_seen").write_text(
+            faucet_asset_id + "\n", encoding="utf-8"
         )
     if skip_faucet:
         state.joinpath("bootstrap_skip_faucet_seen").write_text(
@@ -235,8 +235,12 @@ case "${method} ${url}" in
     fi
     ;;
   "GET https://taira.sora.org/v1/sumeragi/status")
-    body='{"protocol_version":3,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
-    if [[ "$scenario" == "sumeragi_3_validators" ]]; then
+    body='{"protocol_version":3,"restart_required":false,"node_fingerprint":"n","build_fingerprint":"b","config_fingerprint":"c","height_context_id":["ctx"],"height":708,"view":0,"phase":{"phase":"prepare","details":null},"leader":0,"body_state":{"state":"missing","details":null},"last_committed_height":707,"last_committed_subject":{"block_hash":"block","payload_hash":"payload"},"height_context":{"epoch":1,"epoch_end_height":720,"mode":{"mode":"permissioned","details":null},"epoch_seed":"0000000000000000000000000000000000000000000000000000000000000000","validator_count":4,"quorum":{"min_signers":3,"total_power":4}},"last_commit_qc":{"certificate":{"round":{"height":707,"view":0},"phase":{"phase":"commit","details":null},"subject":{"block_hash":"block","payload_hash":"payload"}},"validator_count":4,"signer_count":3,"min_signers":3,"signed_power":3,"total_power":4},"lane_settlement_commitments":[],"lane_relay_envelopes":[],"lane_payload_ownerships":[],"committed_lane_blocks":[],"lane_block_sessions":[],"local_peer_removed":false,"operator":{"adapter_queues":{"ingress_keys":0,"ingress_capacity":64,"deferred_completion":0,"deferred_progress":0,"deferred_progress_capacity":64,"deferred_normal":0,"deferred_normal_capacity":64},"tx_queue":{"tracked_transactions":0,"queued_transactions":0,"capacity":100,"max_retained_bytes":8192}}}'
+    if [[ "$scenario" == "sumeragi_missing_restart_required" ]]; then
+      body="${body/\"restart_required\":false,/}"
+    elif [[ "$scenario" == "sumeragi_invalid_restart_required" ]]; then
+      body="${body/\"restart_required\":false/\"restart_required\":0}"
+    elif [[ "$scenario" == "sumeragi_3_validators" ]]; then
       body="${body//\"validator_count\":4/\"validator_count\":3}"
     elif [[ "$scenario" == "sumeragi_canonical_behind" || "$scenario" == "sumeragi_committed_ahead" ]]; then
       body="${body/\"height\":708/\"height\":706}"
@@ -279,40 +283,37 @@ if [[ "$*" == *"ledger transaction stdin"* ]]; then
   mkdir -p "${MOCK_STATE_DIR:?}"
   cat >"${MOCK_STATE_DIR}/submitted_tx.json"
   : >"${MOCK_STATE_DIR}/submit_seen"
-  metadata_file=""
+  fee_payer=""
+  fee_program=""
+  fee_program_revision=""
   previous=""
   for arg in "$@"; do
-    if [[ "$previous" == "-m" || "$previous" == "--metadata" ]]; then
-      metadata_file="$arg"
+    if [[ "$previous" == "--fee-payer" ]]; then
+      fee_payer="$arg"
+      previous=""
+      continue
+    fi
+    if [[ "$previous" == "--fee-program" ]]; then
+      fee_program="$arg"
+      previous=""
+      continue
+    fi
+    if [[ "$previous" == "--fee-program-revision" ]]; then
+      fee_program_revision="$arg"
       previous=""
       continue
     fi
     case "$arg" in
-      -m|--metadata)
+      --fee-payer|--fee-program|--fee-program-revision)
         previous="$arg"
-        ;;
-      -m=*|--metadata=*)
-        metadata_file="${arg#*=}"
         ;;
     esac
   done
-  if [[ -z "$metadata_file" ]]; then
-    echo "missing gas_asset_id in transaction metadata"
+  if [[ "$fee_payer" != "sponsor" || -z "$fee_program" || "$fee_program_revision" != "1" ]]; then
+    echo "missing exact fee sponsor program selection"
     exit 1
   fi
-  python3 - "$metadata_file" "${MOCK_STATE_DIR}" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-path = Path(sys.argv[1])
-state = Path(sys.argv[2])
-payload = json.loads(path.read_text(encoding="utf-8"))
-gas_asset_id = payload.get("gas_asset_id")
-if gas_asset_id != "6TEAJqbb8oEPmLncoNiMRbLEK6tw":
-    raise SystemExit(f"unexpected gas_asset_id: {gas_asset_id!r}")
-state.joinpath("gas_asset_seen").write_text(gas_asset_id + "\n", encoding="utf-8")
-PY
+  printf '%s\n' "$fee_program" >"${MOCK_STATE_DIR}/fee_program_seen"
   case "${MOCK_SCENARIO:-}" in
     unknown_instruction)
       echo "Unknown instruction type: SoraFsCapacityDeclaration"
@@ -579,10 +580,10 @@ run_implicit_bootstrap_success_case() {
 
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test -f "${root}/state/bootstrap_seen"
-  grep -q '6TEAJqbb8oEPmLncoNiMRbLEK6tw' "${root}/state/bootstrap_gas_asset_seen"
+  grep -q '6TEAJqbb8oEPmLncoNiMRbLEK6tw' "${root}/state/bootstrap_faucet_asset_seen"
   test -f "${root}/state/bootstrap_skip_faucet_seen"
   test -f "${root}/state/submit_seen"
-  test -f "${root}/state/gas_asset_seen"
+  test -f "${root}/state/fee_program_seen"
   test -f "$config_path"
   ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
   grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/private_key_seen"
@@ -631,7 +632,7 @@ run_explicit_config_is_preserved_case() {
   [[ "$before_hash" == "$after_hash" ]]
   grep -q 'SoraFS rollout verification passed.' "$output_file"
   test ! -f "${root}/state/bootstrap_seen"
-  test -f "${root}/state/gas_asset_seen"
+  test -f "${root}/state/fee_program_seen"
   grep -q 'EXPLICITPRIVATEKEY' "${root}/state/private_key_seen"
   ! grep -q 'EXPLICITPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
   test -f "${root}/state/private_key_file_seen"
@@ -817,7 +818,7 @@ run_asset_retry_success_case() {
   test -f "${root}/state/retry_seen"
   test -f "${root}/state/faucet_seen"
   grep -q '^120000$' "${root}/state/faucet_status_timeout_seen"
-  test -f "${root}/state/gas_asset_seen"
+  test -f "${root}/state/fee_program_seen"
   ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
 }
 
@@ -843,14 +844,15 @@ run_expected_failure_case \
 run_expected_failure_case \
   state_missing_after_submit \
   'capacity canary transaction landed but the declaration never appeared in /v1/sorafs/capacity/state'
-run_expected_failure_case \
-  success \
-  'SoraFS capacity canary failed: Taira requires gas_asset_id transaction metadata' \
-  'missing gas_asset_id in transaction metadata' \
-  --gas-asset-id ""
 run_expected_preflight_failure_case \
   status_blocks_zero \
   'status payload did not include a positive `blocks` value'
+run_expected_preflight_failure_case \
+  sumeragi_missing_restart_required \
+  'sumeragi/status restart_required must be a boolean'
+run_expected_preflight_failure_case \
+  sumeragi_invalid_restart_required \
+  'sumeragi/status restart_required must be a boolean'
 run_expected_preflight_failure_case \
   sumeragi_3_validators \
   'sumeragi/status frozen only 3 validators'

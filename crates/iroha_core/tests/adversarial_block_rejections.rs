@@ -128,13 +128,17 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     );
     let ghost_asset_id = AssetId::of(ghost_def, alice_id.clone());
 
-    let forged_transfer = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            ghost_asset_id.clone(),
-            5_u32,
-            bob_id.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let forged_transfer = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        ghost_asset_id.clone(),
+        5_u32,
+        bob_id.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let forged_transfer = AcceptedTransaction::accept(
         forged_transfer,
         &chain_id,
@@ -144,9 +148,13 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     )
     .expect("admission should pass for forged transfer");
 
-    let missing_burn = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Burn::asset_quantity(5_u32, ghost_asset_id.clone())])
-        .sign(alice_kp.private_key());
+    let missing_burn = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Burn::asset_quantity(5_u32, ghost_asset_id.clone())])
+    .sign(alice_kp.private_key());
     let missing_burn = AcceptedTransaction::accept(
         missing_burn,
         &chain_id,
@@ -156,13 +164,17 @@ fn adversarial_transactions_rejected_without_state_mutation() {
     )
     .expect("admission should pass for missing-asset burn");
 
-    let valid_transfer = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Transfer::asset_quantity(
-            alice_asset_id.clone(),
-            10_u32,
-            bob_id.clone(),
-        )])
-        .sign(alice_kp.private_key());
+    let valid_transfer = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Transfer::asset_quantity(
+        alice_asset_id.clone(),
+        10_u32,
+        bob_id.clone(),
+    )])
+    .sign(alice_kp.private_key());
     let valid_transfer = AcceptedTransaction::accept(
         valid_transfer,
         &chain_id,
@@ -210,9 +222,13 @@ fn block_history_tamper_rejected_without_mutation() {
     let time_source = TimeSource::new_system();
 
     // Commit a baseline block at height 1 so subsequent rewinds have a stable checkpoint.
-    let baseline_tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_quantity(5_u32, bob_asset_id.clone())])
-        .sign(alice_kp.private_key());
+    let baseline_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(5_u32, bob_asset_id.clone())])
+    .sign(alice_kp.private_key());
     let baseline_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(baseline_tx))];
     let baseline_block = BlockBuilder::new_with_time_source(baseline_accepted, time_source.clone())
         .chain(0, state.view().latest_block().as_deref())
@@ -244,9 +260,13 @@ fn block_history_tamper_rejected_without_mutation() {
     assert_eq!(balance(&state, &bob_asset_id), Numeric::new(5, 0));
 
     // Forge a block that rewinds height to 1 with a conflicting prev hash and extra mint.
-    let rewind_tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([Mint::asset_quantity(25_u32, bob_asset_id.clone())])
-        .sign(alice_kp.private_key());
+    let rewind_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Mint::asset_quantity(25_u32, bob_asset_id.clone())])
+    .sign(alice_kp.private_key());
     let rewind_accepted = vec![AcceptedTransaction::new_unchecked(Cow::Owned(rewind_tx))];
     let rewind_block = BlockBuilder::new_with_time_source(rewind_accepted, time_source.clone())
         .chain(0, Some(&committed_baseline_signed))

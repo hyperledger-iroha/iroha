@@ -82,7 +82,7 @@ use tower::ServiceExt;
 mod da;
 mod vote_tally;
 use fastpq::{BenchInput, BenchManifestOptions};
-use sorafs_manifest::deal::XorAmount;
+use sorafs_manifest::deal::XorQuantity;
 use soranet_testnet::{
     DrillBundleOptions, VerificationAttachment, VerificationFeedOptions, evaluate_testnet_metrics,
     generate_drill_bundle, generate_testnet_kit, generate_verification_feed,
@@ -502,7 +502,6 @@ enum CommandKind {
     },
     SnsScorecard(sns::ScorecardOptions),
     SnsAnnex(sns::AnnexOptions),
-    SnsCatalogVerify(sns::CatalogVerifyOptions),
     MinistryTransparency(ministry::Command),
     MinistryAgenda(ministry_agenda::Command),
     MinistryPanel(ministry_panel::Command),
@@ -1956,9 +1955,6 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::SnsAnnex(options) => {
             sns::generate_annex(options)?;
         }
-        CommandKind::SnsCatalogVerify(options) => {
-            sns::verify_catalog(options)?;
-        }
         CommandKind::MinistryTransparency(command) => {
             ministry::run(command)?;
         }
@@ -3269,6 +3265,9 @@ where
             }
             let cycle =
                 cycle.ok_or_else(|| "--cycle is required for sns-portal-stub".to_string())?;
+            if suffixes.is_empty() {
+                return Err("sns-portal-stub requires at least one --suffix <.suffix>".into());
+            }
             let output = output.unwrap_or_else(|| sns::default_portal_stub_path(&cycle));
             Ok(CommandKind::SnsPortalStub {
                 options: sns::PortalStubOptions {
@@ -3583,7 +3582,7 @@ where
             let mut durations = Vec::new();
             let mut policy_json: Option<PathBuf> = None;
             let mut policy_norito: Option<PathBuf> = None;
-            let mut reserve_balance: Option<XorAmount> = None;
+            let mut reserve_balance: Option<XorQuantity> = None;
             let mut label: Option<String> = None;
             let mut target: Option<JsonTarget> = None;
             let mut pending = args.peekable();
@@ -3664,7 +3663,7 @@ where
                 storage_classes,
                 tiers,
                 durations,
-                reserve_balance: reserve_balance.unwrap_or_else(XorAmount::zero),
+                reserve_balance: reserve_balance.unwrap_or_else(XorQuantity::zero),
                 policy_json,
                 policy_norito,
                 label,
@@ -7760,31 +7759,6 @@ where
                 dashboard_artifact,
                 regulatory_entry,
                 portal_entry,
-            }))
-        }
-        "sns-catalog-verify" => {
-            let mut inputs: Vec<PathBuf> = Vec::new();
-            let mut allow_missing_checksum = false;
-            let mut pending = args.peekable();
-            while let Some(arg) = pending.next() {
-                match arg.as_str() {
-                    "--input" | "--catalog" | "--json" => {
-                        let Some(path) = pending.next() else {
-                            return Err("expected path after --input".into());
-                        };
-                        inputs.push(normalize_path(Path::new(&path))?);
-                    }
-                    "--allow-missing-checksum" => {
-                        allow_missing_checksum = true;
-                    }
-                    flag => {
-                        return Err(format!("unknown flag for sns-catalog-verify: {flag}").into());
-                    }
-                }
-            }
-            Ok(CommandKind::SnsCatalogVerify(sns::CatalogVerifyOptions {
-                inputs,
-                allow_missing_checksum,
             }))
         }
         "codec" => {
@@ -13294,6 +13268,20 @@ mod tests {
             }
             _ => panic!("expected sorafs-adoption-check command"),
         }
+    }
+
+    #[test]
+    fn parse_sns_portal_stub_requires_explicit_suffix() {
+        let args = ["xtask", "sns-portal-stub", "--cycle", "2026-11"];
+        let iter = args.into_iter().map(String::from);
+        let err = match parse_command(iter) {
+            Ok(_) => panic!("sns-portal-stub must require an explicit suffix"),
+            Err(err) => err,
+        };
+        assert!(
+            err.to_string()
+                .contains("requires at least one --suffix <.suffix>")
+        );
     }
 
     #[test]

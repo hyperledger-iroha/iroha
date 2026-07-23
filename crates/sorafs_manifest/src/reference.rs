@@ -45,7 +45,7 @@ use crate::{
     ReplicationOrderValidationError, SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
     SettlementChannelV1, SettlementReceiptV1, SignatureAlgorithm, SignedAuditorRequestPayloadV1,
     SignedAuditorRequestV1, SignedReplicationOrderV1, SignedReplicationOrderValidationError,
-    TradeEventV1, XorAmount, decode_billing_line_item_v1, decode_billing_statement_v1,
+    TradeEventV1, XorQuantity, decode_billing_line_item_v1, decode_billing_statement_v1,
     decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
     decode_order_cancel_v1, decode_order_request_v1, decode_orderbook_runtime_snapshot_v1,
     decode_settlement_channel_v1, decode_settlement_receipt_v1, decode_trade_event_v1,
@@ -1812,10 +1812,7 @@ fn order_request_context(order: &OrderRequestV1) -> Vec<ValidationContextFieldV1
         ValidationContextFieldV1::new("order_id_hex", hex::encode(order.order_id)),
         ValidationContextFieldV1::new("side", order_side_label(order.side)),
         ValidationContextFieldV1::new("tier", order_tier_label(order.tier)),
-        ValidationContextFieldV1::new(
-            "price_per_gib_micro_xor",
-            order.price_per_gib.as_micro().to_string(),
-        ),
+        ValidationContextFieldV1::new("price_per_gib", order.price_per_gib.to_string()),
         ValidationContextFieldV1::new("quantity_gib", order.quantity_gib.to_string()),
         ValidationContextFieldV1::new("remaining_gib", order.remaining_gib.to_string()),
         ValidationContextFieldV1::new("owner_account_len", order.owner_account.len().to_string()),
@@ -1849,19 +1846,10 @@ fn trade_event_context(trade: &TradeEventV1) -> Vec<ValidationContextFieldV1> {
         ValidationContextFieldV1::new("maker_order_id_hex", hex::encode(trade.maker_order_id)),
         ValidationContextFieldV1::new("taker_order_id_hex", hex::encode(trade.taker_order_id)),
         ValidationContextFieldV1::new("tier", order_tier_label(trade.tier)),
-        ValidationContextFieldV1::new(
-            "price_per_gib_micro_xor",
-            trade.price_per_gib.as_micro().to_string(),
-        ),
+        ValidationContextFieldV1::new("price_per_gib", trade.price_per_gib.to_string()),
         ValidationContextFieldV1::new("filled_gib", trade.filled_gib.to_string()),
-        ValidationContextFieldV1::new(
-            "maker_fee_micro_xor",
-            trade.maker_fee.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "taker_fee_micro_xor",
-            trade.taker_fee.as_micro().to_string(),
-        ),
+        ValidationContextFieldV1::new("maker_fee", trade.maker_fee.to_string()),
+        ValidationContextFieldV1::new("taker_fee", trade.taker_fee.to_string()),
         ValidationContextFieldV1::new("timestamp_unix", trade.timestamp_unix.to_string()),
     ]
 }
@@ -1876,10 +1864,7 @@ fn settlement_channel_context(channel: &SettlementChannelV1) -> Vec<ValidationCo
         ValidationContextFieldV1::new("provider_id_hex", hex::encode(channel.provider_id)),
         ValidationContextFieldV1::new("total_bytes", channel.total_bytes.to_string()),
         ValidationContextFieldV1::new("remaining_bytes", channel.remaining_bytes.to_string()),
-        ValidationContextFieldV1::new(
-            "xor_locked_micro_xor",
-            channel.xor_locked.as_micro().to_string(),
-        ),
+        ValidationContextFieldV1::new("xor_locked", channel.xor_locked.to_string()),
         ValidationContextFieldV1::new("status", settlement_channel_status_label(channel.status)),
         ValidationContextFieldV1::new("opened_at_unix", channel.opened_at_unix.to_string()),
         ValidationContextFieldV1::new("updated_at_unix", channel.updated_at_unix.to_string()),
@@ -1897,18 +1882,9 @@ fn settlement_receipt_context(receipt: &SettlementReceiptV1) -> Vec<ValidationCo
         ValidationContextFieldV1::new("range_end", receipt.range.end.to_string()),
         ValidationContextFieldV1::new("chunk_hash_hex", hex::encode(receipt.chunk_hash)),
         ValidationContextFieldV1::new("bytes_delivered", receipt.bytes_delivered.to_string()),
-        ValidationContextFieldV1::new(
-            "xor_debited_micro_xor",
-            receipt.xor_debited.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "provider_credit_micro_xor",
-            receipt.provider_credit.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "fee_amount_micro_xor",
-            receipt.fee_amount.as_micro().to_string(),
-        ),
+        ValidationContextFieldV1::new("xor_debited", receipt.xor_debited.to_string()),
+        ValidationContextFieldV1::new("provider_credit", receipt.provider_credit.to_string()),
+        ValidationContextFieldV1::new("fee_amount", receipt.fee_amount.to_string()),
         ValidationContextFieldV1::new("issued_at_unix", receipt.issued_at_unix.to_string()),
     ];
     append_orderbook_signature_context(&mut context, &receipt.settlement_signature);
@@ -1969,7 +1945,7 @@ fn hedging_price_feed_context(feed: &HedgingPriceFeedV1) -> Vec<ValidationContex
         ValidationContextFieldV1::new("feed_id", feed.feed_id.clone()),
         ValidationContextFieldV1::new("source", feed.source.clone()),
         ValidationContextFieldV1::new("observed_at_unix", feed.observed_at_unix.to_string()),
-        ValidationContextFieldV1::new("xor_usd_micros", feed.xor_usd_micros.to_string()),
+        ValidationContextFieldV1::new("xor_usd_price", feed.xor_usd_price.to_string()),
         ValidationContextFieldV1::new("weight_bps", feed.weight_bps.to_string()),
         ValidationContextFieldV1::new("evidence_digest_hex", hex::encode(feed.evidence_digest)),
         ValidationContextFieldV1::new("status", hedging_feed_status_label(feed.status)),
@@ -1984,7 +1960,7 @@ fn hedging_reference_price_decision_context(
         ValidationContextFieldV1::new("version", decision.version.to_string()),
         ValidationContextFieldV1::new("decision_id_hex", hex::encode(decision.decision_id)),
         ValidationContextFieldV1::new("effective_at_unix", decision.effective_at_unix.to_string()),
-        ValidationContextFieldV1::new("xor_usd_micros", decision.xor_usd_micros.to_string()),
+        ValidationContextFieldV1::new("xor_usd_price", decision.xor_usd_price.to_string()),
         ValidationContextFieldV1::new("max_feed_age_secs", decision.max_feed_age_secs.to_string()),
         ValidationContextFieldV1::new(
             "max_divergence_bps",
@@ -2007,11 +1983,8 @@ fn billing_line_item_context(line: &BillingLineItemV1) -> Vec<ValidationContextF
         ValidationContextFieldV1::new("kind", billing_line_kind_label(line.kind)),
         ValidationContextFieldV1::new("direction", billing_line_direction_label(line.direction)),
         ValidationContextFieldV1::new("source_id", line.source_id.clone()),
-        ValidationContextFieldV1::new(
-            "xor_amount_micro_xor",
-            line.xor_amount.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new("usd_micros", line.usd_micros.to_string()),
+        ValidationContextFieldV1::new("xor_amount", line.xor_amount.to_string()),
+        ValidationContextFieldV1::new("usd_amount", line.usd_amount.to_string()),
         ValidationContextFieldV1::new("quantity_units", line.quantity_units.to_string()),
         ValidationContextFieldV1::new("note_present", line.note.is_some().to_string()),
     ]
@@ -2031,30 +2004,12 @@ fn billing_statement_context(statement: &BillingStatementV1) -> Vec<ValidationCo
             hex::encode(statement.reference_price.decision_id),
         ),
         ValidationContextFieldV1::new("line_count", statement.lines.len().to_string()),
-        ValidationContextFieldV1::new(
-            "total_debit_micro_xor",
-            statement.total_debit_xor.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "total_credit_micro_xor",
-            statement.total_credit_xor.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "net_due_micro_xor",
-            statement.net_due_xor.as_micro().to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "total_debit_usd_micros",
-            statement.total_debit_usd_micros.to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "total_credit_usd_micros",
-            statement.total_credit_usd_micros.to_string(),
-        ),
-        ValidationContextFieldV1::new(
-            "net_due_usd_micros",
-            statement.net_due_usd_micros.to_string(),
-        ),
+        ValidationContextFieldV1::new("total_debit_xor", statement.total_debit_xor.to_string()),
+        ValidationContextFieldV1::new("total_credit_xor", statement.total_credit_xor.to_string()),
+        ValidationContextFieldV1::new("net_due_xor", statement.net_due_xor.to_string()),
+        ValidationContextFieldV1::new("total_debit_usd", statement.total_debit_usd.to_string()),
+        ValidationContextFieldV1::new("total_credit_usd", statement.total_credit_usd.to_string()),
+        ValidationContextFieldV1::new("net_due_usd", statement.net_due_usd.to_string()),
         ValidationContextFieldV1::new(
             "previous_statement_present",
             statement.previous_statement_id.is_some().to_string(),
@@ -3047,8 +3002,8 @@ pub struct OrderbookOrderRequestFieldsV1 {
     pub side: OrderSideV1,
     /// Storage tier priced by the order.
     pub tier: OrderTierV1,
-    /// Price in micro-XOR per GiB.
-    pub price_per_gib_micro_xor: u128,
+    /// Exact XOR price per GiB.
+    pub price_per_gib: XorQuantity,
     /// Total GiB requested/offered.
     pub quantity_gib: u64,
     /// Remaining GiB after partial fills.
@@ -3095,12 +3050,12 @@ pub struct OrderbookSettlementReceiptFieldsV1 {
     pub chunk_hash: [u8; 32],
     /// Delivered byte count.
     pub bytes_delivered: u64,
-    /// XOR debited from buyer escrow, in micro-XOR.
-    pub xor_debited_micro_xor: u128,
-    /// XOR credited to the provider, in micro-XOR.
-    pub provider_credit_micro_xor: u128,
-    /// XOR retained as fee, in micro-XOR.
-    pub fee_amount_micro_xor: u128,
+    /// Exact XOR debited from buyer escrow.
+    pub xor_debited: XorQuantity,
+    /// Exact XOR credited to the provider.
+    pub provider_credit: XorQuantity,
+    /// Exact XOR retained as fee.
+    pub fee_amount: XorQuantity,
     /// Unix timestamp (seconds) when the receipt was issued.
     pub issued_at_unix: u64,
 }
@@ -3139,7 +3094,7 @@ pub fn build_signed_orderbook_order_request_bytes_ed25519_v1(
         order_id,
         side: fields.side,
         tier: fields.tier,
-        price_per_gib: XorAmount::from_micro(fields.price_per_gib_micro_xor),
+        price_per_gib: fields.price_per_gib,
         quantity_gib: fields.quantity_gib,
         remaining_gib: fields.remaining_gib,
         owner_account: fields.owner_account,
@@ -3205,9 +3160,9 @@ pub fn build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(
         },
         chunk_hash: fields.chunk_hash,
         bytes_delivered: fields.bytes_delivered,
-        xor_debited: XorAmount::from_micro(fields.xor_debited_micro_xor),
-        provider_credit: XorAmount::from_micro(fields.provider_credit_micro_xor),
-        fee_amount: XorAmount::from_micro(fields.fee_amount_micro_xor),
+        xor_debited: fields.xor_debited,
+        provider_credit: fields.provider_credit,
+        fee_amount: fields.fee_amount,
         issued_at_unix: fields.issued_at_unix,
         settlement_signature: empty_sdk_orderbook_signature(),
     };
@@ -5888,10 +5843,7 @@ fn repair_slash_proposal_context(
         ValidationContextFieldV1::new("provider_id_hex", hex::encode(proposal.provider_id)),
         ValidationContextFieldV1::new("manifest_digest_hex", hex::encode(proposal.manifest_digest)),
         ValidationContextFieldV1::new("auditor_account", proposal.auditor_account.clone()),
-        ValidationContextFieldV1::new(
-            "proposed_penalty_nano",
-            proposal.proposed_penalty_nano.to_string(),
-        ),
+        ValidationContextFieldV1::new("proposed_penalty", proposal.proposed_penalty.to_string()),
         ValidationContextFieldV1::new("submitted_at_unix", proposal.submitted_at_unix.to_string()),
         ValidationContextFieldV1::new("approval_present", proposal.approval.is_some().to_string()),
     ]
@@ -5908,7 +5860,7 @@ fn repair_escalation_policy_context(
             policy.dispute_window_secs.to_string(),
         ),
         ValidationContextFieldV1::new("appeal_window_secs", policy.appeal_window_secs.to_string()),
-        ValidationContextFieldV1::new("max_penalty_nano", policy.max_penalty_nano.to_string()),
+        ValidationContextFieldV1::new("max_penalty", policy.max_penalty.to_string()),
     ]
 }
 
@@ -6377,6 +6329,9 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::ZeroBillingQuantity
         | HedgingValidationError::BillingLineDirectionMismatch
         | HedgingValidationError::ZeroUsdAmount
+        | HedgingValidationError::NegativeAmount
+        | HedgingValidationError::AmountScaleOverflow { .. }
+        | HedgingValidationError::InexactAmountPrecision
         | HedgingValidationError::EmptyAccountId
         | HedgingValidationError::NoBillingLines
         | HedgingValidationError::DuplicateLineId
@@ -6391,7 +6346,8 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::PreviousStatementMismatch
         | HedgingValidationError::StatementAccountMismatch
         | HedgingValidationError::NonContiguousStatementPeriod { .. }
-        | HedgingValidationError::UnexpectedInitialStatementPredecessor => "SFS-POL-020",
+        | HedgingValidationError::UnexpectedInitialStatementPredecessor
+        | HedgingValidationError::CreditsExceedDebits => "SFS-POL-020",
         HedgingValidationError::ReferencePriceMismatch { .. }
         | HedgingValidationError::DegradationMismatch
         | HedgingValidationError::BillingTotalsMismatch
@@ -6399,6 +6355,7 @@ fn hedging_validation_code(error: &HedgingValidationError) -> &'static str {
         | HedgingValidationError::DigestMismatch { .. } => "SFS-HDG-001",
         HedgingValidationError::AmountOverflow
         | HedgingValidationError::AmountUnderflow
+        | HedgingValidationError::Numeric(_)
         | HedgingValidationError::LengthOverflow
         | HedgingValidationError::AllocationFailed { .. }
         | HedgingValidationError::Norito(_) => "SFS-INT-001",
@@ -7104,7 +7061,8 @@ mod tests {
             order_id: crate::derive_orderbook_order_id_v1(&owner_account, nonce),
             side: OrderSideV1::Bid,
             tier: OrderTierV1::Hot,
-            price_per_gib: crate::XorAmount::from_micro(1_250_000),
+            price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
+                .expect("legacy micro-XOR value is representable"),
             quantity_gib: 64,
             remaining_gib: 64,
             owner_account,
@@ -7140,9 +7098,12 @@ mod tests {
             },
             chunk_hash: [0x84; 32],
             bytes_delivered: 256,
-            xor_debited: crate::XorAmount::from_micro(100),
-            provider_credit: crate::XorAmount::from_micro(90),
-            fee_amount: crate::XorAmount::from_micro(10),
+            xor_debited: crate::XorQuantity::try_from_micro(100)
+                .expect("legacy micro-XOR value is representable"),
+            provider_credit: crate::XorQuantity::try_from_micro(90)
+                .expect("legacy micro-XOR value is representable"),
+            fee_amount: crate::XorQuantity::try_from_micro(10)
+                .expect("legacy micro-XOR value is representable"),
             issued_at_unix: 1_800_000_010,
             settlement_signature: orderbook_signature(),
         }
@@ -7155,10 +7116,13 @@ mod tests {
             maker_order_id: [0x71; 32],
             taker_order_id: [0x72; 32],
             tier: OrderTierV1::Hot,
-            price_per_gib: crate::XorAmount::from_micro(1_250_000),
+            price_per_gib: crate::XorQuantity::try_from_micro(1_250_000)
+                .expect("legacy micro-XOR value is representable"),
             filled_gib: 2,
-            maker_fee: crate::XorAmount::from_micro(2_500),
-            taker_fee: crate::XorAmount::from_micro(3_750),
+            maker_fee: crate::XorQuantity::try_from_micro(2_500)
+                .expect("legacy micro-XOR value is representable"),
+            taker_fee: crate::XorQuantity::try_from_micro(3_750)
+                .expect("legacy micro-XOR value is representable"),
             timestamp_unix: 1_800_000_005,
         }
     }
@@ -7214,13 +7178,13 @@ mod tests {
         out
     }
 
-    fn hedging_feed(feed_id: &str, price: u64, observed_at_unix: u64) -> HedgingPriceFeedV1 {
+    fn hedging_feed(feed_id: &str, price: &str, observed_at_unix: u64) -> HedgingPriceFeedV1 {
         HedgingPriceFeedV1 {
             version: crate::HEDGING_PRICE_FEED_VERSION_V1,
             feed_id: feed_id.to_owned(),
             source: format!("{feed_id}-source"),
             observed_at_unix,
-            xor_usd_micros: price,
+            xor_usd_price: price.parse().expect("canonical USD/XOR price"),
             weight_bps: 5_000,
             evidence_digest: hedging_digest(feed_id),
             status: HedgingFeedStatusV1::Ok,
@@ -7231,8 +7195,8 @@ mod tests {
         crate::derive_reference_price_decision_v1(
             1_800,
             vec![
-                hedging_feed("primary", 2_000_000, 1_790),
-                hedging_feed("secondary", 2_000_000, 1_785),
+                hedging_feed("primary", "2", 1_790),
+                hedging_feed("secondary", "2", 1_785),
             ],
             120,
             500,
@@ -7246,8 +7210,8 @@ mod tests {
             BillingLineItemKindV1::Storage,
             BillingLineDirectionV1::Debit,
             "deal-storage",
-            XorAmount::from_micro(10 * crate::MICRO_XOR_PER_XOR),
-            reference_price.xor_usd_micros,
+            "10".parse::<XorQuantity>().expect("canonical XOR amount"),
+            &reference_price.xor_usd_price,
             86_400,
             Some("weekly storage".to_owned()),
         )
@@ -7256,8 +7220,8 @@ mod tests {
             BillingLineItemKindV1::IncentiveCredit,
             BillingLineDirectionV1::Credit,
             "provider-credit",
-            XorAmount::from_micro(crate::MICRO_XOR_PER_XOR),
-            reference_price.xor_usd_micros,
+            "1".parse::<XorQuantity>().expect("canonical XOR amount"),
+            &reference_price.xor_usd_price,
             1,
             None,
         )
@@ -7523,7 +7487,8 @@ mod tests {
             profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 1_000_000,
+                stake_amount: crate::deal::XorQuantity::try_from_micro(1_000_000)
+                    .expect("fixture stake is representable"),
             },
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
@@ -8710,6 +8675,34 @@ mod tests {
     }
 
     #[test]
+    fn billing_context_preserves_exact_sub_micro_xor_values() {
+        let exact: XorQuantity = "0.0000001"
+            .parse()
+            .expect("canonical sub-micro XOR quantity");
+        let mut statement = billing_statement();
+        let mut line = statement.lines[0].clone();
+        line.xor_amount = exact.clone();
+        let line_context = billing_line_item_context(&line);
+        assert!(
+            line_context
+                .iter()
+                .any(|field| { field.key == "xor_amount" && field.value == "0.0000001" })
+        );
+
+        statement.total_debit_xor = exact.clone();
+        statement.total_credit_xor = exact.clone();
+        statement.net_due_xor = exact;
+        let statement_context = billing_statement_context(&statement);
+        for key in ["total_debit_xor", "total_credit_xor", "net_due_xor"] {
+            assert!(
+                statement_context
+                    .iter()
+                    .any(|field| { field.key == key && field.value == "0.0000001" })
+            );
+        }
+    }
+
+    #[test]
     fn validate_hedging_payload_bytes_rejects_malformed_norito() {
         let outcome = validate_hedging_payload_bytes(
             HedgingValidationPayloadKindV1::BillingStatement,
@@ -8736,8 +8729,8 @@ mod tests {
         assert_eq!(outcome.category, CATEGORY_NORITO);
         assert!(outcome.message.contains("maximum canonical size"));
 
-        let mut noncanonical = to_bytes(&hedging_feed("primary", 1_000_000, 1_790))
-            .expect("encode canonical hedging feed");
+        let mut noncanonical =
+            to_bytes(&hedging_feed("primary", "1", 1_790)).expect("encode canonical hedging feed");
         noncanonical.push(0);
         let outcome = validate_hedging_payload_bytes(
             HedgingValidationPayloadKindV1::PriceFeed,
@@ -9023,7 +9016,7 @@ mod tests {
             OrderbookOrderRequestFieldsV1 {
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib_micro_xor: 1_500_000,
+                price_per_gib: "1.5".parse().expect("canonical XOR quantity"),
                 quantity_gib: 10,
                 remaining_gib: 10,
                 owner_account: owner_account.clone(),
@@ -9064,9 +9057,9 @@ mod tests {
                 range_end: 42,
                 chunk_hash: [0x08; 32],
                 bytes_delivered: 32,
-                xor_debited_micro_xor: 100,
-                provider_credit_micro_xor: 90,
-                fee_amount_micro_xor: 10,
+                xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
+                provider_credit: "0.00009".parse().expect("canonical XOR quantity"),
+                fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
                 issued_at_unix: 1_800_000_200,
             },
             &seed,
@@ -9088,7 +9081,9 @@ mod tests {
             OrderbookOrderRequestFieldsV1 {
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib_micro_xor: 1,
+                price_per_gib: "0.000001"
+                    .parse()
+                    .expect("legacy micro-XOR price is representable"),
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),
@@ -9129,7 +9124,9 @@ mod tests {
             OrderbookOrderRequestFieldsV1 {
                 side: OrderSideV1::Bid,
                 tier: OrderTierV1::Hot,
-                price_per_gib_micro_xor: 1,
+                price_per_gib: "0.000001"
+                    .parse()
+                    .expect("legacy micro-XOR price is representable"),
                 quantity_gib: 1,
                 remaining_gib: 1,
                 owner_account: owner_account.clone(),
@@ -9173,9 +9170,9 @@ mod tests {
                 range_end: 42,
                 chunk_hash: [0x08; 32],
                 bytes_delivered: 32,
-                xor_debited_micro_xor: 100,
-                provider_credit_micro_xor: 91,
-                fee_amount_micro_xor: 10,
+                xor_debited: "0.0001".parse().expect("canonical XOR quantity"),
+                provider_credit: "0.000091".parse().expect("canonical XOR quantity"),
+                fee_amount: "0.00001".parse().expect("canonical XOR quantity"),
                 issued_at_unix: 1_800_000_200,
             },
             &[0xB7; 32],
@@ -9356,7 +9353,8 @@ mod tests {
     #[test]
     fn validate_orderbook_payload_bytes_rejects_settlement_imbalance() {
         let mut receipt = orderbook_settlement_receipt();
-        receipt.provider_credit = crate::XorAmount::from_micro(91);
+        receipt.provider_credit = crate::XorQuantity::try_from_micro(91)
+            .expect("legacy micro-XOR value is representable");
         let bytes = to_bytes(&receipt).expect("encode orderbook settlement receipt");
         let outcome = validate_orderbook_payload_bytes(
             OrderbookValidationPayloadKindV1::SettlementReceipt,

@@ -7,13 +7,38 @@ This section describes the peer-to-peer (P2P) queue capacities and the metrics e
 
 - `p2p_queue_cap_high` (usize, default: 8192)
   - Capacity of each high-priority network message queue and inbound peer dispatch buffer.
-    Authoritative v2 safety traffic gets an independent queue of this capacity; auxiliary
-    consensus/control traffic uses the ordinary high queue.
+    Authoritative v2 safety traffic and route-qualified semantic-progress traffic each get an
+    independent queue of this capacity; other High traffic uses the ordinary high queue. The
+    safety and ordinary queues share an exact `H + S` byte owner. The progress queue has a separate
+    additive `P` owner equal to one maximum eligible encrypted stream frame. Each lane may retain
+    at most 64 leased overflow waiters. Progress backpressure instead leaves the payload with its
+    source and assigns a bounded FIFO metadata ticket; fresh work cannot overtake live tickets.
 - `p2p_queue_cap_low` (usize, default: 32768)
   - Capacity of the low-priority network message queue and inbound peer dispatch buffer
     (gossip/sync messages).
 - `p2p_post_queue_cap` (usize, default: 2048)
   - Capacity of the per-peer post channel (outbound messages to a specific peer).
+- `p2p_outbound_frame_queue_max_high_bytes` (usize, default: 128 MiB)
+  - Maximum encrypted stream bytes retained by each peer's aggregate high-priority sender queue
+    and by the process-wide owner shared across all connected post channels, sender queues,
+    batches, and socket writes. The network actor uses the same amount as its ordinary high-byte
+    subcap. The actor adds one maximum control-frame safety charge (`S`) and one maximum eligible
+    progress-frame charge (`P`) as disjoint reserves. Separately, each authenticated peer gets one
+    such charge (`R`). Eligible traffic is consensus safety/consensus/payload/chunk, BlockSync, and
+    `Control` only when its subscriber route is `GenesisBootstrap`; caller-selected High traffic,
+    including general, Torii, and Connect control, cannot spend `P` or `R`. Duplicate or replacement
+    sessions reuse the same peer reserve, and `max_total_connections` bounds the connected owner as
+    `H + L + N * R`; the actor owner is independently bounded as `H + S + P`. Startup fails closed
+    if an expression overflows or an owner cannot retain one maximum eligible frame.
+    These formulas describe leased encrypted-frame payload ownership, not total process RSS. Each
+    authenticated stream also has fixed-cap scratch/batch buffers (`B_stream`), and each QUIC
+    connection has transport state plus per-connection datagram/flow-control buffers (`B_quic`).
+    The complete transport-memory envelope is therefore
+    `actor(H+S+P) + H + L + N × (R + B_stream + B_quic)` (plus bounded deferred and subscriber
+    owners). In particular, do not size a deployment from `H + L + N × R` alone.
+- `p2p_outbound_frame_queue_max_low_bytes` (usize, default: 64 MiB)
+  - Maximum encrypted stream bytes retained by each peer's low-priority sender queue and by the
+    process-wide owner shared across all connected low-priority posts through socket completion.
 - `p2p_subscriber_queue_cap` (usize, default: 8192)
   - Capacity of each inbound subscriber queue feeding the node relay.
 
@@ -22,11 +47,23 @@ These defaults are tuned for blockchain workloads around 20,000 TPS: consensus/c
 Notes
 - `ConsensusSafety` is a local scheduling tag (never a wire field) for authoritative v2
   proposals, votes, quorum/timeout certificates, and commit-certificate responses. Its network
-  actor, per-peer post, encrypted-frame, deferred-send, inbound dispatch, and relay subscriber
-  queues are independently bounded so auxiliary, proxy, and genesis traffic cannot consume them.
+  actor, per-peer post, inbound dispatch, and relay subscriber scheduling lanes are isolated so
+  auxiliary, proxy, and genesis traffic cannot consume their count capacity. The encrypted sender
+  and missing-session deferred queues instead share the configured aggregate high count/byte
+  envelope with ordinary traffic; safety owns the first retry/service rank and cannot be evicted
+  by ordinary traffic. This keeps aggregate retention bounded without surrendering safety service.
 - The relay registers separate safety, ordinary high (`Consensus` plus `Control`), payload, chunk,
-  and low subscribers; genesis bootstrap and Torii proxy control also retain their existing
-  filtered `Control` subscriptions.
+  and low subscribers; genesis bootstrap subscribes to `Control` requests and bulk-cap
+  `BlockSync` responses, while Torii proxy control retains its filtered `Control` subscription.
+  On a full subscriber channel, safety and route-qualified semantic progress retain their exact
+  dispatch-owned message in separate bounded per-peer backlogs with alternating service. The
+  progress count bound is `max(p2p_subscriber_queue_cap, 2 × admitted_peer_count)`; each peer's
+  share is clamped to 2–64 entries and divided evenly between a consensus/control lane and a
+  payload/chunk/BlockSync bulk lane. Round-robin service across those classes prevents a chunk
+  flood from consuming or starving the lane reservation. Retained messages keep their existing
+  inbound dispatch-byte leases, so this count backlog does not create an uncharged payload owner.
+  General, Torii, and Connect control remain lossy under subscriber pressure and cannot occupy the
+  progress backlog.
 
 ### Low-Priority Rate Limiting ([network] settings)
 
@@ -55,7 +92,7 @@ The following gauges are exposed via Prometheus when telemetry is enabled:
 - `p2p_subscriber_queue_full_by_topic_total{topic="ConsensusSafety|Consensus|ConsensusChunk|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic subscriber-queue drops.
 - `p2p_subscriber_unrouted_total`: number of inbound messages dropped because no subscriber matches the topic.
 - `p2p_subscriber_unrouted_by_topic_total{topic="ConsensusSafety|Consensus|ConsensusChunk|Control|BlockSync|TxGossip|PeerGossip|Health|Other"}`: per-topic unrouted inbound drops.
-- `p2p_queue_depth{priority="Safety|High|Low"}`: bounded network actor queue depth by scheduling lane.
+- `p2p_queue_depth{priority="Safety|Progress|High|Low"}`: bounded network actor queue depth by scheduling lane.
 - `p2p_queue_dropped_total{priority="High|Low",kind="Post|Broadcast"}`: bounded network actor queue drops by priority/kind.
 - `p2p_handshake_failures`: number of P2P handshake failures (timeouts, signature/verification errors).
 - `soranet_pow_revocation_store_total{reason}`: count of SoraNet PoW revocation store fallbacks
@@ -416,7 +453,7 @@ Notes
 - Current status: inbound QUIC listener is implemented and spawns peers for accepted bidirectional streams. Outbound dialing can attempt QUIC to hostnames (with TCP fallback).
 - Best-effort datagrams: when `[network].quic_datagrams_enabled = true` (default), small best-effort topics (`TxGossip`, `PeerGossip`, `TrustGossip`, `Health`) may be sent over QUIC DATAGRAM instead of streams. This avoids retransmission/head-of-line blocking for "green" traffic and is safe to drop. Reliable topics remain stream-only.
   - `[network].quic_datagram_max_payload_bytes` (default: 1200) caps the QUIC DATAGRAM payload size conservatively to avoid fragmentation.
-  - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers (default: 1 MiB each; both must be non-zero to enable the extension).
+  - `[network].quic_datagram_receive_buffer_bytes` / `[network].quic_datagram_send_buffer_bytes` control the QUIC DATAGRAM buffers **per active QUIC connection** (default: 1 MiB each; both must be non-zero to enable the extension). Their process-level memory term is `max_total_connections × (receive + send)`, in addition to the bounded actor, connected-stream, deferred-frame, and subscriber owners; they are not aggregate endpoint-wide caps.
 
 ### TLS-over-TCP (camouflage)
 
@@ -438,6 +475,10 @@ Notes
 - `iroha_p2p::NetworkHandle::accept_stream(read, write, remote_addr)` allows accepting externally provided duplex streams and spawning a peer, applying the same caps/throttle as TCP accepts.
 - Intended use: Torii `/p2p` WebSocket route upgrades to a raw duplex and forwards its halves to `accept_stream` (feature `p2p_ws`).
 - Outbound fallback: the dialer attempts QUIC/TLS/TCP; if that fails it can fall back to WS/WSS (`ws://host:port/p2p` and `wss://host:port/p2p`).
+- WS is a bounded stream adapter, not a one-message-per-P2P-frame transport. Both client and Torii
+  server split the continuous byte stream into at most 64 KiB WebSocket Binary messages, cap read
+  and write buffers explicitly, and concatenate those chunks before P2P framing. A 17 MiB P2P
+  frame therefore remains valid while a single WebSocket message above 64 KiB is rejected.
 - Preference knob: set `[network].prefer_ws_fallback = true` to try WS/WSS first for any peer address (useful for constrained environments and CI).
 - Status: server-side route and outbound fallback implemented behind `p2p_ws`. An end‑to‑end test exercises the Torii `/p2p` route.
 
@@ -487,17 +528,32 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
 
 ### Frame Size Caps
 
-- Global cap: `[network].max_frame_bytes` (default 16 MiB) rejects oversized frames early.
+- Global encrypted cap: `[network].max_frame_bytes` (default 17 MiB plus the 28-byte
+  ChaCha20-Poly1305 nonce/tag expansion) rejects oversized frames early. The largest topic
+  plaintext ceiling remains exactly 17 MiB.
   The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
-  accepts as well as outbound dialers, with `p2p_post_overflow_by_topic`
+  accepts as well as outbound dialers, with `p2p_frame_cap_violations_total`
   counters incremented whenever an inbound frame is dropped by the topic caps.
   This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
-  toward the limit (currently 28 bytes for ChaCha20-Poly1305).
-- Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
-  - `[network].max_frame_bytes_consensus` (default 16 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
-  - `[network].max_frame_bytes_control` (default 128 KiB; also caps the small
+  toward the limit (currently 28 bytes for ChaCha20-Poly1305). Because the wire
+  stream format stores the encrypted-frame body length in a `u32`; its wire ceiling is
+  4,294,967,295 bytes. The deterministic runtime/configuration ceiling is
+  2,147,483,643 encrypted-body bytes: with the four-byte prefix, the contiguous
+  stream buffer remains within `i32::MAX` on both 32-bit and 64-bit hosts.
+  Startup and `irohad --check-config` reject larger values before binding any
+  listener. Before materializing an outbound frame, the sender performs an
+  exact counting Norito pass and rejects an oversized result; it then checks
+  generic AEAD expansion, the `u32` conversion, and prefix-inclusive queue
+  accounting. Incoming stream readers reject lengths above the runtime cap and
+  grow their buffer in bounded increments rather than reserving the entire
+  unauthenticated declared length. Each authenticated encrypted frame may carry
+  at most 32 concatenated inner Norito objects; the receiver rejects object 33
+  before measuring or decoding it while preserving the first 32 admitted objects.
+- Topic caps (post-decode enforcement, tightened defaults) apply to complete decrypted and authenticated P2P frame bytes:
+  - `[network].max_frame_bytes_consensus` (default 17 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
+  - `[network].max_frame_bytes_control` (default 2 MiB; also caps the small
     authoritative-v2 `ConsensusSafety` messages)
-  - `[network].max_frame_bytes_block_sync` (default = global cap; caps bulk consensus payloads such as `BlockSyncUpdate`, `Proposal`, and `RbcChunk`, plus BlockSync responses)
+  - `[network].max_frame_bytes_block_sync` (default = 17 MiB plaintext ceiling; caps bulk consensus payloads such as `BlockSyncUpdate`, `Proposal`, and `RbcChunk`, plus BlockSync responses)
   - `[network].max_frame_bytes_tx_gossip` (default 256 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)
   - `[network].max_frame_bytes_health` (default 32 KiB)

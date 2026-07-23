@@ -29,11 +29,11 @@ Norito даацтай тул түрээсийн үнийн дүн болон у�
 
 | Талбай | Тодорхойлолт | Өгөгдмөл |
 |-------|-------------|---------|
-| `base_rate_per_gib_month` | Хадгалсан сар бүр GiB тутамд XOR хураамж авдаг. | `250_000` микро-XOR (0.25 XOR) |
+| `base_rate_per_gib_month` | Хадгалсан сар бүр GiB тутамд XOR хураамж авдаг. | `"0.25"` XOR |
 | `protocol_reserve_bps` | Протоколын нөөцөд шилжүүлсэн түрээсийн хувь (үндсэн цэг). | `2_000` (20%) |
 | `pdp_bonus_bps` | Амжилттай PDP үнэлгээнд ногдох урамшууллын хувь. | `500` (5%) |
 | `potr_bonus_bps` | Амжилттай PoTR үнэлгээний урамшууллын хувь. | `250` (2.5%) |
-| `egress_credit_per_gib` | Үйлчилгээ үзүүлэгч нь DA-ийн 1GiB датад үйлчлэх үед төлсөн кредит. | `1_500` микро-XOR |
+| `egress_credit_per_gib` | Үйлчилгээ үзүүлэгч нь DA-ийн 1GiB датад үйлчлэх үед төлсөн кредит. | `"0.0015"` XOR |
 
 Бүх суурь онооны утгыг `BASIS_POINTS_PER_UNIT` (10000)-тай харьцуулсан.
 Бодлогын шинэчлэлтүүд засаглалаар дамжих ёстой бөгөөд Torii зангилаа бүр нь
@@ -42,11 +42,11 @@ Norito даацтай тул түрээсийн үнийн дүн болон у�
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI хэрэгсэл (`iroha app da rent-quote`) нь ижил Norito/JSON бодлогын оролтыг хүлээн авдаг.
@@ -80,12 +80,12 @@ Torii төлөв рүү буцах. Залгихад ашигласан бодл
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```Бүртгэлийн проекцын хэсэг нь DA түрээсийн дэвтэрийн ISI-д шууд ордог: энэ
@@ -105,12 +105,12 @@ JSON гаралт нь үнийн саналын мета өгөгдлүүдий
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ JSON гаралт нь үнийн саналын мета өгөгдлүүдий
 }
 ```
 
-Эцсийн `egress_credit_per_gib_micro_xor` талбар нь хяналтын самбар болон төлбөр хийх боломжийг олгодог
+Эцсийн `egress_credit_per_gib` талбар нь хяналтын самбар болон төлбөр хийх боломжийг олгодог
 Төлөвлөгчид гарах нөхөн олговрыг түрээсийн бодлоготой уялдуулдаг
 скриптийн цавуу дахь бодлогын математикийг дахин тооцоололгүйгээр иш татах.
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 Үнийн саналыг Torii зангилаа, SDK болон Төрийн сангийн тайлангууд дээр дахин гаргах боломжтой.
 Энэ нь түр зуурын математикийн оронд детерминист Norito бүтцийг ашигладаг. Операторууд чадна
-JSON/CBOR кодлогдсон `DaRentPolicyV1`-ийг засаглалын санал эсвэл түрээсэнд хавсаргана уу
+Norito/JSON кодлогдсон `DaRentPolicyV1`-ийг засаглалын санал эсвэл түрээсэнд хавсаргана уу
 өгөгдсөн бөмбөрцөгт ямар параметр хүчинтэй байсныг нотлох аудит.
 
 ## Урамшуулал ба нөөц

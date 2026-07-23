@@ -51,8 +51,8 @@ network.
 
 ### Bridge delivery and platform minimums
 - Toolchain/platform: Swift 5.9+ with iOS 15+ or macOS 12+ for both SPM and CocoaPods.
-- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` exercises the manifest with and without the bridge (missing-bridge path must fall back to Swift-only with warning), and `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/swift-packaging.yml`.
-- Policy: bridge loading is automatic. When `dist/NoritoBridge.xcframework` is present, native helpers are enabled; when it is absent, Swift-only fallback is used. SDK helper failures surface `bridgeUnavailable`/`nativeBridgeUnavailable` with the expected bridge location.
+- Bridge: `dist/NoritoBridge.xcframework` and `dist/NoritoBridge.artifacts.json` must ship with the app or pod (the manifest records the bridge version plus per-platform SHA-256 hashes). `ci/check_swift_spm_validation.sh` proves that the complete artifact builds and that a missing bridge is rejected, while `ci/check_swift_pod_bridge.sh` lints the podspec with the bundled bridge so pod consumers stay in parity with SwiftPM binary targets. Both run in `.github/workflows/mobile_sdk_artifacts.yml`.
+- Policy: the bridge is mandatory. Package resolution fails when `dist/NoritoBridge.xcframework` is absent or incomplete; runtime `bridgeUnavailable`/`nativeBridgeUnavailable` errors identify a broken or unloaded required artifact rather than selecting a Swift-only codec fallback.
 
 ## Quickstart
 
@@ -231,22 +231,42 @@ Torii exposes `GET /v1/offline/readiness?asset_definition_id=...`,
 `submitKagemushaRedeem(_:)`, and
 `getKagemushaOperationStatus(operationId:)`. Top-up and redemption send only
 canonical Norito archives and return a `KagemushaOperationReference`; follow
-its status URI until the tagged `KagemushaOperationStatus` is applied or rejected.
+its status URI until the tagged `KagemushaOperationStatus` is applied or
+rejected. The request models enforce Torii's exact route limits: 512 KiB for
+top-up and 48 MiB for redemption.
 A `200` readiness response may legitimately contain `ready: false`; `503`
 means Torii could not evaluate readiness. Readiness is a closed snapshot-bound
-object. It carries bridge ABI 19, maximum hop count, canonical asset and scale,
-evaluated block height/hash, active transfer, top-up-shield, unshield,
-recursive-transition, and recursive-state verifier records, proof availability,
-recursive-lineage support, readiness, and blockers. Each verifier role must
-have the exact backend/name/circuit and must not share a registry id, key
-commitment, or public-input schema hash with another role.
+object. It carries exact bridge ABI 21, maximum hop count, canonical asset and
+scale, evaluated block height/hash, active transfer, top-up-shield, unshield,
+recursive StepEq and StepEp verifier records, a required nullable
+`artifactSet`, backend-construction state, recursive-lineage support, readiness,
+and blockers. A non-null artifact set binds the authenticated V4 generation,
+manifest, release-policy and release-attestation digests, issuance window,
+proof-pair bound, and asset scale to the atomic recursive verifier pair.
+A null value requires both recursive records and backend construction to be
+unavailable with exactly one `recursive_v4_registry_unavailable` or
+`recursive_v4_registry_malformed` blocker; a non-null value forbids both.
 
 The response carries five required nullable SDK snapshots:
 `activeTransferVerifier`, `activeTopUpShieldVerifier`,
 `activeUnshieldVerifier`, `activeRecursiveStepEqVerifier`, and
 `activeRecursiveStepEpVerifier`. Each is null exactly with its matching
-unavailable blocker, and `ready: true` requires all five roles to be active at
-the evaluated block.
+unavailable blocker. The recursive records are exactly
+`kagemusha_recursive_step_eq_v4_verifier_record` with circuit
+`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
+`kagemusha_recursive_step_ep_v4_verifier_record` with circuit
+`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, both under
+`halo2/ipa`. They appear or disappear atomically with `artifactSet` and must
+match its activation window and proof bound. Verifier ids, commitments, and
+public-input schema hashes remain distinct across all five roles.
+
+`proofBackendAvailable` reports exact authenticated backend construction
+independently. `recursiveLineageSupported` additionally requires the non-null
+artifact set and distinct active Eq/Ep records;
+`recursive_lineage_unavailable` is present exactly when that conjunction is
+false. `ready` is true only when the complete blocker set is empty, so unrelated
+blockers do not erase valid backend or lineage facts. Swift rejects inconsistent
+combinations.
 
 ## SoraFS orchestrator client
 

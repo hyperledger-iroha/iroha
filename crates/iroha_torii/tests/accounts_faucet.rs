@@ -23,7 +23,7 @@ use iroha_data_model::{
     consensus::VrfEpochRecord,
     domain::DomainId,
     peer::PeerId,
-    prelude::{Account, AssetDefinition, Domain, ExposedPrivateKey, InstructionBox, Mint},
+    prelude::{Account, AssetDefinition, Domain, InstructionBox, Mint},
 };
 use iroha_torii::{Torii, json_entry, json_object};
 use mv::storage::StorageReadOnly;
@@ -187,9 +187,13 @@ fn build_faucet_test_context_with_registration(
             );
         }
 
-        let seed_tx = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-            .with_instructions(seed_instructions)
-            .sign(authority_kp.private_key());
+        let seed_tx = TransactionBuilder::new(
+            chain_id.clone(),
+            authority_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(seed_instructions)
+        .sign(authority_kp.private_key());
         let leader = checked_faucet_block_leader_fixture();
         let unverified = BlockBuilder::new(vec![AcceptedTransaction::new_unchecked(Cow::Owned(
             seed_tx,
@@ -213,7 +217,8 @@ fn build_faucet_test_context_with_registration(
     let pow_max_anchor_age_blocks = 4;
     cfg.torii.faucet = Some(iroha_config::parameters::actual::ToriiFaucet {
         authority: authority_id.clone(),
-        private_key: ExposedPrivateKey(authority_kp.private_key().clone()),
+        private_key_file: "/runtime-only/faucet-signer.key".into(),
+        signer: authority_kp.clone(),
         asset_definition_id: faucet_selector
             .unwrap_or(canonical_selector.as_str())
             .to_owned(),

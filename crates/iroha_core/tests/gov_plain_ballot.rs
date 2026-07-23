@@ -32,7 +32,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let mut state = State::new_for_testing(world, kura, query_handle);
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     state.set_gov(gov_cfg);
     // Build a minimal header for transaction context
@@ -61,7 +61,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let instr = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks,
         direction: 0, // Aye
     };
@@ -91,7 +91,7 @@ fn plain_ballot_emits_ballot_accepted_with_weight() {
     let instr2 = CastPlainBallot {
         referendum_id: "ref-1".to_string(),
         owner: ALICE_ID.clone(),
-        amount,
+        amount: amount.into(),
         duration_blocks: 200,
         direction: 0,
     };

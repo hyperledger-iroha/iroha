@@ -1,5 +1,7 @@
 package org.hyperledger.iroha.android.client;
 
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+
 /** Public normalized evidence returned for a contract operation. */
 public final class ContractOperationReceipt {
   private final String operationKind;
@@ -15,8 +17,7 @@ public final class ContractOperationReceipt {
   private final String entrypointHashHex;
   private final Long gasLimit;
   private final Long gasUsed;
-  private final String gasAssetId;
-  private final String feeSponsor;
+  private final FeePaymentIntent feePayment;
   private final String payloadDigestHex;
 
   public ContractOperationReceipt(
@@ -33,8 +34,7 @@ public final class ContractOperationReceipt {
       final String entrypointHashHex,
       final Long gasLimit,
       final Long gasUsed,
-      final String gasAssetId,
-      final String feeSponsor,
+      final FeePaymentIntent feePayment,
       final String payloadDigestHex) {
     this.operationKind = operationKind;
     this.status = status;
@@ -49,8 +49,7 @@ public final class ContractOperationReceipt {
     this.entrypointHashHex = entrypointHashHex;
     this.gasLimit = gasLimit;
     this.gasUsed = gasUsed;
-    this.gasAssetId = gasAssetId;
-    this.feeSponsor = feeSponsor;
+    this.feePayment = feePayment;
     this.payloadDigestHex = payloadDigestHex;
   }
 
@@ -67,7 +66,6 @@ public final class ContractOperationReceipt {
   public String entrypointHashHex() { return entrypointHashHex; }
   public Long gasLimit() { return gasLimit; }
   public Long gasUsed() { return gasUsed; }
-  public String gasAssetId() { return gasAssetId; }
-  public String feeSponsor() { return feeSponsor; }
+  public FeePaymentIntent feePayment() { return feePayment; }
   public String payloadDigestHex() { return payloadDigestHex; }
 }

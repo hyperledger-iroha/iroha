@@ -338,7 +338,7 @@ pub enum NposPenaltyAction {
 }
 
 /// Snapshot of the election parameters used when selecting validators for an epoch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -347,9 +347,9 @@ pub struct ValidatorElectionParameters {
     /// Maximum number of validators allowed in the elected set (0 = unlimited).
     pub max_validators: u32,
     /// Minimum self-bond required for eligibility (stake units).
-    pub min_self_bond: u64,
+    pub min_self_bond: Quantity,
     /// Minimum nomination bond required for delegators (stake units).
-    pub min_nomination_bond: u64,
+    pub min_nomination_bond: Quantity,
     /// Maximum percentage of total stake a single nominator may contribute to one validator.
     pub max_nominator_concentration_pct: u8,
     /// Seat band (percentage) for tie-breaking near the cut line.
@@ -418,8 +418,8 @@ impl ValidatorElectionOutcome {
             validator_set_hash,
             params: ValidatorElectionParameters {
                 max_validators: 0,
-                min_self_bond: 0,
-                min_nomination_bond: 0,
+                min_self_bond: Quantity::zero(),
+                min_nomination_bond: Quantity::zero(),
                 max_nominator_concentration_pct: 0,
                 seat_band_pct: 0,
                 max_entity_correlation_pct: 0,
@@ -878,11 +878,14 @@ mod tests {
             signer: 5,
             commitment: Some([0xAA; 32]),
             reveal: Some([0xBB; 32]),
+            commit_proof: None,
+            reveal_proof: None,
             last_updated_height: 42,
         };
         let late = VrfLateRevealRecord {
             signer: 6,
             reveal: [0xCC; 32],
+            reveal_proof: None,
             noted_at_height: 360,
         };
         let record = VrfEpochRecord {

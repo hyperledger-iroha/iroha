@@ -13,10 +13,13 @@ use iroha_crypto::{Algorithm, PublicKey};
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
-use crate::{deal::BASIS_POINTS_PER_UNIT, provider_advert::SignatureAlgorithm};
+use crate::{
+    deal::{BASIS_POINTS_PER_UNIT, XorQuantity},
+    provider_advert::SignatureAlgorithm,
+};
 
 #[cfg(test)]
-use iroha_crypto::Signature;
+use iroha_crypto::{Signature, numeric::Quantity};
 
 /// Schema version for [`RepairEvidenceV1`].
 pub const REPAIR_EVIDENCE_VERSION_V1: u8 = 1;
@@ -1011,8 +1014,8 @@ pub struct RepairEscalationPolicyV1 {
     pub dispute_window_secs: u64,
     /// Appeal window in seconds after approval before a decision is final.
     pub appeal_window_secs: u64,
-    /// Maximum slash penalty allowed for repair escalations (nano-XOR).
-    pub max_penalty_nano: u128,
+    /// Maximum exact XOR-denominated slash penalty allowed for repair escalations.
+    pub max_penalty: XorQuantity,
 }
 
 impl RepairEscalationPolicyV1 {
@@ -1031,6 +1034,9 @@ impl RepairEscalationPolicyV1 {
         }
         if self.minimum_voters == 0 {
             return Err(RepairValidationError::InvalidMinimumVoters);
+        }
+        if self.max_penalty.is_zero() {
+            return Err(RepairValidationError::InvalidMaxPenalty);
         }
         Ok(())
     }
@@ -1099,8 +1105,8 @@ pub struct RepairSlashProposalV1 {
     pub manifest_digest: [u8; 32],
     /// Auditor submitting the proposal.
     pub auditor_account: String,
-    /// Proposed bond penalty (nano-XOR).
-    pub proposed_penalty_nano: u128,
+    /// Proposed exact XOR-denominated bond penalty.
+    pub proposed_penalty: XorQuantity,
     /// Unix timestamp when the proposal was created.
     pub submitted_at_unix: u64,
     /// Human-readable rationale for governance review.
@@ -1130,7 +1136,7 @@ impl RepairSlashProposalV1 {
                 max: MAX_STRING_BYTES,
             });
         }
-        if self.proposed_penalty_nano == 0 {
+        if self.proposed_penalty.is_zero() {
             return Err(RepairValidationError::InvalidPenalty);
         }
         ensure_timestamp(self.submitted_at_unix, "submitted_at_unix")?;
@@ -1456,6 +1462,9 @@ pub enum RepairValidationError {
     /// Proposed penalty must be positive.
     #[error("proposed penalty must be greater than zero")]
     InvalidPenalty,
+    /// Maximum policy penalty must be positive.
+    #[error("maximum penalty must be greater than zero")]
+    InvalidMaxPenalty,
     /// Approval quorum exceeds basis point bounds.
     #[error("quorum_bps must be within 0..=10_000 (got {quorum_bps})")]
     InvalidQuorumBps {
@@ -1629,6 +1638,33 @@ mod tests {
         }
     }
 
+    fn sample_escalation_policy(max_penalty: &str) -> RepairEscalationPolicyV1 {
+        RepairEscalationPolicyV1 {
+            version: REPAIR_ESCALATION_POLICY_VERSION_V1,
+            quorum_bps: 6_667,
+            minimum_voters: 3,
+            dispute_window_secs: 86_400,
+            appeal_window_secs: 604_800,
+            max_penalty: max_penalty.parse().expect("canonical XOR maximum penalty"),
+        }
+    }
+
+    fn sample_slash_proposal(proposed_penalty: &str) -> RepairSlashProposalV1 {
+        RepairSlashProposalV1 {
+            version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
+            ticket_id: RepairTicketId("REP-351".into()),
+            provider_id: provider_id(),
+            manifest_digest: manifest_digest(),
+            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
+            proposed_penalty: proposed_penalty
+                .parse()
+                .expect("canonical XOR proposed penalty"),
+            submitted_at_unix: 1_704_361_600,
+            rationale: "Repeated PoR failures beyond SLA".into(),
+            approval: None,
+        }
+    }
+
     #[test]
     fn ticket_validation_succeeds() {
         let id = RepairTicketId("REP-351".into());
@@ -1753,18 +1789,139 @@ mod tests {
 
     #[test]
     fn slash_proposal_validation_succeeds() {
-        let proposal = RepairSlashProposalV1 {
+        let proposal = sample_slash_proposal("1000000000");
+        assert!(proposal.validate().is_ok());
+    }
+
+    #[test]
+    fn repair_escalation_xor_penalties_roundtrip_exactly() {
+        let maximum = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        let policy = sample_escalation_policy(maximum);
+        let proposal = sample_slash_proposal("340282366920938463463374607431768211456.000000001");
+
+        let policy_bytes = norito::to_bytes(&policy).expect("encode escalation policy");
+        let decoded_policy: RepairEscalationPolicyV1 =
+            norito::decode_from_bytes(&policy_bytes).expect("decode escalation policy");
+        assert_eq!(decoded_policy, policy);
+
+        let proposal_bytes = norito::to_bytes(&proposal).expect("encode slash proposal");
+        let decoded_proposal: RepairSlashProposalV1 =
+            norito::decode_from_bytes(&proposal_bytes).expect("decode slash proposal");
+        assert_eq!(decoded_proposal, proposal);
+
+        let policy_json = norito::json::to_string(&policy).expect("encode escalation policy JSON");
+        assert!(policy_json.contains(&format!("\"max_penalty\":\"{maximum}\"")));
+        let decoded_policy: RepairEscalationPolicyV1 =
+            norito::json::from_str(&policy_json).expect("decode escalation policy JSON");
+        assert_eq!(decoded_policy, policy);
+
+        let proposal_json = norito::json::to_string(&proposal).expect("encode slash proposal JSON");
+        assert!(proposal_json.contains(
+            "\"proposed_penalty\":\"340282366920938463463374607431768211456.000000001\""
+        ));
+        let decoded_proposal: RepairSlashProposalV1 =
+            norito::json::from_str(&proposal_json).expect("decode slash proposal JSON");
+        assert_eq!(decoded_proposal, proposal);
+    }
+
+    #[test]
+    fn repair_escalation_xor_penalty_json_rejects_adversarial_values() {
+        let policy_json =
+            norito::json::to_string(&sample_escalation_policy("1")).expect("encode policy JSON");
+        let proposal_json =
+            norito::json::to_string(&sample_slash_proposal("1")).expect("encode proposal JSON");
+        let overflow = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042048";
+        let invalid_json_values = [
+            "\"0.0000000001\"".to_owned(),
+            "\"-1\"".to_owned(),
+            "\"01\"".to_owned(),
+            "\"1.0\"".to_owned(),
+            "\"+1\"".to_owned(),
+            "\"1e3\"".to_owned(),
+            "\"not-a-quantity\"".to_owned(),
+            "1".to_owned(),
+            format!("\"{overflow}\""),
+        ];
+
+        for invalid in invalid_json_values {
+            let forged_policy = policy_json.replace(
+                "\"max_penalty\":\"1\"",
+                &format!("\"max_penalty\":{invalid}"),
+            );
+            assert_ne!(forged_policy, policy_json, "policy fixture must be mutated");
+            assert!(
+                norito::json::from_str::<RepairEscalationPolicyV1>(&forged_policy).is_err(),
+                "policy accepted adversarial max_penalty {invalid}"
+            );
+
+            let forged_proposal = proposal_json.replace(
+                "\"proposed_penalty\":\"1\"",
+                &format!("\"proposed_penalty\":{invalid}"),
+            );
+            assert_ne!(
+                forged_proposal, proposal_json,
+                "proposal fixture must be mutated"
+            );
+            assert!(
+                norito::json::from_str::<RepairSlashProposalV1>(&forged_proposal).is_err(),
+                "proposal accepted adversarial proposed_penalty {invalid}"
+            );
+        }
+    }
+
+    #[derive(NoritoSerialize)]
+    struct RawQuantityEscalationPolicyV1 {
+        version: u8,
+        quorum_bps: u16,
+        minimum_voters: u32,
+        dispute_window_secs: u64,
+        appeal_window_secs: u64,
+        max_penalty: Quantity,
+    }
+
+    #[derive(NoritoSerialize)]
+    struct RawQuantitySlashProposalV1 {
+        version: u8,
+        ticket_id: RepairTicketId,
+        provider_id: [u8; 32],
+        manifest_digest: [u8; 32],
+        auditor_account: String,
+        proposed_penalty: Quantity,
+        submitted_at_unix: u64,
+        rationale: String,
+        approval: Option<RepairEscalationApprovalV1>,
+    }
+
+    #[test]
+    fn repair_escalation_norito_rejects_generic_scale_ten_quantities() {
+        let too_precise: Quantity = "0.0000000001"
+            .parse()
+            .expect("generic quantity permits scale ten");
+        let forged_policy = RawQuantityEscalationPolicyV1 {
+            version: REPAIR_ESCALATION_POLICY_VERSION_V1,
+            quorum_bps: 6_667,
+            minimum_voters: 3,
+            dispute_window_secs: 86_400,
+            appeal_window_secs: 604_800,
+            max_penalty: too_precise.clone(),
+        };
+        let policy_bytes = norito::to_bytes(&forged_policy).expect("encode raw quantity policy");
+        assert!(norito::decode_from_bytes::<RepairEscalationPolicyV1>(&policy_bytes).is_err());
+
+        let forged_proposal = RawQuantitySlashProposalV1 {
             version: REPAIR_SLASH_PROPOSAL_VERSION_V1,
             ticket_id: RepairTicketId("REP-351".into()),
             provider_id: provider_id(),
             manifest_digest: manifest_digest(),
             auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            proposed_penalty_nano: 1_000_000_000,
+            proposed_penalty: too_precise,
             submitted_at_unix: 1_704_361_600,
             rationale: "Repeated PoR failures beyond SLA".into(),
             approval: None,
         };
-        assert!(proposal.validate().is_ok());
+        let proposal_bytes =
+            norito::to_bytes(&forged_proposal).expect("encode raw quantity slash proposal");
+        assert!(norito::decode_from_bytes::<RepairSlashProposalV1>(&proposal_bytes).is_err());
     }
 
     #[test]
@@ -1782,15 +1939,24 @@ mod tests {
 
     #[test]
     fn escalation_policy_validation_succeeds() {
+        let policy = sample_escalation_policy("1000");
+        assert!(policy.validate().is_ok());
+    }
+
+    #[test]
+    fn escalation_policy_validation_rejects_zero_maximum_penalty() {
         let policy = RepairEscalationPolicyV1 {
             version: REPAIR_ESCALATION_POLICY_VERSION_V1,
             quorum_bps: 6_667,
             minimum_voters: 3,
             dispute_window_secs: 86_400,
             appeal_window_secs: 604_800,
-            max_penalty_nano: 1_000,
+            max_penalty: XorQuantity::zero(),
         };
-        assert!(policy.validate().is_ok());
+        assert_eq!(
+            policy.validate(),
+            Err(RepairValidationError::InvalidMaxPenalty)
+        );
     }
 
     #[test]

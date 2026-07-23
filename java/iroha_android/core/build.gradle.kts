@@ -1,12 +1,17 @@
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.net.URLClassLoader
+import org.gradle.api.provider.Provider
 
 plugins {
     `java-library`
+    `maven-publish`
 }
 
 val sdkVersion = providers.gradleProperty("irohaAndroidVersion").orElse("0.1.0")
+@Suppress("UNCHECKED_CAST")
+val irohaKotlinSdkVersion =
+    rootProject.extra["irohaKotlinSdkVersionProvider"] as Provider<String>
 val noritoJavaVersion = providers.gradleProperty("noritoJavaVersion").orElse(sdkVersion)
 val noritoSchemaManifest =
     rootProject.layout.projectDirectory.file("schemas/norito_schema_manifest.json")
@@ -41,6 +46,24 @@ tasks.withType<Test>().configureEach {
             .dir("..")
             .dir("..")
             .file("fixtures/numeric_v1_golden.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/peer_transport_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/peer_nearby_v1.json"),
+    )
+    inputs.file(
+        rootProject.layout.projectDirectory
+            .dir("..")
+            .dir("..")
+            .file("fixtures/offline/peer_nfc_v1.json"),
     )
     val harnessFilter = System.getenv("ANDROID_HARNESS_MAINS")
     if (!harnessFilter.isNullOrBlank()) {
@@ -248,10 +271,61 @@ tasks.named("check") {
 }
 
 dependencies {
-    api(noritoJarDependency)
+    api("org.hyperledger.iroha:norito-java:${noritoJavaVersion.get()}")
+    api("org.hyperledger.iroha.sdk:core-jvm:${irohaKotlinSdkVersion.get()}")
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("com.squareup.okhttp3:okhttp:4.12.0")
     testImplementation("com.squareup.okio:okio:3.6.0")
     testImplementation("junit:junit:4.13.2")
+}
+
+publishing {
+    publications {
+        create<MavenPublication>("androidSdkCore") {
+            from(components["java"])
+            artifactId = "core"
+            pom {
+                name.set("Iroha Android SDK (shared Java core)")
+                description.set(
+                    "Shared Java implementation used by the Iroha Android AAR and JVM SDK.",
+                )
+                url.set("https://github.com/hyperledger/iroha")
+                licenses {
+                    license {
+                        name.set("Apache License 2.0")
+                        url.set("https://www.apache.org/licenses/LICENSE-2.0")
+                        distribution.set("repo")
+                    }
+                }
+                scm {
+                    connection.set("scm:git:https://github.com/hyperledger/iroha.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/hyperledger/iroha.git")
+                    url.set("https://github.com/hyperledger/iroha")
+                }
+            }
+        }
+    }
+    repositories {
+        val repoDirProp = providers.gradleProperty("irohaAndroidRepoDir").orNull
+        val repoUrlProp = providers.gradleProperty("irohaAndroidRepoUrl").orNull
+        val targetUri = when {
+            !repoUrlProp.isNullOrBlank() -> uri(repoUrlProp)
+            !repoDirProp.isNullOrBlank() -> file(repoDirProp).toURI()
+            else -> layout.buildDirectory.dir("maven").get().asFile.toURI()
+        }
+        maven {
+            name = "target"
+            url = targetUri
+            val repoUser = providers.gradleProperty("irohaAndroidRepoUsername").orNull
+            val repoPass = providers.gradleProperty("irohaAndroidRepoPassword").orNull
+            if (!repoUser.isNullOrBlank() && !repoPass.isNullOrBlank()) {
+                credentials {
+                    username = repoUser
+                    password = repoPass
+                }
+            }
+            isAllowInsecureProtocol = targetUri.scheme.equals("http", ignoreCase = true)
+        }
+    }
 }

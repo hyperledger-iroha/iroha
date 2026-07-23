@@ -7,7 +7,7 @@ use iroha::{
     data_model::{
         asset::AssetDefinitionId,
         prelude::{AccountId, AssetId, ChainId, Metadata, Quantity},
-        transaction::SignedTransaction,
+        transaction::{FeePaymentIntent, SignedTransaction, TransactionPayload},
     },
     nexus_app::{
         NexusAppClient, NexusAppConfig, NexusAppError, NexusApprovedAccount, NexusConnectOptions,
@@ -78,6 +78,13 @@ impl NexusConnectTransport for DemoConnectTransport {
 struct DemoToriiSubmitter;
 
 impl NexusToriiSubmitter for DemoToriiSubmitter {
+    fn quote_fee_payment(
+        &self,
+        payload: &TransactionPayload,
+    ) -> Result<FeePaymentIntent, NexusAppError> {
+        Ok(payload.fee_payment.clone())
+    }
+
     fn submit_and_wait(
         &self,
         transaction: &SignedTransaction,
@@ -103,6 +110,7 @@ fn transfer_input(authority: AccountId) -> NexusTransferInput {
         destination_account_id: authority.clone(),
         authority: Some(authority),
         metadata: Metadata::default(),
+        fee_payment: FeePaymentIntent::authority(Vec::new(), None),
         creation_time_ms: Some(1_700_000_000_000),
         ttl: Some(Duration::from_secs(30)),
         nonce: Some(NonZeroU32::new(7).expect("non-zero nonce")),

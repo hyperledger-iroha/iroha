@@ -51,7 +51,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 lane メタデータは dataspace ごとのバッファアカウントを紐付けます。
 - `settlement.buffer_account` — リザーブを保持するアカウント（例: `buffer::cbdc_treasury`）。
 - `settlement.buffer_asset` — ヘッドルーム控除に使う資産定義（通常は `xor#sora`）。
-- `settlement.buffer_capacity_micro` — マイクロ XOR で指定する容量（10 進文字列）。
+- `settlement.buffer_capacity` — マイクロ XOR で指定する容量（10 進文字列）。
 
 メタデータが無い場合、その lane のバッファスナップショットは無効になり、
 テレメトリは容量/状態のゼロ値にフォールバックします。

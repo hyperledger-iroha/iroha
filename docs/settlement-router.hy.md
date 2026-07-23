@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 Գոտի մետատվյալների լարերը յուրաքանչյուր տվյալների տարածության բուֆերային հաշվում.
 - `settlement.buffer_account` - հաշիվ, որը պահում է պահուստը (օրինակ՝ `buffer::cbdc_treasury`):
 - `settlement.buffer_asset` - ակտիվի սահմանումը դեբետագրված գլխի համար (սովորաբար `xor#sora`):
-- `settlement.buffer_capacity_micro` — կոնֆիգուրացված հզորություն միկրո-XOR-ում (տասնորդական տող):
+- `settlement.buffer_capacity` — կոնֆիգուրացված հզորություն միկրո-XOR-ում (տասնորդական տող):
 
 Բացակայող մետատվյալներն անջատում են բուֆերային նկարահանումը այդ գոտու համար (հեռաչափությունը հետ է ընկնում զրոյական հզորության/կարգավիճակին):## Փոխակերպման խողովակաշար
 1. **Մեջբերում.** `SettlementEngine::quote`-ը կիրառում է կազմաձևված էպսիլոն + անկայունության մարժան և սանրվածքի մակարդակը TWAP չակերտների վրա՝ վերադարձնելով `SettlementReceipt`՝ `xor_due`-ով և `xor_due`-ով և Prometheus-ով և Prometheus-ով: `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

@@ -10,10 +10,12 @@ import java.nio.file.Paths;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.security.Signature;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -24,10 +26,19 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.IrohaKeyManager.KeySecurityPreference;
+import org.hyperledger.iroha.android.alias.AccountAliasName;
+import org.hyperledger.iroha.android.alias.AliasQuoteGuardV1;
+import org.hyperledger.iroha.android.alias.AliasSetupModels;
+import org.hyperledger.iroha.android.alias.AliasSetupPlanRequestV1;
+import org.hyperledger.iroha.android.alias.AliasTransactionPlanV1;
+import org.hyperledger.iroha.android.alias.EnsureAlias;
+import org.hyperledger.iroha.android.alias.ResolvedAccountAliasV1;
 import org.hyperledger.iroha.android.client.queue.FilePendingTransactionQueue;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
+import org.hyperledger.iroha.android.model.FeeSponsorProgramId;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -63,7 +74,11 @@ import org.hyperledger.iroha.android.client.transport.TransportRequest;
 import org.hyperledger.iroha.android.client.transport.TransportResponse;
 
 public final class HttpClientTransportTests {
-  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(248);
+  private static final String VPN_HELPER_TICKET_HEX = "5356504e48543100" + "00".repeat(656);
+
+  private static FeePaymentIntent feePayment(final Long gasLimit) {
+    return FeePaymentIntent.authority(Collections.emptyList(), gasLimit);
+  }
 
   private HttpClientTransportTests() {}
 
@@ -132,12 +147,18 @@ public final class HttpClientTransportTests {
     ramLfeReceiptVerifyUsesRawReceipt();
     ramLfeResponseParsersRejectNonExactFields();
     vpnProfileRequestParsesNativeLeaseFields();
+    vpnSessionParserRejectsNonCanonicalHelperTicketHex();
+    vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields();
+    vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds();
+    vpnRoutesRejectWrongSuccessfulStatusCodes();
     vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction();
+    feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer();
+    feeQuoteRejectsPayerRevisionAndGasSubstitution();
+    feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle();
+    feeSponsorProgramRejectsSubstitutedResponseId();
     vpnSessionAndReceiptRequestsUseNativeLeaseDtos();
     verifierKeyRegisterAndUpdatePostSignedPayloads();
     verifierKeyRequestsRejectMalformedInputsBeforeRequest();
-    deployContractRequestParsesResponse();
-    deployContractResponseRejectsRetiredInitCallsField();
     callContractRequestParsesResponse();
     contractCallBoundaryConsumesSharedRustArgumentRecordFixture();
     callContractRejectsInvalidEntrypointOrGas();
@@ -148,6 +169,8 @@ public final class HttpClientTransportTests {
     callContractRejectsAmbiguousTarget();
     governanceContractRequestParsesResponse();
     resolveAccountAliasRequestParsesResponse();
+    resolveRestrictedAccountAliasUsesCanonicalAuthentication();
+    aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan();
     resolveAccountAliasRequestParsesResponseWithoutIndex();
     resolveAccountAliasAllowsNotFound();
     resolveAccountAliasRejectsNonIntegerIndex();
@@ -684,7 +707,11 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().build();
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setInstructions(Collections.emptyList())
+            .build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "queued-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -729,7 +756,11 @@ public final class HttpClientTransportTests {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final IrohaKeyManager keyManager = IrohaKeyManager.fromProviders(List.of(provider));
     final TransactionBuilder builder = new TransactionBuilder(new NoritoJavaCodecAdapter(), keyManager);
-    final TransactionPayload payload = TransactionPayload.builder().build();
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
+            .setInstructions(Collections.emptyList())
+            .build();
     final SignedTransaction transaction =
         builder.encodeAndSign(payload, "skip-alias", KeySecurityPreference.SOFTWARE_ONLY);
 
@@ -2222,7 +2253,7 @@ public final class HttpClientTransportTests {
         "{"
             + "\"available\":true,"
             + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
-            + "\"supported_exit_classes\":[\"standard\",\"low-latency\"],"
+            + "\"supported_exit_classes\":[\"standard\",\"low-latency\",\"high-security\"],"
             + "\"default_exit_class\":\"standard\","
             + "\"lease_secs\":600,"
             + "\"dns_push_interval_secs\":60,"
@@ -2231,12 +2262,12 @@ public final class HttpClientTransportTests {
             + "\"excluded_routes\":[\"10.0.0.0/8\"],"
             + "\"dns_servers\":[\"1.1.1.1\"],"
             + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
-            + "\"mtu_bytes\":1024,"
+            + "\"mtu_bytes\":1280,"
             + "\"display_billing_label\":\"standard XOR\","
             + "\"fee_asset_id\":\"xor#universal.universal\","
             + "\"escrow_account_id\":\"sorauEscrow\","
             + "\"operator_account_id\":\"sorauOperator\","
-            + "\"lease_fee_nanos\":1000000,"
+            + "\"lease_fee\":\"1000000.25\","
             + "\"settlement_grace_secs\":120,"
             + "\"flow_label_bits\":24,"
             + "\"padding_budget_ms\":15,"
@@ -2257,12 +2288,323 @@ public final class HttpClientTransportTests {
     assert "xor#universal.universal".equals(profile.feeAssetId()) : "VPN fee asset mismatch";
     assert "sorauEscrow".equals(profile.escrowAccountId()) : "VPN escrow account mismatch";
     assert "sorauOperator".equals(profile.operatorAccountId()) : "VPN operator account mismatch";
-    assert profile.leaseFeeNanos() == 1_000_000L : "VPN lease fee mismatch";
+    assert "1000000.25".equals(profile.leaseFee()) : "VPN lease fee mismatch";
+    assert profile.dnsPushIntervalSecs() == 60L : "VPN DNS push interval mismatch";
     assert profile.settlementGraceSecs() == 120L : "VPN settlement grace mismatch";
     assert "ab".repeat(32).equals(profile.relayTlsSpkiSha256Hex()) : "VPN TLS pin mismatch";
     assert "GET".equals(executor.lastRequest().method()) : "VPN profile must use GET";
     assert executor.lastRequest().uri().toString().equals("https://torii.example/v1/vpn/profile")
         : "VPN profile URI mismatch";
+
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace("\"dns_push_interval_secs\":60", "\"dns_push_interval_secs\":29")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject DNS push intervals below 30 seconds");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace("\"dns_push_interval_secs\":60,", "")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must require dns_push_interval_secs");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replaceFirst("\\{", "{\"unexpected\":true,")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject unknown fields");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseProfile(
+                json.replace("ab".repeat(32), "AB".repeat(32))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN profile parser must reject uppercase TLS pins");
+  }
+
+  private static void vpnSessionParserRejectsNonCanonicalHelperTicketHex() {
+    final String sessionId = "33".repeat(32);
+    final String paymentTxHash = "44".repeat(32);
+    final String[] invalidValues = {
+      "0x" + VPN_HELPER_TICKET_HEX,
+      VPN_HELPER_TICKET_HEX.toUpperCase(Locale.ROOT),
+      VPN_HELPER_TICKET_HEX.substring(0, VPN_HELPER_TICKET_HEX.length() - 2)
+    };
+    for (final String invalid : invalidValues) {
+      final byte[] payload =
+          vpnSessionJson(sessionId, paymentTxHash)
+              .replace(VPN_HELPER_TICKET_HEX, invalid)
+              .getBytes(StandardCharsets.UTF_8);
+      expectRuntimeException(
+          () -> VpnJsonParser.parseSession(payload),
+          "VPN session parser must reject non-canonical helper_ticket_hex");
+    }
+  }
+
+  private static void vpnResponseParsersRejectNonCanonicalIdsHashesAndUnknownFields() {
+    final String identifier = "ab".repeat(32);
+    final String paymentTxHash = "cd".repeat(32);
+    final String meteringKey = "ef".repeat(32);
+    final String quote = vpnQuoteJson(identifier, meteringKey);
+
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                quote
+                    .replace(
+                        "\"quote_id\":\"" + identifier + "\"",
+                        "\"quote_id\":\"0x" + identifier + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN quote parser must reject prefixed quote ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                quote.replace("aa".repeat(16), "AA".repeat(16))
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN quote parser must reject uppercase session ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                quote.replaceFirst("\\{", "{\"unexpected\":true,")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN quote parser must reject unknown fields");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseQuote(
+                quote
+                    .replaceFirst(
+                        "\"payload_hex\":\"cafe\"",
+                        "\"payload_hex\":\"cafe\",\"unexpected\":true")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN transaction instruction parser must reject unknown fields");
+
+    final String session = vpnSessionJson(identifier, paymentTxHash);
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseSession(
+                session
+                    .replace(
+                        "\"session_id\":\"" + identifier + "\"",
+                        "\"session_id\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN session parser must reject uppercase session ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseSession(
+                session
+                    .replace(
+                        "\"payment_tx_hash\":\"" + paymentTxHash + "\"",
+                        "\"payment_tx_hash\":\"0x" + paymentTxHash + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN session parser must reject prefixed payment hashes");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseSession(
+                session.replaceFirst("\\{", "{\"unexpected\":true,")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN session parser must reject unknown fields");
+
+    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                receipt
+                    .replace(
+                        "\"lease_id_hex\":\"" + identifier + "\"",
+                        "\"lease_id_hex\":\"" + identifier.toUpperCase(Locale.ROOT) + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt parser must reject uppercase lease ids");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                receipt
+                    .replace(
+                        "\"payment_tx_hash\":\"" + paymentTxHash + "\"",
+                        "\"payment_tx_hash\":\"0x" + paymentTxHash + "\"")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt parser must reject prefixed payment hashes");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                receipt.replaceFirst("\\{", "{\"unexpected\":true,")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt parser must reject unknown fields");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceiptList(
+                ("{\"items\":[" + receipt + "],\"total\":1,\"unexpected\":true}")
+                    .getBytes(StandardCharsets.UTF_8)),
+        "VPN receipt-list parser must reject unknown fields");
+  }
+
+  private static void vpnResponseParsersRejectMissingRequiredFieldsAndSchemaBounds() {
+    final String identifier = "ab".repeat(32);
+    final String paymentTxHash = "cd".repeat(32);
+    final String meteringKey = "ef".repeat(32);
+    final String profile = vpnProfileJson();
+    final String quote = vpnQuoteJson(identifier, meteringKey);
+    final String session = vpnSessionJson(identifier, paymentTxHash);
+    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    final String receiptList = "{\"items\":[" + receipt + "],\"total\":1}";
+
+    final List<Runnable> missingCases =
+        List.of(
+            () ->
+                VpnJsonParser.parseProfile(
+                    vpnJsonWithoutField(profile, "relay_tls_spki_sha256_hex")),
+            () ->
+                VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "open_lease_instruction")),
+            () -> VpnJsonParser.parseQuote(vpnJsonWithoutField(quote, "tx_instructions")),
+            () -> VpnJsonParser.parseSession(vpnJsonWithoutField(session, "route_pushes")),
+            () ->
+                VpnJsonParser.parseReceipt(
+                    vpnJsonWithoutField(receipt, "settle_lease_instruction")),
+            () -> VpnJsonParser.parseReceiptList(vpnJsonWithoutField(receiptList, "items")));
+    for (final Runnable decode : missingCases) {
+      expectRuntimeException(decode, "VPN response parser must reject a missing required field");
+    }
+    expectRuntimeException(
+        () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "route_pushes", null)),
+        "VPN response parser must reject null required arrays");
+
+    final Object[][] profileViolations = {
+      {"supported_exit_classes", List.of("standard", "low-latency")},
+      {"supported_exit_classes", List.of("standard", "standard", "high-security")},
+      {"default_exit_class", "unsupported"},
+      {"lease_secs", 0L},
+      {"lease_secs", 4_294_967_296L},
+      {"mtu_bytes", 1279L},
+      {"settlement_grace_secs", 0L},
+      {"flow_label_bits", 23L},
+      {"padding_budget_ms", 0L}
+    };
+    for (final Object[] violation : profileViolations) {
+      expectRuntimeException(
+          () ->
+              VpnJsonParser.parseProfile(
+                  vpnJsonWithField(profile, (String) violation[0], violation[1])),
+          "VPN profile parser must reject invalid " + violation[0]);
+    }
+
+    final Object instruction = vpnJsonObject(quote).get("open_lease_instruction");
+    for (final List<Object> instructions :
+        List.of(Collections.emptyList(), List.of(instruction, instruction))) {
+      expectRuntimeException(
+          () -> VpnJsonParser.parseQuote(vpnJsonWithField(quote, "tx_instructions", instructions)),
+          "VPN quote parser must require exactly one transaction instruction");
+    }
+    expectRuntimeException(
+        () -> VpnJsonParser.parseSession(vpnJsonWithField(session, "status", "settled")),
+        "VPN session parser must require active status");
+    expectRuntimeException(
+        () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "status", "active")),
+        "VPN receipt parser must reject active status");
+    expectRuntimeException(
+        () -> VpnJsonParser.parseReceipt(vpnJsonWithField(receipt, "receipt_source", "operator")),
+        "VPN receipt parser must reject unknown receipt sources");
+    final Map<String, Object> receiptInstruction =
+        Map.of("wire_id", "SettleVpnLease", "payload_hex", "abcd");
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceipt(
+                vpnJsonWithField(
+                    receipt,
+                    "tx_instructions",
+                    List.of(receiptInstruction, receiptInstruction))),
+        "VPN receipt parser must allow at most one transaction instruction");
+
+    final Map<String, Object> receiptObject = vpnJsonObject(receipt);
+    expectRuntimeException(
+        () ->
+            VpnJsonParser.parseReceiptList(
+                vpnJsonWithField(receiptList, "items", Collections.nCopies(25, receiptObject))),
+        "VPN receipt-list parser must allow at most 24 items");
+    expectRuntimeException(
+        () -> VpnJsonParser.parseReceiptList(vpnJsonWithField(receiptList, "total", 25L)),
+        "VPN receipt-list parser must cap total at 24");
+  }
+
+  @SuppressWarnings("unchecked")
+  private static Map<String, Object> vpnJsonObject(final String json) {
+    return new LinkedHashMap<>((Map<String, Object>) JsonParser.parse(json));
+  }
+
+  private static byte[] vpnJsonWithField(
+      final String json, final String field, final Object value) {
+    final Map<String, Object> root = vpnJsonObject(json);
+    root.put(field, value);
+    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static byte[] vpnJsonWithoutField(final String json, final String field) {
+    final Map<String, Object> root = vpnJsonObject(json);
+    root.remove(field);
+    return JsonEncoder.encode(root).getBytes(StandardCharsets.UTF_8);
+  }
+
+  private static void vpnRoutesRejectWrongSuccessfulStatusCodes() throws Exception {
+    final String identifier = "33".repeat(32);
+    final String paymentTxHash = "44".repeat(32);
+    final String meteringKey = "55".repeat(32);
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_050L, "vpn-status-nonce");
+
+    assertVpnWrongStatusRejected(201, vpnProfileJson(), transport -> transport.getVpnProfile().join());
+    assertVpnWrongStatusRejected(
+        200,
+        vpnQuoteJson(identifier, meteringKey),
+        transport ->
+            transport
+                .createVpnQuote(new VpnQuoteCreateRequest("standard", "0x" + meteringKey), auth)
+                .join());
+    assertVpnWrongStatusRejected(
+        200,
+        vpnSessionJson(identifier, paymentTxHash),
+        transport ->
+            transport
+                .createVpnSession(
+                    new VpnSessionCreateRequest(
+                        "standard", identifier, "0x" + paymentTxHash, meteringKey),
+                    auth)
+                .join());
+    assertVpnWrongStatusRejected(
+        201,
+        vpnSessionJson(identifier, paymentTxHash),
+        transport -> transport.getVpnSession(identifier, auth).join());
+    assertVpnWrongStatusRejected(
+        201,
+        vpnReceiptJson(identifier, paymentTxHash, false),
+        transport -> transport.deleteVpnSession(identifier, auth).join());
+    assertVpnWrongStatusRejected(
+        200,
+        vpnReceiptJson(identifier, paymentTxHash, true),
+        transport ->
+            transport
+                .submitVpnReceipt(
+                    new VpnReceiptSubmitRequest("0xCAFE", "BEEF", "0x" + identifier), auth)
+                .join());
+    final String receipt = vpnReceiptJson(identifier, paymentTxHash, true);
+    assertVpnWrongStatusRejected(
+        201,
+        "{\"items\":[" + receipt + "],\"total\":1}",
+        transport -> transport.listVpnReceipts(auth).join());
+  }
+
+  @FunctionalInterface
+  private interface VpnTransportCall {
+    void invoke(HttpClientTransport transport);
+  }
+
+  private static void assertVpnWrongStatusRejected(
+      final int status, final String body, final VpnTransportCall call) {
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            new StubResponseExecutor(status, body.getBytes(StandardCharsets.UTF_8)),
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+    expectRuntimeException(
+        () -> call.invoke(transport),
+        "VPN route must reject unexpected successful status " + status);
   }
 
   private static void vpnQuoteRequestSignsCanonicalBodyAndParsesOpenLeaseInstruction()
@@ -2309,6 +2651,172 @@ public final class HttpClientTransportTests {
     assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_000L, "vpn-nonce-1");
   }
 
+  private static void feeQuoteRequestSignsExactUnsignedPayloadAndPreservesPayer()
+      throws Exception {
+    final String responseBody =
+        "{\"intent\":{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],"
+            + "\"gas_limit\":9000}},\"observation\":{\"schedule_revision\":4},"
+            + "\"components\":[],\"capacities\":[],\"decision\":{\"accepted\":true}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_020L, "fee-quote-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+    unsignedPayload.put("chain", "test-chain");
+    unsignedPayload.put("authority", "alice");
+    unsignedPayload.put("fee_payment", feePayment(9_000L).toJsonMap());
+
+    final FeeQuoteResponse quote = transport.quoteFees(unsignedPayload, auth).join();
+
+    assert quote.intent() instanceof FeePaymentIntent.Authority
+        : "fee quote payer must remain authority";
+    assert Long.valueOf(9_000L).equals(quote.intent().gasLimit())
+        : "fee quote gas bound mismatch";
+    assert ((Number) quote.observation().get("schedule_revision")).longValue() == 4L
+        : "fee quote observation mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert "POST".equals(request.method()) : "fee quote must use POST";
+    assert "https://torii.example/api/v1/fees/quote".equals(request.uri().toString())
+        : "fee quote URI mismatch";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> requestBody =
+        (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert unsignedPayload.equals(requestBody.get("payload")) : "unsigned payload changed";
+    assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_020L, "fee-quote-1");
+
+    expectIllegalArgument(
+        () ->
+            transport.quoteFees(
+                unsignedPayload, canonicalAuth("bob", keyPair, null, null)),
+        "fee quote must reject an auth payer mismatch");
+    assert executor.lastRequest() == request : "payer mismatch must fail before dispatch";
+  }
+
+  private static void feeSponsorProgramRequestSignsExactSelectorAndParsesLifecycle()
+      throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseBody =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},"
+            + "\"lifecycle\":{\"state\":\"active\",\"value\":null},"
+            + "\"active_revision\":3,\"staged_revision\":4,"
+            + "\"scheduled_activation\":{\"revision\":4,\"activate_at_height\":100}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_021L, "fee-program-1");
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+
+    final FeeSponsorProgramResponse program =
+        transport
+            .getFeeSponsorProgram(new FeeSponsorProgramId(sponsor, "wallet_fx"), auth)
+            .join();
+
+    assert sponsor.equals(program.id().sponsor()) : "fee sponsor account mismatch";
+    assert "wallet_fx".equals(program.id().name()) : "fee sponsor program name mismatch";
+    assert program.lifecycle() == FeeSponsorProgramLifecycle.ACTIVE
+        : "fee sponsor lifecycle mismatch";
+    assert Long.valueOf(3L).equals(program.activeRevision())
+        : "fee sponsor active revision mismatch";
+    assert Long.valueOf(4L).equals(program.stagedRevision())
+        : "fee sponsor staged revision mismatch";
+    assert program.scheduledActivation() != null : "missing scheduled activation";
+    assert program.scheduledActivation().revision() == 4L
+        : "scheduled activation revision mismatch";
+    assert program.scheduledActivation().activateAtHeight() == 100L
+        : "scheduled activation height mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert "POST".equals(request.method()) : "fee sponsor lookup must use POST";
+    assert "https://torii.example/api/v1/fee-sponsor-programs/by-id"
+        .equals(request.uri().toString()) : "fee sponsor lookup URI mismatch";
+    assert ("{\"program_id\":\"" + sponsor + "/wallet_fx\"}").equals(readBody(request))
+        : "fee sponsor lookup body mismatch";
+    assertCanonicalSignature(request, keyPair.getPublic(), 1_700_000_000_021L, "fee-program-1");
+  }
+
+  private static void feeQuoteRejectsPayerRevisionAndGasSubstitution() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final FeePaymentIntent sponsorIntent =
+        FeePaymentIntent.sponsor(
+            new FeeSponsorProgramId(sponsor, "wallet_fx"),
+            3L,
+            Collections.emptyList(),
+            9_000L);
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth = canonicalAuth("alice", keyPair, null, null);
+
+    final Object[][] cases = {
+      {
+        feePayment(9_000L),
+        "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":9001}}"
+      },
+      {
+        sponsorIntent,
+        "{\"payer\":\"authority\",\"value\":{\"charge_limits\":[],\"gas_limit\":9000}}"
+      },
+      {
+        sponsorIntent,
+        "{\"payer\":\"sponsor\",\"value\":{\"program_id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"wallet_fx\"},\"program_revision\":4,"
+            + "\"charge_limits\":[],\"gas_limit\":9000}}"
+      }
+    };
+    for (final Object[] entry : cases) {
+      final FeePaymentIntent requested = (FeePaymentIntent) entry[0];
+      final String responseBody =
+          "{\"intent\":"
+              + entry[1]
+              + ",\"observation\":{},\"components\":[],\"capacities\":[],"
+              + "\"decision\":{}}";
+      final StubResponseExecutor executor =
+          new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+      final HttpClientTransport transport =
+          HttpClientTransport.withExecutor(
+              executor,
+              ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+      final Map<String, Object> unsignedPayload = new LinkedHashMap<>();
+      unsignedPayload.put("authority", "alice");
+      unsignedPayload.put("fee_payment", requested.toJsonMap());
+
+      expectCompletionIllegalArgument(
+          transport.quoteFees(unsignedPayload, auth),
+          "fee quote must reject a substituted payer, sponsor revision, or gas bound");
+    }
+  }
+
+  private static void feeSponsorProgramRejectsSubstitutedResponseId() throws Exception {
+    final String sponsor = TestAccountIds.ed25519Authority(0x37);
+    final String responseBody =
+        "{\"id\":{\"sponsor\":\""
+            + sponsor
+            + "\",\"name\":\"other\"},"
+            + "\"lifecycle\":{\"state\":\"active\",\"value\":null}}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, responseBody.getBytes(StandardCharsets.UTF_8));
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    expectCompletionIllegalArgument(
+        transport.getFeeSponsorProgram(
+            new FeeSponsorProgramId(sponsor, "wallet_fx"),
+            canonicalAuth("alice", keyPair, null, null)),
+        "fee sponsor lookup must reject a substituted response id");
+  }
+
   private static void vpnSessionAndReceiptRequestsUseNativeLeaseDtos() throws Exception {
     final String sessionId = "33".repeat(32);
     final String paymentTxHash = "44".repeat(32);
@@ -2346,12 +2854,13 @@ public final class HttpClientTransportTests {
 
     assert sessionId.equals(session.sessionId()) : "VPN session id mismatch";
     assert VPN_HELPER_TICKET_HEX.equals(session.helperTicketHex()) : "VPN helper ticket length mismatch";
+    assert session.helperTicketHex().length() == 1328 : "VPN helper ticket must be 664 bytes";
     assert fetched.isPresent() : "VPN session lookup should be present";
     assert deleted.isPresent() : "VPN delete receipt should be present";
     assert "disconnected".equals(deleted.get().status()) : "VPN delete status mismatch";
     assert "settled".equals(submitted.status()) : "VPN settled receipt status mismatch";
-    assert submitted.earnedFeeNanos() == 750_000L : "VPN earned fee mismatch";
-    assert submitted.refundedFeeNanos() == 250_000L : "VPN refund mismatch";
+    assert "750000.125".equals(submitted.earnedFee()) : "VPN earned fee mismatch";
+    assert "250000.125".equals(submitted.refundedFee()) : "VPN refund mismatch";
     assert submitted.settleLeaseInstruction() != null : "VPN settled receipt must include settle instruction";
     assert "iroha_data_model::isi::vpn::SettleVpnLease"
         .equals(submitted.settleLeaseInstruction().wireId()) : "VPN settle wire id mismatch";
@@ -2585,112 +3094,6 @@ public final class HttpClientTransportTests {
         "VK register must reject u32 overflow proof limits");
   }
 
-  private static void deployContractRequestParsesResponse() {
-    final StubResponseExecutor executor =
-        new StubResponseExecutor(
-            200,
-            ("{"
-                    + "\"ok\":true,"
-                    + "\"bundle_name\":\"single-contract-deploy\","
-                    + "\"bundle_digest\":\"mock-bundle-digest\","
-                    + "\"chain_fingerprint\":\"mock-chain@height-0\","
-                    + "\"dry_run\":false,"
-                    + "\"completed_stages\":[\"plan\",\"deploy\"],"
-                    + "\"failure_point\":null,"
-                    + "\"contracts\":[{"
-                    + "\"name\":\"router::universal\","
-                    + "\"contract_alias\":\"router::universal\","
-                    + "\"contract_address\":\"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7\","
-                    + "\"previous_contract_address\":null,"
-                    + "\"kaizen\":false,"
-                    + "\"dataspace\":\"router\","
-                    + "\"deploy_nonce\":9,"
-                    + "\"tx_hash_hex\":\""
-                    + "11".repeat(32)
-                    + "\","
-                    + "\"pipeline_status\":{"
-                    + "\"hash\":\""
-                    + "11".repeat(32)
-                    + "\",\"status\":{\"kind\":\"Queued\"},"
-                    + "\"summary\":\"Queued\",\"diagnostics\":[],"
-                    + "\"scope\":\"local\",\"resolved_from\":\"queue\"},"
-                    + "\"code_hash_hex\":\""
-                    + "22".repeat(32)
-                    + "\","
-                    + "\"abi_hash_hex\":\""
-                    + "33".repeat(32)
-                    + "\","
-                    + "\"status\":\"submitted\""
-                    + "}],"
-                    + "\"hajimari_calls\":[{"
-                    + "\"id\":\"initialize\","
-                    + "\"contract_alias\":\"router::universal\","
-                    + "\"entrypoint\":\"initialize\","
-                    + "\"tx_hash_hex\":\""
-                    + "12".repeat(32)
-                    + "\","
-                    + "\"pipeline_status\":{"
-                    + "\"hash\":\""
-                    + "12".repeat(32)
-                    + "\",\"status\":{\"kind\":\"Queued\"},"
-                    + "\"summary\":\"Queued\",\"diagnostics\":[],"
-                    + "\"scope\":\"local\",\"resolved_from\":\"queue\"},"
-                    + "\"status\":\"submitted\"}],"
-                    + "\"assertions\":[]"
-                    + "}")
-                .getBytes(StandardCharsets.UTF_8),
-            "ok");
-    final HttpClientTransport transport =
-        HttpClientTransport.withExecutor(
-            executor,
-            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
-
-    final Optional<ContractDeployResponse> response =
-        transport.deployContract("alice", "privkey", "AQID", "router::universal").join();
-
-    assert response.isPresent() : "Deploy response should be present";
-    final ContractDeployResponse parsed = response.get();
-    assert parsed.ok() : "Deploy response should be successful";
-    assert "mock-bundle-digest".equals(parsed.bundleDigest()) : "Bundle digest mismatch";
-    assert "router::universal".equals(parsed.contracts().get(0).contractAlias())
-        : "Contract alias mismatch";
-    assert !parsed.contracts().get(0).kaizen() : "Kaizen status mismatch";
-    assert "router".equals(parsed.contracts().get(0).dataspace()) : "Dataspace mismatch";
-    assert Long.valueOf(9L).equals(parsed.contracts().get(0).deployNonce())
-        : "Deploy nonce mismatch";
-    assert "11".repeat(32).equals(parsed.contracts().get(0).txHashHex())
-        : "tx_hash_hex mismatch";
-    assert "local".equals(parsed.contracts().get(0).pipelineStatus().get("scope"))
-        : "deployment pipeline status mismatch";
-    assert "queue".equals(parsed.hajimariCalls().get(0).pipelineStatus().get("resolved_from"))
-        : "hajimari pipeline status mismatch";
-
-    final TransportRequest request = executor.lastRequest();
-    assert request != null : "Deploy request must be captured";
-    assert request.uri().toString().equals("https://torii.example/api/v1/contracts/deploy")
-        : "Deploy URI mismatch";
-    @SuppressWarnings("unchecked")
-    final Map<String, Object> payload =
-        (Map<String, Object>) JsonParser.parse(readBody(request));
-    assert "alice".equals(payload.get("authority")) : "Deploy authority mismatch";
-    assert "privkey".equals(payload.get("private_key")) : "Deploy private key mismatch";
-    assert "AQID".equals(payload.get("code_b64")) : "Deploy code_b64 mismatch";
-    assert "router::universal".equals(payload.get("contract_alias"))
-        : "Deploy contract_alias mismatch";
-    assert !payload.containsKey("lease_expiry_ms") : "lease_expiry_ms should be omitted by default";
-  }
-
-  private static void deployContractResponseRejectsRetiredInitCallsField() {
-    try {
-      ContractJsonParser.parseDeployResponse(
-          ("{\"contracts\":[],\"init_calls\":[],\"assertions\":[]}")
-              .getBytes(StandardCharsets.UTF_8));
-      throw new AssertionError("Retired init_calls response field must be rejected");
-    } catch (final IllegalStateException error) {
-      assert error.getMessage().contains("hajimari_calls must be an array")
-          : "Expected missing hajimari_calls diagnostic";
-    }
-  }
 
   private static void callContractRequestParsesResponse() {
     final String contractAddress =
@@ -2752,7 +3155,8 @@ public final class HttpClientTransportTests {
                     + "77".repeat(32)
                     + "\","
                     + "\"gas_limit\":5000,\"gas_used\":17,"
-                    + "\"gas_asset_id\":\"xor#sora\",\"fee_sponsor\":\"alice\","
+                    + "\"fee_payment\":{\"payer\":\"authority\","
+                    + "\"value\":{\"charge_limits\":[],\"gas_limit\":5000}},"
                     + "\"payload_digest_hex\":\""
                     + "88".repeat(32)
                     + "\"}}")
@@ -2771,12 +3175,11 @@ public final class HttpClientTransportTests {
             .callContract(
                 "alice",
                 "privkey",
-                5000L,
+                feePayment(5000L),
                 null,
                 "router::universal",
                 "contribute",
-                contractPayload,
-                "xor#sora")
+                contractPayload)
             .join();
 
     assert response.ok() : "Call response should be successful";
@@ -2809,13 +3212,17 @@ public final class HttpClientTransportTests {
         (Map<String, Object>) JsonParser.parse(readBody(request));
     assert "alice".equals(payload.get("authority")) : "Call authority mismatch";
     assert "privkey".equals(payload.get("private_key")) : "Call private key mismatch";
-    assert Long.valueOf(5000L).equals(((Number) payload.get("gas_limit")).longValue())
-        : "gas_limit mismatch";
+    assert !payload.containsKey("gas_limit") : "legacy gas_limit must be absent";
     assert "router::universal".equals(payload.get("contract_alias"))
         : "contract_alias mismatch";
     assert !payload.containsKey("contract_address") : "contract_address should be absent";
     assert "contribute".equals(payload.get("entrypoint")) : "Call entrypoint mismatch";
-    assert "xor#sora".equals(payload.get("gas_asset_id")) : "gas_asset_id mismatch";
+    assert !payload.containsKey("gas_asset_id") : "legacy gas_asset_id must be absent";
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> feeValue =
+        (Map<String, Object>) ((Map<String, Object>) payload.get("fee_payment")).get("value");
+    assert ((Number) feeValue.get("gas_limit")).longValue() == 5000L
+        : "fee_payment gas limit mismatch";
     @SuppressWarnings("unchecked")
     final Map<String, Object> requestPayload = (Map<String, Object>) payload.get("payload");
     assert "alice".equals(requestPayload.get("buyer")) : "Nested buyer mismatch";
@@ -2839,16 +3246,17 @@ public final class HttpClientTransportTests {
         : "Argument record must be canonical lowercase hex bytes";
 
     final Map<String, Object> boundary = object(fixture, "torii_boundary");
+    final org.hyperledger.iroha.android.model.FeePaymentIntent boundaryFeePayment =
+        FeePaymentJson.parse(boundary.get("fee_payment"), "torii_boundary.fee_payment");
     final Map<String, Object> request =
         HttpClientTransport.buildContractCallPayload(
             string(boundary, "authority"),
             "fixture-private-key",
-            ((Number) boundary.get("gas_limit")).longValue(),
+            boundaryFeePayment,
             null,
             string(boundary, "contract_alias"),
             string(boundary, "entrypoint"),
-            boundary.get("payload"),
-            null);
+            boundary.get("payload"));
 
     assert string(boundary, "authority").equals(request.get("authority"))
         : "Shared call authority mismatch";
@@ -2861,9 +3269,8 @@ public final class HttpClientTransportTests {
         : "Shared call entrypoint mismatch";
     assert boundary.get("payload").equals(request.get("payload"))
         : "Shared call payload mismatch";
-    assert ((Number) boundary.get("gas_limit")).longValue()
-            == ((Number) request.get("gas_limit")).longValue()
-        : "Shared call gas limit mismatch";
+    assert boundaryFeePayment.toJsonMap().equals(request.get("fee_payment"))
+        : "Shared call fee payment mismatch";
     assert !request.containsKey("argument_record")
         : "Java must leave canonical argument-record encoding to Rust";
     assert !request.containsKey("argument_record_norito_hex")
@@ -2903,12 +3310,11 @@ public final class HttpClientTransportTests {
     final MultisigResponse response =
         transport
             .proposeMultisig(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instructionBytes)
                     .setCreationTimeMs(123L)
-                    .setFeeSponsor("fee-sponsor")
                     .setMemo("QR invoice 42")
                     .setValidationFeePolicyVersion(7L)
                     .setValidationFeePolicyHash("AB".repeat(32))
@@ -2936,7 +3342,8 @@ public final class HttpClientTransportTests {
     assert "cbdc@banka".equals(payload.get("multisig_account_alias"))
         : "multisig_account_alias mismatch";
     assert "alice".equals(payload.get("signer_account_id")) : "signer_account_id mismatch";
-    assert "fee-sponsor".equals(payload.get("fee_sponsor")) : "fee_sponsor mismatch";
+    assert !payload.containsKey("fee_sponsor") : "legacy fee_sponsor must be absent";
+    assert payload.containsKey("fee_payment") : "typed fee payment must be present";
     assert "QR invoice 42".equals(payload.get("memo")) : "memo mismatch";
     assert "7".equals(payload.get("validation_fee_policy_version"))
         : "validation_fee_policy_version mismatch";
@@ -2957,7 +3364,7 @@ public final class HttpClientTransportTests {
     boolean failed = false;
     try {
       HttpClientTransport.buildMultisigProposePayload(
-          MultisigProposeRequest.builder()
+          MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
               .setMultisigAccountAlias("cbdc@banka")
               .setSignerAccountId("alice")
               .addInstructionBytes(new byte[0])
@@ -2973,7 +3380,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountId("aid:multisig")
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
@@ -2983,7 +3390,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
                     .build()),
@@ -2991,7 +3398,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3004,7 +3411,7 @@ public final class HttpClientTransportTests {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildMultisigProposePayload(
-                  MultisigProposeRequest.builder()
+                  MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                       .setMultisigAccountAlias("cbdc@banka")
                       .setSignerAccountId("alice")
                       .addInstructionBytes(instruction)
@@ -3015,7 +3422,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3025,7 +3432,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3035,7 +3442,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3045,7 +3452,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3055,7 +3462,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3066,7 +3473,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3077,7 +3484,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3087,7 +3494,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3097,7 +3504,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3109,7 +3516,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3121,7 +3528,7 @@ public final class HttpClientTransportTests {
     expectIllegalArgument(
         () ->
             HttpClientTransport.buildMultisigProposePayload(
-                MultisigProposeRequest.builder()
+                MultisigProposeRequest.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
                     .setMultisigAccountAlias("cbdc@banka")
                     .setSignerAccountId("alice")
                     .addInstructionBytes(instruction)
@@ -3231,11 +3638,10 @@ public final class HttpClientTransportTests {
       transport.callContract(
           "alice",
           "privkey",
-          5000L,
+          feePayment(5000L),
           "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           "router::universal",
           "contribute",
-          null,
           null);
     } catch (final IllegalArgumentException ex) {
       failed = ex.getMessage().contains("Exactly one");
@@ -3248,21 +3654,13 @@ public final class HttpClientTransportTests {
       expectIllegalArgument(
           () ->
               HttpClientTransport.buildContractCallPayload(
-                  "alice", "privkey", 1L, null, "router::universal", entrypoint, null, null),
+                  "alice", "privkey", feePayment(1L), null, "router::universal", entrypoint, null),
           "blank contract entrypoint must be rejected");
     }
     for (final long gasLimit : new long[] {0L, -1L}) {
       expectIllegalArgument(
           () ->
-              HttpClientTransport.buildContractCallPayload(
-                  "alice",
-                  "privkey",
-                  gasLimit,
-                  null,
-                  "router::universal",
-                  "contribute",
-                  null,
-                  null),
+              feePayment(gasLimit),
           "non-positive contract gas limit must be rejected");
     }
   }
@@ -3304,7 +3702,18 @@ public final class HttpClientTransportTests {
             executor,
             ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
 
-    final GovernanceContractResponse response = transport.getGovernanceContract(contractAddress).join();
+    final KeyPair keyPair;
+    try {
+      keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    } catch (final NoSuchAlgorithmException error) {
+      throw new AssertionError(error);
+    }
+    final GovernanceContractResponse response =
+        transport
+            .getGovernanceContract(
+                contractAddress,
+                canonicalAuth("alice", keyPair, 1_700_000_000_100L, "governance-read"))
+            .join();
 
     assert response.found() : "Governance binding should be found";
     assert contractAddress.equals(response.contractAddress()) : "Governance contract address mismatch";
@@ -3344,7 +3753,7 @@ public final class HttpClientTransportTests {
     final AccountAliasResolution resolution = response.orElseThrow();
     assert "alice@universal".equals(resolution.alias()) : "Alias mismatch";
     assert accountId.equals(resolution.accountId()) : "Account id mismatch";
-    assert Long.valueOf(7L).equals(resolution.index()) : "Index mismatch";
+    assert BigInteger.valueOf(7L).equals(resolution.index()) : "Index mismatch";
     assert "directory".equals(resolution.source()) : "Source mismatch";
 
     final TransportRequest request = executor.lastRequest();
@@ -3356,6 +3765,128 @@ public final class HttpClientTransportTests {
         : "Account alias resolve must send JSON";
     assert readBody(request).equals("{\"alias\":\"alice@universal\"}")
         : "Account alias resolve payload mismatch";
+  }
+
+  private static void resolveRestrictedAccountAliasUsesCanonicalAuthentication()
+      throws Exception {
+    final String json =
+        "{"
+            + "\"alias\":\"merchant@private\","
+            + "\"account_id\":\"aid:merchant-123\","
+            + "\"source\":\"world_state\""
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth("alice", keyPair, 1_700_000_000_000L, "alias-resolve-nonce-1");
+
+    final Optional<AccountAliasResolution> response =
+        transport.resolveAccountAlias("merchant@private", auth).join();
+
+    assert response.isPresent() : "Restricted alias resolution should be present";
+    assert "aid:merchant-123".equals(response.orElseThrow().accountId())
+        : "Restricted alias target mismatch";
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Restricted alias request must be captured";
+    assert "alice".equals(request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0))
+        : "Canonical account header mismatch";
+    assert "1700000000000"
+        .equals(request.headers().get(CanonicalRequestSigner.HEADER_TIMESTAMP_MS).get(0))
+        : "Canonical timestamp header mismatch";
+    assert "alias-resolve-nonce-1"
+        .equals(request.headers().get(CanonicalRequestSigner.HEADER_NONCE).get(0))
+        : "Canonical nonce header mismatch";
+    assertCanonicalSignature(
+        request, keyPair.getPublic(), 1_700_000_000_000L, "alias-resolve-nonce-1");
+  }
+
+  static void aliasSetupPlanningIsCanonicalSignedReadOnlyAndParsesTypedPlan()
+      throws Exception {
+    final String authority = TestAccountIds.ed25519Authority(0x41);
+    final String asset = TestAssetDefinitionIds.PRIMARY;
+    final ResolvedAccountAliasV1 alias =
+        new ResolvedAccountAliasV1(AccountAliasName.parse("merchant@banka.paynet"), 7L);
+    final AliasQuoteGuardV1 guard =
+        new AliasQuoteGuardV1(3, asset, "5", 1_700_000_100_000L);
+    final AliasSetupModels.AccountAliasIntent intent =
+        new AliasSetupModels.AccountAliasIntent(
+            new AliasSetupModels.AliasAccountIntentV1(
+                alias,
+                authority,
+                AliasSetupModels.AccountProvisionV1.CREATE,
+                AliasSetupModels.AccountAliasRoleV1.PRIMARY));
+    final AliasSetupPlanRequestV1 requestBody =
+        new AliasSetupPlanRequestV1(
+            Collections.singletonList(
+                new EnsureAlias(
+                    intent,
+                    new AliasSetupModels.AliasLeaseAcquisitionV1(1, null),
+                    guard)));
+    final AliasSetupModels.AliasTransactionPlanBodyV1 planBody =
+        new AliasSetupModels.AliasTransactionPlanBodyV1(
+            1,
+            authority,
+            "test-chain",
+            new AliasSetupModels.AliasPlanAnchorV1(9, "01".repeat(32)),
+            Collections.singletonList(
+                new AliasSetupModels.AliasPlanResourceV1(
+                    intent,
+                    AliasSetupModels.AliasPlanDispositionV1.CREATE,
+                    new AliasSetupModels.AliasLeaseQuoteV1(
+                        new AliasSetupModels.AccountAliasTarget(alias),
+                        1,
+                        "3",
+                        guard,
+                        1_800_000_000_000L,
+                        1_800_000_100_000L,
+                        1_800_000_200_000L),
+                    0L)),
+            Collections.singletonList(
+                new AliasSetupModels.AliasFramedInstructionV1(
+                    EnsureAlias.WIRE_ID, new byte[] {0x4e, 0x52, 0x54, 0x30})),
+            Collections.singletonList(new AliasSetupModels.AliasAssetTotalV1(asset, "3")),
+            Collections.emptyList(),
+            Collections.emptyList(),
+            1_700_000_100_000L);
+    final AliasTransactionPlanV1 responsePlan =
+        new AliasTransactionPlanV1(planBody, "03".repeat(32));
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(
+            200,
+            JsonEncoder.encode(responsePlan.toJsonMap()).getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example/api")).build());
+    final KeyPair keyPair = KeyPairGenerator.getInstance("Ed25519").generateKeyPair();
+    final ToriiCanonicalRequestAuth auth =
+        canonicalAuth(authority, keyPair, 1_700_000_000_000L, "alias-plan-nonce-1");
+
+    final AliasTransactionPlanV1 plan = transport.planAliasSetup(requestBody, auth).join();
+
+    assert authority.equals(plan.body().authority()) : "Alias plan authority mismatch";
+    assert plan.body().resources().get(0).disposition()
+        == AliasSetupModels.AliasPlanDispositionV1.CREATE;
+    final TransportRequest request = executor.lastRequest();
+    assert request != null : "Alias setup plan request must be captured";
+    assert "POST".equals(request.method()) : "Alias setup planning must use POST";
+    assert "https://torii.example/api/v1/aliases/setup/plan".equals(request.uri().toString())
+        : "Alias setup planning must use the read-only planner route";
+    assert authority.equals(
+        request.headers().get(CanonicalRequestSigner.HEADER_ACCOUNT).get(0));
+    @SuppressWarnings("unchecked")
+    final Map<String, Object> sent = (Map<String, Object>) JsonParser.parse(readBody(request));
+    assert Long.valueOf(1L).equals(sent.get("schema_version"));
+    assert ((List<?>) sent.get("intents")).size() == 1;
+    assert !sent.containsKey("private_key");
+    assert !sent.containsKey("payment_proof");
+    assertCanonicalSignature(
+        request, keyPair.getPublic(), 1_700_000_000_000L, "alias-plan-nonce-1");
   }
 
   private static void resolveAccountAliasAllowsNotFound() {
@@ -4692,6 +5223,17 @@ public final class HttpClientTransportTests {
     assert failed : message;
   }
 
+  private static void expectCompletionIllegalArgument(
+      final CompletableFuture<?> future, final String message) {
+    boolean failed = false;
+    try {
+      future.join();
+    } catch (final java.util.concurrent.CompletionException error) {
+      failed = error.getCause() instanceof IllegalArgumentException;
+    }
+    assert failed : message;
+  }
+
   private static void expectVerifierReject(
       final Runnable action, final CapturingExecutor executor, final String message) {
     final TransportRequest before = executor.lastRequest;
@@ -5250,6 +5792,34 @@ public final class HttpClientTransportTests {
     }
   }
 
+  private static String vpnProfileJson() {
+    return "{"
+        + "\"available\":true,"
+        + "\"relay_endpoint\":\"/dns/relay.example/udp/9443/quic\","
+        + "\"supported_exit_classes\":[\"standard\",\"low-latency\",\"high-security\"],"
+        + "\"default_exit_class\":\"standard\","
+        + "\"lease_secs\":600,"
+        + "\"dns_push_interval_secs\":60,"
+        + "\"meter_family\":\"soranet.vpn.standard\","
+        + "\"route_pushes\":[\"0.0.0.0/0\"],"
+        + "\"excluded_routes\":[\"10.0.0.0/8\"],"
+        + "\"dns_servers\":[\"1.1.1.1\"],"
+        + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
+        + "\"mtu_bytes\":1280,"
+        + "\"display_billing_label\":\"standard XOR\","
+        + "\"fee_asset_id\":\"xor#universal.universal\","
+        + "\"escrow_account_id\":\"sorauEscrow\","
+        + "\"operator_account_id\":\"sorauOperator\","
+        + "\"lease_fee\":\"1000000.25\","
+        + "\"settlement_grace_secs\":120,"
+        + "\"flow_label_bits\":24,"
+        + "\"padding_budget_ms\":15,"
+        + "\"relay_tls_spki_sha256_hex\":\""
+        + "ab".repeat(32)
+        + "\""
+        + "}";
+  }
+
   private static String vpnQuoteJson(final String quoteId, final String meteringKey) {
     return "{"
         + "\"quote_id\":\""
@@ -5268,12 +5838,12 @@ public final class HttpClientTransportTests {
         + "\"fee_asset_id\":\"xor#universal.universal\","
         + "\"escrow_account_id\":\"sorauEscrow\","
         + "\"operator_account_id\":\"sorauOperator\","
-        + "\"lease_fee_nanos\":1000000,"
+        + "\"lease_fee\":\"1000000.25\","
         + "\"route_pushes\":[\"0.0.0.0/0\"],"
         + "\"excluded_routes\":[],"
         + "\"dns_servers\":[\"1.1.1.1\"],"
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
-        + "\"mtu_bytes\":1024,"
+        + "\"mtu_bytes\":1280,"
         + "\"meter_family\":\"soranet.vpn.standard\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
@@ -5310,7 +5880,7 @@ public final class HttpClientTransportTests {
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
         + "\"escrow_account_id\":\"sorauEscrow\","
         + "\"operator_account_id\":\"sorauOperator\","
-        + "\"lease_fee_nanos\":1000000,"
+        + "\"lease_fee\":\"1000000.25\","
         + "\"flow_label_bits\":24,"
         + "\"padding_budget_ms\":15,"
         + "\"relay_tls_spki_sha256_hex\":\""
@@ -5319,7 +5889,7 @@ public final class HttpClientTransportTests {
         + "\"excluded_routes\":[],"
         + "\"dns_servers\":[\"1.1.1.1\"],"
         + "\"tunnel_addresses\":[\"10.208.0.2/32\"],"
-        + "\"mtu_bytes\":1024,"
+        + "\"mtu_bytes\":1280,"
         + "\"helper_ticket_hex\":\""
         + VPN_HELPER_TICKET_HEX
         + "\","
@@ -5333,8 +5903,8 @@ public final class HttpClientTransportTests {
       final String sessionId, final String paymentTxHash, final boolean settled) {
     final String status = settled ? "settled" : "disconnected";
     final String source = settled ? "relay" : "torii";
-    final long earned = settled ? 750_000L : 0L;
-    final long refunded = settled ? 250_000L : 1_000_000L;
+    final String earned = settled ? "750000.125" : "0";
+    final String refunded = settled ? "250000.125" : "1000000.25";
     final String settlement =
         settled
             ? ",\"settle_lease_instruction\":{"
@@ -5367,12 +5937,12 @@ public final class HttpClientTransportTests {
         + "\",\"fee_asset_id\":\"xor#universal.universal\","
         + "\"escrow_account_id\":\"sorauEscrow\","
         + "\"operator_account_id\":\"sorauOperator\","
-        + "\"lease_fee_nanos\":1000000,"
-        + "\"earned_fee_nanos\":"
+        + "\"lease_fee\":\"1000000.25\","
+        + "\"earned_fee\":\""
         + earned
-        + ",\"refunded_fee_nanos\":"
+        + "\",\"refunded_fee\":\""
         + refunded
-        + ",\"lease_id_hex\":\""
+        + "\",\"lease_id_hex\":\""
         + sessionId
         + "\""
         + settlement
@@ -5646,7 +6216,7 @@ public final class HttpClientTransportTests {
     java.util.Arrays.fill(signature, (byte) (fillValue + 1));
     java.util.Arrays.fill(publicKey, (byte) (fillValue + 2));
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList(), 1L))
             .setChainId(String.format("%08x", fillValue))
             .setAuthority(TestAccountIds.ed25519Authority(0x26))
             .setCreationTimeMs(1_700_000_000_000L + (fillValue & 0xFF))

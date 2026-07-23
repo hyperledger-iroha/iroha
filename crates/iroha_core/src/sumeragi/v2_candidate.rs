@@ -1154,7 +1154,12 @@ mod tests {
             .expect("deterministic transaction key");
         let authority = AccountId::new(key.public_key().clone());
         let chain_id: ChainId = "v2-candidate-test".parse().expect("chain id");
-        let tx = TransactionBuilder::new(chain_id, authority).sign(key.private_key());
+        let tx = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(key.private_key());
         AcceptedTransaction::new_unchecked(Cow::Owned(tx))
     }
 

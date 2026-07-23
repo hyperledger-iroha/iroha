@@ -1,7 +1,8 @@
 //! Canonical request signing helpers for app-facing HTTP endpoints.
 //!
 //! Clients may optionally attach:
-//! - `X-Iroha-Account`: account id that authorises the request.
+//! - `X-Iroha-Account`: exact canonical I105 account id or active canonical
+//!   ASCII account alias that authorises the request.
 //! - `X-Iroha-Signature`: base64 signature over the canonical request bytes plus
 //!   freshness metadata.
 //! - `X-Iroha-Timestamp-Ms`: unix timestamp in milliseconds included in the
@@ -43,11 +44,14 @@ use axum::http::HeaderMap;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use dashmap::{DashMap, mapref::entry::Entry};
 use iroha_config::parameters::{actual::AppApi as AppApiConfig, defaults};
-use iroha_core::state::{State as CoreState, WorldReadOnly};
+use iroha_core::{
+    sns::resolve_active_account_alias,
+    state::{State as CoreState, WorldReadOnly},
+};
 use iroha_crypto::{Algorithm, Hash, PublicKey, Signature};
 use iroha_data_model::{
     ValidationFail,
-    account::{AccountController, AccountId},
+    account::{AccountController, AccountId, rekey::AccountAlias},
     query::{
         ErasedIterQuery, Query, QueryBox, QueryOutputBatchBox, QueryRequest, QueryWithParams,
         dsl::{CompoundPredicate, HasProjection, PredicateMarker, SelectorMarker, SelectorTuple},
@@ -59,6 +63,8 @@ use iroha_data_model::{
         CanonicalRequestWitnessV1,
     },
 };
+#[cfg(feature = "app_api")]
+use iroha_torii_shared::FeeQuoteRequest;
 use norito::codec::Encode;
 use sha2::{Digest as _, Sha256};
 
@@ -72,7 +78,6 @@ pub const HEADER_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 pub const HEADER_NONCE: &str = "X-Iroha-Nonce";
 /// Header carrying the base64 Norito-encoded multisig witness.
 pub const HEADER_WITNESS: &str = "X-Iroha-Witness";
-const ACCOUNT_HEADER_CONTEXT: &str = "X-Iroha-Account";
 const ACCOUNT_BODY_CONTEXT: &str = "account_id";
 /// HTTP request types used for canonical signing.
 pub use axum::http::{Method, Uri};
@@ -430,12 +435,48 @@ fn parse_account_header_value(
     state: &Arc<CoreState>,
     account_literal: &str,
 ) -> Result<AccountId, crate::Error> {
-    parse_account_literal_value(
-        state,
-        account_literal,
-        ACCOUNT_HEADER_CONTEXT,
-        "invalid X-Iroha-Account value",
-    )
+    fn invalid_account_header() -> crate::Error {
+        crate::Error::Query(ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    }
+
+    if account_literal.is_empty() || account_literal.trim() != account_literal {
+        return Err(invalid_account_header());
+    }
+
+    if let Ok(parsed) = AccountId::parse_encoded(account_literal) {
+        let (account_id, canonical, _) = parsed.into_parts();
+        if canonical != account_literal {
+            return Err(invalid_account_header());
+        }
+        return Ok(account_id);
+    }
+
+    // Browser Fetch cannot transport the Kana-bearing I105 spelling in a
+    // header. App authentication therefore has one deliberately narrower
+    // alias exception: resolve the exact active ASCII alias only to establish
+    // which controller must verify the request signature. User-directed alias
+    // lookup remains permissioned independently.
+    if !account_literal.is_ascii() {
+        return Err(invalid_account_header());
+    }
+    let nexus = state.nexus_snapshot();
+    let alias = AccountAlias::from_literal(account_literal, &nexus.dataspace_catalog)
+        .map_err(|_| invalid_account_header())?;
+    let canonical = alias
+        .to_literal(&nexus.dataspace_catalog)
+        .map_err(|_| invalid_account_header())?;
+    if canonical != account_literal {
+        return Err(invalid_account_header());
+    }
+    let now_ms = state
+        .latest_block_header_fast()
+        .map(|header| header.creation_time_ms)
+        .unwrap_or(0);
+    let world = state.world_view();
+    resolve_active_account_alias(&world, &nexus.dataspace_catalog, &alias, now_ms)
+        .ok_or_else(invalid_account_header)
 }
 
 fn parse_account_body_value(
@@ -889,15 +930,9 @@ pub fn verify_canonical_request(
                 witness.schema_version
             ))));
         }
-        let account = if let Some(account_hdr) = account_hdr {
-            let account_literal = std::str::from_utf8(account_hdr.as_bytes())
-                .map(str::trim)
-                .map_err(|_| {
-                    crate::Error::Query(ValidationFail::NotPermitted(
-                        "invalid X-Iroha-Account value".to_owned(),
-                    ))
-                })?;
-            let account = parse_account_header_value(state, account_literal)?;
+        let account = if account_hdr.is_some() {
+            let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
+            let account = parse_account_header_value(state, &account_literal)?;
             if account != witness.subject_account {
                 return Err(crate::Error::Query(ValidationFail::NotPermitted(
                     "X-Iroha-Account does not match X-Iroha-Witness subject_account".to_owned(),
@@ -1022,7 +1057,7 @@ pub fn verify_canonical_request(
         )));
     };
 
-    let account_literal = parse_required_header_text(headers, HEADER_ACCOUNT)?;
+    let account_literal = parse_required_header_exact_text(headers, HEADER_ACCOUNT)?;
     let account = parse_account_header_value(state, &account_literal)?;
 
     if let Some(expected) = expected_account
@@ -1085,6 +1120,100 @@ pub fn verify_canonical_request(
     }))
 }
 
+/// Verify canonical request headers for the fee-quote endpoint.
+///
+/// Normal world-state-backed authentication always takes precedence. When the exact canonical
+/// single-key account named by `X-Iroha-Account` is not registered yet, this endpoint alone may
+/// authenticate it from the key embedded in its account id, provided the quoted payload's first
+/// instruction self-registers that same authority. Aliases, multisig controllers, and other
+/// endpoints never enter this fallback.
+#[cfg(feature = "app_api")]
+pub(crate) fn verify_fee_quote_canonical_request(
+    state: &Arc<CoreState>,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+) -> Result<Option<VerifiedCanonicalRequest>, crate::Error> {
+    let normal_error = match verify_canonical_request(state, headers, method, uri, body, None) {
+        Ok(verified) => return Ok(verified),
+        Err(error) => error,
+    };
+
+    if method != Method::POST || uri.path() != "/v1/fees/quote" || uri.query().is_some() {
+        return Err(normal_error);
+    }
+    if headers.get(HEADER_WITNESS).is_some() {
+        return Err(normal_error);
+    }
+
+    let account_literal = match parse_required_header_exact_text(headers, HEADER_ACCOUNT) {
+        Ok(account_literal) => account_literal,
+        Err(_) => return Err(normal_error),
+    };
+    let parsed = match AccountId::parse_encoded(&account_literal) {
+        Ok(parsed) => parsed,
+        Err(_) => return Err(normal_error),
+    };
+    let (account, canonical, _) = parsed.into_parts();
+    if canonical != account_literal {
+        return Err(normal_error);
+    }
+    let signer = match account.controller() {
+        AccountController::Single(signer) => signer.clone(),
+        AccountController::Multisig(_) => return Err(normal_error),
+    };
+
+    // A materialised account must always use its world-state controller and normal account
+    // authentication, even when the request body happens to contain a registration instruction.
+    if state.world_view().account(&account).is_ok() {
+        return Err(normal_error);
+    }
+
+    let timestamp_ms = parse_required_header_text(headers, HEADER_TIMESTAMP_MS)?
+        .parse::<u64>()
+        .map_err(|_| {
+            crate::Error::Query(ValidationFail::NotPermitted(
+                "invalid X-Iroha-Timestamp-Ms value".to_owned(),
+            ))
+        })?;
+    let nonce = parse_required_header_text(headers, HEADER_NONCE)?;
+    let (auth_config, replay_cache) = auth_runtime_snapshot();
+    validate_freshness(&auth_config, timestamp_ms, &nonce, "X-Iroha-Nonce")?;
+
+    let signature_b64 = parse_required_header_exact_text(headers, HEADER_SIGNATURE)?;
+    let signature_bytes = decode_signature_bytes_value(&signature_b64, "X-Iroha-Signature")?;
+    let signature = checked_app_auth_signature_from_bytes(
+        &signature_bytes,
+        &signer,
+        "X-Iroha-Signature payload",
+    )?;
+    let message = canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
+    verify_app_auth_signature(&signature, &signer, &message, "X-Iroha-Signature payload")?;
+
+    // Decode only after proving the raw request bytes. Malformed bodies therefore cannot bypass
+    // authentication, and they do not qualify an absent authority for this endpoint exception.
+    let request: FeeQuoteRequest = match norito::json::from_slice(body) {
+        Ok(request) => request,
+        Err(_) => return Err(normal_error),
+    };
+    if request.payload.authority != account
+        || !iroha_core::tx::executable_self_registers_authority(
+            &request.payload.instructions,
+            &account,
+        )
+    {
+        return Err(normal_error);
+    }
+
+    check_replay(&account, &nonce, &replay_cache)?;
+    Ok(Some(VerifiedCanonicalRequest {
+        account,
+        signer: signer.clone(),
+        verified_signers: vec![signer],
+    }))
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod tests {
     use axum::http::Uri;
@@ -1097,11 +1226,12 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{
-        Registrable,
-        account::{Account, MultisigMember, MultisigPolicy},
+        ChainId, Registrable,
+        account::{Account, AccountAddress, MultisigMember, MultisigPolicy},
         domain::Domain,
         isi::Register,
         prelude::DomainId,
+        transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use mv::storage::StorageReadOnly;
@@ -1131,12 +1261,94 @@ mod tests {
         ))
     }
 
-    fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
-        let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
-            alias,
-            &state.nexus_snapshot().dataspace_catalog,
+    fn minimal_state_without_accounts() -> Arc<State> {
+        Arc::new(State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    fn fee_quote_body(authority: &AccountId, account_to_register: &AccountId) -> Vec<u8> {
+        let payload = TransactionBuilder::new(
+            ChainId::from("app-auth-self-register-fee-quote"),
+            authority.clone(),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect("valid account alias");
+        .with_instructions([Register::account(Account::new(account_to_register.clone()))])
+        .into_payload()
+        .expect("build self-registering fee quote payload");
+        norito::json::to_vec(&FeeQuoteRequest { payload }).expect("encode fee quote request")
+    }
+
+    fn signed_headers_for_test(
+        account: &AccountId,
+        key_pair: &KeyPair,
+        method: &Method,
+        uri: &Uri,
+        body: &[u8],
+        nonce: &'static str,
+    ) -> HeaderMap {
+        let timestamp_ms = now_unix_ms();
+        let message = canonical_request_signature_message(method, uri, body, timestamp_ms, nonce);
+        let signature = checked_signature(key_pair.private_key(), &message);
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HEADER_ACCOUNT,
+            account
+                .canonical_i105()
+                .expect("canonical account header")
+                .parse()
+                .expect("valid account header"),
+        );
+        headers.insert(
+            HEADER_SIGNATURE,
+            signature_header_value(&signature)
+                .parse()
+                .expect("valid signature header"),
+        );
+        headers.insert(
+            HEADER_TIMESTAMP_MS,
+            timestamp_ms
+                .to_string()
+                .parse()
+                .expect("valid timestamp header"),
+        );
+        headers.insert(HEADER_NONCE, nonce.parse().expect("valid nonce header"));
+        headers
+    }
+
+    fn assert_missing_account_rejection(error: crate::Error, expected: &AccountId) {
+        match error {
+            crate::Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Account(actual),
+            ))) => assert_eq!(&actual, expected),
+            other => panic!("expected missing-account authentication rejection, got {other:?}"),
+        }
+    }
+
+    fn bind_account_alias_for_test(state: &Arc<State>, account_id: &AccountId, alias: &str) {
+        let dataspace_catalog = state.nexus_snapshot().dataspace_catalog.clone();
+        let label =
+            iroha_data_model::account::rekey::AccountAlias::from_literal(alias, &dataspace_catalog)
+                .expect("valid account alias");
+        let selector = iroha_core::sns::selector_for_account_alias(&label, &dataspace_catalog)
+            .expect("account alias selector");
+        let account_address =
+            AccountAddress::from_account_id(account_id).expect("address from account id");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
@@ -1157,6 +1369,10 @@ mod tests {
         world.account_rekey_records_mut_for_testing().insert(
             label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
@@ -1350,6 +1566,209 @@ mod tests {
     }
 
     #[test]
+    fn fee_quote_auth_accepts_exact_absent_self_registration_and_rejects_replay() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let state = minimal_state_without_accounts();
+        let method = Method::POST;
+        let uri: Uri = "/v1/fees/quote".parse().expect("fee quote uri");
+        let body = fee_quote_body(&authority, &authority);
+        let headers = signed_headers_for_test(
+            &authority,
+            &key_pair,
+            &method,
+            &uri,
+            &body,
+            "fee-quote-self-register-success",
+        );
+
+        let verified = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
+            .expect("self-registering authority should authenticate")
+            .expect("signed request identity");
+        assert_eq!(verified.account, authority);
+        assert_eq!(verified.signer, key_pair.public_key().clone());
+        assert_eq!(
+            verified.verified_signers,
+            vec![key_pair.public_key().clone()]
+        );
+
+        let replay = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
+            .expect_err("accepted fallback must use the canonical replay cache");
+        assert!(matches!(
+            replay,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "request nonce already used"
+        ));
+    }
+
+    #[test]
+    fn fee_quote_auth_fallback_is_limited_to_the_exact_self_registering_request() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let other_key_pair = checked_app_auth_key_fixture();
+        let other = AccountId::new(other_key_pair.public_key().clone());
+        let state = minimal_state_without_accounts();
+        let method = Method::POST;
+        let quote_uri: Uri = "/v1/fees/quote".parse().expect("fee quote uri");
+
+        let registers_other = fee_quote_body(&authority, &other);
+        let headers = signed_headers_for_test(
+            &authority,
+            &key_pair,
+            &method,
+            &quote_uri,
+            &registers_other,
+            "fee-quote-registers-other",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &quote_uri,
+            &registers_other,
+        )
+        .expect_err("registration of another account must not qualify");
+        assert_missing_account_rejection(error, &authority);
+
+        let mismatched_authority = fee_quote_body(&other, &other);
+        let headers = signed_headers_for_test(
+            &authority,
+            &key_pair,
+            &method,
+            &quote_uri,
+            &mismatched_authority,
+            "fee-quote-mismatched-payload-authority",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &quote_uri,
+            &mismatched_authority,
+        )
+        .expect_err("header and payload authorities must match");
+        assert_missing_account_rejection(error, &authority);
+
+        let multisig_policy = MultisigPolicy::new(
+            1,
+            vec![MultisigMember::new(key_pair.public_key().clone(), 1).expect("multisig member")],
+        )
+        .expect("multisig policy");
+        let multisig_authority = AccountId::new_multisig(multisig_policy);
+        let multisig_body = fee_quote_body(&multisig_authority, &multisig_authority);
+        let headers = signed_headers_for_test(
+            &multisig_authority,
+            &key_pair,
+            &method,
+            &quote_uri,
+            &multisig_body,
+            "fee-quote-absent-multisig",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &quote_uri,
+            &multisig_body,
+        )
+        .expect_err("absent multisig authority must require a materialised WSV policy");
+        assert_missing_account_rejection(error, &multisig_authority);
+
+        let correct_body = fee_quote_body(&authority, &authority);
+        let wrong_key_headers = signed_headers_for_test(
+            &authority,
+            &other_key_pair,
+            &method,
+            &quote_uri,
+            &correct_body,
+            "fee-quote-wrong-embedded-controller",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &wrong_key_headers,
+            &method,
+            &quote_uri,
+            &correct_body,
+        )
+        .expect_err("embedded authority controller must verify the request");
+        assert!(matches!(
+            error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "query signature failed verification"
+        ));
+
+        let other_uri: Uri = "/v1/fee-sponsor-programs/by-id"
+            .parse()
+            .expect("other signed endpoint uri");
+        let headers = signed_headers_for_test(
+            &authority,
+            &key_pair,
+            &method,
+            &other_uri,
+            &correct_body,
+            "fee-quote-fallback-other-endpoint",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &other_uri,
+            &correct_body,
+        )
+        .expect_err("fallback must not broaden another endpoint");
+        assert_missing_account_rejection(error, &authority);
+
+        let malformed_body = b"{";
+        let headers = signed_headers_for_test(
+            &authority,
+            &key_pair,
+            &method,
+            &quote_uri,
+            malformed_body,
+            "fee-quote-malformed-body-auth-first",
+        );
+        let error = verify_fee_quote_canonical_request(
+            &state,
+            &headers,
+            &method,
+            &quote_uri,
+            malformed_body,
+        )
+        .expect_err("malformed body must not qualify an absent account");
+        assert_missing_account_rejection(error, &authority);
+    }
+
+    #[test]
+    fn fee_quote_auth_never_bypasses_a_registered_account_controller() {
+        let _guard = test_guard(CanonicalRequestAuthConfig::default());
+        let key_pair = checked_app_auth_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let wrong_key_pair = checked_app_auth_key_fixture();
+        let state = minimal_state_with_account(&authority);
+        let method = Method::POST;
+        let uri: Uri = "/v1/fees/quote".parse().expect("fee quote uri");
+        let body = fee_quote_body(&authority, &authority);
+        let headers = signed_headers_for_test(
+            &authority,
+            &wrong_key_pair,
+            &method,
+            &uri,
+            &body,
+            "fee-quote-registered-controller-wins",
+        );
+
+        let error = verify_fee_quote_canonical_request(&state, &headers, &method, &uri, &body)
+            .expect_err("registered controller verification must not fall back");
+        assert!(matches!(
+            error,
+            crate::Error::Query(ValidationFail::NotPermitted(message))
+                if message == "query signature failed verification"
+        ));
+    }
+
+    #[test]
     fn verify_accepts_valid_signature() {
         let _guard = test_guard(CanonicalRequestAuthConfig::default());
         let account = ALICE_ID.clone();
@@ -1484,6 +1903,30 @@ mod tests {
                 verified_signers: vec![ALICE_KEYPAIR.public_key().clone()],
             })
         );
+    }
+
+    #[test]
+    fn account_header_alias_requires_an_exact_active_ascii_binding() {
+        let account = ALICE_ID.clone();
+        let state = minimal_state_with_account(&account);
+        bind_account_alias_for_test(&state, &account, "wallet@universal");
+
+        assert_eq!(
+            parse_account_header_value(&state, "wallet@universal").expect("active alias"),
+            account
+        );
+        for invalid in [
+            " wallet@universal",
+            "wallet@universal ",
+            "Wallet@universal",
+            "wallet@UNIVERSAL",
+            "wallet",
+            "wállét@universal",
+            "missing@universal",
+        ] {
+            parse_account_header_value(&state, invalid)
+                .expect_err("noncanonical or inactive account header alias must fail closed");
+        }
     }
 
     #[test]

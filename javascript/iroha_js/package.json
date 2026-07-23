@@ -24,6 +24,11 @@
       "import": "./dist/transactionCodec.js",
       "types": "./transaction-codec.d.ts"
     },
+    "./smart-contract-deployment": {
+      "browser": "./dist/smartContractDeployment.js",
+      "import": "./dist/smartContractDeployment.js",
+      "types": "./smart-contract-deployment.d.ts"
+    },
     "./normalizers": {
       "browser": "./dist/normalizers.js",
       "import": "./dist/normalizers.js",
@@ -38,6 +43,11 @@
       "browser": "./dist/ivmArtifact.js",
       "import": "./dist/ivmArtifact.js",
       "types": "./ivm-artifact.d.ts"
+    },
+    "./ivm-artifact-admission-wasm": {
+      "browser": "./dist/ivmArtifactAdmissionWasm.js",
+      "import": "./dist/ivmArtifactAdmissionWasm.js",
+      "types": "./ivm-artifact-admission-wasm.d.ts"
     },
     "./instruction-builders": {
       "import": "./dist/instructionBuilders.js",
@@ -101,6 +111,9 @@
       "transaction-codec": [
         "./transaction-codec.d.ts"
       ],
+      "smart-contract-deployment": [
+        "./smart-contract-deployment.d.ts"
+      ],
       "normalizers": [
         "./index.d.ts"
       ],
@@ -109,6 +122,9 @@
       ],
       "ivm-artifact": [
         "./ivm-artifact.d.ts"
+      ],
+      "ivm-artifact-admission-wasm": [
+        "./ivm-artifact-admission-wasm.d.ts"
       ],
       "instruction-builders": [
         "./index.d.ts"
@@ -190,7 +206,9 @@
     "index.d.ts",
     "canonical-request.d.ts",
     "ivm-artifact.d.ts",
+    "ivm-artifact-admission-wasm.d.ts",
     "transaction-codec.d.ts",
+    "smart-contract-deployment.d.ts",
     "connect.browser.d.ts",
     "nexus-app.d.ts",
     "kotodama-compiler.d.ts",

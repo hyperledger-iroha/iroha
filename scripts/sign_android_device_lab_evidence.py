@@ -738,8 +738,13 @@ def _require_slot_metadata(slot_path: Path) -> tuple[dict[str, Any] | None, list
     if metadata is None:
         return None, errors
     device_lab.validate_slot_metadata_fields(metadata, errors)
-    if metadata.get("schema") != "iroha.android.device_lab.kagemusha.v1":
-        errors.append("slot.json schema must be iroha.android.device_lab.kagemusha.v1")
+    if metadata.get("schema") != device_lab.KAGEMUSHA_SLOT_SCHEMA_V2:
+        errors.append(
+            "slot.json schema must be candidate-bound "
+            f"{device_lab.KAGEMUSHA_SLOT_SCHEMA_V2}"
+        )
+    else:
+        device_lab.validate_candidate_binding_v2(slot_path, metadata, errors)
     return metadata, errors
 
 
@@ -773,6 +778,13 @@ def _slot_true(metadata: dict[str, Any], key: str, errors: list[str]) -> bool | 
         errors.append(f"slot.json {key} must be true")
         return None
     return True
+
+
+def _slot_false(metadata: dict[str, Any], key: str, errors: list[str]) -> bool | None:
+    if metadata.get(key) is not False:
+        errors.append(f"slot.json {key} must be false")
+        return None
+    return False
 
 
 def _slot_int(metadata: dict[str, Any], key: str, errors: list[str]) -> int | None:
@@ -1312,6 +1324,10 @@ def build_signed_evidence(
             evidence[key] = value
     for key in device_lab.SIGNED_EVIDENCE_SLOT_TRUE_FIELDS:
         value = _slot_true(metadata, key, errors)
+        if value is not None:
+            evidence[key] = value
+    for key in device_lab.SIGNED_EVIDENCE_SLOT_FALSE_FIELDS:
+        value = _slot_false(metadata, key, errors)
         if value is not None:
             evidence[key] = value
 

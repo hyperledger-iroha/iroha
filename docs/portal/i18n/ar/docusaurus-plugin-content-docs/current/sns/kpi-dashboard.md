@@ -1,40 +1,20 @@
+<!-- Auto-generated stub for Arabic (ar) translation. Replace this content with the full translation. -->
+
 ---
-id: kpi-dashboard
 lang: ar
 direction: rtl
 source: docs/portal/docs/sns/kpi-dashboard.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
+source_hash: 7c53fdda3c7a758055ad60eea6328cc0c28aae4e1d236c67a81e0a88fb162d72
+source_last_modified: "2026-07-18T23:03:42.072Z"
+translation_last_reviewed: null
 ---
-# لوحة مؤشرات KPI لخدمة أسماء سورا
 
-تمنح لوحة مؤشرات KPI الأمناء والحراس والمنظمين مكانا واحدا لمراجعة إشارات الاعتماد والأخطاء والإيرادات قبل إيقاع الملحق الشهري (SN-8a). يوجد تعريف Grafana في المستودع عند `dashboards/grafana/sns_suffix_analytics.json`، وتعكس البوابة اللوحات نفسها عبر iframe مضمّن بحيث تطابق التجربة نسخة Grafana الداخلية.
+# قيد الترجمة
 
-## المرشحات ومصادر البيانات
+<div dir="rtl">
+هذا الملف عبارة عن قالب لترجمة المستند الإنجليزي إلى العربية. بعد الانتهاء من الترجمة، حدّث حقل `status` في بيانات التعريف أعلاه.
 
-- **مرشح اللاحقة** – يقود استعلامات `sns_registrar_status_total{suffix}` حتى يمكن فحص `.sora` و`.nexus` و`.dao` بشكل مستقل.
-- **مرشح الإصدار المجمع** – يقيّد مقاييس `sns_bulk_release_payment_*` حتى يتمكن فريق المالية من مطابقة بيان registrar محدد.
-- **المقاييس** – يجلب من Torii (`sns_registrar_status_total`, `torii_request_duration_seconds`)، وCLI الخاص بالـguardian (`guardian_freeze_active`)، و`sns_governance_activation_total`، ومقاييس مساعد bulk-onboarding.
-
-## اللوحات
-
-1. **التسجيلات (آخر 24h)** – عدد أحداث registrar الناجحة لللاحقة المحددة.
-2. **تفعيلات الحوكمة (30d)** – حركات الميثاق/الملحق المسجلة بواسطة CLI.
-3. **معدل تدفق registrar** – معدل الإجراءات الناجحة للـregistrar لكل لاحقة.
-4. **أنماط أخطاء registrar** – معدل 5 دقائق لعدادات `sns_registrar_status_total` الموسومة بالخطأ.
-5. **نوافذ تجميد guardian** – محددات مباشرة حيث يُبلغ `guardian_freeze_active` عن تذكرة تجميد مفتوحة.
-6. **وحدات الدفع الصافية حسب الأصل** – الإجماليات التي يبلغ عنها `sns_bulk_release_payment_net_units` لكل أصل.
-7. **طلبات مجمعة لكل لاحقة** – أحجام الـmanifest لكل معرف لاحقة.
-8. **الوحدات الصافية لكل طلب** – حساب بنمط ARPU مشتق من مقاييس الإصدار.
-
-## قائمة مراجعة KPI الشهرية
-
-يقود مسؤول المالية مراجعة دورية في أول ثلاثاء من كل شهر:
-
-1. افتح صفحة البوابة **Analytics → SNS KPI** (أو لوحة Grafana `sns-kpis`).
-2. التقط تصدير PDF/CSV لجداول معدل تدفق registrar والإيرادات.
-3. قارن اللواحق لاكتشاف خروقات SLA (ارتفاعات معدل الخطأ، محددات مجمدة >72 h، فروق ARPU >10%).
-4. سجّل الملخصات وبنود العمل في إدخال الملحق المناسب تحت `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
-5. أرفق عناصر لوحة البيانات المصدّرة بعملية commit الخاصة بالملحق واربطها في جدول أعمال المجلس.
-
-إذا كشفت المراجعة عن خروقات SLA، افتح حادث PagerDuty للمالك المتأثر (registrar duty manager، guardian on-call، أو steward program lead) وتابع المعالجة في سجل الملحق.
+هذا المخطط في انتظار الترجمة. استبدل هذا النص بالمحتوى المترجَم وغيّر الحالة إلى `complete` عند الانتهاء. تأكد أيضًا من أن حقل `translation_last_reviewed` يعكس آخر مراجعة تمت مقارنةً بالنص الإنجليزي.
+</div>

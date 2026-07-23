@@ -9,6 +9,7 @@ public enum SccpPayloadKindV1: String, CaseIterable, Sendable {
 /// Request payload for `POST /v1/bridge/proofs/submit`.
 public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
+    public let feePayment: FeePaymentIntent
     public let signatureB64: String?
     public let transactionPayloadB64: String?
     public let destinationProofB64: String
@@ -19,15 +20,25 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
         destinationProofB64: String,
         signatureB64: String? = nil,
         transactionPayloadB64: String? = nil,
-        creationTimeMs: UInt64? = nil
+        creationTimeMs: UInt64? = nil,
+        feePayment: FeePaymentIntent
     ) throws {
-        self.authority = try SccpSubmitValidation.authority(authority)
+        let exactAuthority = try SccpSubmitValidation.authority(authority)
+        self.authority = exactAuthority
+        _ = try feePayment.compactNorito()
+        self.feePayment = feePayment
         self.signatureB64 = try SccpSubmitValidation.optionalSignature(signatureB64)
         self.transactionPayloadB64 = try transactionPayloadB64.map {
-            _ = try SccpSubmitValidation.canonicalBase64(
+            let payload = try SccpSubmitValidation.canonicalBase64(
                 $0,
                 field: "transaction_payload_b64",
                 maximumBytes: SccpSubmitValidation.maximumTransactionPayloadBytes
+            )
+            try SccpSubmitValidation.canonicalTransactionPayload(
+                payload,
+                creationTimeMs: creationTimeMs,
+                expectedAuthority: exactAuthority,
+                expectedFeePayment: feePayment
             )
             return $0
         }
@@ -51,6 +62,7 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
+        case feePayment = "fee_payment"
         case signatureB64 = "signature_b64"
         case transactionPayloadB64 = "transaction_payload_b64"
         case destinationProofB64 = "destination_proof_b64"
@@ -61,6 +73,7 @@ public struct ToriiBridgeProofSubmitRequest: Encodable, Equatable, Sendable {
 /// Native-proof-only request for `POST /v1/bridge/messages`.
 public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
     public let authority: String
+    public let feePayment: FeePaymentIntent
     public let signatureB64: String?
     public let transactionPayloadB64: String?
     public let nativeProofB64: String
@@ -71,15 +84,25 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
         nativeProofB64: String,
         signatureB64: String? = nil,
         transactionPayloadB64: String? = nil,
-        creationTimeMs: UInt64? = nil
+        creationTimeMs: UInt64? = nil,
+        feePayment: FeePaymentIntent
     ) throws {
-        self.authority = try SccpSubmitValidation.authority(authority)
+        let exactAuthority = try SccpSubmitValidation.authority(authority)
+        self.authority = exactAuthority
+        _ = try feePayment.compactNorito()
+        self.feePayment = feePayment
         self.signatureB64 = try SccpSubmitValidation.optionalSignature(signatureB64)
         self.transactionPayloadB64 = try transactionPayloadB64.map {
-            _ = try SccpSubmitValidation.canonicalBase64(
+            let payload = try SccpSubmitValidation.canonicalBase64(
                 $0,
                 field: "transaction_payload_b64",
                 maximumBytes: SccpSubmitValidation.maximumTransactionPayloadBytes
+            )
+            try SccpSubmitValidation.canonicalTransactionPayload(
+                payload,
+                creationTimeMs: creationTimeMs,
+                expectedAuthority: exactAuthority,
+                expectedFeePayment: feePayment
             )
             return $0
         }
@@ -103,6 +126,7 @@ public struct ToriiBridgeMessageSubmitRequest: Encodable, Equatable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case authority
+        case feePayment = "fee_payment"
         case signatureB64 = "signature_b64"
         case transactionPayloadB64 = "transaction_payload_b64"
         case nativeProofB64 = "native_proof_b64"
@@ -247,6 +271,12 @@ public struct SccpBridgeSubmitResponse: Equatable, Sendable {
                 field: "transaction_payload_b64",
                 maximumBytes: 16 * 1024 * 1024
             )
+            try SccpSubmitValidation.canonicalTransactionPayload(
+                payload,
+                creationTimeMs: creation,
+                expectedAuthority: nil,
+                expectedFeePayment: nil
+            )
             let signing = try SccpSubmitValidation.canonicalBase64(
                 signingB64,
                 field: "signing_message_b64",
@@ -306,6 +336,385 @@ enum SccpSubmitValidation {
     static let maximumDetachedSignatureBytes = 16 * 1024
     static let maximumTransactionPayloadBytes = 16 * 1024 * 1024
     static let maximumArtifactBytes = maximumDestinationArtifactBytes
+
+    /// Require the canonical compact eight-field `TransactionPayload` layout used by SCCP.
+    static func canonicalTransactionPayload(
+        _ payload: Data,
+        creationTimeMs: UInt64?,
+        expectedAuthority: String?,
+        expectedFeePayment: FeePaymentIntent?
+    ) throws {
+        var transaction = SccpCompactTransactionCursor(payload)
+        let chain = try transaction.takeField("chain")
+        let authority = try transaction.takeField("authority")
+        let creation = try transaction.takeField("creation_time_ms")
+        let executable = try transaction.takeField("instructions")
+        let timeToLive = try transaction.takeField("time_to_live_ms")
+        let nonce = try transaction.takeField("nonce")
+        let feePayment = try transaction.takeField("fee_payment")
+        let metadata = try transaction.takeField("metadata")
+        guard transaction.isFinished, !chain.isEmpty, !authority.isEmpty, !executable.isEmpty,
+              creation.count == MemoryLayout<UInt64>.size else {
+            throw SccpV1Error.invalid(
+                "transaction_payload_b64 must contain exactly one canonical eight-field TransactionPayload"
+            )
+        }
+        let exactCreation = creation.withUnsafeBytes { bytes in
+            UInt64(littleEndian: bytes.loadUnaligned(as: UInt64.self))
+        }
+        if let creationTimeMs, exactCreation != creationTimeMs {
+            throw SccpV1Error.invalid(
+                "transaction payload creation time does not match creation_time_ms"
+            )
+        }
+        if let expectedAuthority {
+            let address = try AccountAddress.parseEncoded(
+                expectedAuthority,
+                expectedPrefix: SccpV1.tairaI105DiscriminantV1
+            )
+            guard authority == (try address.compactNoritoAccountControllerPayload()) else {
+                throw SccpV1Error.invalid(
+                    "transaction payload authority does not match authority"
+                )
+            }
+        }
+        try requireAbsentCompactOption(timeToLive, field: "time_to_live_ms")
+        try requireAbsentCompactOption(nonce, field: "nonce")
+        let payloadFeeBinding = try requireCanonicalSccpFeePayment(feePayment)
+        if let expectedFeePayment {
+            let requestFeeBinding = try requireCanonicalSccpFeePayment(
+                expectedFeePayment.compactNorito()
+            )
+            guard payloadFeeBinding == requestFeeBinding else {
+                throw SccpV1Error.invalid(
+                    "transaction payload fee_payment changed the request payer, sponsor program/revision, or gas bound"
+                )
+            }
+        }
+        var metadataCursor = SccpCompactTransactionCursor(metadata)
+        guard try metadataCursor.takeLength("metadata.count") == 0,
+              metadataCursor.isFinished else {
+            throw SccpV1Error.invalid(
+                "SCCP transaction metadata must be empty; fee selection belongs in fee_payment"
+            )
+        }
+    }
+
+    private static func requireAbsentCompactOption(_ payload: Data, field: String) throws {
+        var cursor = SccpCompactTransactionCursor(payload)
+        guard try cursor.takeByte(field) == 0, cursor.isFinished else {
+            throw SccpV1Error.invalid(
+                "SCCP transaction \(field) must use the exact None encoding"
+            )
+        }
+    }
+
+    private static func requireCanonicalSccpFeePayment(
+        _ payload: Data
+    ) throws -> SccpFeePaymentBinding {
+        var intent = SccpCompactTransactionCursor(payload)
+        let payer = try intent.takeUInt32("fee_payment.payer")
+        var value = SccpCompactTransactionCursor(
+            try intent.takeField("fee_payment.value")
+        )
+        let binding: SccpFeePaymentBinding
+        switch payer {
+        case 0:
+            try requireCanonicalChargeLimits(
+                try value.takeField("fee_payment.charge_limits")
+            )
+            let gasLimit = try requireCanonicalPositiveUInt64Option(
+                try value.takeField("fee_payment.gas_limit"),
+                field: "fee_payment.gas_limit"
+            )
+            binding = SccpFeePaymentBinding(
+                payer: payer,
+                sponsorProgram: nil,
+                programRevision: nil,
+                gasLimit: gasLimit
+            )
+        case 1:
+            let sponsorProgram = try value.takeField("fee_payment.program_id")
+            try requireCanonicalSponsorProgram(sponsorProgram)
+            let programRevision = try requireCanonicalPositiveUInt64(
+                try value.takeField("fee_payment.program_revision"),
+                field: "fee_payment.program_revision"
+            )
+            try requireCanonicalChargeLimits(
+                try value.takeField("fee_payment.charge_limits")
+            )
+            let gasLimit = try requireCanonicalPositiveUInt64Option(
+                try value.takeField("fee_payment.gas_limit"),
+                field: "fee_payment.gas_limit"
+            )
+            binding = SccpFeePaymentBinding(
+                payer: payer,
+                sponsorProgram: sponsorProgram,
+                programRevision: programRevision,
+                gasLimit: gasLimit
+            )
+        default:
+            throw SccpV1Error.invalid(
+                "SCCP transaction fee_payment contains an unknown payer variant"
+            )
+        }
+        guard value.isFinished, intent.isFinished else {
+            throw SccpV1Error.invalid("SCCP transaction fee_payment contains trailing bytes")
+        }
+        return binding
+    }
+
+    private static func requireCanonicalChargeLimits(_ payload: Data) throws {
+        var limits = SccpCompactTransactionCursor(payload)
+        let count = try limits.takeLength("fee_payment.charge_limits.count")
+        guard count <= UInt64(FeeChargeKind.allCases.count) else {
+            throw SccpV1Error.invalid(
+                "fee_payment.charge_limits contains duplicate or unknown charge kinds"
+            )
+        }
+        var previousKind: UInt32?
+        for _ in 0..<count {
+            var limit = SccpCompactTransactionCursor(
+                try limits.takeField("fee_payment.charge_limits.item")
+            )
+            var kind = SccpCompactTransactionCursor(
+                try limit.takeField("fee_payment.charge_limits.kind")
+            )
+            let rawKind = try kind.takeUInt32("fee_payment.charge_limits.kind")
+            guard kind.isFinished, FeeChargeKind(rawValue: rawKind) != nil,
+                  previousKind.map({ $0 < rawKind }) ?? true else {
+                throw SccpV1Error.invalid(
+                    "fee_payment.charge_limits must use unique canonical charge-kind order"
+                )
+            }
+            previousKind = rawKind
+            try requireCanonicalAssetDefinition(
+                try limit.takeField("fee_payment.charge_limits.asset_definition_id")
+            )
+            try requireCanonicalPositiveQuantity(
+                try limit.takeField("fee_payment.charge_limits.max_amount")
+            )
+            guard limit.isFinished else {
+                throw SccpV1Error.invalid(
+                    "fee_payment.charge_limits item contains trailing bytes"
+                )
+            }
+        }
+        guard limits.isFinished else {
+            throw SccpV1Error.invalid("fee_payment.charge_limits contains trailing bytes")
+        }
+    }
+
+    private static func requireCanonicalAssetDefinition(_ payload: Data) throws {
+        var asset = SccpCompactTransactionCursor(payload)
+        var bytes = Data()
+        bytes.reserveCapacity(16)
+        for _ in 0..<16 {
+            guard try asset.takeLength("fee_payment.asset_definition_id.byte") == 1 else {
+                throw SccpV1Error.invalid(
+                    "fee_payment asset definition must use the exact 16-byte encoding"
+                )
+            }
+            bytes.append(try asset.takeByte("fee_payment.asset_definition_id.byte"))
+        }
+        guard asset.isFinished, AssetDefinitionAddress.encode(uuidBytes: bytes) != nil else {
+            throw SccpV1Error.invalid(
+                "fee_payment asset definition must use the exact 16-byte encoding"
+            )
+        }
+    }
+
+    private static func requireCanonicalPositiveQuantity(_ payload: Data) throws {
+        var quantity = SccpCompactTransactionCursor(payload)
+        var mantissa = SccpCompactTransactionCursor(
+            try quantity.takeField("fee_payment.max_amount.mantissa")
+        )
+        let byteCount = try mantissa.takeUInt32("fee_payment.max_amount.mantissa.count")
+        guard byteCount > 0, byteCount <= UInt32(CanonicalNorito.maxBigIntBytes) else {
+            throw SccpV1Error.invalid("fee_payment maximum must fit the canonical numeric bound")
+        }
+        let bytes = try mantissa.takeBytes(
+            Int(byteCount),
+            field: "fee_payment.max_amount.mantissa"
+        )
+        guard mantissa.isFinished,
+              bytes.contains(where: { $0 != 0 }),
+              let mostSignificant = bytes.last,
+              mostSignificant & 0x80 == 0,
+              bytes.count == 1 || mostSignificant != 0 || (bytes[bytes.count - 2] & 0x80) != 0 else {
+            throw SccpV1Error.invalid(
+                "fee_payment maximum must be a positive canonical quantity"
+            )
+        }
+        var scale = SccpCompactTransactionCursor(
+            try quantity.takeField("fee_payment.max_amount.scale")
+        )
+        guard try scale.takeUInt32("fee_payment.max_amount.scale") <= CanonicalNorito.maxNumericScale,
+              scale.isFinished,
+              quantity.isFinished else {
+            throw SccpV1Error.invalid("fee_payment maximum contains an invalid numeric scale")
+        }
+    }
+
+    private static func requireCanonicalSponsorProgram(_ payload: Data) throws {
+        var program = SccpCompactTransactionCursor(payload)
+        try requireCanonicalAccountController(
+            try program.takeField("fee_payment.program_id.sponsor")
+        )
+        var name = SccpCompactTransactionCursor(
+            try program.takeField("fee_payment.program_id.name")
+        )
+        let byteCount = try name.takeLength("fee_payment.program_id.name.length")
+        guard byteCount > 0, byteCount <= UInt64(Int.max) else {
+            throw SccpV1Error.invalid("fee_payment sponsor program name is invalid")
+        }
+        let nameBytes = try name.takeBytes(
+            Int(byteCount),
+            field: "fee_payment.program_id.name"
+        )
+        guard name.isFinished,
+              program.isFinished,
+              let value = String(data: nameBytes, encoding: .utf8),
+              value == value.precomposedStringWithCanonicalMapping,
+              value.unicodeScalars.allSatisfy({ scalar in
+                  !CharacterSet.whitespacesAndNewlines.contains(scalar)
+                      && scalar != "@" && scalar != "#" && scalar != "$" && scalar != "/"
+              }) else {
+            throw SccpV1Error.invalid("fee_payment sponsor program name is invalid")
+        }
+    }
+
+    private static func requireCanonicalAccountController(_ payload: Data) throws {
+        var controller = SccpCompactTransactionCursor(payload)
+        let tag = try controller.takeUInt32("fee_payment.program_id.sponsor.controller")
+        let body = try controller.takeField("fee_payment.program_id.sponsor.value")
+        guard controller.isFinished else {
+            throw SccpV1Error.invalid("fee_payment sponsor account contains trailing bytes")
+        }
+        switch tag {
+        case 0:
+            try requireCanonicalPublicKey(body)
+        case 1:
+            try requireCanonicalMultisigPolicy(body)
+        default:
+            throw SccpV1Error.invalid("fee_payment sponsor account controller is unknown")
+        }
+    }
+
+    private static func requireCanonicalPublicKey(_ payload: Data) throws {
+        var key = SccpCompactTransactionCursor(payload)
+        let count = try key.takeUInt64("fee_payment.program_id.sponsor.public_key.count")
+        guard count > 1, count <= 8_193 else {
+            throw SccpV1Error.invalid("fee_payment sponsor public key length is invalid")
+        }
+        var bytes = Data()
+        bytes.reserveCapacity(Int(count))
+        for _ in 0..<count {
+            guard try key.takeLength("fee_payment.program_id.sponsor.public_key.byte") == 1 else {
+                throw SccpV1Error.invalid("fee_payment sponsor public key is not canonical")
+            }
+            bytes.append(try key.takeByte("fee_payment.program_id.sponsor.public_key.byte"))
+        }
+        guard key.isFinished,
+              let algorithmByte = bytes.first,
+              let algorithm = SigningAlgorithm(noritoDiscriminant: algorithmByte),
+              (try? AccountAddress.fromAccount(
+                  publicKey: Data(bytes.dropFirst()),
+                  algorithm: algorithm.wireName
+              )) != nil else {
+            throw SccpV1Error.invalid("fee_payment sponsor public key is invalid")
+        }
+    }
+
+    private static func requireCanonicalMultisigPolicy(_ payload: Data) throws {
+        var policy = SccpCompactTransactionCursor(payload)
+        var version = SccpCompactTransactionCursor(
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.version")
+        )
+        guard try version.takeByte("fee_payment.program_id.sponsor.multisig.version") == 1,
+              version.isFinished else {
+            throw SccpV1Error.invalid("fee_payment sponsor multisig version is invalid")
+        }
+        var threshold = SccpCompactTransactionCursor(
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.threshold")
+        )
+        let requiredWeight = try threshold.takeUInt16(
+            "fee_payment.program_id.sponsor.multisig.threshold"
+        )
+        guard requiredWeight > 0, threshold.isFinished else {
+            throw SccpV1Error.invalid("fee_payment sponsor multisig threshold is invalid")
+        }
+        var members = SccpCompactTransactionCursor(
+            try policy.takeField("fee_payment.program_id.sponsor.multisig.members")
+        )
+        let memberCount = try members.takeUInt64(
+            "fee_payment.program_id.sponsor.multisig.members.count"
+        )
+        guard memberCount > 0, memberCount <= 1_024 else {
+            throw SccpV1Error.invalid("fee_payment sponsor multisig member count is invalid")
+        }
+        var totalWeight: UInt64 = 0
+        for _ in 0..<memberCount {
+            var member = SccpCompactTransactionCursor(
+                try members.takeField("fee_payment.program_id.sponsor.multisig.member")
+            )
+            try requireCanonicalPublicKey(
+                try member.takeField("fee_payment.program_id.sponsor.multisig.member.public_key")
+            )
+            var weight = SccpCompactTransactionCursor(
+                try member.takeField("fee_payment.program_id.sponsor.multisig.member.weight")
+            )
+            let value = try weight.takeUInt16(
+                "fee_payment.program_id.sponsor.multisig.member.weight"
+            )
+            guard value > 0, weight.isFinished, member.isFinished else {
+                throw SccpV1Error.invalid("fee_payment sponsor multisig member is invalid")
+            }
+            totalWeight += UInt64(value)
+        }
+        guard members.isFinished,
+              policy.isFinished,
+              UInt64(requiredWeight) <= totalWeight else {
+            throw SccpV1Error.invalid("fee_payment sponsor multisig policy is invalid")
+        }
+    }
+
+    private static func requireCanonicalPositiveUInt64(
+        _ payload: Data,
+        field: String
+    ) throws -> UInt64 {
+        var value = SccpCompactTransactionCursor(payload)
+        let exact = try value.takeUInt64(field)
+        guard exact > 0, value.isFinished else {
+            throw SccpV1Error.invalid("\(field) must be a positive canonical UInt64")
+        }
+        return exact
+    }
+
+    private static func requireCanonicalPositiveUInt64Option(
+        _ payload: Data,
+        field: String
+    ) throws -> UInt64? {
+        var option = SccpCompactTransactionCursor(payload)
+        switch try option.takeByte(field) {
+        case 0:
+            guard option.isFinished else {
+                throw SccpV1Error.invalid("\(field) None encoding contains trailing bytes")
+            }
+            return nil
+        case 1:
+            let exact = try requireCanonicalPositiveUInt64(
+                try option.takeField(field),
+                field: field
+            )
+            guard option.isFinished else {
+                throw SccpV1Error.invalid("\(field) Some encoding contains trailing bytes")
+            }
+            return exact
+        default:
+            throw SccpV1Error.invalid("\(field) contains an invalid option tag")
+        }
+    }
 
     static func authority(_ value: String) throws -> String {
         guard !value.isEmpty, value == value.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -409,6 +818,112 @@ enum SccpSubmitValidation {
         return value
     }
 
+}
+
+private struct SccpFeePaymentBinding: Equatable {
+    let payer: UInt32
+    let sponsorProgram: Data?
+    let programRevision: UInt64?
+    let gasLimit: UInt64?
+}
+
+private struct SccpCompactTransactionCursor {
+    private let data: Data
+    private var offset = 0
+
+    init(_ data: Data) {
+        self.data = data
+    }
+
+    var isFinished: Bool { offset == data.count }
+
+    mutating func takeBytes(_ count: Int, field: String) throws -> Data {
+        guard count >= 0, count <= data.count - offset else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        defer { offset += count }
+        return data.subdata(in: offset..<(offset + count))
+    }
+
+    mutating func takeByte(_ field: String) throws -> UInt8 {
+        guard offset < data.count else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        defer { offset += 1 }
+        return data[offset]
+    }
+
+    mutating func takeLength(_ field: String) throws -> UInt64 {
+        var value: UInt64 = 0
+        var shift: UInt64 = 0
+        var count = 0
+        while count < 10 {
+            let byte = try takeByte(field)
+            let chunk = UInt64(byte & 0x7f)
+            guard shift < 64, chunk <= (UInt64.max >> shift) else {
+                throw SccpV1Error.invalid("\(field) length overflows UInt64")
+            }
+            value |= chunk << shift
+            count += 1
+            if byte & 0x80 == 0 {
+                guard count == 1 || chunk != 0 else {
+                    throw SccpV1Error.invalid("\(field) length is not canonical")
+                }
+                return value
+            }
+            shift += 7
+        }
+        throw SccpV1Error.invalid("\(field) length is not canonical")
+    }
+
+    mutating func takeField(_ field: String) throws -> Data {
+        let length = try takeLength(field)
+        guard length <= UInt64(Int.max) else {
+            throw SccpV1Error.invalid("\(field) exceeds the runtime bound")
+        }
+        let count = Int(length)
+        guard count <= data.count - offset else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        defer { offset += count }
+        return data.subdata(in: offset..<(offset + count))
+    }
+
+    mutating func takeUInt32(_ field: String) throws -> UInt32 {
+        guard data.count - offset >= MemoryLayout<UInt32>.size else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        let value = data.subdata(in: offset..<(offset + MemoryLayout<UInt32>.size))
+            .withUnsafeBytes { bytes in
+                UInt32(littleEndian: bytes.loadUnaligned(as: UInt32.self))
+            }
+        offset += MemoryLayout<UInt32>.size
+        return value
+    }
+
+    mutating func takeUInt16(_ field: String) throws -> UInt16 {
+        guard data.count - offset >= MemoryLayout<UInt16>.size else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        let value = data.subdata(in: offset..<(offset + MemoryLayout<UInt16>.size))
+            .withUnsafeBytes { bytes in
+                UInt16(littleEndian: bytes.loadUnaligned(as: UInt16.self))
+            }
+        offset += MemoryLayout<UInt16>.size
+        return value
+    }
+
+    mutating func takeUInt64(_ field: String) throws -> UInt64 {
+        guard data.count - offset >= MemoryLayout<UInt64>.size else {
+            throw SccpV1Error.invalid("\(field) is truncated")
+        }
+        let value = data.subdata(in: offset..<(offset + MemoryLayout<UInt64>.size))
+            .withUnsafeBytes { bytes in
+                UInt64(littleEndian: bytes.loadUnaligned(as: UInt64.self))
+            }
+        offset += MemoryLayout<UInt64>.size
+        return value
+    }
 }
 
 enum SccpStrictJSON {

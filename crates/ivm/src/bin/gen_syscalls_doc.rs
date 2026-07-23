@@ -121,6 +121,10 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&Name(schema)".into();
         ret = "ptr (&Json{\"id\":...,\"version\":...})".into();
         gas = "G_schema + bytes".into();
+    } else if up.contains("PRIVATE_NUMERIC_VALCOM") || n == 0xF8 {
+        args = "r10=private:&Int|&Decimal|&Quantity(value), r11=private:&Int|&Decimal|&Quantity(blind)".into();
+        ret = "r10=public:&Int(full compressed Pedersen point)".into();
+        gas = "G_private_numeric_valcom".into();
     } else if up.contains("GET_ACCOUNT_BALANCE") || n == 0xF9 {
         args = "r10=&AccountId, r11=&AssetDefinitionId".into();
         ret = "ptr (&Quantity)".into();
@@ -229,8 +233,8 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         ret = "u64=new_limit".into();
         gas = "G_grow_heap per page".into();
     } else if up.contains("GET_PRIVATE_INPUT") || n == 0xFD {
-        args = "r10=index:u64".into();
-        ret = "r10=value".into();
+        args = "r10=index:u64, r11=PrivateInputKindV1".into();
+        ret = "r10=private:&Int|&Decimal|&Quantity".into();
         gas = "G_get_priv".into();
     } else if up.contains("GET_PUBLIC_INPUT") || n == 0xF1 {
         args = "r10=&Name".into();

@@ -8,7 +8,7 @@ use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSe
 use thiserror::Error;
 
 use crate::{
-    CapacityMetadataEntry, XorAmount, chunker_registry,
+    CapacityMetadataEntry, XorQuantity, chunker_registry,
     provider_advert::{AdvertSignature, SignatureAlgorithm},
 };
 
@@ -1516,7 +1516,7 @@ pub struct PorSlashingEventV1 {
     /// Manifest digest associated with the penalty.
     pub manifest_digest: [u8; 32],
     /// Penalty amount denominated in XOR micro-units.
-    pub penalty_xor: XorAmount,
+    pub penalty_xor: XorQuantity,
     /// Governance verdict CID anchoring the slashing decision.
     pub verdict_cid: String,
     /// Timestamp when the decision was finalised (seconds since Unix epoch).
@@ -2394,7 +2394,8 @@ mod tests {
         let event = PorSlashingEventV1 {
             provider_id: [1; 32],
             manifest_digest: [2; 32],
-            penalty_xor: XorAmount::from_micro(1_000_000),
+            penalty_xor: XorQuantity::try_from_micro(1_000_000)
+                .expect("legacy micro-XOR value is representable"),
             verdict_cid: "ipfs://cid".into(),
             decided_at: 1_700_000_000,
         };
@@ -2589,7 +2590,8 @@ mod tests {
         let slashing = PorSlashingEventV1 {
             provider_id: [6; 32],
             manifest_digest: [7; 32],
-            penalty_xor: XorAmount::from_micro(250_000_000),
+            penalty_xor: XorQuantity::try_from_micro(250_000_000)
+                .expect("legacy micro-XOR value is representable"),
             verdict_cid: "ipfs://verdict".into(),
             decided_at: 1_700_000_200,
         };

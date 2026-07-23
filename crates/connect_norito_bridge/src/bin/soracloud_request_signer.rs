@@ -16,7 +16,7 @@ use iroha_data_model::{
     smart_contract::manifest::ManifestProvenance,
     soracloud::{
         SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1, SORA_UPLOADED_MODEL_ENCRYPTION_RECIPIENT_VERSION_V1,
-        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SoraUploadedModelBundleV1,
+        SORA_UPLOADED_MODEL_WRAPPED_KEY_VERSION_V1, SORACLOUD_XOR_SCALE, SoraUploadedModelBundleV1,
         SoraUploadedModelEncryptionRecipientV1, SoraUploadedModelKeyEncapsulationV1,
         SoraUploadedModelKeyWrapAeadV1, SoraUploadedModelPricingPolicyV1,
         SoraUploadedModelRuntimeFormatV1, SoraUploadedModelWrappedKeyV1,
@@ -25,6 +25,7 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::ManifestDigest,
 };
+use iroha_primitives::numeric::{Numeric, Quantity};
 use norito::{json, to_bytes};
 
 #[derive(Debug, norito::json::JsonDeserialize)]
@@ -456,6 +457,11 @@ fn load_stage_manifest(manifest_path: &str) -> Result<StageUploadManifest, Strin
     Ok(manifest)
 }
 
+fn xor_quantity_from_nanos(value: u128) -> Result<Quantity, String> {
+    Quantity::from_canonical_numeric(Numeric::new(value, SORACLOUD_XOR_SCALE))
+        .map_err(|error| format!("invalid nano-XOR storage price: {error}"))
+}
+
 fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadBundle, String> {
     let service_name = parse_name(&manifest.service_name, "service_name")?;
     let plaintext_root = parse_hash_like(&manifest.plaintext_root);
@@ -508,7 +514,7 @@ fn derive_upload_bundle(manifest: &StageUploadManifest) -> Result<DerivedUploadB
         manifest.pricing_policy.decrypt_release_xor_nanos,
     );
     let pricing_policy = SoraUploadedModelPricingPolicyV1 {
-        storage_xor_nanos: manifest.pricing_policy.storage_xor_nanos,
+        storage_price: xor_quantity_from_nanos(manifest.pricing_policy.storage_xor_nanos)?,
     };
     let bundle_root = compute_bundle_root(
         &service_name,
@@ -909,6 +915,10 @@ mod tests {
         );
         assert_eq!(derived.chunks.len(), 1);
         assert_eq!(derived.chunks[0].ciphertext_len, 16);
+        assert_eq!(
+            derived.bundle.pricing_policy.storage_price.to_string(),
+            "0.000000011"
+        );
         derived.bundle.validate().expect("bundle validates");
     }
 }

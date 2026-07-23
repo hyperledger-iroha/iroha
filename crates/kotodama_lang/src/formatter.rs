@@ -65,6 +65,7 @@ fn formatted_source_too_large(source: &SourceFile) -> DiagnosticBundle {
             "canonical formatting would exceed the {MAX_SOURCE_BYTES}-byte Kotodama V1 source limit"
         ),
         Some(SourceSpan {
+            package_identity: source.package_identity().map(str::to_owned),
             source: Some(source.name().to_owned()),
             start: SourcePosition { line: 1, column: 1 },
             end: SourcePosition {

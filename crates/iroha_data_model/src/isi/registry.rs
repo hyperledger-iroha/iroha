@@ -2,11 +2,11 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, account_alias_lease, account_recovery, asset_alias,
-        asset_transfer_control, bridge, confidential, consensus_keys, content, contract_alias,
-        defi, domain_link, endorsement, escrow, identifier, kaigi, ministry, musubi, nexus,
-        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code, sns,
-        social, soracloud, soradns, sorafs, space_directory,
+        InstructionRegistry, account_recovery, alias_setup, asset_alias, asset_transfer_control,
+        bridge, confidential, consensus_keys, content, contract_alias, defi, endorsement, escrow,
+        identifier, kaigi, ministry, musubi, nexus, offline, oracle, ram_lfe, repo,
+        runtime_upgrade, rwa, settlement, smart_contract_code, social, soracloud, soradns, sorafs,
+        space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -46,8 +46,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<RemoveAssetKeyValue>,
     InstructionRegistry::register_slice::<GrantBox>,
     InstructionRegistry::register_slice::<RevokeBox>,
-    InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV2>,
-    InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV2>,
+    InstructionRegistry::register_slice::<offline::TopUpKagemushaRecursiveV4>,
+    InstructionRegistry::register_slice::<offline::RedeemKagemushaRecursiveV4>,
+    InstructionRegistry::register_slice::<offline::ActivateKagemushaRecursiveReleaseV4>,
     InstructionRegistry::register_slice::<offline::RegisterOfflineDeviceAttestation>,
     InstructionRegistry::register_slice::<offline::SetOfflineDeviceAttestationPolicy>,
     InstructionRegistry::register_slice::<zk::RegisterAssetHiddenZkPool>,
@@ -70,9 +71,17 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<crate::isi::staking::ClaimPublicLaneRewards>,
     InstructionRegistry::register_slice::<nexus::SetLaneRelayEmergencyValidators>,
     InstructionRegistry::register_slice::<nexus::RegisterVerifiedLaneRelay>,
-    InstructionRegistry::register_slice::<nexus::RegisterVerifiedNexusFeeBudget>,
-    InstructionRegistry::register_slice::<nexus::UpsertFeeSponsorPolicy>,
-    InstructionRegistry::register_slice::<nexus::RemoveFeeSponsorPolicy>,
+    InstructionRegistry::register_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>,
+    InstructionRegistry::register_slice::<nexus::CreateFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::StageFeeSponsorProgramRevision>,
+    InstructionRegistry::register_slice::<nexus::ActivateFeeSponsorProgramRevision>,
+    InstructionRegistry::register_slice::<nexus::PauseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::BeginCloseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::CloseFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::EnrollFeeSponsorBeneficiary>,
+    InstructionRegistry::register_slice::<nexus::UnenrollFeeSponsorBeneficiary>,
+    InstructionRegistry::register_slice::<nexus::FundFeeSponsorProgram>,
+    InstructionRegistry::register_slice::<nexus::WithdrawFeeSponsorProgram>,
     InstructionRegistry::register_slice::<bridge::ApplySccpRouteGovernance>,
     InstructionRegistry::register_slice::<oracle::RegisterOracleFeed>,
     InstructionRegistry::register_slice::<oracle::SubmitOracleObservation>,
@@ -175,16 +184,11 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<endorsement::RegisterDomainCommittee>,
     InstructionRegistry::register_slice::<endorsement::SetDomainEndorsementPolicy>,
     InstructionRegistry::register_slice::<endorsement::SubmitDomainEndorsement>,
-    InstructionRegistry::register_slice::<domain_link::SetAccountAliasBinding>,
-    InstructionRegistry::register_slice::<domain_link::SetPrimaryAccountAlias>,
-    InstructionRegistry::register_slice::<account_alias_lease::AcquireAccountAliasLease>,
-    InstructionRegistry::register_slice::<account_alias_lease::RenewAccountAliasLease>,
-    InstructionRegistry::register_slice::<sns::RegisterSnsName>,
-    InstructionRegistry::register_slice::<sns::RenewSnsName>,
-    InstructionRegistry::register_slice::<sns::TransferSnsName>,
-    InstructionRegistry::register_slice::<sns::UpdateSnsNameControllers>,
-    InstructionRegistry::register_slice::<sns::FreezeSnsName>,
-    InstructionRegistry::register_slice::<sns::UnfreezeSnsName>,
+    InstructionRegistry::register_slice::<alias_setup::EnsureAlias>,
+    InstructionRegistry::register_slice::<alias_setup::RenewAliasLease>,
+    InstructionRegistry::register_slice::<alias_setup::ConfigureAliasAutoRenew>,
+    InstructionRegistry::register_slice::<alias_setup::RebindAccountAlias>,
+    InstructionRegistry::register_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>,
     InstructionRegistry::register_slice::<account_recovery::ReplaceAccountController>,
     InstructionRegistry::register_slice::<account_recovery::SetAccountRecoveryPolicy>,
     InstructionRegistry::register_slice::<account_recovery::ClearAccountRecoveryPolicy>,
@@ -252,6 +256,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractCode>,
     InstructionRegistry::register_slice::<smart_contract_code::DeactivateContractInstance>,
     InstructionRegistry::register_slice::<smart_contract_code::ActivateContractInstance>,
+    InstructionRegistry::register_slice::<smart_contract_code::CommitContractDeployment>,
     InstructionRegistry::register_slice::<smart_contract_code::RegisterSmartContractBytes>,
     InstructionRegistry::register_slice::<smart_contract_code::UploadSmartContractCodeChunk>,
     InstructionRegistry::register_slice::<smart_contract_code::FinalizeSmartContractCodeUpload>,
@@ -330,6 +335,16 @@ pub fn default() -> InstructionRegistry {
     with_stable_ids(registry)
 }
 
+/// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
+///
+/// Sponsor-program revision validation uses this fail-closed lookup before an
+/// immutable native-instruction selector can be staged.
+#[must_use]
+pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
+    static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
+    DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
+}
+
 /// Apply every [`Registrar`] from the provided iterator to build an [`InstructionRegistry`].
 fn apply_registrars(registrars: impl IntoIterator<Item = Registrar>) -> InstructionRegistry {
     registrars
@@ -377,6 +392,9 @@ fn with_core_stable_ids(mut registry: InstructionRegistry) -> InstructionRegistr
     registry = registry.register_with_id_slice::<RemoveKeyValueBox>(RemoveKeyValueBox::WIRE_ID);
     registry = registry.register_with_id_slice::<GrantBox>(GrantBox::WIRE_ID);
     registry = registry.register_with_id_slice::<RevokeBox>(RevokeBox::WIRE_ID);
+    registry = registry.register_with_id_slice::<offline::RegisterOfflineDeviceAttestation>(
+        offline::RegisterOfflineDeviceAttestation::WIRE_ID,
+    );
     registry = registry.register_with_id_slice::<musubi::PublishMusubiRelease>(
         musubi::PublishMusubiRelease::WIRE_ID,
     );
@@ -558,11 +576,19 @@ fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id_slice::<endorsement::SubmitDomainEndorsement>(
         "nexus::SubmitDomainEndorsement",
     );
-    registry = registry.register_with_id_slice::<domain_link::SetAccountAliasBinding>(
-        "identity::SetAccountAliasBinding",
+    registry = registry
+        .register_with_id_slice::<alias_setup::EnsureAlias>(alias_setup::EnsureAlias::WIRE_ID);
+    registry = registry.register_with_id_slice::<alias_setup::RenewAliasLease>(
+        alias_setup::RenewAliasLease::WIRE_ID,
     );
-    registry = registry.register_with_id_slice::<domain_link::SetPrimaryAccountAlias>(
-        "identity::SetPrimaryAccountAlias",
+    registry = registry.register_with_id_slice::<alias_setup::ConfigureAliasAutoRenew>(
+        alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<alias_setup::RebindAccountAlias>(
+        alias_setup::RebindAccountAlias::WIRE_ID,
+    );
+    registry = registry.register_with_id_slice::<alias_setup::CompareAndSetPrimaryAccountAlias>(
+        alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
     );
     registry = registry.register_with_id_slice::<account_recovery::ReplaceAccountController>(
         account_recovery::ReplaceAccountController::WIRE_ID,
@@ -633,13 +659,35 @@ fn with_identity_stable_ids(mut registry: InstructionRegistry) -> InstructionReg
     registry = registry.register_with_id_slice::<nexus::RegisterVerifiedLaneRelay>(
         "nexus::RegisterVerifiedLaneRelay",
     );
-    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedNexusFeeBudget>(
-        "nexus::RegisterVerifiedNexusFeeBudget",
+    registry = registry.register_with_id_slice::<nexus::RegisterVerifiedFeeSponsorVaultAllocation>(
+        "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
     );
     registry = registry
-        .register_with_id_slice::<nexus::UpsertFeeSponsorPolicy>("nexus::UpsertFeeSponsorPolicy");
+        .register_with_id_slice::<nexus::CreateFeeSponsorProgram>("nexus::CreateFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::StageFeeSponsorProgramRevision>(
+        "nexus::StageFeeSponsorProgramRevision",
+    );
+    registry = registry.register_with_id_slice::<nexus::ActivateFeeSponsorProgramRevision>(
+        "nexus::ActivateFeeSponsorProgramRevision",
+    );
     registry = registry
-        .register_with_id_slice::<nexus::RemoveFeeSponsorPolicy>("nexus::RemoveFeeSponsorPolicy");
+        .register_with_id_slice::<nexus::PauseFeeSponsorProgram>("nexus::PauseFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::BeginCloseFeeSponsorProgram>(
+        "nexus::BeginCloseFeeSponsorProgram",
+    );
+    registry = registry
+        .register_with_id_slice::<nexus::CloseFeeSponsorProgram>("nexus::CloseFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::EnrollFeeSponsorBeneficiary>(
+        "nexus::EnrollFeeSponsorBeneficiary",
+    );
+    registry = registry.register_with_id_slice::<nexus::UnenrollFeeSponsorBeneficiary>(
+        "nexus::UnenrollFeeSponsorBeneficiary",
+    );
+    registry = registry
+        .register_with_id_slice::<nexus::FundFeeSponsorProgram>("nexus::FundFeeSponsorProgram");
+    registry = registry.register_with_id_slice::<nexus::WithdrawFeeSponsorProgram>(
+        "nexus::WithdrawFeeSponsorProgram",
+    );
     registry
 }
 
@@ -660,6 +708,15 @@ fn with_runtime_upgrade_stable_ids(mut registry: InstructionRegistry) -> Instruc
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, Hash, KeyPair};
+    use iroha_primitives::numeric::{Numeric, Quantity};
+
+    fn xor_quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(
+            value,
+            crate::sorafs::pricing::XOR_QUANTITY_SCALE,
+        ))
+        .expect("u128 nano-XOR registry fixture fits Quantity")
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -844,6 +901,104 @@ mod tests {
                 panic!("wire id collision: {wire_id} registered for {previous} and {name}");
             }
         }
+    }
+
+    #[test]
+    fn sponsor_program_wire_id_lookup_is_clean_break() {
+        assert!(is_instruction_wire_id_registered(
+            "nexus::CreateFeeSponsorProgram"
+        ));
+        assert!(is_instruction_wire_id_registered("iroha.transfer"));
+        assert!(!is_instruction_wire_id_registered(
+            "nexus::UpsertFeeSponsorPolicy"
+        ));
+    }
+
+    #[test]
+    fn legacy_split_alias_instruction_ids_are_not_registered() {
+        let registry = default();
+        let removed_ids = [
+            "iroha.account.alias.lease.acquire",
+            "iroha.account.alias.lease.renew",
+            "iroha.account.alias.binding.set",
+            "identity::SetAccountAliasBinding",
+            "iroha.account.alias.primary.set",
+            "identity::SetPrimaryAccountAlias",
+        ];
+
+        for wire_id in removed_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "retired split alias instruction id must not decode: {wire_id}"
+            );
+            assert!(!is_instruction_wire_id_registered(wire_id));
+        }
+
+        for wire_id in [
+            alias_setup::EnsureAlias::WIRE_ID,
+            alias_setup::RenewAliasLease::WIRE_ID,
+            alias_setup::RebindAccountAlias::WIRE_ID,
+            alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
+            alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+        ] {
+            assert!(
+                registry.contains(wire_id),
+                "replacement must decode: {wire_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn legacy_sns_mutation_instruction_ids_are_not_registered() {
+        let registry = default();
+        let removed_ids = [
+            "iroha_data_model::isi::sns::RegisterSnsName",
+            "iroha.sns.name.register",
+            "iroha_data_model::isi::sns::RenewSnsName",
+            "iroha.sns.name.renew",
+            "iroha_data_model::isi::sns::TransferSnsName",
+            "iroha.sns.name.transfer",
+            "iroha_data_model::isi::sns::UpdateSnsNameControllers",
+            "iroha.sns.name.controllers.update",
+            "iroha_data_model::isi::sns::FreezeSnsName",
+            "iroha.sns.name.freeze",
+            "iroha_data_model::isi::sns::UnfreezeSnsName",
+            "iroha.sns.name.unfreeze",
+        ];
+
+        for wire_id in removed_ids {
+            assert!(
+                !registry.contains(wire_id),
+                "retired SNS mutation instruction id must not decode: {wire_id}"
+            );
+            assert!(registry.decode(wire_id, &[]).is_none());
+            assert!(!is_instruction_wire_id_registered(wire_id));
+        }
+
+        for wire_id in [
+            alias_setup::EnsureAlias::WIRE_ID,
+            alias_setup::RenewAliasLease::WIRE_ID,
+            alias_setup::RebindAccountAlias::WIRE_ID,
+            alias_setup::CompareAndSetPrimaryAccountAlias::WIRE_ID,
+            alias_setup::ConfigureAliasAutoRenew::WIRE_ID,
+        ] {
+            assert!(
+                registry.contains(wire_id),
+                "replacement alias lifecycle instruction must decode: {wire_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn device_attestation_registration_has_stable_wire_id() {
+        let registry = default();
+        let type_name = std::any::type_name::<offline::RegisterOfflineDeviceAttestation>();
+
+        assert_eq!(
+            registry.wire_id(type_name),
+            Some(offline::RegisterOfflineDeviceAttestation::WIRE_ID)
+        );
+        assert!(registry.contains(offline::RegisterOfflineDeviceAttestation::WIRE_ID));
     }
 
     #[test]
@@ -1530,10 +1685,10 @@ mod tests {
         assert_default_registry_decodes(sorafs::UpsertProviderCredit::new(
             crate::sorafs::pricing::ProviderCreditRecord::new(
                 crate::sorafs::capacity::ProviderId::new([0xC1; 32]),
-                1,
-                0,
-                0,
-                0,
+                xor_quantity_nanos(1),
+                Quantity::zero(),
+                Quantity::zero(),
+                Quantity::zero(),
                 0,
                 0,
                 Metadata::default(),

@@ -97,7 +97,10 @@ fn register_assets(client: &Client) -> Result<()> {
         .collect();
 
     for chunk in register.chunks(MAX_INSTRUCTIONS_PER_TX) {
-        client.submit_all_blocking::<InstructionBox>(chunk.iter().cloned())?;
+        client.submit_all_blocking::<InstructionBox>(
+            chunk.iter().cloned(),
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
 
     Ok(())

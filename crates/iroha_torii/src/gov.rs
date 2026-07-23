@@ -26,8 +26,9 @@ use iroha_data_model::{
     governance::types::{AtWindow, ParliamentBody},
     isi::governance::{CouncilDerivationKind, ParliamentDecision},
     ministry::{AgendaProposalRecordV1, AgendaProposalV1},
-    smart_contract::manifest::ManifestProvenance,
+    smart_contract::manifest::{EntryPointKind, ManifestProvenance},
 };
+use iroha_primitives::numeric::Quantity;
 use mv::storage::StorageReadOnly;
 use norito::{
     codec::Encode as _,
@@ -357,8 +358,8 @@ pub struct PlainBallotDto {
     pub referendum_id: String,
     /// Owner as canonical I105 or on-chain account alias.
     pub owner: String,
-    /// Token amount as decimal string to avoid JSON f64 issues
-    pub amount: String,
+    /// Exact non-negative token quantity.
+    pub amount: Quantity,
     pub duration_blocks: u64,
     /// One of: "Aye" | "Nay" | "Abstain"
     pub direction: String,
@@ -603,9 +604,9 @@ pub struct ZkBallotV1Dto {
     /// Optional owner account id (for lock hints when the circuit commits owner)
     #[norito(default)]
     pub owner: Option<String>,
-    /// Optional lock amount hint (decimal string).
+    /// Optional exact lock amount hint.
     #[norito(default)]
-    pub amount: Option<String>,
+    pub amount: Option<Quantity>,
     /// Optional lock duration hint in blocks.
     #[norito(default)]
     pub duration_blocks: Option<u64>,
@@ -696,7 +697,10 @@ pub async fn handle_gov_ballot_zk_v1(
         pub_map.insert("owner".into(), norito::json::Value::from(owner.clone()));
     }
     if let Some(amount) = &body.amount {
-        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+        pub_map.insert(
+            "amount".into(),
+            norito::json::Value::from(amount.to_string()),
+        );
     }
     if let Some(duration_blocks) = body.duration_blocks {
         pub_map.insert(
@@ -805,7 +809,10 @@ pub async fn handle_gov_ballot_zk_v1_ballotproof(
         pub_map.insert("owner".into(), norito::json::Value::from(owner.to_string()));
     }
     if let Some(amount) = &body.ballot.amount {
-        pub_map.insert("amount".into(), norito::json::Value::from(amount.clone()));
+        pub_map.insert(
+            "amount".into(),
+            norito::json::Value::from(amount.to_string()),
+        );
     }
     if let Some(duration_blocks) = body.ballot.duration_blocks {
         pub_map.insert(
@@ -1366,6 +1373,7 @@ fn build_signable_transaction_b64(
     let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
         chain_id.clone(),
         authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(instructions)
     .try_sign(dummy_key_pair.private_key())
@@ -1630,7 +1638,8 @@ pub async fn handle_gov_get_referendum(
 /// Handler for computing a referendum tally summary.
 ///
 /// # Errors
-/// This handler never returns an error; missing records result in zeroed tallies.
+/// Returns a conversion error if an exact quadratic weight or tally exceeds
+/// the fixed consensus tally domain. Missing records result in zeroed tallies.
 pub async fn handle_gov_get_tally(
     state: Arc<iroha_core::state::State>,
     id: axum::extract::Path<String>,
@@ -1657,16 +1666,27 @@ pub async fn handle_gov_get_tally(
                     if rec.expiry_height < now_h {
                         continue;
                     }
-                    let base = integer_sqrt_u128(rec.amount);
-                    let mut f = 1u64 + (rec.duration_blocks / step);
-                    if f > max_c {
-                        f = max_c;
+                    if rec.amount.scale() != 0 {
+                        return Err(crate::routing::conversion_error(
+                            "plain ballot lock amount must have scale zero".into(),
+                        ));
                     }
-                    let w = base.saturating_mul(u128::from(f));
+                    let units = rec.amount.as_numeric().try_mantissa_u128().ok_or_else(|| {
+                        crate::routing::conversion_error(
+                            "plain ballot lock amount exceeds u128 voting range".into(),
+                        )
+                    })?;
+                    let w = checked_plain_tally_weight(units, rec.duration_blocks, step, max_c)?;
                     match rec.direction {
-                        0 => approve = approve.saturating_add(w),
-                        1 => reject = reject.saturating_add(w),
-                        _ => abstain = abstain.saturating_add(w),
+                        0 => {
+                            approve = approve.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
+                        1 => {
+                            reject = reject.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
+                        _ => {
+                            abstain = abstain.checked_add(w).ok_or_else(tally_overflow_error)?;
+                        }
                     }
                 }
             }
@@ -1686,6 +1706,22 @@ pub async fn handle_gov_get_tally(
         reject,
         abstain,
     }))
+}
+
+fn checked_plain_tally_weight(
+    units: u128,
+    duration_blocks: u64,
+    conviction_step_blocks: u64,
+    max_conviction: u64,
+) -> Result<u128, crate::Error> {
+    let base = integer_sqrt_u128(units);
+    let step = conviction_step_blocks.max(1);
+    let factor = (u128::from(duration_blocks / step) + 1).min(u128::from(max_conviction));
+    base.checked_mul(factor).ok_or_else(tally_overflow_error)
+}
+
+fn tally_overflow_error() -> crate::Error {
+    crate::routing::conversion_error("governance tally arithmetic overflow".into())
 }
 
 fn integer_sqrt_u128(n: u128) -> u128 {
@@ -2023,12 +2059,36 @@ pub struct GovernedContractResponse {
     pub found: bool,
     /// Canonical public contract address queried.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Consensus-persisted non-signing account authority for the active contract.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_subject_account: Option<String>,
     /// Dataspace alias derived from the contract address, when known.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub dataspace: Option<String>,
     /// Active code hash bound to the contract address, when present.
     #[norito(skip_serializing_if = "Option::is_none")]
     pub code_hash_hex: Option<String>,
+    /// Authenticated ABI hash embedded in the exact active artifact.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub abi_hash_hex: Option<String>,
+    /// Sorted, unique transaction and read-only entrypoints exposed to applications.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub public_entrypoints: Option<Vec<String>>,
+}
+
+fn governed_contract_invariant(message: impl Into<String>) -> crate::Error {
+    crate::Error::Query(iroha_data_model::ValidationFail::InternalError(
+        message.into(),
+    ))
+}
+
+fn is_canonical_public_entrypoint_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    (1..=128).contains(&bytes.len())
+        && bytes[0].is_ascii_lowercase()
+        && bytes[1..]
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'_')
 }
 
 /// GET /v1/gov/contracts/{contract_address} — read the active governance binding for a contract.
@@ -2065,19 +2125,122 @@ pub async fn handle_gov_contract_get(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    let code_hash_hex = state
-        .world_view()
+    let view = state.view();
+    let active_code_hash = view
+        .world()
         .contract_instances()
         .get(&contract_address)
-        .map(|hash| {
-            let bytes: [u8; 32] = (*hash).into();
-            hex::encode(bytes)
-        });
+        .copied();
+    let Some(active_code_hash) = active_code_hash else {
+        return Ok(JsonBody(GovernedContractResponse {
+            found: false,
+            contract_address,
+            contract_subject_account: None,
+            dataspace: Some(dataspace),
+            code_hash_hex: None,
+            abi_hash_hex: None,
+            public_entrypoints: None,
+        }));
+    };
+
+    let record =
+        iroha_core::smartcontracts::code::fetch_bound_contract_record(&view, &contract_address)
+            .ok_or_else(|| {
+                governed_contract_invariant(
+                    "active contract has incomplete code, manifest, alias, or subject bindings",
+                )
+            })?;
+    if record.contract_address != contract_address || record.code_hash != active_code_hash {
+        return Err(governed_contract_invariant(
+            "active contract record disagrees with its world-state binding",
+        ));
+    }
+
+    let verified = ivm::verify_contract_artifact(&record.code_bytes).map_err(|error| {
+        governed_contract_invariant(format!(
+            "active contract artifact failed independent verification: {error}"
+        ))
+    })?;
+    let manifest_code_hash = record
+        .manifest
+        .code_hash
+        .ok_or_else(|| governed_contract_invariant("active contract manifest has no code_hash"))?;
+    let manifest_abi_hash = record
+        .manifest
+        .abi_hash
+        .ok_or_else(|| governed_contract_invariant("active contract manifest has no abi_hash"))?;
+    if verified.code_hash != active_code_hash || manifest_code_hash != active_code_hash {
+        return Err(governed_contract_invariant(
+            "active contract code hash does not match its stored artifact and manifest",
+        ));
+    }
+    if verified.abi_hash != manifest_abi_hash
+        || record.manifest.signature_payload() != verified.manifest.signature_payload()
+    {
+        return Err(governed_contract_invariant(
+            "active contract manifest does not match its authenticated artifact metadata",
+        ));
+    }
+    let provenance = record.manifest.provenance.as_ref().ok_or_else(|| {
+        governed_contract_invariant("active contract manifest has no signed provenance")
+    })?;
+    provenance
+        .signature
+        .verify(
+            &provenance.signer,
+            &record.manifest.signature_payload_bytes(),
+        )
+        .map_err(|_| {
+            governed_contract_invariant("active contract manifest provenance is invalid")
+        })?;
+
+    let code_hash_bytes: [u8; 32] = active_code_hash.into();
+    let abi_hash_bytes: [u8; 32] = manifest_abi_hash.into();
+    if code_hash_bytes.iter().all(|byte| *byte == 0) || abi_hash_bytes.iter().all(|byte| *byte == 0)
+    {
+        return Err(governed_contract_invariant(
+            "active contract exposes an invalid all-zero code or ABI hash",
+        ));
+    }
+
+    let mut public_entrypoints = verified
+        .manifest
+        .entrypoints
+        .as_ref()
+        .ok_or_else(|| governed_contract_invariant("active contract has no entrypoint manifest"))?
+        .iter()
+        .filter(|entrypoint| {
+            matches!(
+                entrypoint.kind,
+                EntryPointKind::Kotoage | EntryPointKind::View
+            )
+        })
+        .map(|entrypoint| entrypoint.name.clone())
+        .collect::<Vec<_>>();
+    if public_entrypoints.is_empty()
+        || public_entrypoints
+            .iter()
+            .any(|name| !is_canonical_public_entrypoint_name(name))
+    {
+        return Err(governed_contract_invariant(
+            "active contract has no canonical public entrypoints",
+        ));
+    }
+    public_entrypoints.sort();
+    if public_entrypoints.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(governed_contract_invariant(
+            "active contract advertises duplicate public entrypoints",
+        ));
+    }
+
     Ok(JsonBody(GovernedContractResponse {
-        found: code_hash_hex.is_some(),
+        found: true,
         contract_address,
+        contract_subject_account: Some(record.contract_subject.to_string()),
         dataspace: Some(dataspace),
-        code_hash_hex,
+        code_hash_hex: Some(hex::encode(code_hash_bytes)),
+        abi_hash_hex: Some(hex::encode(abi_hash_bytes)),
+        public_entrypoints: Some(public_entrypoints),
     }))
 }
 
@@ -2482,10 +2645,7 @@ pub async fn handle_gov_ballot_plain_with_policy(
     let instr = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: body.referendum_id,
         owner,
-        amount: body
-            .amount
-            .parse::<u128>()
-            .map_err(|_| crate::routing::conversion_error("invalid amount".into()))?,
+        amount: body.amount,
         duration_blocks: body.duration_blocks,
         direction: match body.direction.as_str() {
             "Aye" => 0,
@@ -2618,11 +2778,11 @@ pub async fn handle_gov_council_current(
 
     // Eligibility follows the configured parliament stake asset. The stake is
     // only an anti-Sybil floor; every qualifying account receives one draw.
-    let required_stake = iroha_primitives::numeric::Quantity::from(gov_cfg.parliament_min_stake);
+    let required_stake = &gov_cfg.parliament_min_stake;
     let mut elig: BTreeSet<iroha_data_model::account::AccountId> = BTreeSet::new();
     for (asset_id, balance) in world.assets().iter() {
         if asset_id.definition() == &gov_cfg.parliament_eligibility_asset_id
-            && balance.as_ref() >= &required_stake
+            && balance.as_ref() >= required_stake
         {
             elig.insert(asset_id.account().clone());
         }
@@ -3053,6 +3213,7 @@ mod tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
+        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         state::{
             GovernanceLockRecord, GovernanceLocksForReferendum, GovernanceProposalStatus,
             GovernanceReferendumMode, GovernanceReferendumRecord, GovernanceReferendumStatus,
@@ -3388,11 +3549,15 @@ mod tests {
                 norito::json!({ "referendum_id": "any" }),
             );
             let enact = Permission::new("CanEnactGovernance".to_string(), norito::json!({}));
+            let register_contract: Permission =
+                iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                    .into();
             let mut world_block = world.block();
             let mut world_tx = world_block.transaction_without_telemetry(LaneConfig::default(), 0);
             let _ = world_tx.add_account_permission(&authority, propose);
             let _ = world_tx.add_account_permission(&authority, ballot);
             let _ = world_tx.add_account_permission(&authority, enact);
+            let _ = world_tx.add_account_permission(&authority, register_contract);
             world_tx.apply();
             world_block.commit();
         }
@@ -3407,8 +3572,8 @@ mod tests {
         gov_cfg.bond_escrow_account = escrow.clone();
         gov_cfg.citizenship_escrow_account = escrow.clone();
         gov_cfg.slash_receiver_account = escrow.clone();
-        gov_cfg.min_bond_amount = 0;
-        gov_cfg.citizenship_bond_amount = 0;
+        gov_cfg.min_bond_amount = 0_u64.into();
+        gov_cfg.citizenship_bond_amount = 0_u64.into();
         gov_cfg.plain_voting_enabled = true;
         gov_cfg.conviction_step_blocks = 1;
         gov_cfg.max_conviction = 1;
@@ -3473,6 +3638,56 @@ mod tests {
         "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
             .parse()
             .expect("contract address")
+    }
+
+    fn install_governed_contract_for_test(
+        harness: &GovHarness,
+    ) -> (
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_crypto::Hash,
+    ) {
+        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GovernedReadFixture {
+    view fn balance() -> bool { return true; }
+    kotoage fn transfer() authorize("CanTransferGovernedFixture") {}
+}
+"#,
+            )
+            .expect("compile governed contract fixture");
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("verify governed contract fixture");
+        assert_eq!(
+            manifest.signature_payload(),
+            verified.manifest.signature_payload()
+        );
+        let signed_manifest = manifest.signed(&harness.authority_keypair);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            91,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("governed contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        let code_hash = register_code_bytes(&harness.authority, artifact, &mut transaction)
+            .expect("register governed contract bytes");
+        assert_eq!(code_hash, verified.code_hash);
+        register_manifest(&harness.authority, signed_manifest, &mut transaction)
+            .expect("register governed contract manifest");
+        activate_instance(
+            &harness.authority,
+            contract_address.clone(),
+            code_hash,
+            &mut transaction,
+        )
+        .expect("activate governed contract");
+        transaction.apply();
+        block.commit().expect("commit governed contract fixture");
+        (contract_address, code_hash)
     }
 
     fn sample_sccp_route_governance_action()
@@ -3542,6 +3757,7 @@ mod tests {
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions(instructions)
         .sign(harness.authority_keypair.private_key());
@@ -3612,11 +3828,12 @@ mod tests {
         let harness = mk_governance_harness(false);
         let instruction = InstructionBox::from(RegisterCitizen {
             owner: harness.authority.clone(),
-            amount: 0,
+            amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());
@@ -3667,11 +3884,12 @@ mod tests {
 
         let instruction = InstructionBox::from(RegisterCitizen {
             owner: harness.authority.clone(),
-            amount: 0,
+            amount: Quantity::zero(),
         });
         let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
             (*harness.chain_id).clone(),
             harness.authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .with_instructions([instruction])
         .sign(harness.authority_keypair.private_key());
@@ -4581,8 +4799,8 @@ mod tests {
                 ALICE_ID.clone(),
                 GovernanceLockRecord {
                     owner: ALICE_ID.clone(),
-                    amount: 9,
-                    slashed: 0,
+                    amount: 9_u64.into(),
+                    slashed: Quantity::zero(),
                     expiry_height: 100,
                     direction: 0,
                     duration_blocks: 4,
@@ -4600,6 +4818,62 @@ mod tests {
         let body = res.0;
         assert_eq!(body.approve, 9);
         assert_eq!(body.reject, 0);
+    }
+
+    #[tokio::test]
+    async fn gov_get_tally_rejects_accumulator_overflow() {
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query);
+        let mut cfg = state.gov.clone();
+        cfg.conviction_step_blocks = 1;
+        cfg.max_conviction = u64::MAX;
+        state.set_gov(cfg);
+
+        let rid = "rid-tally-overflow".to_string();
+        let other = AccountId::parse_encoded(ACCOUNT_OWNER_ALT)
+            .expect("alternate account id")
+            .into_account_id();
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        {
+            let mut block = state.block(header);
+            let mut tx = block.transaction();
+            tx.world.governance_referenda_mut().insert(
+                rid.clone(),
+                GovernanceReferendumRecord {
+                    h_start: 1,
+                    h_end: u64::MAX,
+                    status: GovernanceReferendumStatus::Open,
+                    mode: GovernanceReferendumMode::Plain,
+                },
+            );
+            let mut locks = GovernanceLocksForReferendum::default();
+            for owner in [ALICE_ID.clone(), other] {
+                locks.locks.insert(
+                    owner.clone(),
+                    GovernanceLockRecord {
+                        owner,
+                        amount: Quantity::from(u128::MAX),
+                        slashed: Quantity::zero(),
+                        expiry_height: u64::MAX,
+                        direction: 0,
+                        duration_blocks: u64::MAX - 1,
+                    },
+                );
+            }
+            tx.world.governance_locks_mut().insert(rid.clone(), locks);
+            tx.apply();
+            let iroha_core::state::StateBlock { world, .. } = block;
+            world.commit();
+        }
+
+        let err = handle_gov_get_tally(Arc::new(state), axum::extract::Path(rid))
+            .await
+            .expect_err("overflowing tally must fail");
+        assert!(
+            err.to_string()
+                .contains("governance tally arithmetic overflow")
+        );
     }
 
     #[tokio::test]
@@ -4627,6 +4901,177 @@ mod tests {
         let body = res.0;
         assert!(body.ok);
         assert_eq!(body.tx_instructions.len(), 1);
+    }
+
+    #[test]
+    fn governed_contract_entrypoint_names_are_closed_ascii_identifiers() {
+        for name in ["a", "balance", "transfer_2"] {
+            assert!(is_canonical_public_entrypoint_name(name), "{name}");
+        }
+        for name in [
+            "",
+            "Balance",
+            "2transfer",
+            "transfer-funds",
+            "transfer funds",
+            "tránsfer",
+            &"a".repeat(129),
+        ] {
+            assert!(!is_canonical_public_entrypoint_name(name), "{name}");
+        }
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_serializes_exact_inactive_shape() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            92,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("inactive contract address");
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("inactive governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize inactive response");
+        let object = value.as_object().expect("inactive response object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            ["found", "contract_address", "dataspace"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(false)));
+        assert_eq!(
+            object
+                .get("contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            object
+                .get("dataspace")
+                .and_then(norito::json::Value::as_str),
+            Some("universal")
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_verifies_real_artifact_and_exact_active_shape() {
+        let harness = mk_governance_harness(true);
+        let (contract_address, expected_code_hash) = install_governed_contract_for_test(&harness);
+        let response = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect("active governed contract read");
+        let value = norito::json::to_value(&response.0).expect("serialize active response");
+        let object = value.as_object().expect("active response object");
+        assert_eq!(
+            object.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            [
+                "found",
+                "contract_address",
+                "contract_subject_account",
+                "dataspace",
+                "code_hash_hex",
+                "abi_hash_hex",
+                "public_entrypoints",
+            ]
+            .into_iter()
+            .collect()
+        );
+        assert_eq!(object.get("found"), Some(&norito::json::Value::Bool(true)));
+        assert_eq!(
+            object
+                .get("contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            object
+                .get("contract_subject_account")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.subject_id().to_string().as_str())
+        );
+        assert_eq!(
+            object
+                .get("code_hash_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(hex::encode(<[u8; 32]>::from(expected_code_hash)).as_str())
+        );
+        assert_eq!(
+            object.get("public_entrypoints"),
+            Some(&norito::json!(["balance", "transfer"]))
+        );
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_rejects_incomplete_active_state() {
+        let harness = mk_governance_harness(true);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &harness.authority,
+            93,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("incomplete contract address");
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .bind_active_contract_subject_for_testing(
+                contract_address.clone(),
+                iroha_crypto::Hash::prehashed([0x44; 32]),
+            );
+        transaction.apply();
+        block.commit().expect("commit incomplete fixture");
+
+        let error = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect_err("incomplete active state must fail closed");
+        assert!(error.to_string().contains("incomplete code"));
+    }
+
+    #[tokio::test]
+    async fn governed_contract_read_rejects_removed_manifest_provenance() {
+        let harness = mk_governance_harness(true);
+        let (contract_address, code_hash) = install_governed_contract_for_test(&harness);
+        let mut manifest = harness
+            .state
+            .view()
+            .world()
+            .contract_manifests()
+            .get(&code_hash)
+            .cloned()
+            .expect("registered manifest");
+        manifest.provenance = None;
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = harness.state.block(header);
+        let mut transaction = block.transaction();
+        transaction
+            .world_mut_for_testing()
+            .contract_manifests_mut_for_testing()
+            .insert(code_hash, manifest);
+        transaction.apply();
+        block.commit().expect("commit corrupted manifest fixture");
+
+        let error = handle_gov_contract_get(
+            harness.state,
+            axum::extract::Path(contract_address.to_string()),
+        )
+        .await
+        .expect_err("unsigned active manifest must fail closed");
+        assert!(error.to_string().contains("signed provenance"));
     }
 
     #[tokio::test]
@@ -4704,7 +5149,7 @@ mod tests {
             chain_id: chain_id_str.clone(),
             referendum_id: proposal_id.clone(),
             owner: authority_str.clone(),
-            amount: "100".to_string(),
+            amount: 100_u64.into(),
             duration_blocks: 1,
             direction: "Aye".to_string(),
             private_key: None,
@@ -4737,7 +5182,7 @@ mod tests {
             .cloned()
             .expect("locks stored");
         let lock = locks.locks.get(&harness.authority).expect("authority lock");
-        assert_eq!(lock.amount, 100);
+        assert_eq!(lock.amount, Quantity::from(100_u64));
         assert_eq!(lock.direction, 0);
 
         let finalize = FinalizeDto {
@@ -4939,7 +5384,7 @@ mod tests {
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
             root_hint: Some(hex::encode([0u8; 32])),
             owner: Some(owner),
-            amount: Some("100".to_string()),
+            amount: Some(100_u64.into()),
             duration_blocks: Some(200),
             direction: Some("Aye".to_string()),
             nullifier: Some(hex::encode([0x11u8; 32])),
@@ -5115,7 +5560,7 @@ mod tests {
             envelope_b64: base64::engine::general_purpose::STANDARD.encode(&[1u8, 2, 3, 4]),
             root_hint: None,
             owner: Some(owner),
-            amount: Some("100".to_string()),
+            amount: Some(100_u64.into()),
             duration_blocks: Some(200),
             direction: None,
             nullifier: None,
@@ -5178,7 +5623,7 @@ mod tests {
             root_hint: Some([0xAA; 32]),
             owner: Some(owner.parse().expect("valid account id")),
             nullifier: Some([0x11; 32]),
-            amount: Some("200".to_string()),
+            amount: Some(200_u64.into()),
             duration_blocks: Some(256),
             direction: Some("Nay".to_string()),
         };
@@ -5290,7 +5735,7 @@ mod tests {
             root_hint: None,
             owner: Some(owner_canonical.parse().expect("valid account id")),
             nullifier: None,
-            amount: Some("200".to_string()),
+            amount: Some(200_u64.into()),
             duration_blocks: Some(256),
             direction: None,
         };

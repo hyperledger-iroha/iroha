@@ -1,30 +1,57 @@
 {
-  "schema": "iroha.kagemusha.peer_transport.v2",
-  "kind": "receive_request",
-  "norito_schema": "KagemushaRecipientPaymentRequestV2",
-  "archive_hex": "4e5254300000dbb6585e2e75a835bced19003aab7acd000100000000000000de8130dd3f67aeb50251",
-  "text": "PKK2R.TlJUMAAA27ZYXi51qDW87RkAOqt6zQABAAAAAAAAAN6BMN0_Z661AlE",
+  "schema": "iroha.kagemusha.peer_transport.v2.structural",
+  "purpose": "Native-independent profile-2 framing validation only; this one-byte body is not a semantically valid payment request and must not be passed to the typed Kagemusha adapter.",
+  "profile": 2,
+  "kind": 1,
+  "ipm_schema_version": 258,
+  "semantic_valid": false,
+  "norito": {
+    "type_name": "iroha_data_model::offline::model::KagemushaRecipientPaymentRequestV2",
+    "header_bytes": 40,
+    "padding_bytes": 8,
+    "payload_hex": "51",
+    "archive_bytes": 49,
+    "archive_hex": "4e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051"
+  },
+  "ipm1": {
+    "message_bytes": 133,
+    "canonical_hash_hex": "06dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e2783",
+    "wire_hash_hex": "f7d328c95d03028e0d5a98a806b548186c625e7368a24606742402da4fb6dbc8",
+    "encoded_hex": "49504d310100000201000102000000310000003106dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e2783f7d328c95d03028e0d5a98a806b548186c625e7368a24606742402da4fb6dbc84e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051"
+  },
   "qr": {
-    "chunk_size": 256,
-    "parity_group": 4,
-    "frames": [
-      "PKKQ1.S1EBALu6J7gkvW_mKvRoE04Tc9IAAAABAC4BAQQAAQAAAQABAAAAKbu6J7gkvW_mKvRoE04Tc9L3Ile8Baahf0wb7ZGckATmMK4Faw",
-      "PKKQ1.S1EBAbu6J7gkvW_mKvRoE04Tc9IAAAABAClOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUZiX9lk",
-      "PKKQ1.S1EBAru6J7gkvW_mKvRoE04Tc9IAAAABAQBOUlQwAADbtlheLnWoNbztGQA6q3rNAAEAAAAAAAAA3oEw3T9nrrUCUQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4vsCHg"
-    ]
+    "frame_count": 1,
+    "static_text": "IQR1:5C9SCAV50200V50%EV1756YBOE0/U1KDJ7%0659000100/203C96Y9V50200V50X500004100004101*0GOK65FMCAL%Q7O9H2I4VH%E76W93Q14/LD+IRUCEMIZ:4%EV1756YBOE0/U1KDJ7%0659QVDE.BBADG%8WUEAG0L3AEZRP+9.SA000PK2JAG%OAZ%47I6C72O+UV1E100000000000.40.EGT/R$4DX*M0000000000009FA*D9X3:"
   },
   "nfc": {
-    "aid": "F0504B45504B524E464301",
-    "safe_chunk_bytes": 220,
-    "write_apdus_hex": [
-      "8020000025010000003d67c2b6e61aef6d1f5e6b10692f58e4c864e988e98d164a43139a8e5b343e77bc",
-      "802100003d504b4b32522e546c4a554d41414132375a59586935317144573837526b414f7174367a5141424141414141414141414e36424d4e305f5a363631416c45",
-      "8022000000"
-    ]
+    "session_hex": "71717171717171717171717171717171",
+    "info_hex": "494e4631010100020100717171717171717171717171717171710000008506dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e2783f7d328c95d03028e0d5a98a806b548186c625e7368a24606742402da4fb6dbc810001000",
+    "read_request_apdu_hex": "80110000347171717171717171717171717171717106dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e27830000000085",
+    "read_request_response_hex": "49504d310100000201000102000000310000003106dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e2783f7d328c95d03028e0d5a98a806b548186c625e7368a24606742402da4fb6dbc84e5254300000136f80655378267532a71119f46e6f0a000100000000000000de8130dd3f67aeb502000000000000000051"
   },
   "nearby": {
-    "available": false,
-    "authenticated_transcript_required": true,
-    "envelope": "{\"contentType\":\"text/vnd.pk.kagemusha-v2.receive-request\",\"kind\":\"receive_request\",\"pairingChallenge\":\"nearby_pairing_stars\",\"payload\":\"UEtLMlIuVGxKVU1BQUEyN1pZWGk1MXFEVzg3UmtBT3F0NnpRQUJBQUFBQUFBQUFONkJNTjBfWjY2MUFsRQ\"}"
-  }
+    "session_hex": "71717171717171717171717171717171",
+    "request_hash_hex": "06dca27c778e514cd46d4b708ecd8bf039fb4cd70c7eadb09577644d924e2783",
+    "sender_certificate_hex": "01",
+    "receiver_certificate_hex": "02",
+    "sender_private_scalar": 3,
+    "receiver_private_scalar": 4,
+    "sender_nonce_repeat_byte": 115,
+    "receiver_nonce_repeat_byte": 116,
+    "sender_authentication_signature_hex": "11",
+    "receiver_authentication_signature_hex": "22",
+    "transcript_hash_hex": "2523261b11e34b586a9cb541a4c90deadfe6ed9bab1996e0788f6ae157800e1d",
+    "sender_record_hex": "49504e3101030002010071717171717171717171717171717171000000000000000000000095201f979966cefee98a09245f6aa2346ae939d0de30f35b3bea0d95bb75b52358bf5bf2eddadd2bc299037392d43252c36941acb74f44bf4150c7c52ce759a2b79b82dc6a4d33852320fe03a35408315f45e2ccbb25d3070dc22e6c212db134f37855c63b303813b246ac3f7955539e230516c20c2771ee2ff538c357ebe05de0871b17c7d4f995b65b820aae06f5df445c09417da7"
+  },
+  "required_rejections": [
+    "bare_or_wrong_schema_hash",
+    "seven_or_nine_padding_bytes",
+    "nonzero_padding",
+    "checksum_mismatch",
+    "flags_other_than_compact_length",
+    "compression_other_than_none",
+    "empty_payload",
+    "trailing_bytes",
+    "kind_schema_mismatch"
+  ]
 }

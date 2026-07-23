@@ -254,6 +254,7 @@ impl Signature {
             crate::PrivateKeyInner::Secp256k1(sk) => {
                 secp256k1::EcdsaSecp256k1Sha256::try_sign(payload, sk)?
             }
+            #[cfg(feature = "pqc")]
             crate::PrivateKeyInner::MlDsa(sk) => sk.try_sign(payload)?,
             #[cfg(feature = "gost")]
             crate::PrivateKeyInner::Gost { algorithm, secret } => {
@@ -348,6 +349,7 @@ impl Signature {
             PublicKeyFull::Secp256k1(pk) => {
                 secp256k1::EcdsaSecp256k1Sha256::verify(payload, &self.payload, pk)
             }
+            #[cfg(feature = "pqc")]
             PublicKeyFull::MlDsa(pk_bytes) => {
                 use pqcrypto_mldsa::mldsa65 as dilithium;
                 use pqcrypto_traits::sign::{DetachedSignature as _, PublicKey as _};
@@ -366,6 +368,8 @@ impl Signature {
                 }
                 Ok(())
             }
+            #[cfg(not(feature = "pqc"))]
+            PublicKeyFull::MlDsa(_) => Err(Error::BadSignature),
             #[cfg(feature = "gost")]
             PublicKeyFull::Gost { algorithm, key } => {
                 gost::verify(*algorithm, payload, &self.payload, key)

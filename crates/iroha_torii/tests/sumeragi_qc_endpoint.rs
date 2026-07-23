@@ -12,9 +12,10 @@ use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::{
     BlockHeader,
     consensus_v2::{
-        BlockSubject, ConsensusRound, ExecutionCommitment, GlobalPhase, HeightContext,
-        HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef, SumeragiV2BodyState,
-        SumeragiV2Status, SumeragiV2StatusPhase,
+        BlockSubject, ConsensusMode, ConsensusRound, DualQuorum, ExecutionCommitment, GlobalPhase,
+        HeightContext, HeightContextId, PROTOCOL_VERSION, QuorumCertificateRef,
+        SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
+        SumeragiV2StatusPhase,
     },
 };
 use iroha_torii::SumeragiV2QcResponse;
@@ -51,12 +52,14 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
         block_hash: HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(b"block")),
         payload_hash: Hash::new(b"payload"),
     };
+    let round = ConsensusRound {
+        context_id,
+        height: 42,
+        view: 3,
+    };
     let certificate = QuorumCertificateRef {
-        round: ConsensusRound {
-            context_id,
-            height: 42,
-            view: 3,
-        },
+        round,
+        proposal_round: round,
         phase: GlobalPhase::Prepare,
         subject,
         execution_commitment: ExecutionCommitment::without_topups(
@@ -85,6 +88,19 @@ fn status_fixture() -> (SumeragiV2Status, QuorumCertificateRef) {
             pending_persistence_id: None,
             last_committed_height: 41,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
         },
         certificate,
     )

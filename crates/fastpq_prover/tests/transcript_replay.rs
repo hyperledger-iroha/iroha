@@ -1,7 +1,7 @@
 //! V1 transcript regression fixtures.
 
 #[cfg(feature = "fastpq-gpu")]
-use std::{env, fs, path::Path};
+use std::{fs, path::Path};
 
 #[cfg(feature = "fastpq-gpu")]
 use fastpq_prover::{
@@ -18,13 +18,18 @@ use iroha_data_model::{
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
 #[cfg(feature = "fastpq-gpu")]
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::Quantity;
 #[cfg(feature = "fastpq-gpu")]
 use norito::core::to_bytes;
 #[cfg(feature = "fastpq-gpu")]
 use norito::to_bytes as norito_bytes;
 #[cfg(feature = "fastpq-gpu")]
 const FIXTURE_NAME: &str = "stage4_balanced_preview.bin";
+
+#[cfg(feature = "fastpq-gpu")]
+mod common;
+#[cfg(feature = "fastpq-gpu")]
+use common::fixture_update_requested;
 
 #[cfg(feature = "fastpq-gpu")]
 fn annotate_batch(batch: &mut TransitionBatch) {
@@ -162,7 +167,7 @@ fn v1_preview_fixture_verifies_transcript() {
     let batch = preview_fixture_batch(64);
     let path = fixture_path();
 
-    if env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
+    if fixture_update_requested() {
         let prover = Prover::canonical("fastpq-lane-balanced").expect("prover");
         let proof = prover.prove(&batch).expect("proof");
         let encoded = to_bytes(&proof).expect("encode proof");

@@ -134,6 +134,132 @@ callers. A host must choose cumulative budgets with enough headroom for
 temporary alignment copies and container metadata; accounting is intentionally
 conservative and may charge both a declared field body and a temporary copy.
 
+## Transaction Payload Layout
+
+`TransactionPayload` is an eight-field canonical struct. Its fields are encoded
+in this exact order, with the active per-field length-prefix rules:
+
+```text
+chain
+authority
+creation_time_ms
+instructions
+time_to_live_ms
+nonce
+fee_payment
+metadata
+```
+
+`fee_payment` is required; it is not an optional extension and it precedes
+`metadata` on wire. It contains either an authority payer or one exact sponsor
+program and immutable revision, followed by canonically ordered charge limits
+and the optional positive executable gas bound. The retired transaction
+metadata keys `fee_sponsor`, `gas_asset_id`, and `gas_limit` are not alternate
+encodings of this field and are rejected by transaction construction and
+admission. SDK encoders and fixture exporters must use this eight-field layout;
+the former seven-field payload is not a supported compatibility format.
+
+The `instructions` field contains the `Executable` enum. Its canonical variant
+tags are stable and append-only:
+
+```text
+0  Instructions(ConstVec<InstructionBox>)
+1  ContractCall(ContractInvocation)
+2  Ivm(IvmBytecode)
+3  IvmProved(IvmProved)
+4  Batch(ConstVec<ExecutableBatchItem>)
+```
+
+`Batch` is the flat ordered form for atomically interleaving native ISIs and
+deployed-contract calls. Each `ExecutableBatchItem` uses tag `0` for
+`Instruction(InstructionBox)` and tag `1` for
+`ContractCall(ContractInvocation)`. Raw IVM bytecode and nested batches are not
+batch-item variants. Nodes reject an empty `Batch`; SDKs should reject one
+before signing. Existing instruction-only transactions continue to use
+`Executable` tag `0`, so adding the mixed form does not rewrite their canonical
+bytes. The append-only variant is advertised by `DATA_MODEL_VERSION = 3`.
+
+Admission schedules a mixed batch as one global live-state barrier. Items run
+in canonical input order against the same transaction view, and failure of any
+item rolls back every staged state change. A signed transaction containing a
+contract-call item binds one gas limit in `fee_payment`; explicit native-ISI gas
+and contract-call gas consume that shared limit, and fee settlement happens
+once for the transaction rather than once per item. Trigger actions may store
+the same `Batch` form. One trigger invocation executes the items atomically and
+shares its deterministic trigger gas budget across the complete sequence.
+
+## Sumeragi v2 Consensus Evidence Layout
+
+Sumeragi v2 votes and quorum certificates authenticate two distinct rounds:
+the round in which validators issued the vote and the immutable round in which
+the proposal body originated. The first-release canonical struct field order
+is:
+
+```text
+Vote:
+round
+proposal_round
+phase
+subject
+execution_commitment
+signer
+signature
+
+QuorumCertificateRef:
+round
+proposal_round
+phase
+subject
+execution_commitment
+
+QuorumCertificate:
+round
+proposal_round
+phase
+subject
+execution_commitment
+signers
+aggregate_signature
+
+SumeragiV2VoteQuorumStatus:
+round
+proposal_round
+subject
+execution_commitment
+signer_count
+signed_power
+min_signers
+total_power
+
+SumeragiV2OutboundIntentStatus:
+kind
+round
+proposal_round
+subject
+execution_commitment
+stage
+```
+
+`proposal_round` is mandatory and is included in the vote signature preimage.
+For Prepare evidence it must equal `round`. For Commit evidence it must use the
+same context and height and may name an earlier view, but never a later one.
+Body requests, durable manifests, validation receipts, finality artifacts, and
+application recovery bind exactly to `proposal_round`; they must not infer it
+from a local lock or substitute the Commit certification round. The unreleased
+Vote/QC layout without this field has no decoder or compatibility fallback.
+Liveness vote-quorum rows carry the same mandatory origin. Outbound proposal,
+Prepare-vote, Commit-vote, Prepare-QC, and Commit-QC intents carry
+`Some(proposal_round)`; timeout-vote and timeout-certificate intents carry
+`None`. This status field is diagnostic, but it obeys the same context, height,
+and non-future-origin rules as the authenticated evidence it describes.
+
+The successor [`HeightContext`](crates/iroha_data_model/src/block/consensus_v2.rs)
+identity projection also includes the complete parent `proposal_round`. It
+continues to exclude only the parent CommitQC's later certification view,
+signer subset, and aggregate signature. Consequently nodes that learned the
+same proposal through different later-view certificates derive one successor
+context, while origin-distinct parent decisions cannot alias.
+
 ## Hardware Acceleration Validation
 
 Norito hardware acceleration is performance-only. Accelerated paths must either

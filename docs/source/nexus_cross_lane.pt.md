@@ -42,8 +42,8 @@ Os payloads canonicos vivem em `crates/iroha_data_model/src/block/consensus.rs`.
 ### `LaneSettlementReceipt`
 
 - `source_id` - hash de transacao ou id fornecido pelo caller.
-- `local_amount_micro` - debito do token de gas do dataspace.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` - entradas deterministicas do livro XOR e a margem de seguranca por recibo (`due - after haircut`).
+- `local_amount` - debito do token de gas do dataspace.
+- `xor_due` / `xor_after_haircut` / `xor_variance` - entradas deterministicas do livro XOR e a margem de seguranca por recibo (`due - after haircut`).
 - `timestamp_ms` - timestamp UTC em milissegundos capturado durante o settlement.
 
 Os recibos herdam as regras de cotacao deterministicas de `SettlementEngine` e sao agregados dentro de cada `LaneBlockCommitment`.
@@ -61,7 +61,7 @@ Metadados opcionais que registram os parametros usados na cotacao:
 Resumo por lane armazenado com cada bloco:
 
 - Cabecalho: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- Totais: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- Totais: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - `swap_metadata` opcional.
 - Vetor `receipts` ordenado.
 
@@ -179,7 +179,7 @@ O merge ring DEVE aplicar o seguinte antes de aceitar um compromisso de lane:
   totais de settlement expostos acima. As definicoes de alertas devem paginar quando:
   - `nexus_scheduler_dataspace_age_slots` viola a politica.
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` aumenta de forma persistente.
-  - `total_xor_variance_micro` desvia de normas historicas.
+  - `total_xor_variance` desvia de normas historicas.
 - **Bundles de evidencia:**  
   Cada release deve anexar exportacoes de `LaneBlockCommitment`, snapshots de Grafana/Alertmanager
   e manifests de DA relay sob `artifacts/nexus/cross-lane/<date>/`. O bundle se torna o conjunto

@@ -28,6 +28,8 @@ public final class SumeragiV2WireFixtureTests {
               "proposal",
               "vote",
               "quorum_certificate",
+              "commit_vote_later_view",
+              "commit_quorum_certificate_later_view",
               "timeout_vote",
               "timeout_certificate",
               "payload_manifest",
@@ -36,6 +38,13 @@ public final class SumeragiV2WireFixtureTests {
               "certified_body_response",
               "commit_certificate_request",
               "commit_certificate_response"));
+
+  @Test
+  public void unsafeProposalIgnoreReasonDecodesWireDiscriminantEleven() {
+    assertEquals(
+        SumeragiV2Wire.IgnoreReason.UNSAFE_PROPOSAL,
+        SumeragiV2Wire.IgnoreReason.decode(new byte[] {11, 0, 0, 0}));
+  }
 
   @Test
   public void rustCanonicalMessageFixturesRoundtrip() throws Exception {
@@ -49,6 +58,39 @@ public final class SumeragiV2WireFixtureTests {
       assertArrayEquals(row.name, encoded, decoded.encode());
     }
     assertEquals(EXPECTED_MESSAGE_NAMES, names);
+  }
+
+  @Test
+  public void laterViewCommitFixturesPreserveProposalOrigin() throws Exception {
+    SumeragiV2Wire.ConsensusPayload.VoteMessage votePayload =
+        (SumeragiV2Wire.ConsensusPayload.VoteMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "commit_vote_later_view").hex))
+                .payload;
+    SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage certificatePayload =
+        (SumeragiV2Wire.ConsensusPayload.QuorumCertificateMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(
+                        fixtureRow("message", "commit_quorum_certificate_later_view").hex))
+                .payload;
+    SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage responsePayload =
+        (SumeragiV2Wire.ConsensusPayload.CommitCertificateResponseMessage)
+            SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(
+                    hexBytes(fixtureRow("message", "commit_certificate_response").hex))
+                .payload;
+
+    SumeragiV2Wire.Vote vote = votePayload.value;
+    SumeragiV2Wire.QuorumCertificate certificate = certificatePayload.value;
+    assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, vote.phase);
+    assertEquals(9L, vote.round.view);
+    assertEquals(1L, vote.proposalRound.view);
+    assertEquals(vote.round.contextId, vote.proposalRound.contextId);
+    assertEquals(vote.round.height, vote.proposalRound.height);
+    assertEquals(vote.round, certificate.round);
+    assertEquals(vote.proposalRound, certificate.proposalRound);
+    assertEquals(vote.subject, certificate.subject);
+    assertEquals(vote.executionCommitment, certificate.executionCommitment);
+    assertEquals(certificate.reference(), responsePayload.value.certificate.reference());
   }
 
   @Test
@@ -69,6 +111,8 @@ public final class SumeragiV2WireFixtureTests {
       throw new AssertionError("timeout vote omitted its highest PrepareQC");
     }
     assertArrayEquals(preparePayload.value.encode(), embeddedPrepare.encode());
+    assertEquals(embeddedPrepare.round, embeddedPrepare.proposalRound);
+    assertEquals(embeddedPrepare.proposalRound, embeddedPrepare.reference().proposalRound);
     assertEquals(Arrays.asList(0L, 1L, 2L), embeddedPrepare.signers);
     assertEquals(48, embeddedPrepare.aggregateSignature().length);
 
@@ -77,6 +121,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.QuorumCertificate changedPrepare =
         new SumeragiV2Wire.QuorumCertificate(
             embeddedPrepare.round,
+            embeddedPrepare.proposalRound,
             embeddedPrepare.phase,
             embeddedPrepare.subject,
             embeddedPrepare.executionCommitment,
@@ -136,6 +181,8 @@ public final class SumeragiV2WireFixtureTests {
             SumeragiV2Wire.ConsensusMessageV2.decodeCanonical(hexBytes(responseMessage.hex)).payload;
     SumeragiV2Wire.CommitCertificateResponse response = responsePayload.value;
     assertEquals(SumeragiV2Wire.GlobalPhase.COMMIT, response.certificate.phase);
+    assertEquals(9L, response.certificate.round.view);
+    assertEquals(1L, response.certificate.proposalRound.view);
     assertEquals(48, response.signature().length);
     assertEquals(response.requestHash, request.requestHash());
     response.validateAgainst(request);
@@ -198,6 +245,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.QuorumCertificate changedSubjectCertificate =
         new SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
+            response.certificate.proposalRound,
             response.certificate.phase,
             changedSubject,
             response.certificate.executionCommitment,
@@ -224,6 +272,7 @@ public final class SumeragiV2WireFixtureTests {
     SumeragiV2Wire.QuorumCertificate changedExecutionCertificate =
         new SumeragiV2Wire.QuorumCertificate(
             response.certificate.round,
+            response.certificate.proposalRound,
             response.certificate.phase,
             response.certificate.subject,
             changedExecutionCommitment,
@@ -322,9 +371,10 @@ public final class SumeragiV2WireFixtureTests {
         SumeragiV2Wire.SumeragiV2Status.decodeCanonical(encoded);
     assertArrayEquals(encoded, decoded.encode());
     assertEquals(SumeragiV2Wire.PROTOCOL_VERSION, decoded.protocolVersion);
+    assertEquals(false, decoded.restartRequired);
     assertEquals(1L, decoded.height);
     assertEquals(3L, decoded.view);
-    assertEquals(SumeragiV2Wire.StatusPhase.PREPARE, decoded.phase);
+    assertEquals(SumeragiV2Wire.StatusPhase.COMMIT, decoded.phase);
     assertEquals(2L, decoded.leader);
     assertEquals(SumeragiV2Wire.BodyState.VALIDATED, decoded.bodyState);
     assertEquals(Long.valueOf(17L), decoded.pendingPersistenceId);
@@ -342,6 +392,32 @@ public final class SumeragiV2WireFixtureTests {
     assertEquals(3L, decoded.heightContext.quorum.minSigners);
     assertEquals(4L, decoded.heightContext.quorum.totalPower);
     assertEquals(null, decoded.lastCommitQc);
+    assertEquals(3L, decoded.liveness.generation);
+    assertEquals(1, decoded.liveness.prepareQuorums.size());
+    assertEquals(1, decoded.liveness.commitQuorums.size());
+    assertEquals(1L, decoded.liveness.prepareQuorums.get(0).round.view);
+    assertEquals(1L, decoded.liveness.prepareQuorums.get(0).proposalRound.view);
+    assertEquals(3L, decoded.liveness.commitQuorums.get(0).round.view);
+    assertEquals(1L, decoded.liveness.commitQuorums.get(0).proposalRound.view);
+    assertEquals(1, decoded.liveness.timeoutQuorums.size());
+    assertEquals(SumeragiV2Wire.OutboundIntentKind.COMMIT_VOTE,
+        decoded.liveness.outboundIntents.get(0).kind);
+    assertEquals(3L, decoded.liveness.outboundIntents.get(0).round.view);
+    assertEquals(1L, decoded.liveness.outboundIntents.get(0).proposalRound.view);
+    assertEquals(1, decoded.liveness.queues.size());
+    assertEquals(SumeragiV2Wire.QueueKind.EFFECT_DISPATCH,
+        decoded.liveness.queues.get(0).queue);
+    assertEquals(SumeragiV2Wire.LivenessBlocker.LOCAL_CONTROL_PENDING,
+        decoded.liveness.blocker);
+
+    // The fifth struct field follows four fixed-width fields and is the
+    // canonical one-byte restart_required boolean.
+    assertEquals(1, encoded[102]);
+    byte[] invalidBoolean = encoded.clone();
+    invalidBoolean[103] = 2;
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> SumeragiV2Wire.SumeragiV2Status.decodeCanonical(invalidBoolean));
   }
 
   @Test

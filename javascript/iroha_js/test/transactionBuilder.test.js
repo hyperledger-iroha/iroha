@@ -4,7 +4,12 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import {
   buildRegisterDomainTransaction,
+  buildExecutableBatchTransaction,
+  buildExecutableBatchTransactionPayload,
   buildTransaction,
+  buildTransactionPayload,
+  signQuotedTransactionPayload,
+  quoteAndSignTransaction,
   buildIvmProvedTransaction,
   submitIvmProvedContractCall,
   submitValidationFeeIvmProvedContractCall,
@@ -51,6 +56,7 @@ import {
   hashSignedTransaction,
   hashSignedTransactionPayload,
   hashInstructionBatch,
+  feePaymentIntentToNoritoJson,
 } from "../src/transaction.js";
 import {
   buildBurnAssetInstruction,
@@ -83,6 +89,15 @@ const AUTHORITY_ID_INPUT = i105FromEd25519PublicKeyHex(
   AUTHORITY_PUBLIC_KEY_HEX,
 );
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const AUTHORITY_FEE_PAYMENT = Object.freeze({
+  payer: "authority",
+  chargeLimits: Object.freeze([]),
+});
+const IVM_AUTHORITY_FEE_PAYMENT = Object.freeze({
+  payer: "authority",
+  chargeLimits: Object.freeze([]),
+  gasLimit: 1_000,
+});
 const ZK_IVM_BYTECODE_BASE64 = Buffer.from([
   0x49, 0x56, 0x4d, 0x00,
   0x01, 0x01, 0x01, 0x00,
@@ -226,6 +241,7 @@ function buildSampleRegisterDomain(additionalOptions = {}) {
   return buildRegisterDomainTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     domainId: "garden_of_live_flowers.sora",
     metadata: { key: "value" },
     creationTimeMs: 1_700_000_000_000,
@@ -327,6 +343,7 @@ test("buildTransaction normalizes instruction objects", () => {
         chainId,
         authority,
         instructions,
+        feePaymentJson,
         metadataPayload,
         creationTimeMs,
         ttlMs,
@@ -338,6 +355,7 @@ test("buildTransaction normalizes instruction objects", () => {
           chainId,
           authority,
           instructions,
+          feePaymentJson,
           metadataPayload,
           creationTimeMs,
           ttlMs,
@@ -352,6 +370,7 @@ test("buildTransaction normalizes instruction objects", () => {
       const built = buildTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         instructions: [instruction],
         metadata: { tag: "value" },
         creationTimeMs: 10,
@@ -373,11 +392,351 @@ test("buildTransaction normalizes instruction objects", () => {
   assert.equal(call.chainId, "test-chain");
   assert.equal(call.authority, AUTHORITY_ID);
   assert.deepEqual(call.instructions, [JSON.stringify(instruction)]);
+  assert.deepEqual(JSON.parse(call.feePaymentJson), {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: null },
+  });
   assert.equal(call.metadataPayload, JSON.stringify({ tag: "value" }));
   assert.equal(call.creationTimeMs, 10);
   assert.equal(call.ttlMs, 20);
   assert.equal(call.nonce, 5);
   assert.equal(call.privateKeyAlgorithm, "secp256k1");
+});
+
+test("mixed executable batch builder forwards ordered copied entries", () => {
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "2",
+  });
+  const expectedCodeHash = Buffer.alloc(32, 0x41);
+  const argumentsBytes = Uint8Array.from([0x4b, 0x4f, 0x54, 0x4f]);
+  const captures = [];
+  const fakeResult = {
+    signed_transaction: Buffer.from([0x04, 0x01]),
+    hash: Buffer.alloc(32, 0xab),
+  };
+  withNativeBinding(
+    {
+      buildExecutableBatchTransaction: (...args) => {
+        captures.push(args);
+        return fakeResult;
+      },
+    },
+    () => {
+      const result = buildExecutableBatchTransaction({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        entries: [
+          { kind: "instruction", instruction },
+          {
+            kind: "contractCall",
+            contractAddress:
+              "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            expectedCodeHash,
+            entrypoint: "run",
+            arguments: argumentsBytes,
+          },
+          { kind: "instruction", instruction },
+        ],
+        feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(result.signedTransaction, fakeResult.signed_transaction);
+      assert.deepEqual(result.hash, fakeResult.hash);
+    },
+  );
+  expectedCodeHash.fill(0);
+  argumentsBytes.fill(0);
+
+  assert.equal(captures.length, 1);
+  const entries = captures[0][2].map((entry) => JSON.parse(entry));
+  assert.deepEqual(entries.map(({ kind }) => kind), [
+    "instruction",
+    "contractCall",
+    "instruction",
+  ]);
+  assert.equal(entries[1].expectedCodeHash, "41".repeat(32).toUpperCase());
+  assert.deepEqual(entries[1].arguments, [0x4b, 0x4f, 0x54, 0x4f]);
+  assert.equal(JSON.parse(captures[0][3]).value.gas_limit, 1000);
+});
+
+test("mixed executable batch draft and validation reject missing requirements", () => {
+  const call = {
+    kind: "contractCall",
+    contractAddress:
+      "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+    expectedCodeHash: Buffer.alloc(32, 0x41),
+    entrypoint: "run",
+  };
+  withNativeBinding(
+    {
+      buildExecutableBatchTransactionPayload: (...args) => ({
+        payload_json: JSON.stringify({ instructions: { Batch: [] } }),
+        payload_bytes: Buffer.from([4]),
+        payload_hash: Buffer.alloc(32, 5),
+        args,
+      }),
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [call],
+            feePayment: AUTHORITY_FEE_PAYMENT,
+          }),
+        /gasLimit is required/u,
+      );
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [],
+            feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+          }),
+        /non-empty array/u,
+      );
+      assert.throws(
+        () =>
+          buildExecutableBatchTransactionPayload({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            entries: [{ ...call, expectedCodeHash: Buffer.alloc(31) }],
+            feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+          }),
+        /exactly 32 bytes/u,
+      );
+      for (const contractAddress of [
+        "abc",
+        call.contractAddress.toUpperCase(),
+        `${call.contractAddress.slice(0, -1)}p`,
+        "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+        "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+      ]) {
+        assert.throws(
+          () =>
+            buildExecutableBatchTransactionPayload({
+              chainId: "test-chain",
+              authority: AUTHORITY_ID_INPUT,
+              entries: [{ ...call, contractAddress }],
+              feePayment: IVM_AUTHORITY_FEE_PAYMENT,
+            }),
+          /contractAddress/u,
+        );
+      }
+    },
+  );
+});
+
+test("quote-to-sign helpers preserve the exact unsigned payload", () => {
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "2",
+  });
+  const payload = {
+    chain: "test-chain",
+    authority: AUTHORITY_ID,
+    creation_time_ms: 10,
+    instructions: { Instructions: [instruction] },
+    time_to_live_ms: 20,
+    nonce: 5,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+    metadata: {},
+  };
+  const payloadJson = JSON.stringify(payload);
+  const draftCaptures = [];
+  const signCaptures = [];
+  withNativeBinding(
+    {
+      buildTransactionPayload: (...args) => {
+        draftCaptures.push(args);
+        return {
+          payload_json: payloadJson,
+          payload_bytes: Buffer.from([0x10, 0x11]),
+          payload_hash: Buffer.alloc(32, 0x12),
+        };
+      },
+      signQuotedTransactionPayload: (...args) => {
+        signCaptures.push(args);
+        return {
+          signed_transaction: Buffer.from([0x20, 0x21]),
+          hash: Buffer.alloc(32, 0x22),
+        };
+      },
+    },
+    () => {
+      const draft = buildTransactionPayload({
+        chainId: "test-chain",
+        authority: AUTHORITY_ID_INPUT,
+        instructions: [instruction],
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        metadata: {},
+        creationTimeMs: 10,
+        ttlMs: 20,
+        nonce: 5,
+      });
+      assert.deepEqual(draft.payload, payload);
+      assert.equal(draft.payloadJson, payloadJson);
+      const quotedIntent = {
+        payer: "authority",
+        value: {
+          charge_limits: [
+            {
+              kind: { kind: "nexus", value: null },
+              asset_definition_id: ASSET_DEFINITION_ID,
+              max_amount: "3",
+            },
+          ],
+          gas_limit: null,
+        },
+      };
+      const signed = signQuotedTransactionPayload({
+        payload: draft,
+        quotedFeePayment: quotedIntent,
+        privateKey: PRIVATE_KEY,
+        privateKeyAlgorithm: "ed25519",
+      });
+      assert.deepEqual(signed.signedTransaction, Buffer.from([0x20, 0x21]));
+      assert.deepEqual(signed.hash, Buffer.alloc(32, 0x22));
+      assert.equal(signCaptures[0][0], payloadJson);
+      assert.deepEqual(JSON.parse(signCaptures[0][1]), quotedIntent);
+    },
+  );
+  assert.equal(draftCaptures.length, 1);
+  assert.equal(draftCaptures[0][0], "test-chain");
+  assert.equal(draftCaptures[0][1], AUTHORITY_ID);
+  assert.deepEqual(draftCaptures[0][2], [JSON.stringify(instruction)]);
+});
+
+test("quoteAndSignTransaction performs the guided exact-payload flow", async () => {
+  const instruction = buildMintAssetInstruction({
+    assetId: ASSET_ID_INPUT,
+    quantity: "1",
+  });
+  const payload = {
+    chain: "guided-chain",
+    authority: AUTHORITY_ID,
+    fee_payment: {
+      payer: "authority",
+      value: { charge_limits: [], gas_limit: null },
+    },
+  };
+  const quotedIntent = {
+    payer: "authority",
+    value: {
+      charge_limits: [
+        {
+          kind: { kind: "nexus", value: null },
+          asset_definition_id: ASSET_DEFINITION_ID,
+          max_amount: "1",
+        },
+      ],
+      gas_limit: null,
+    },
+  };
+  const calls = [];
+  await withNativeBindingAsync(
+    {
+      buildTransactionPayload: () => ({
+        payload_json: JSON.stringify(payload),
+        payload_bytes: Buffer.from([1]),
+        payload_hash: Buffer.alloc(32, 2),
+      }),
+      signQuotedTransactionPayload: (...args) => {
+        calls.push(["sign", ...args]);
+        return {
+          signed_transaction: Buffer.from([3]),
+          hash: Buffer.alloc(32, 4),
+        };
+      },
+    },
+    async () => {
+      const client = {
+        async quoteFees(draft, options) {
+          calls.push(["quote", draft, options]);
+          return { intent: quotedIntent, observation: {}, components: [], capacities: [] };
+        },
+      };
+      const result = await quoteAndSignTransaction(client, {
+        chainId: "guided-chain",
+        authority: AUTHORITY_ID_INPUT,
+        instructions: [instruction],
+        feePayment: AUTHORITY_FEE_PAYMENT,
+        privateKey: PRIVATE_KEY,
+      });
+      assert.deepEqual(result.signedTransaction, Buffer.from([3]));
+      assert.deepEqual(result.quote.intent, quotedIntent);
+    },
+  );
+  assert.equal(calls[0][0], "quote");
+  assert.equal(calls[0][2].canonicalAuth.accountId, AUTHORITY_ID_INPUT);
+  assert.equal(calls[1][0], "sign");
+  assert.equal(calls[1][1], JSON.stringify(payload));
+  assert.deepEqual(JSON.parse(calls[1][2]), quotedIntent);
+});
+
+test("feePaymentIntentToNoritoJson binds exact sponsor revision and limits", () => {
+  const programId = `${AUTHORITY_ID_INPUT}/wallet-onboarding`;
+  const parsed = JSON.parse(
+    feePaymentIntentToNoritoJson({
+      payer: "sponsor",
+      programId,
+      programRevision: "7",
+      chargeLimits: [
+        {
+          kind: "nexus",
+          assetDefinitionId: ASSET_DEFINITION_ID,
+          maxAmount: "1.25",
+        },
+      ],
+      gasLimit: "5000",
+    }),
+  );
+  assert.deepEqual(parsed, {
+    payer: "sponsor",
+    value: {
+      program_id: {
+        sponsor: AUTHORITY_ID_INPUT,
+        name: "wallet-onboarding",
+      },
+      program_revision: 7,
+      charge_limits: [
+        {
+          kind: { kind: "nexus", value: null },
+          asset_definition_id: ASSET_DEFINITION_ID,
+          max_amount: "1.25",
+        },
+      ],
+      gas_limit: 5000,
+    },
+  });
+});
+
+test("buildTransaction requires an explicit fee payment intent", () => {
+  withNativeBinding(
+    {
+      buildTransaction: () => {
+        throw new Error("native builder should not be called");
+      },
+    },
+    () => {
+      assert.throws(
+        () =>
+          buildTransaction({
+            chainId: "test-chain",
+            authority: AUTHORITY_ID_INPUT,
+            instructions: [{ Log: { level: "INFO", message: "hello" } }],
+            privateKey: PRIVATE_KEY,
+          }),
+        /feePayment must be a non-null object/i,
+      );
+    },
+  );
 });
 
 test("buildApplySccpRouteGovernanceInstruction wraps one exact closed action", () => {
@@ -412,6 +771,7 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
         chainId,
         authority,
         instructions,
+        feePaymentJson,
         metadataPayload,
         creationTimeMs,
         ttlMs,
@@ -422,6 +782,7 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
           chainId,
           authority,
           instructions: instructions.map((payload) => JSON.parse(payload)),
+          feePaymentJson,
           metadataPayload,
           creationTimeMs,
           ttlMs,
@@ -435,6 +796,7 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
       const built = buildApplySccpRouteGovernanceTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         action,
         metadata: { op: "apply-sccp-route-governance" },
         creationTimeMs: 1_700_000_000_000,
@@ -450,6 +812,7 @@ test("SCCP route governance transaction submits one typed atomic action", () => 
   assert.deepEqual(captures[0].instructions, [
     { ApplySccpRouteGovernance: { action } },
   ]);
+  assert.equal(JSON.parse(captures[0].feePaymentJson).payer, "authority");
   assert.deepEqual(JSON.parse(captures[0].metadataPayload), {
     op: "apply-sccp-route-governance",
   });
@@ -472,6 +835,7 @@ test("transaction helper wrappers forward privateKeyAlgorithm", () => {
         _chainId,
         _authority,
         _instructions,
+        _feePaymentJson,
         _metadataPayload,
         _creationTimeMs,
         _ttlMs,
@@ -487,6 +851,7 @@ test("transaction helper wrappers forward privateKeyAlgorithm", () => {
       buildMintAssetTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetHoldingId: ASSET_ID_INPUT,
         quantity: "2",
         privateKey: PRIVATE_KEY,
@@ -521,6 +886,7 @@ test("buildTransaction rejects empty instruction arrays", () => {
       buildTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         instructions: [],
         privateKey: PRIVATE_KEY,
       }),
@@ -559,6 +925,7 @@ test("buildTransaction rejects empty instruction arrays", () => {
         authority,
         provedPayload,
         attachmentPayload,
+        feePaymentJson,
         metadataPayload,
         creationTimeMs,
         ttlMs,
@@ -570,6 +937,7 @@ test("buildTransaction rejects empty instruction arrays", () => {
           authority,
           provedPayload,
           attachmentPayload,
+          feePaymentJson,
           metadataPayload,
           creationTimeMs,
           ttlMs,
@@ -583,9 +951,10 @@ test("buildTransaction rejects empty instruction arrays", () => {
       const built = buildIvmProvedTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: IVM_AUTHORITY_FEE_PAYMENT,
         proved,
         attachment,
-        metadata: { gas_limit: 1000 },
+        metadata: { purpose: "proof-test" },
         creationTimeMs: 10,
         ttlMs: 20,
         nonce: 5,
@@ -605,7 +974,8 @@ test("buildTransaction rejects empty instruction arrays", () => {
   assert.equal(call.authority, AUTHORITY_ID);
   assert.deepEqual(JSON.parse(call.provedPayload), proved);
   assert.deepEqual(JSON.parse(call.attachmentPayload), attachment);
-  assert.equal(call.metadataPayload, JSON.stringify({ gas_limit: 1000 }));
+  assert.equal(JSON.parse(call.feePaymentJson).value.gas_limit, 1_000);
+  assert.equal(call.metadataPayload, JSON.stringify({ purpose: "proof-test" }));
   assert.equal(call.creationTimeMs, 10);
   assert.equal(call.ttlMs, 20);
   assert.equal(call.nonce, 5);
@@ -624,6 +994,7 @@ test("buildIvmProvedTransaction rejects empty proved payload strings", () => {
           buildIvmProvedTransaction({
             chainId: "test-chain",
             authority: AUTHORITY_ID_INPUT,
+            feePayment: IVM_AUTHORITY_FEE_PAYMENT,
             proved: " ",
             attachment: {},
             privateKey: PRIVATE_KEY,
@@ -751,7 +1122,10 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
               privateKey: PRIVATE_KEY,
               vkRef: { backend: "halo2/ipa", name: "ivm-exec-v1" },
               contractAlias: "dlmm_router::dlmm.universal",
-              gasLimit: 5000,
+              feePayment: {
+                ...IVM_AUTHORITY_FEE_PAYMENT,
+                gasLimit: 5000,
+              },
               ...input,
             },
             options,
@@ -839,14 +1213,21 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
         { ...trusted, contractAddress: "tairac1attacker" },
         /exactly one of contractAddress or contractAlias/,
       ],
-      [{ ...trusted, gas_limit: 5000 }, /exactly one of gasLimit, gas_limit/],
       [
-        { ...trusted, gasAssetId: null, gas_asset_id: null },
-        /exactly one of gasAssetId, gas_asset_id/,
+        { ...trusted, fee_payment: IVM_AUTHORITY_FEE_PAYMENT },
+        /exactly one of feePayment, fee_payment/,
       ],
       [
-        { ...trusted, feeSponsor: null, fee_sponsor: null },
-        /exactly one of feeSponsor, fee_sponsor/,
+        { ...trusted, gasAssetId: null },
+        /gasAssetId is retired/,
+      ],
+      [
+        { ...trusted, feeSponsor: null },
+        /feeSponsor is retired/,
+      ],
+      [
+        { ...trusted, gasLimit: 5000 },
+        /gasLimit is retired/,
       ],
       [
         { ...trusted, creationTimeMs: 1, creation_time_ms: 1 },
@@ -906,7 +1287,13 @@ test("submitIvmProvedContractCall rejects code and proof substitution before sig
       [{ ...trusted, privateKeyAlgorithm: "attacker" }, /unsupported crypto algorithm/],
       [{ ...trusted, metadata: { contract_address: "attacker" } }, /reserved/],
       [{ ...trusted, payload: circularPayload }, /must be JSON-serializable/],
-      [{ ...trusted, gasLimit: 0 }, /positive|greater than zero/i],
+      [
+        {
+          ...trusted,
+          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 0 },
+        },
+        /gasLimit.*outside|non-zero/i,
+      ],
       [{ ...trusted, creationTimeMs: -1 }, /non-negative/i],
       [{ ...trusted, ttlMs: Number.NaN }, /integer/i],
       [{ ...trusted, nonce: 0 }, /positive|greater than zero/i],
@@ -1205,7 +1592,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
     // used by the overlay check must not change the verified binding.
     policyFixture.policy.ds_asset_id = CANONICAL_ASSET_ID_INPUT;
     policyFixture.policy.treasury_account_id = RELAY_ACCOUNT_ID_INPUT;
-    policyFixture.policy.fee_minor_units = 99;
+    policyFixture.policy.fee = "99";
     policyFixture.policy.exemption_classes.length = 0;
     return {
       ok: true,
@@ -1255,6 +1642,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
       authority,
       provedPayload,
       attachmentPayload,
+      feePaymentJson,
       metadataPayload,
       creationTimeMs,
       ttlMs,
@@ -1266,6 +1654,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
         authority,
         proved: JSON.parse(provedPayload),
         attachment: JSON.parse(attachmentPayload),
+        feePayment: JSON.parse(feePaymentJson),
         metadata: JSON.parse(metadataPayload),
         creationTimeMs,
         ttlMs,
@@ -1292,7 +1681,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
         contractAlias: "dlmm_router::dlmm.universal",
         entrypoint: "route_swap",
         payload: { amount: "7" },
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         metadata: { request_id: "swap-7" },
         validationFeePolicy: {
           signedPolicy: policyFixture.signedPolicy,
@@ -1321,7 +1710,6 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
     request_id: "swap-7",
     contract_address: "tairac1routerfixture",
     contract_entrypoint: "route_swap",
-    gas_limit: 5000,
     contract_alias: "dlmm_router::dlmm.universal",
     contract_payload: { amount: "7" },
     validation_fee_policy_version: 1,
@@ -1330,6 +1718,7 @@ test("submitIvmProvedContractCall snapshots policy inputs, proof-binds, and sign
   });
   assert.deepEqual(captures.signed.proved, proved);
   assert.deepEqual(captures.signed.attachment, attachment);
+  assert.equal(captures.signed.feePayment.value.gas_limit, 5000);
   assert.deepEqual(captures.signed.metadata, captures.deriveRequest.metadata);
   assert.deepEqual(captures.submitted, Buffer.from([0x03, 0x04]));
   assert.equal(captures.submitOptions.signal, submissionController.signal);
@@ -1409,7 +1798,7 @@ test("submitIvmProvedContractCall keeps a 4 MiB proof request below Torii's defa
           expectedCodeHashHex: hashes.codeHashHex,
           expectedArtifactSha256Hex: hashes.artifactSha256Hex,
           contractAlias: "dlmm_router::dlmm.universal",
-          gasLimit: 5000,
+          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         }),
       /stop after capturing the proof request/,
     );
@@ -1498,7 +1887,7 @@ async function submitBase64ValidationFeeOverlayFixture({
       expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
       expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
       contractAlias: "dlmm_router::dlmm.universal",
-      gasLimit: 5000,
+      feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
       validationFeePolicy: {
         signedPolicy: policyFixture.signedPolicy,
         feeInstructionIndex,
@@ -1614,7 +2003,7 @@ test("submitIvmProvedContractCall rejects a missing required transfer before pro
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
         entrypoint: "route_swap",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         validationFeePolicy: {
           signedPolicy: policyFixture.signedPolicy,
           qualifyingTransferCount: 1,
@@ -1711,7 +2100,7 @@ test("streamed __proto__ overlay cannot satisfy validation fee or reach signing"
           expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
           expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
           contractAlias: "dlmm_router::dlmm.universal",
-          gasLimit: 5000,
+          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
           validationFeePolicy: {
             signedPolicy: policyFixture.signedPolicy,
             qualifyingTransferCount: 1,
@@ -1813,7 +2202,7 @@ async function assertAmbiguousValidationFeeInstructionStopsSubmission(
           expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
           expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
           contractAlias: "dlmm_router::dlmm.universal",
-          gasLimit: 5000,
+          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
           validationFeePolicy: {
             signedPolicy: policyFixture.signedPolicy,
             qualifyingTransferCount: 1,
@@ -1992,7 +2381,7 @@ test("submitIvmProvedContractCall preserves generic non-policy overlay assertion
         expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         requiredOverlayTransfer: {
           sourceAssetHoldingId: CANONICAL_ASSET_ID_INPUT,
           quantity: "0.1",
@@ -2026,7 +2415,7 @@ test("submitValidationFeeIvmProvedContractCall requires exactly one policy inten
     expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
     expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
     contractAlias: "dlmm_router::dlmm.universal",
-    gasLimit: 5000,
+    feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
   };
 
   assert.throws(
@@ -2148,7 +2537,7 @@ test("submitIvmProvedContractCall rejects caller fee assertions that conflict wi
         expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         validationFeePolicy: {
           signedPolicy: policyFixture.signedPolicy,
           qualifyingTransferCount: 1,
@@ -2205,7 +2594,7 @@ test("submitIvmProvedContractCall rejects caller validation-fee metadata", async
         expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
         metadata: { validation_fee_policy_hash: "00".repeat(32) },
         validationFeePolicy: {
           signedPolicy: policyFixture.signedPolicy,
@@ -2295,7 +2684,7 @@ test("submitIvmProvedContractCall derives counts by coordinate and rejects unsup
           expectedCodeHashHex: ZK_IVM_CODE_HASH_HEX,
           expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
           contractAlias: "dlmm_router::dlmm.universal",
-          gasLimit: 5000,
+          feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
           validationFeePolicy: {
             signedPolicy: policyFixture.signedPolicy,
             qualifyingTransferCount: 1,
@@ -2428,7 +2817,7 @@ test("submitIvmProvedContractCall rejects conventional non-ZK deployed bytecode"
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
         entrypoint: "route_swap",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
       }),
     /not ZK mode/,
   );
@@ -2491,7 +2880,7 @@ test("submitIvmProvedContractCall rejects a prover payload that differs from der
         expectedArtifactSha256Hex: ZK_IVM_ARTIFACT_SHA256_HEX,
         contractAlias: "dlmm_router::dlmm.universal",
         entrypoint: "route_swap",
-        gasLimit: 5000,
+        feePayment: { ...IVM_AUTHORITY_FEE_PAYMENT, gasLimit: 5000 },
       }),
     /different from the authoritative derived payload/,
   );
@@ -2502,6 +2891,7 @@ test("buildMintAssetTransaction returns canonical hash", () => {
   const built = buildMintAssetTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     assetId: CANONICAL_ASSET_ID_INPUT,
     quantity: "10",
     privateKey: PRIVATE_KEY,
@@ -2517,6 +2907,7 @@ test("buildTransferAssetTransaction returns canonical hash", () => {
   const built = buildTransferAssetTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     sourceAssetId: CANONICAL_ASSET_ID_INPUT,
     quantity: "3",
     destinationAccountId: AUTHORITY_ID_INPUT,
@@ -2533,6 +2924,7 @@ test("buildTransferRwaTransaction returns canonical hash", () => {
   const built = buildTransferRwaTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     sourceAccountId: AUTHORITY_ID_INPUT,
     rwaId: RWA_ID,
     quantity: "3",
@@ -2564,6 +2956,7 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
           buildTransaction({
             chainId: "test-chain",
             authority: ` ${AUTHORITY_ID_INPUT}`,
+            feePayment: AUTHORITY_FEE_PAYMENT,
             instructions: [{ RegisterDomain: { id: "wonderland" } }],
             privateKey: PRIVATE_KEY,
           }),
@@ -2574,6 +2967,7 @@ baseTest("transaction builders reject padded authority and asset definition IDs 
           buildRegisterAssetDefinitionAndMintTransaction({
             chainId: "test-chain",
             authority: AUTHORITY_ID_INPUT,
+            feePayment: AUTHORITY_FEE_PAYMENT,
             assetDefinition: {
               assetDefinitionId: `${ASSET_DEFINITION_ID} `,
               spec: { scale: 0 },
@@ -2606,6 +3000,7 @@ test("buildRegisterRwaTransaction forwards canonical instruction payload", () =>
       buildRegisterRwaTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         rwa: {
           domain: "commodities.sora",
           quantity: "10.5",
@@ -2659,6 +3054,7 @@ test("buildRwaKeyValueTransactions forward canonical instruction payloads", () =
       buildSetRwaKeyValueTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         rwaId: RWA_ID,
         key: "grade",
         value: { origin: "AE", score: BigInt(9) },
@@ -2667,6 +3063,7 @@ test("buildRwaKeyValueTransactions forward canonical instruction payloads", () =
       buildRemoveRwaKeyValueTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         rwaId: RWA_ID,
         key: "grade",
         privateKey: PRIVATE_KEY,
@@ -2707,6 +3104,7 @@ test("buildMintAndTransferTransaction composes instructions in order", () => {
       const result = buildMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "6" },
         transfer: {
           quantity: "2",
@@ -2752,6 +3150,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "wonderland.sora" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "4" },
@@ -2807,6 +3206,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "7" },
@@ -2882,6 +3282,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction derives asset ids f
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           {
@@ -2911,6 +3312,7 @@ test("buildMintAndTransferTransaction returns canonical hash", () => {
   const built = buildMintAndTransferTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     mint: { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "8" },
     transfer: {
       sourceAssetId: CANONICAL_ASSET_ID_INPUT,
@@ -2930,6 +3332,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction returns canonical h
   const built = buildRegisterAssetDefinitionMintAndTransferTransaction({
     chainId: "test-chain",
     authority: AUTHORITY_ID_INPUT,
+    feePayment: AUTHORITY_FEE_PAYMENT,
     assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
     mint: { assetId: CANONICAL_ASSET_ID_INPUT, quantity: "4" },
     transfer: {
@@ -2966,6 +3369,7 @@ test("buildCreateKaigiTransaction composes Kaigi create instruction", () => {
       buildCreateKaigiTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         call: {
           id: { domainId: "wonderland.sora", callName: "weekly-sync" },
           host: AUTHORITY_ID_INPUT,
@@ -3023,6 +3427,7 @@ test("buildCreateKaigiTransaction preserves privacy artifacts", () => {
       buildCreateKaigiTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         call: {
           id: "wonderland.sora:private-room",
           host: AUTHORITY_ID_INPUT,
@@ -3064,6 +3469,7 @@ test("buildJoinKaigiTransaction normalizes binary fields", () => {
       buildJoinKaigiTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         join: {
           callId: "wonderland.sora:weekly-sync",
           participant: AUTHORITY_ID_INPUT,
@@ -3109,6 +3515,7 @@ test("buildRegisterKaigiRelayTransaction encodes hpke key", () => {
       buildRegisterKaigiRelayTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         relay: {
           relayId: relayIdInput,
           hpkePublicKey: Buffer.alloc(32, 0xaa),
@@ -3148,6 +3555,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
       buildProposeDeployContractTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         proposal: {
           contractAddress:
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
@@ -3183,6 +3591,7 @@ test("buildCastZkBallotTransaction encodes ballot", () => {
       buildCastZkBallotTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         ballot: {
           electionId: "ref-1",
           proof: Buffer.alloc(32, 0x01),
@@ -3211,6 +3620,7 @@ test("buildCastPlainBallotTransaction normalizes amount", () => {
       buildCastPlainBallotTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         ballot: {
           referendumId: "ref-2",
           owner: AUTHORITY_ID_INPUT,
@@ -3241,6 +3651,7 @@ test("buildEnactReferendumTransaction wraps enactment", () => {
       buildEnactReferendumTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         enactment: {
           referendumId: Buffer.alloc(32, 0x33),
           preimageHash: Buffer.alloc(32, 0x44),
@@ -3268,6 +3679,7 @@ test("buildFinalizeReferendumTransaction normalizes proposal id", () => {
       buildFinalizeReferendumTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         finalization: {
           referendumId: "ref-3",
           proposalId: Buffer.alloc(32, 0x55),
@@ -3298,6 +3710,7 @@ test("buildPersistCouncilForEpochTransaction wraps council", () => {
       buildPersistCouncilForEpochTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         record: {
           epoch: 1,
           members: [AUTHORITY_ID_INPUT],
@@ -3345,6 +3758,7 @@ test("buildRegisterSmartContractCodeTransaction wraps manifest instruction", () 
       const result = buildRegisterSmartContractCodeTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         manifest: {
           codeHash: Buffer.alloc(32, 0xaa),
           compilerFingerprint: "rustc",
@@ -3398,6 +3812,7 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
       const result = buildRegisterSmartContractBytesTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         codeHash: Buffer.alloc(32, 0xdd),
         code: codeBytes,
         privateKey: PRIVATE_KEY,
@@ -3429,6 +3844,7 @@ test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {
       buildRemoveSmartContractBytesTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         codeHash: Buffer.alloc(32, 0xaa),
         reason: "cleanup",
         privateKey: PRIVATE_KEY,
@@ -3876,6 +4292,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildRegisterZkAssetTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       registration: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         mode: "Hybrid",
@@ -3890,6 +4307,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildScheduleConfidentialPolicyTransitionTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       transition: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         newMode: "TransparentOnly",
@@ -3905,6 +4323,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildCancelConfidentialPolicyTransitionTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       cancellation: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         transitionId: Buffer.alloc(32, 0xbb),
@@ -3918,6 +4337,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildShieldTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       shield: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         fromAccountId: AUTHORITY_ID_INPUT,
@@ -3934,6 +4354,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildZkTransferTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       transfer: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         inputs: [Buffer.alloc(32, 0x10)],
@@ -3949,10 +4370,11 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildUnshieldTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       unshield: {
         assetDefinitionId: ASSET_DEFINITION_ID,
         destinationAccountId: AUTHORITY_ID_INPUT,
-        publicAmount: 3,
+        publicAmount: "3",
         inputs: [Buffer.alloc(32, 0x30)],
         proof,
         rootHint: Buffer.alloc(32, 0x40),
@@ -3966,6 +4388,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildCreateElectionTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       election: {
         electionId: "election-1",
         options: 2,
@@ -3984,6 +4407,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildSubmitBallotTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       ballot: {
         electionId: "election-1",
         ciphertext: Buffer.from("encrypted"),
@@ -3999,6 +4423,7 @@ test("confidential transaction builders wrap expected instruction payloads", () 
     buildFinalizeElectionTransaction({
       chainId: "test-chain",
       authority: AUTHORITY_ID_INPUT,
+      feePayment: AUTHORITY_FEE_PAYMENT,
       finalization: {
         electionId: "election-1",
         tally: [1n],
@@ -4051,6 +4476,16 @@ function withNativeBinding(binding, fn) {
   globalThis.__IROHA_NATIVE_BINDING__ = binding;
   try {
     return fn();
+  } finally {
+    globalThis.__IROHA_NATIVE_BINDING__ = previous;
+  }
+}
+
+async function withNativeBindingAsync(binding, fn) {
+  const previous = globalThis.__IROHA_NATIVE_BINDING__;
+  globalThis.__IROHA_NATIVE_BINDING__ = binding;
+  try {
+    return await fn();
   } finally {
     globalThis.__IROHA_NATIVE_BINDING__ = previous;
   }

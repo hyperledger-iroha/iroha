@@ -983,6 +983,9 @@ pub enum PorTrackerError {
     /// Durable auxiliary runtime checkpoint could not be committed.
     #[error("PoR runtime checkpoint failed: {0}")]
     RuntimeCheckpoint(String),
+    /// Exact provider-bond penalty arithmetic could not be represented.
+    #[error("PoR penalty arithmetic failed: {0}")]
+    PenaltyArithmetic(String),
     /// Challenge id is unknown to the tracker.
     #[error("unknown challenge id")]
     UnknownChallenge,

@@ -8,10 +8,14 @@ import java.security.KeyPair;
 import java.security.Signature;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import org.hyperledger.iroha.android.model.ContractInvocation;
 import org.hyperledger.iroha.android.model.Executable;
+import org.hyperledger.iroha.android.model.ExecutableBatchItem;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.InstructionBox;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.SigningException;
@@ -35,13 +39,14 @@ public final class TransactionBuilderTests {
     encodeAndSignWithExplicitSigner();
     encodeAndSignWithKeyManagerAlias();
     instructionsVariantRoundTrips();
+    mixedBatchBuilderAndSignerPreserveOrder();
     transactionPayloadRejectsPaddedIdsBeforeSigning();
     System.out.println("[IrohaAndroid] Transaction builder tests passed.");
   }
 
   private static void encodeAndSignWithExplicitSigner() throws Exception {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000002")
             .setAuthority(TestAccountIds.ed25519Authority(0x28))
             .setCreationTimeMs(1_735_000_001_234L)
@@ -77,7 +82,7 @@ public final class TransactionBuilderTests {
 
   private static void encodeAndSignWithKeyManagerAlias() throws Exception {
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 1L))
             .setChainId("00000003")
             .setAuthority(TestAccountIds.ed25519Authority(0x29))
             .setCreationTimeMs(1_735_000_111_000L)
@@ -120,7 +125,7 @@ public final class TransactionBuilderTests {
     final byte[] wirePayloadB =
         NoritoCodec.encode("wire-B", "iroha.test.WirePayload", NoritoAdapters.stringAdapter());
     final TransactionPayload payload =
-        TransactionPayload.builder()
+        TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList()))
             .setExecutable(
                 Executable.instructions(
                     List.of(
@@ -136,16 +141,57 @@ public final class TransactionBuilderTests {
         : "Instruction list must round-trip";
   }
 
+  private static void mixedBatchBuilderAndSignerPreserveOrder() throws Exception {
+    final InstructionBox first =
+        InstructionBox.fromWirePayload(
+            "iroha.batch.first",
+            NoritoCodec.encode("first", "iroha.test.Batch", NoritoAdapters.stringAdapter()));
+    final InstructionBox last =
+        InstructionBox.fromWirePayload(
+            "iroha.batch.last",
+            NoritoCodec.encode("last", "iroha.test.Batch", NoritoAdapters.stringAdapter()));
+    final ContractInvocation invocation =
+        new ContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            repeatedByte(0x51, 32),
+            "run",
+            new byte[] {0x01, 0x02});
+    final List<ExecutableBatchItem> batch =
+        Arrays.asList(
+            ExecutableBatchItem.instruction(first),
+            ExecutableBatchItem.contractCall(invocation),
+            ExecutableBatchItem.instruction(last));
+    final TransactionPayload payload =
+        TransactionPayload.builder()
+            .setFeePayment(FeePaymentIntent.authority(Collections.emptyList(), 5_000L))
+            .setChainId("00000004")
+            .setAuthority(TestAccountIds.ed25519Authority(0x2A))
+            .setCreationTimeMs(1_735_000_222_000L)
+            .setBatch(batch)
+            .build();
+
+    final TransactionBuilder builder =
+        new TransactionBuilder(
+            new NoritoJavaCodecAdapter(), IrohaKeyManager.withSoftwareProvider());
+    final SignedTransaction signed = builder.encodeAndSign(payload, new FakeSigner());
+    final TransactionPayload decoded =
+        new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
+
+    assert decoded.executable().isBatch() : "Executable variant must remain Batch";
+    assert batch.equals(decoded.executable().batchItems())
+        : "Signing must preserve mixed batch order";
+  }
+
   private static void transactionPayloadRejectsPaddedIdsBeforeSigning() {
     final String authority = TestAccountIds.ed25519Authority(0x2F);
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setChainId(" 00000042"),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId(" 00000042"),
         "chainId must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setChainId("00000042 "),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setChainId("00000042 "),
         "chainId must not contain surrounding whitespace");
     assertIllegalArgumentMessage(
-        () -> TransactionPayload.builder().setAuthority(" " + authority),
+        () -> TransactionPayload.builder().setFeePayment(org.hyperledger.iroha.android.model.FeePaymentIntent.authority(java.util.Collections.emptyList())).setAuthority(" " + authority),
         "authority must not contain surrounding whitespace");
   }
 
@@ -178,6 +224,12 @@ public final class TransactionBuilderTests {
     System.arraycopy(left, 0, out, 0, left.length);
     System.arraycopy(right, 0, out, left.length, right.length);
     return out;
+  }
+
+  private static byte[] repeatedByte(final int value, final int length) {
+    final byte[] bytes = new byte[length];
+    Arrays.fill(bytes, (byte) value);
+    return bytes;
   }
 
   private static void assertThrows(final Runnable runnable, final String message) {

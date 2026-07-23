@@ -188,6 +188,7 @@ pub struct LineColumn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SourceFile {
     id: SourceId,
+    package_identity: Option<Arc<str>>,
     name: Arc<str>,
     text: Arc<str>,
     original_len: usize,
@@ -202,6 +203,31 @@ impl SourceFile {
     /// [`Self::original_len`] preserves the size used by that diagnostic.
     #[must_use]
     pub fn new(id: SourceId, name: impl Into<Arc<str>>, text: impl AsRef<str>) -> Self {
+        Self::new_scoped(id, None::<Arc<str>>, name, text)
+    }
+
+    /// Construct a source file owned by one exact locked package.
+    ///
+    /// Package identity is intentionally separate from the portable logical
+    /// path: two dependencies may both contain `src/lib.ko`, while diagnostics
+    /// and source maps must still identify their owners without rewriting the
+    /// source-visible path.
+    #[must_use]
+    pub fn new_in_package(
+        id: SourceId,
+        package_identity: impl Into<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        text: impl AsRef<str>,
+    ) -> Self {
+        Self::new_scoped(id, Some(package_identity.into()), name, text)
+    }
+
+    fn new_scoped(
+        id: SourceId,
+        package_identity: Option<Arc<str>>,
+        name: impl Into<Arc<str>>,
+        text: impl AsRef<str>,
+    ) -> Self {
         let name = name.into();
         let original = text.as_ref();
         let original_len = original.len();
@@ -224,6 +250,7 @@ impl SourceFile {
         }
         Self {
             id,
+            package_identity,
             name,
             text,
             original_len,
@@ -235,6 +262,13 @@ impl SourceFile {
     #[must_use]
     pub const fn id(&self) -> SourceId {
         self.id
+    }
+
+    /// Return the exact locked package identity, when this is a reusable
+    /// package source rather than a deployable root or loose editor document.
+    #[must_use]
+    pub fn package_identity(&self) -> Option<&str> {
+        self.package_identity.as_deref()
     }
 
     /// Return the logical source name.

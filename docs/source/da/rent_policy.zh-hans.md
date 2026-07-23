@@ -29,11 +29,11 @@ Norito 有效负载，以便可以重新计算租金报价和激励分类账
 
 |领域 |描述 |默认 |
 |--------|-------------|---------|
-| `base_rate_per_gib_month` | XOR 按保留每月 GiB 收费。 | `250_000` 微异或 (0.25 异或) |
+| `base_rate_per_gib_month` | XOR 按保留每月 GiB 收费。 | `"0.25"` XOR |
 | `protocol_reserve_bps` |转入协议储备金的租金份额（基点）。 | `2_000` (20%) |
 | `pdp_bonus_bps` |每次成功的 PDP 评估的奖金百分比。 | `500` (5%) |
 | `potr_bonus_bps` |每次成功 PoTR 评估的奖励百分比。 | `250` (2.5%) |
-| `egress_credit_per_gib` |当提供商提供 1GiB DA 数据时支付信用。 | `1_500` 微异或 |
+| `egress_credit_per_gib` |当提供商提供 1GiB DA 数据时支付信用。 | `"0.0015"` XOR |
 
 所有基点值均根据 `BASIS_POINTS_PER_UNIT` (10000) 进行验证。
 策略更新必须经过治理，每个 Torii 节点都会公开
@@ -42,11 +42,11 @@ Norito 有效负载，以便可以重新计算租金报价和激励分类账
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 CLI 工具 (`iroha app da rent-quote`) 接受相同的 Norito/JSON 策略输入
@@ -80,12 +80,12 @@ CLI 工具 (`iroha app da rent-quote`) 接受相同的 Norito/JSON 策略输入
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```账本投影部分直接输入 DA 租金账本 ISI：
@@ -105,12 +105,12 @@ CLI 工具 (`iroha app da rent-quote`) 接受相同的 Norito/JSON 策略输入
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ CLI 工具 (`iroha app da rent-quote`) 接受相同的 Norito/JSON 策略输入
 }
 ```
 
-最后的 `egress_credit_per_gib_micro_xor` 字段允许仪表板和支付
+最后的 `egress_credit_per_gib` 字段允许仪表板和支付
 调度程序将出口报销与产生的租金政策相一致
 无需在脚本胶水中重新计算策略数学即可引用。
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 该报价可在 Torii 节点、SDK 和财务报告中重现，因为
 它使用确定性 Norito 结构而不是临时数学。运营商可以
-将 JSON/CBOR 编码的 `DaRentPolicyV1` 附加到治理提案或租金中
+将 Norito/JSON 编码的 `DaRentPolicyV1` 附加到治理提案或租金中
 审核以证明哪些参数对于任何给定的 blob 有效。
 
 ## 奖金和储备金

@@ -21,19 +21,31 @@ translation_last_reviewed: 2026-01-08
   `liquidity_profile` (`tier1`, `tier2`, или `tier3`) и `volatility_class` (`stable`, `elevated`,
   `dislocated`). Эти флаги подаются в settlement router, чтобы итоговая XOR котировка совпадала с
   каноническим TWAP и haircut tier для lane.
-- Транзакции IVM должны содержать метаданные `gas_limit` (`u64`, > 0), чтобы ограничить риск по комиссиям.
-  Эндпоинт `/v1/contracts/call` требует `gas_limit` явно, а некорректные значения отклоняются.
-- Когда транзакция задает метаданные `fee_sponsor`, спонсор должен выдать вызывающему
-  `CanUseFeeSponsor { sponsor }`. Попытки спонсирования без разрешения отклоняются и фиксируются.
+- Каждая транзакция должна содержать обязательное типизированное и связанное с
+  подписью поле `fee_payment` (`FeePaymentIntent`). Оно выбирает плательщиком
+  authority либо одну точную sponsor program с ее неизменяемой revision и
+  содержит подписанные максимумы компонентов, а при необходимости — положительный
+  gas bound. Устаревшие ключи метаданных `fee_sponsor`, `gas_limit` и
+  `gas_asset_id` отклоняются.
+- До подписания запросите quote: соберите точный неподписанный payload, дайте его
+  authority аутентифицировать `POST /v1/fees/quote`, проверьте рекомендуемый
+  intent, замените только `payload.fee_payment`, затем подпишите и отправьте
+  именно этот payload. Quote является наблюдением, а не резервом; admission
+  повторно проверяет актуальное состояние.
+- Direct settlement поддерживает оплату authority или одной точной sponsor
+  program. Settlement через receipts (`lane_relay_burn`) допускает только
+  точного sponsor: комиссии Nexus за счет authority отклоняются с
+  `relay_capacity_unavailable`, поскольку ее баланс не является
+  аутентифицированным source lock для receipt.
 - Каждая транзакция, оплачивающая gas, записывает `LaneSettlementReceipt`. Каждый receipt хранит
   source identifier, переданный вызывающей стороной, локальную micro-amount, XOR к немедленной оплате,
-  XOR после haircut, реализованный safety margin (`xor_variance_micro`) и timestamp блока в
+  XOR после haircut, реализованный safety margin (`xor_variance`) и timestamp блока в
   миллисекундах.
 - Исполнение блока агрегирует receipts по lane/dataspace и публикует их через
-  `lane_settlement_commitments` в `/v1/sumeragi/status`. Итоги выставляют `total_local_micro`,
-  `total_xor_due_micro` и `total_xor_after_haircut_micro`, суммированные по блоку для ночных выгрузок
+  `lane_settlement_commitments` в `/v1/sumeragi/status`. Итоги выставляют `total_local_amount`,
+  `total_xor_due` и `total_xor_after_haircut`, суммированные по блоку для ночных выгрузок
   reconciliation.
-- Новый счетчик `total_xor_variance_micro` отслеживает, сколько safety margin было израсходовано
+- Новый счетчик `total_xor_variance` отслеживает, сколько safety margin было израсходовано
   (разница между due XOR и post-haircut ожиданием), а `swap_metadata` документирует детерминированные
   параметры конверсии (TWAP, epsilon, liquidity profile, volatility_class), чтобы аудиторы могли
   проверять входные данные котировки независимо от runtime конфигурации.

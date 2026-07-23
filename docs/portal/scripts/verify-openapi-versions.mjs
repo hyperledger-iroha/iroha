@@ -340,7 +340,7 @@ async function readBinaryFile(path, missingMessage) {
   }
 }
 
-async function validateManifestStructure(manifest) {
+function validateManifestStructure(manifest) {
   if (!manifest || typeof manifest !== 'object') {
     throw new Error(`versions.json is malformed. ${staleHint}`);
   }

@@ -543,12 +543,41 @@ mod tests {
     }
 
     #[test]
-    fn limb_boundaries_are_monotonic_and_zero_is_one_limb() {
+    fn every_v1_limb_boundary_has_exact_monotonic_work() {
         assert_eq!(limbs_for_bits(0), 1);
-        assert_eq!(limbs_for_bits(1), 1);
-        assert_eq!(limbs_for_bits(64), 1);
-        assert_eq!(limbs_for_bits(65), 2);
-        assert_eq!(limbs_for_bits(512), 8);
+
+        let mut previous_additive_work = None;
+        let mut previous_additive_gas = None;
+        for expected_limbs in 1_u64..=8 {
+            let first_bit_width = 64 * (expected_limbs - 1) + 1;
+            let last_bit_width = 64 * expected_limbs;
+            assert_eq!(limbs_for_bits(first_bit_width), expected_limbs);
+            assert_eq!(limbs_for_bits(last_bit_width), expected_limbs);
+
+            // Independently expand the normative checked-add formula:
+            // `L + 2 * (L + 1) = 3L + 2`, at four gas per work limb.
+            let expected_additive_work = 3 * expected_limbs + 2;
+            let expected_additive_gas = 12 * expected_limbs + 8;
+            assert_eq!(
+                checked_int_additive_work(expected_limbs, 1),
+                Ok(expected_additive_work),
+            );
+            assert_eq!(work_gas(expected_additive_work), Ok(expected_additive_gas));
+
+            if let Some(previous) = previous_additive_work {
+                assert_eq!(expected_additive_work - previous, 3);
+            }
+            if let Some(previous) = previous_additive_gas {
+                assert_eq!(expected_additive_gas - previous, 12);
+            }
+            previous_additive_work = Some(expected_additive_work);
+            previous_additive_gas = Some(expected_additive_gas);
+
+            if expected_limbs < 8 {
+                assert_eq!(limbs_for_bits(last_bit_width + 1), expected_limbs + 1);
+            }
+        }
+
         assert_eq!(MAX_VALUE_LIMBS, 8);
         assert_eq!(scaled_limbs(511, 28), Ok(10));
         assert_eq!(scaled_limbs(511, 56), Ok(11));

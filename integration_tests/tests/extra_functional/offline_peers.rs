@@ -104,7 +104,13 @@ async fn register_offline_peer() -> Result<()> {
 
     // Wait for some time to allow peers to connect
     let client = network.client();
-    spawn_blocking(move || client.submit_blocking(register_peer)).await??;
+    spawn_blocking(move || {
+        client.submit_blocking(
+            register_peer,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     let ensure_result = network.ensure_blocks(2).await.map(|_| ());
     if sandbox::handle_result(ensure_result, stringify!(register_offline_peer))?.is_none() {
         return Ok(());

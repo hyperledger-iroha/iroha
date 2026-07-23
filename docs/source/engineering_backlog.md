@@ -11143,17 +11143,13 @@ redistributable schemas, and official trust/revocation bundles.
   - Added a 4-peer `integration_tests/tests/multisig.rs` regression where `MultisigRegister` materializes a previously unregistered signatory and that signatory successfully authors `MultisigPropose` on the network.
   - The same test asserts single-key proposal and approval transaction-authority shape, submits approval from an existing signatory, and waits for the proposed metadata write to execute after quorum.
 - Extend and burn down the translation metadata audit backlog.
-  - Restored
-    `python3 ci/check_docs_i18n_metadata.py --paths docs/formal --require-current`
-    for formal docs by marking the stale translated
-    `docs/formal/sumeragi/README.*.md` files as `needs-review` with current
-    source metadata instead of falsely advertising them as `complete`.
-  - Refresh the translated `docs/formal/sumeragi/README.*.md` bodies after the
-    English-only frontier formal and 2026-05-03 process-hardening updates, then
-    move each locale back to `complete` with a real review date.
-  - The Sumeragi frontier model, process invariants, mutation suite, TLC
-    cross-check, and longer nightly bound are wired; the remaining formal-doc
-    task is translation refresh only.
+  - The retired `docs/formal/sumeragi/` proof corridor and its stale
+    translations have been removed. `docs/formal/sumeragi_v2/` is the sole
+    Sumeragi proof source for the first release; do not revive or translate the
+    legacy model.
+  - If Sumeragi v2 formal translations are added after the release proof is
+    frozen, generate them from the final v2 sources and require current source
+    metadata before advertising them as complete.
   - The metadata checker no longer treats source-only generated English pages
     as translations, and new portal translation stubs now include
     `source_hash`, `source_last_modified`, and `translation_last_reviewed:

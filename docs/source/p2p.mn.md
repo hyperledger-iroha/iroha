@@ -468,15 +468,19 @@ Because queues are always bounded, overflow counters rise whenever a channel dro
 
 ### Frame Size Caps
 
-- Global cap: `[network].max_frame_bytes` (default 16 MiB) rejects oversized frames early.
+- Global cap: `[network].max_frame_bytes` (default 17 MiB) rejects oversized frames early.
   The limit now applies uniformly to TCP, TLS, QUIC, and Torii `/p2p` WebSocket
-  accepts as well as outbound dialers, with `p2p_post_overflow_by_topic`
+  accepts as well as outbound dialers, with `p2p_frame_cap_violations_total`
   counters incremented whenever an inbound frame is dropped by the topic caps.
   This cap is enforced on encrypted frames, so AEAD overhead (nonce + tag) counts
   toward the limit (currently 28 bytes for ChaCha20-Poly1305).
-- Topic caps (post-decode enforcement, tightened defaults) apply to decrypted payload sizes:
-  - `[network].max_frame_bytes_consensus` (default 16 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
-  - `[network].max_frame_bytes_control` (default 128 KiB)
+  Stream framing uses a `u32` encrypted-body length (wire ceiling 4,294,967,295
+  bytes), while the deterministic runtime/configuration ceiling is
+  2,147,483,643 bytes so prefix plus body fits one buffer on 32-bit and 64-bit
+  hosts. Startup and `irohad --check-config` reject larger values before binding.
+- Topic caps (post-decode enforcement, tightened defaults) apply to complete decrypted and authenticated P2P frame bytes:
+  - `[network].max_frame_bytes_consensus` (default 17 MiB; caps critical consensus frames such as `BlockCreated`, `FetchPendingBlock`, and `RbcInit`/`RbcReady`/`RbcDeliver`)
+  - `[network].max_frame_bytes_control` (default 2 MiB)
   - `[network].max_frame_bytes_block_sync` (default = global cap; caps bulk consensus payloads such as `BlockSyncUpdate`, `Proposal`, and `RbcChunk`, plus BlockSync responses)
   - `[network].max_frame_bytes_tx_gossip` (default 256 KiB)
   - `[network].max_frame_bytes_peer_gossip` (default 64 KiB)

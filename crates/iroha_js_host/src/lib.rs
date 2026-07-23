@@ -118,7 +118,6 @@ use iroha_data_model::{
             ActivateContractInstance, DeactivateContractInstance, RegisterSmartContractBytes,
             RegisterSmartContractCode, RemoveSmartContractBytes,
         },
-        sns::RegisterSnsName,
         social::{CancelTwitterEscrow, ClaimTwitterFollowReward, SendToTwitter},
         zk::{
             CancelConfidentialPolicyTransition, CreateElection, FinalizeElection, RegisterZkAsset,
@@ -145,8 +144,10 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId},
     role::{NewRole, Role, RoleId},
     rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-    smart_contract::manifest::{ContractManifest, ManifestProvenance},
-    sns::RegisterNameRequestV1,
+    smart_contract::{
+        ContractAddress,
+        manifest::{ContractManifest, ManifestProvenance},
+    },
     soracloud::{
         SecretEnvelopeV1, encode_agent_deploy_provenance_payload,
         encode_bundle_with_materials_provenance_payload,
@@ -154,9 +155,11 @@ use iroha_data_model::{
     },
     sorafs::pin_registry::StorageClass,
     transaction::{
-        Executable, IvmProved, PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi,
-        PrivateKaigiAction, PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate,
-        PrivateKaigiTransaction, TransactionSubmissionReceipt,
+        Executable, ExecutableBatchItem, FeePaymentIntent, IvmProved, PrivateCreateKaigi,
+        PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction, PrivateKaigiArtifacts,
+        PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction, TransactionPayload,
+        TransactionSubmissionReceipt,
+        executable::{ContractArgumentRecord, ContractInvocation},
         signed::{SignedTransaction, TransactionBuilder, TransactionEntrypoint},
     },
     trigger::{
@@ -210,7 +213,7 @@ use sorafs_car::{
 use sorafs_manifest::{
     ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1, OrderCancelReasonV1, OrderSideV1, OrderTierV1,
     OrderbookOrderCancelFieldsV1, OrderbookOrderRequestFieldsV1,
-    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1,
+    OrderbookSettlementReceiptFieldsV1, OrderbookValidationPayloadKindV1, XorQuantity,
     alias_cache::{AliasCachePolicy, AliasProofState, decode_alias_proof, unix_now_secs},
     build_signed_orderbook_order_cancel_bytes_ed25519_v1,
     build_signed_orderbook_order_request_bytes_ed25519_v1,
@@ -656,6 +659,15 @@ pub struct JsReplicationOrder {
     pub sla: JsReplicationSla,
     /// Metadata entries attached to the order.
     pub metadata: Vec<JsReplicationMetadataEntry>,
+}
+
+/// Return the immutable source revision embedded by the release build.
+#[napi]
+#[must_use]
+pub fn embedded_source_revision() -> String {
+    option_env!("IROHA_GIT_COMMIT_HASH")
+        .unwrap_or("unknown")
+        .to_owned()
 }
 
 /// Derive deterministic `SoraDNS` gateway hosts from an FQDN.
@@ -1539,7 +1551,10 @@ pub fn soracloud_build_hf_deploy_request_json(
 
     let storage_class = parse_soracloud_storage_class(&storage_class)?;
     let lease_term_ms = parse_positive_u64_literal(&lease_term_ms, "lease_term_ms")?;
-    let base_fee_nanos = parse_positive_u128_literal(&base_fee_nanos, "base_fee_nanos")?;
+    let base_fee_nanos = Quantity::from(parse_positive_u128_literal(
+        &base_fee_nanos,
+        "base_fee_nanos",
+    )?);
     let lease_asset_definition_id = lease_asset_definition_id
         .trim()
         .parse::<AssetDefinitionId>()
@@ -1560,7 +1575,7 @@ pub fn soracloud_build_hf_deploy_request_json(
         storage_class,
         lease_term_ms,
         &lease_asset_definition_id,
-        base_fee_nanos,
+        &base_fee_nanos,
     )
     .map_err(norito_to_napi)?;
     let provenance = sign_soracloud_payload(&keypair, &deploy_payload)?;
@@ -1850,10 +1865,10 @@ pub fn lane_relay_envelope_sample() -> napi::Result<JsLaneRelaySample> {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: 10,
-        total_xor_due_micro: 5,
-        total_xor_after_haircut_micro: 4,
-        total_xor_variance_micro: 1,
+        total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+        total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -2229,7 +2244,7 @@ pub fn derive_confidential_note_v2(
     Ok(Buffer::from(commitment.to_vec()))
 }
 
-/// Derive a confidential v2 nullifier from spend key material.
+/// Validate the exact chain identifier used by confidential-v2 derivation.
 fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
     if value.is_empty() || value.trim() != value {
         Err("chain_id must be non-empty and contain no surrounding whitespace")
@@ -2238,6 +2253,7 @@ fn strict_confidential_chain_id(value: &str) -> Result<&str, &'static str> {
     }
 }
 
+/// Derive a confidential v2 nullifier from spend key material.
 #[napi]
 #[allow(clippy::needless_pass_by_value)]
 pub fn derive_confidential_nullifier_v2(
@@ -5682,6 +5698,13 @@ fn multi_source_js_error(error: MultiSourceError) -> napi::Error {
 
     let message = format!("{error}");
     let payload = match error {
+        InvalidPlan(reason) => norito_json!({
+            "kind": "multi_source",
+            "code": "invalid_plan",
+            "message": message,
+            "details": reason.to_string(),
+            "retryable": false,
+        }),
         NoProviders => norito_json!({
             "kind": "multi_source",
             "code": "no_providers",
@@ -6120,13 +6143,26 @@ fn parse_sorafs_decimal_u64(value: &str, context: &str) -> napi::Result<u64> {
     })
 }
 
-fn parse_sorafs_decimal_u128(value: &str, context: &str) -> napi::Result<u128> {
-    value.trim().parse::<u128>().map_err(|err| {
+fn parse_sorafs_xor_quantity(value: &str, context: &str) -> napi::Result<XorQuantity> {
+    if value.len() > 155 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} exceeds the canonical XOR quantity text bound"),
+        ));
+    }
+    let quantity = value.parse::<XorQuantity>().map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be an unsigned 128-bit decimal integer: {err}"),
+            format!("{context} must be a canonical non-negative XOR quantity: {err}"),
         )
-    })
+    })?;
+    if quantity.to_string() != value {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} must use canonical XOR quantity spelling"),
+        ));
+    }
+    Ok(quantity)
 }
 
 fn parse_sorafs_fee_bps(value: u32, context: &str) -> napi::Result<u16> {
@@ -6180,7 +6216,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     order_id: Uint8Array,
     side: String,
     tier: String,
-    price_per_gib_micro_xor: String,
+    price_per_gib: String,
     quantity_gib: String,
     remaining_gib: Option<String>,
     owner_account: Uint8Array,
@@ -6214,10 +6250,7 @@ pub fn sorafs_build_signed_orderbook_order_request(
     let fields = OrderbookOrderRequestFieldsV1 {
         side: parse_sorafs_orderbook_side(&side)?,
         tier: parse_sorafs_orderbook_tier(&tier)?,
-        price_per_gib_micro_xor: parse_sorafs_decimal_u128(
-            &price_per_gib_micro_xor,
-            "price_per_gib_micro_xor",
-        )?,
+        price_per_gib: parse_sorafs_xor_quantity(&price_per_gib, "price_per_gib")?,
         quantity_gib,
         remaining_gib: match remaining_gib {
             Some(value) => parse_sorafs_decimal_u64(&value, "remaining_gib")?,
@@ -6304,9 +6337,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
     range_end: String,
     chunk_hash: Uint8Array,
     bytes_delivered: String,
-    xor_debited_micro_xor: String,
-    provider_credit_micro_xor: String,
-    fee_amount_micro_xor: String,
+    xor_debited: String,
+    provider_credit: String,
+    fee_amount: String,
     issued_at_unix: String,
     private_key: Uint8Array,
 ) -> napi::Result<Buffer> {
@@ -6318,18 +6351,9 @@ pub fn sorafs_build_signed_orderbook_settlement_receipt(
         range_end: parse_sorafs_decimal_u64(&range_end, "range_end")?,
         chunk_hash: parse_sorafs_fixed32(&chunk_hash, "chunk_hash")?,
         bytes_delivered: parse_sorafs_decimal_u64(&bytes_delivered, "bytes_delivered")?,
-        xor_debited_micro_xor: parse_sorafs_decimal_u128(
-            &xor_debited_micro_xor,
-            "xor_debited_micro_xor",
-        )?,
-        provider_credit_micro_xor: parse_sorafs_decimal_u128(
-            &provider_credit_micro_xor,
-            "provider_credit_micro_xor",
-        )?,
-        fee_amount_micro_xor: parse_sorafs_decimal_u128(
-            &fee_amount_micro_xor,
-            "fee_amount_micro_xor",
-        )?,
+        xor_debited: parse_sorafs_xor_quantity(&xor_debited, "xor_debited")?,
+        provider_credit: parse_sorafs_xor_quantity(&provider_credit, "provider_credit")?,
+        fee_amount: parse_sorafs_xor_quantity(&fee_amount, "fee_amount")?,
         issued_at_unix: parse_sorafs_decimal_u64(&issued_at_unix, "issued_at_unix")?,
     };
     build_signed_orderbook_settlement_receipt_bytes_ed25519_v1(fields, private_key.as_ref())
@@ -6499,6 +6523,22 @@ mod sorafs_orderbook_validation_tests {
             SorafsPdpPayloadKind::Proof
         );
         assert!(parse_sorafs_pdp_payload_kind("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_sorafs_xor_quantity_preserves_the_exact_signed_512_boundary() {
+        const MAX_SCALED: &str = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+        assert_eq!(MAX_SCALED.len(), 155);
+        assert_eq!(
+            parse_sorafs_xor_quantity(MAX_SCALED, "amount")
+                .expect("maximum scaled XOR quantity")
+                .to_string(),
+            MAX_SCALED
+        );
+        assert!(parse_sorafs_xor_quantity("0.000000001", "amount").is_ok());
+        for invalid in ["1.0", "0.0000000001", &"1".repeat(156)] {
+            assert!(parse_sorafs_xor_quantity(invalid, "amount").is_err());
+        }
     }
 }
 
@@ -7196,6 +7236,175 @@ fn parse_instruction_payloads(payloads: Vec<String>) -> napi::Result<Vec<Instruc
     Ok(instructions)
 }
 
+fn parse_executable_batch_payloads(
+    payloads: Vec<String>,
+) -> napi::Result<Vec<ExecutableBatchItem>> {
+    if payloads.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "executable batch entries must be a non-empty array",
+        ));
+    }
+
+    let mut entries = Vec::with_capacity(payloads.len());
+    for (index, payload) in payloads.into_iter().enumerate() {
+        let value: json::Value = json::from_json(&payload).map_err(|err| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("invalid executable batch entry {index} JSON: {err}"),
+            )
+        })?;
+        let json::Value::Object(mut fields) = value else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} must be an object"),
+            ));
+        };
+        let kind = fields.remove("kind").ok_or_else(|| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} is missing kind"),
+            )
+        })?;
+        let json::Value::String(kind) = kind else {
+            return Err(napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("executable batch entry {index} kind must be a string"),
+            ));
+        };
+
+        let entry = match kind.as_str() {
+            "instruction" => {
+                let instruction = fields.remove("instruction").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch entry {index} is missing instruction"),
+                    )
+                })?;
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch instruction entry {index} has unknown fields"),
+                    ));
+                }
+                let instruction = match instruction {
+                    json::Value::String(payload) => instruction_from_json(&payload)?,
+                    value => value_to_instruction(value)?,
+                };
+                ExecutableBatchItem::Instruction(instruction)
+            }
+            "contractCall" => {
+                let contract_address = fields.remove("contractAddress").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} is missing contractAddress"
+                        ),
+                    )
+                })?;
+                let json::Value::String(contract_address) = contract_address else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} contractAddress must be a string"
+                        ),
+                    ));
+                };
+                if contract_address.trim() != contract_address {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} contractAddress must be exact"
+                        ),
+                    ));
+                }
+                let contract_address: ContractAddress =
+                    contract_address.parse().map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid executable batch contractAddress at entry {index}: {err}"
+                            ),
+                        )
+                    })?;
+
+                let expected_code_hash = fields.remove("expectedCodeHash").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} is missing expectedCodeHash"
+                        ),
+                    )
+                })?;
+                let expected_code_hash = parse_hash_value(
+                    expected_code_hash,
+                    &format!("executable batch contract call {index} expectedCodeHash"),
+                )?;
+
+                let entrypoint = fields.remove("entrypoint").ok_or_else(|| {
+                    napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch contract call {index} is missing entrypoint"),
+                    )
+                })?;
+                let json::Value::String(entrypoint) = entrypoint else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} entrypoint must be a string"
+                        ),
+                    ));
+                };
+                if entrypoint.is_empty() || entrypoint.trim() != entrypoint {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "executable batch contract call {index} entrypoint must be a non-empty exact string"
+                        ),
+                    ));
+                }
+
+                let arguments = match fields.remove("arguments") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => {
+                        let bytes: Vec<u8> = json::from_value(value).map_err(|err| {
+                            napi::Error::new(
+                                napi::Status::InvalidArg,
+                                format!("invalid executable batch contract call {index} arguments: {err}"),
+                            )
+                        })?;
+                        Some(ContractArgumentRecord::try_new(bytes).map_err(|err| {
+                            napi::Error::new(napi::Status::InvalidArg, err.to_string())
+                        })?)
+                    }
+                };
+                if !fields.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!("executable batch contract call entry {index} has unknown fields"),
+                    ));
+                }
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address,
+                    expected_code_hash,
+                    entrypoint,
+                    arguments,
+                })
+            }
+            _ => {
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    format!(
+                        "executable batch entry {index} kind must be instruction or contractCall"
+                    ),
+                ));
+            }
+        };
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
 fn encode_trigger_action(action: &Action) -> napi::Result<String> {
     norito::to_bytes(action)
         .map(|bytes| STANDARD.encode(bytes))
@@ -7291,19 +7500,21 @@ fn transfer_asset_batch_from_json(value: json::Value) -> napi::Result<Instructio
 
 #[allow(clippy::too_many_lines)] // comprehensive translation keeps instruction handling centralized
 fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
-    if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
-        return Ok(instruction);
+    // Registration and settlement carry release-critical JSON contracts. The
+    // generic `InstructionBox` decoder may accept data-model defaults and
+    // unknown fields, so route these envelopes through explicit strict parsers.
+    let requires_explicit_parser = matches!(
+        &value,
+        json::Value::Object(map)
+            if map.contains_key("Register") || map.contains_key("Settlement")
+    );
+    if !requires_explicit_parser {
+        if let Ok(instruction) = json::from_value::<InstructionBox>(value.clone()) {
+            return Ok(instruction);
+        }
     }
     match value {
         json::Value::Object(mut map) => {
-            if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
-                let parameter = json::from_value::<Parameter>(parameter_value.clone())
-                    .or_else(|_| {
-                        json::from_value::<CustomParameter>(parameter_value).map(Parameter::Custom)
-                    })
-                    .map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(SetParameter::new(parameter)));
-            }
             if let Some(settlement_value) = map.remove("Settlement") {
                 if !map.is_empty() {
                     return Err(napi::Error::new(
@@ -7320,7 +7531,28 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return transfer_asset_batch_from_json(batch_value);
             }
 
-            if let Some(json::Value::Object(mut register_map)) = map.remove("Register") {
+            if let Some(register_value) = map.remove("Register") {
+                if !map.is_empty() {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        format!(
+                            "Register instruction envelope contains unexpected field(s): {}",
+                            map.keys().cloned().collect::<Vec<_>>().join(", ")
+                        ),
+                    ));
+                }
+                let json::Value::Object(mut register_map) = register_value else {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Register instruction must be an object containing exactly one variant",
+                    ));
+                };
+                if register_map.len() != 1 {
+                    return Err(napi::Error::new(
+                        napi::Status::InvalidArg,
+                        "Register instruction must contain exactly one variant",
+                    ));
+                }
                 if let Some(domain_value) = register_map.remove("Domain") {
                     let new_domain: NewDomain =
                         json::from_value(domain_value).map_err(norito_to_napi)?;
@@ -7364,6 +7596,18 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     let register_box = RegisterBox::Peer(peer_registration);
                     return Ok(InstructionBox::from(register_box));
                 }
+                return Err(napi::Error::new(
+                    napi::Status::InvalidArg,
+                    "unsupported Register instruction variant",
+                ));
+            }
+            if let Some(parameter_value) = remove_case_insensitive(&mut map, "SetParameter") {
+                let parameter = json::from_value::<Parameter>(parameter_value.clone())
+                    .or_else(|_| {
+                        json::from_value::<CustomParameter>(parameter_value).map(Parameter::Custom)
+                    })
+                    .map_err(norito_to_napi)?;
+                return Ok(InstructionBox::from(SetParameter::new(parameter)));
             }
             if let Some(json::Value::Object(mut mint_map)) = map.remove("Mint") {
                 if let Some(json::Value::Object(mut asset_fields)) = mint_map.remove("Asset") {
@@ -7464,11 +7708,6 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     napi::Status::InvalidArg,
                     "unsupported Unregister instruction variant; expected keys: Peer, Domain, Account, AssetDefinition, Nft, Role, Trigger",
                 ));
-            }
-            if let Some(register_sns_value) = remove_case_insensitive(&mut map, "RegisterSnsName") {
-                let request: RegisterNameRequestV1 =
-                    json::from_value(register_sns_value).map_err(norito_to_napi)?;
-                return Ok(InstructionBox::from(RegisterSnsName::new(request)));
             }
             if let Some(json::Value::Object(mut burn_map)) = map.remove("Burn") {
                 if let Some(json::Value::Object(mut asset_fields)) = burn_map.remove("Asset") {
@@ -8384,7 +8623,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 let ballot = CastPlainBallot {
                     referendum_id,
                     owner,
-                    amount,
+                    amount: amount.into(),
                     duration_blocks,
                     direction,
                 };
@@ -8398,7 +8637,10 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "amount", "RegisterCitizen")?,
                     "RegisterCitizen.amount",
                 )?;
-                let instruction = RegisterCitizen { owner, amount };
+                let instruction = RegisterCitizen {
+                    owner,
+                    amount: amount.into(),
+                };
                 return Ok(Box::new(instruction).into_instruction_box());
             }
 
@@ -8833,6 +9075,19 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
             SettlementInstructionBox::SetFxCorridorPolicy(set)
         }
         "SettleFxCorridor" => {
+            exact_json_object_fields(
+                &payload,
+                &[
+                    "policy_id",
+                    "expected_policy_revision",
+                    "source_asset_definition_id",
+                    "destination_asset_definition_id",
+                    "settlement_id",
+                    "recipient",
+                    "source_amount",
+                ],
+                "SettleFxCorridor",
+            )?;
             let settle = json::from_value::<SettleFxCorridor>(payload).map_err(norito_to_napi)?;
             if settle.source_amount.is_zero() {
                 return Err(napi::Error::new(
@@ -8850,6 +9105,45 @@ fn settlement_instruction_from_json(value: json::Value) -> napi::Result<Instruct
         }
     };
     Ok(InstructionBox::from(instruction))
+}
+
+fn exact_json_object_fields(
+    value: &json::Value,
+    expected: &[&str],
+    context: &str,
+) -> napi::Result<()> {
+    let json::Value::Object(fields) = value else {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} payload must be an object"),
+        ));
+    };
+    let unknown = fields
+        .keys()
+        .filter(|key| !expected.contains(&key.as_str()))
+        .cloned()
+        .collect::<Vec<_>>();
+    if !unknown.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!(
+                "{context} contains unexpected field(s): {}",
+                unknown.join(", ")
+            ),
+        ));
+    }
+    let missing = expected
+        .iter()
+        .copied()
+        .filter(|key| !fields.contains_key(*key))
+        .collect::<Vec<_>>();
+    if !missing.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{context} is missing field(s): {}", missing.join(", ")),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)] // mirrors `value_to_instruction` for full roundtrips
@@ -10162,11 +10456,28 @@ fn configure_transaction_builder(
     Ok(builder)
 }
 
+fn parse_fee_payment_intent(fee_payment_json: &str) -> napi::Result<FeePaymentIntent> {
+    let intent = norito::json::from_str::<FeePaymentIntent>(fee_payment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee payment intent JSON: {err}"),
+        )
+    })?;
+    intent.validate().map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid fee payment intent: {err}"),
+        )
+    })?;
+    Ok(intent)
+}
+
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
 fn assemble_executable_transaction(
     chain_id: ChainId,
     authority: AccountId,
     executable: Executable,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     attachments: Option<ProofAttachmentList>,
     creation_time_ms: Option<i64>,
@@ -10176,7 +10487,7 @@ fn assemble_executable_transaction(
     algorithm: Option<String>,
 ) -> napi::Result<JsSignedTransaction> {
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(chain_id, authority).with_executable(executable),
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
         metadata,
         attachments,
         creation_time_ms,
@@ -10201,6 +10512,7 @@ fn assemble_transaction(
     chain_id: ChainId,
     authority: AccountId,
     instructions: Vec<InstructionBox>,
+    fee_payment: FeePaymentIntent,
     metadata: Metadata,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -10219,6 +10531,7 @@ fn assemble_transaction(
         chain_id,
         authority,
         Executable::from(instructions),
+        fee_payment,
         metadata,
         None,
         creation_time_ms,
@@ -10227,6 +10540,26 @@ fn assemble_transaction(
         secret,
         algorithm,
     )
+}
+
+fn checked_batch_executable(
+    entries: Vec<ExecutableBatchItem>,
+    fee_payment: &FeePaymentIntent,
+) -> napi::Result<Executable> {
+    if entries.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "executable batch entries must be a non-empty array",
+        ));
+    }
+    let executable = Executable::Batch(entries.into());
+    if executable.requires_transaction_gas_limit() && fee_payment.gas_limit().is_none() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "fee payment gas limit is required when an executable batch contains a contract call",
+        ));
+    }
+    Ok(executable)
 }
 
 /// Compute the canonical pipeline hash for a Norito-serialized signed transaction.
@@ -10346,9 +10679,13 @@ pub fn decode_transaction_receipt_json(bytes: Uint8Array) -> napi::Result<String
 #[allow(clippy::needless_pass_by_value)] // N-API typed arrays require ownership at the boundary
 pub fn sign_transaction(bytes: Uint8Array, secret: Uint8Array) -> napi::Result<Buffer> {
     let tx = decode_signed_transaction(bytes.as_ref())?;
-    let mut builder = TransactionBuilder::new(tx.chain().clone(), tx.authority().clone())
-        .with_executable(tx.instructions().clone())
-        .with_metadata(tx.metadata().clone());
+    let mut builder = TransactionBuilder::new(
+        tx.chain().clone(),
+        tx.authority().clone(),
+        tx.fee_payment_intent().clone(),
+    )
+    .with_executable(tx.instructions().clone())
+    .with_metadata(tx.metadata().clone());
 
     if let Some(nonce) = tx.nonce() {
         builder.set_nonce(nonce);
@@ -13047,6 +13384,17 @@ pub struct JsTransactionPayload {
     pub payload_hash: Buffer,
 }
 
+/// Exact unsigned transaction draft used by the fee quote-to-sign flow.
+#[napi(object)]
+pub struct JsTransactionPayloadDraft {
+    /// Canonical Norito JSON for `TransactionPayload`, sent unchanged to `/v1/fees/quote`.
+    pub payload_json: String,
+    /// Bare adaptive-Norito transaction payload bytes before the quote is applied.
+    pub payload_bytes: Buffer,
+    /// Iroha transaction prehash for the draft payload.
+    pub payload_hash: Buffer,
+}
+
 /// Input accepted by the external-signature transaction finalizer.
 #[napi(object)]
 pub struct JsExternalTransactionSignature {
@@ -13580,6 +13928,7 @@ pub fn build_transfer_asset_payload(
     source_asset_holding_id: String,
     quantity: String,
     destination_account_id: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13655,6 +14004,7 @@ pub fn build_transfer_asset_payload(
     }
     let destination = parse_account_id(&destination_account_id, "destination account id")?;
     let quantity = parse_positive_transfer_quantity(&quantity)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     if metadata_json
         .as_ref()
         .is_some_and(|metadata| metadata.len() > EXTERNAL_TRANSACTION_METADATA_MAX_BYTES)
@@ -13668,7 +14018,7 @@ pub fn build_transfer_asset_payload(
     let instruction: InstructionBox =
         Transfer::asset_quantity(source, quantity, destination).into();
     let builder = configure_transaction_builder(
-        TransactionBuilder::new(ChainId::from(chain_id), authority)
+        TransactionBuilder::new(ChainId::from(chain_id), authority, fee_payment)
             .with_instructions([instruction]),
         metadata,
         None,
@@ -13809,6 +14159,7 @@ pub fn build_register_domain_transaction(
     chain_id: String,
     authority: String,
     domain_id: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13830,10 +14181,12 @@ pub fn build_register_domain_transaction(
     let domain_metadata = parse_metadata_payload("domain", metadata_json)?;
     let new_domain = Domain::new(domain_id).with_metadata(domain_metadata);
     let instruction: InstructionBox = Register::<Domain>::domain(new_domain).into();
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     assemble_transaction(
         chain_id,
         authority,
         vec![instruction],
+        fee_payment,
         Metadata::default(),
         creation_time_ms,
         ttl_ms,
@@ -13848,6 +14201,7 @@ fn build_transaction_from_instructions_json(
     chain_id: ChainId,
     authority: AccountId,
     instructions_json: Vec<String>,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13857,11 +14211,13 @@ fn build_transaction_from_instructions_json(
 ) -> napi::Result<JsSignedTransaction> {
     let instructions = parse_instruction_payloads(instructions_json)?;
 
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
     assemble_transaction(
         chain_id,
         authority,
         instructions,
+        fee_payment,
         metadata,
         creation_time_ms,
         ttl_ms,
@@ -13871,6 +14227,185 @@ fn build_transaction_from_instructions_json(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_transaction_payload_from_instructions_json(
+    chain_id: ChainId,
+    authority: AccountId,
+    instructions_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let instructions = parse_instruction_payloads(instructions_json)?;
+    if instructions.is_empty() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "instructions must be a non-empty array",
+        ));
+    }
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_instructions(instructions),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_transaction_payload_from_batch_json(
+    chain_id: ChainId,
+    authority: AccountId,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let entries = parse_executable_batch_payloads(entries_json)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let executable = checked_batch_executable(entries, &fee_payment)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment).with_executable(executable),
+        metadata,
+        None,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
+}
+
+/// Build, but do not sign, the exact arbitrary-instruction payload sent to fee quoting.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_transaction_payload(
+    chain_id: String,
+    authority: String,
+    instructions_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    build_transaction_payload_from_instructions_json(
+        chain_id,
+        authority,
+        instructions_json,
+        fee_payment_json,
+        metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )
+}
+
+/// Build, but do not sign, an exact ordered mixed executable-batch payload.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_executable_batch_transaction_payload(
+    chain_id: String,
+    authority: String,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    build_transaction_payload_from_batch_json(
+        chain_id,
+        authority,
+        entries_json,
+        fee_payment_json,
+        metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )
+}
+
+fn same_fee_payer_selection(draft: &FeePaymentIntent, quoted: &FeePaymentIntent) -> bool {
+    draft.has_same_payer_and_gas_bound(quoted)
+}
+
+/// Replace only an unsigned payload's fee limits with the quote result and sign it.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sign_quoted_transaction_payload(
+    payload_json: String,
+    quoted_fee_payment_json: String,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transaction payload JSON: {err}"),
+        )
+    })?;
+    let quoted_fee_payment = parse_fee_payment_intent(&quoted_fee_payment_json)?;
+    if !same_fee_payer_selection(&payload.fee_payment, &quoted_fee_payment) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted fee intent changed the selected payer, exact sponsor program revision, or gas bound",
+        ));
+    }
+    payload.fee_payment = quoted_fee_payment;
+    let builder = TransactionBuilder::from_payload(payload).map_err(norito_to_napi)?;
+    let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
+    let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
+    let signed = sign_js_transaction(builder, &private_key, "quoted JavaScript payload")?;
+    let signed_bytes = Encode::encode(&signed);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_bytes),
+        hash: Buffer::from(signed.hash().as_ref().to_vec()),
+    })
+}
+
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -13878,6 +14413,7 @@ pub fn build_transaction(
     chain_id: String,
     authority: String,
     instructions_json: Vec<String>,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13895,7 +14431,47 @@ pub fn build_transaction(
         chain_id,
         authority,
         instructions_json,
+        fee_payment_json,
         metadata_json,
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+        secret.as_ref(),
+        private_key_algorithm,
+    )
+}
+
+/// Build and sign a transaction from ordered instruction and contract-call entries.
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_executable_batch_transaction(
+    chain_id: String,
+    authority: String,
+    entries_json: Vec<String>,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let entries = parse_executable_batch_payloads(entries_json)?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let executable = checked_batch_executable(entries, &fee_payment)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    assemble_executable_transaction(
+        chain_id,
+        authority,
+        executable,
+        fee_payment,
+        metadata,
+        None,
         creation_time_ms,
         ttl_ms,
         nonce,
@@ -13912,6 +14488,7 @@ pub fn build_ivm_proved_transaction(
     authority: String,
     proved_json: String,
     attachment_json: String,
+    fee_payment_json: String,
     metadata_json: Option<String>,
     creation_time_ms: Option<i64>,
     ttl_ms: Option<i64>,
@@ -13936,12 +14513,14 @@ pub fn build_ivm_proved_transaction(
             format!("invalid ProofAttachment json: {err}"),
         )
     })?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
     let metadata = parse_metadata_payload("transaction", metadata_json)?;
 
     assemble_executable_transaction(
         chain_id,
         authority,
         Executable::IvmProved(proved),
+        fee_payment,
         metadata,
         Some(ProofAttachmentList(vec![attachment])),
         creation_time_ms,
@@ -14355,6 +14934,22 @@ mod tests {
     }
 
     #[test]
+    fn multi_source_invalid_plan_is_a_structured_non_retryable_error() {
+        let error = multi_source_js_error(MultiSourceError::InvalidPlan(
+            sorafs_car::CarPlanError::EmptyInput,
+        ));
+        assert_eq!(error.status, napi::Status::GenericFailure);
+        let payload: Value = json::from_str(&error.reason).expect("structured error JSON");
+        assert_eq!(payload["kind"], Value::String("multi_source".to_owned()));
+        assert_eq!(payload["code"], Value::String("invalid_plan".to_owned()));
+        assert_eq!(payload["retryable"], Value::Bool(false));
+        assert_eq!(
+            payload["details"],
+            Value::String("input payload is empty".to_owned())
+        );
+    }
+
+    #[test]
     fn canonical_kotodama_binding_returns_full_artifact_manifest() {
         let request = canonical_kotodama_request(
             r#"seiyaku Demo {
@@ -14436,8 +15031,7 @@ seiyaku Privacy {
   kotoage fn commit() authorize("CanCommitPrivateInput") {
     let Secret<int> value = crypto::private_input(0);
     let Secret<int> blinding = crypto::private_input(1);
-    let nullifier = crypto::valcom(left: value, right: blinding);
-    crypto::use_nullifier(nullifier);
+    let commitment = crypto::valcom(left: value, right: blinding);
     crypto::commit_output();
   }
 }
@@ -20766,6 +21360,30 @@ seiyaku Privacy {
     }
 
     #[test]
+    fn retired_sns_mutation_instructions_are_rejected() {
+        for retired in [
+            "RegisterSnsName",
+            "RenewSnsName",
+            "TransferSnsName",
+            "UpdateSnsNameControllers",
+            "FreezeSnsName",
+            "UnfreezeSnsName",
+        ] {
+            let value = json::Value::Object(json::Map::from_iter([(
+                retired.to_owned(),
+                json::Value::Object(json::Map::new()),
+            )]));
+            let error = value_to_instruction(value)
+                .expect_err("retired SNS mutation instruction must not decode");
+            assert!(
+                error.reason.contains("unsupported instruction"),
+                "unexpected rejection for {retired}: {}",
+                error.reason
+            );
+        }
+    }
+
+    #[test]
     fn governance_cast_zk_ballot_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(CastZkBallot {
             election_id: "ref-1".to_owned(),
@@ -20977,7 +21595,7 @@ seiyaku Privacy {
         let instruction: InstructionBox = Box::new(CastPlainBallot {
             referendum_id: "ref-plain".to_owned(),
             owner: owner.clone(),
-            amount: 1_000,
+            amount: 1_000_u64.into(),
             duration_blocks: 42,
             direction: 1,
         })
@@ -21012,7 +21630,7 @@ seiyaku Privacy {
         let owner = sample_account("wonderland");
         let instruction: InstructionBox = Box::new(RegisterCitizen {
             owner: owner.clone(),
-            amount: 10_000,
+            amount: 10_000_u64.into(),
         })
         .into_instruction_box();
 
@@ -21312,6 +21930,106 @@ seiyaku Privacy {
         }
     }
 
+    fn authority_fee_payment_json() -> String {
+        norito::json::to_json(&FeePaymentIntent::authority(Vec::new(), None))
+            .expect("serialize authority fee payment")
+    }
+
+    fn authority_fee_payment_json_with_gas(gas_limit: u64) -> String {
+        norito::json::to_json(&FeePaymentIntent::authority(
+            Vec::new(),
+            NonZeroU64::new(gas_limit),
+        ))
+        .expect("serialize authority fee payment with gas")
+    }
+
+    #[test]
+    fn quoted_payload_signer_changes_only_fee_limits_and_rejects_payer_substitution() {
+        let keypair =
+            KeyPair::try_from_seed(vec![0x6A; 32], Algorithm::Ed25519).expect("authority key");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let authority_i105 = AccountAddress::from_account_id(&authority)
+            .expect("authority address")
+            .to_i105_for_discriminant(0x02F1)
+            .expect("authority I105");
+        let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
+            DomainId::try_new("quote-flow", "universal").expect("domain id"),
+        ))
+        .into();
+        let instruction_json = json::to_json(
+            &instruction_to_json_value(&instruction).expect("instruction JSON value"),
+        )
+        .expect("instruction JSON");
+        let draft = build_transaction_payload(
+            "quote-flow-chain".to_owned(),
+            authority_i105,
+            vec![instruction_json],
+            authority_fee_payment_json(),
+            None,
+            Some(1_700_000_000_000),
+            Some(60_000),
+            Some(7),
+        )
+        .expect("unsigned transaction draft");
+        let mut expected: TransactionPayload =
+            json::from_json(&draft.payload_json).expect("decode exact draft JSON");
+        let fee_asset = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("fee domain"),
+            "xor".parse().expect("asset name"),
+        );
+        let quoted_intent = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset,
+                "42".parse().expect("fee quantity"),
+            )],
+            None,
+        );
+        let quoted_intent_json = json::to_json(&quoted_intent).expect("quote intent JSON");
+        let (_, secret) = keypair.private_key().to_bytes();
+        let result = sign_quoted_transaction_payload(
+            draft.payload_json.clone(),
+            quoted_intent_json,
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect("sign quoted payload");
+        let signed = decode_signed_transaction(result.signed_transaction.as_ref())
+            .expect("decode signed transaction");
+        expected.fee_payment = quoted_intent;
+        assert_eq!(signed.payload(), &expected);
+        signed
+            .verify_signature()
+            .expect("quoted signature verifies");
+
+        let gas_error = sign_quoted_transaction_payload(
+            draft.payload_json.clone(),
+            authority_fee_payment_json_with_gas(1),
+            Uint8Array::from(secret.clone()),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quote must not substitute the signed gas bound");
+        assert!(gas_error.reason.contains("gas bound"));
+
+        let substituted = FeePaymentIntent::sponsor(
+            iroha_data_model::nexus::FeeSponsorProgramId::new(
+                authority,
+                "substituted".parse().expect("program name"),
+            ),
+            1,
+            Vec::new(),
+            None,
+        );
+        let error = sign_quoted_transaction_payload(
+            draft.payload_json,
+            json::to_json(&substituted).expect("substituted intent JSON"),
+            Uint8Array::from(secret),
+            Some("ed25519".to_owned()),
+        )
+        .expect_err("quote must not substitute the selected payer");
+        assert!(error.reason.contains("changed the selected payer"));
+    }
+
     #[test]
     fn external_transfer_payload_builder_and_finalizer_match_native_transaction_model() {
         let authority_key =
@@ -21339,6 +22057,7 @@ seiyaku Privacy {
             source,
             "1.25".to_owned(),
             destination_i105,
+            authority_fee_payment_json(),
             Some(r#"{"memo":"native","order":2}"#.to_owned()),
             Some(1_700_000_000_000),
             Some(5_000),
@@ -21420,6 +22139,7 @@ seiyaku Privacy {
                 source.clone(),
                 "1".to_owned(),
                 wrong_network_i105,
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21441,6 +22161,7 @@ seiyaku Privacy {
                     source.clone(),
                     invalid_quantity.clone(),
                     other_i105.clone(),
+                    authority_fee_payment_json(),
                     None,
                     Some(1),
                     None,
@@ -21457,6 +22178,7 @@ seiyaku Privacy {
                 other_source,
                 "1".to_owned(),
                 other_i105.clone(),
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21471,6 +22193,7 @@ seiyaku Privacy {
                 source.clone(),
                 "0".to_owned(),
                 other_i105.clone(),
+                authority_fee_payment_json(),
                 None,
                 Some(1),
                 None,
@@ -21485,6 +22208,7 @@ seiyaku Privacy {
             source,
             "1".to_owned(),
             other_i105,
+            authority_fee_payment_json(),
             None,
             Some(1),
             None,
@@ -21543,7 +22267,11 @@ seiyaku Privacy {
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let authority = AccountId::new(keypair.public_key().clone());
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
-        let mut builder = TransactionBuilder::new(chain_id, authority);
+        let mut builder = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
         builder.set_creation_time(Duration::from_millis(1));
         let signed = builder.sign(keypair.private_key());
         let mut versioned = vec![1];
@@ -21570,7 +22298,12 @@ seiyaku Privacy {
                 .into();
 
         let tx = sign_js_transaction(
-            TransactionBuilder::new(chain_id, authority.clone()).with_instructions([instruction]),
+            TransactionBuilder::new(
+                chain_id,
+                authority.clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([instruction]),
             keypair.private_key(),
             "test",
         )
@@ -21579,6 +22312,42 @@ seiyaku Privacy {
         assert_eq!(tx.authority(), &authority);
         tx.verify_signature()
             .expect("checked signed JS transaction should verify");
+    }
+
+    #[test]
+    fn sign_transaction_preserves_exact_fee_payment_intent() {
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let chain_id: ChainId = "fee-intent-preservation".parse().expect("valid chain id");
+        let fee_asset = AssetDefinitionId::new(
+            DomainId::try_new("fees", "universal").expect("fee domain"),
+            "xor".parse().expect("fee asset name"),
+        );
+        let intent = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::Nexus,
+                fee_asset,
+                Quantity::from(42_u32),
+            )],
+            NonZeroU64::new(9_000),
+        );
+        let mut builder = TransactionBuilder::new(chain_id, authority, intent.clone());
+        builder.set_creation_time(Duration::from_millis(1));
+        let original = builder.sign(keypair.private_key());
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        let resigned = sign_transaction(
+            Uint8Array::from(Encode::encode(&original)),
+            Uint8Array::from(secret),
+        )
+        .expect("re-sign transaction");
+        let decoded =
+            decode_signed_transaction(resigned.as_ref()).expect("decode re-signed transaction");
+
+        assert_eq!(decoded.fee_payment_intent(), &intent);
+        decoded
+            .verify_signature()
+            .expect("re-signed transaction verifies");
     }
 
     #[test]
@@ -21738,16 +22507,20 @@ seiyaku Privacy {
             DataSpaceId::UNIVERSAL,
         )
         .expect("contract address");
-        let transaction = TransactionBuilder::new(ChainId::from("js-contract-call"), authority)
-            .with_executable(Executable::ContractCall(
-                iroha_data_model::transaction::executable::ContractInvocation {
-                    contract_address,
-                    expected_code_hash,
-                    entrypoint: "run".to_owned(),
-                    arguments: None,
-                },
-            ))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("js-contract-call"),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address,
+                expected_code_hash,
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            },
+        ))
+        .sign(keypair.private_key());
         let bytes = norito::to_bytes(&transaction).expect("encode signed transaction");
         let decoded = decode_signed_transaction_json(Uint8Array::from(bytes))
             .expect("decode signed transaction JSON");
@@ -21794,6 +22567,7 @@ seiyaku Privacy {
             chain_id.clone(),
             authority.clone(),
             vec![instruction_json],
+            authority_fee_payment_json(),
             None,
             Some(1_700_000_000_000),
             Some(5_000),
@@ -21820,6 +22594,87 @@ seiyaku Privacy {
             tx.hash().as_ref(),
             "hash must match signed transaction hash"
         );
+    }
+
+    #[test]
+    fn build_executable_batch_transaction_preserves_mixed_order_and_tag() {
+        disable_packed_struct_once();
+        let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+        let authority = AccountId::new(keypair.public_key().clone());
+        let contract_address = ContractAddress::derive(0, &authority, 9, DataSpaceId::UNIVERSAL)
+            .expect("contract address");
+        let expected_code_hash = Hash::new(b"js-host-mixed-batch-code");
+        let instruction: InstructionBox = Register::<Domain>::domain(Domain::new(
+            DomainId::try_new("mixed-batch", "universal").expect("domain id"),
+        ))
+        .into();
+        let instruction_value =
+            instruction_to_json_value(&instruction).expect("instruction JSON value");
+        let instruction_entry = json::to_json(&norito_json!({
+            "kind": "instruction",
+            "instruction": instruction_value
+        }))
+        .expect("instruction entry JSON");
+        let call_entry = json::to_json(&norito_json!({
+            "kind": "contractCall",
+            "contractAddress": contract_address.to_string(),
+            "expectedCodeHash": hex::encode_upper(expected_code_hash.as_ref()),
+            "entrypoint": "run",
+            "arguments": vec![0x4b_u8, 0x4f, 0x54, 0x4f]
+        }))
+        .expect("contract-call entry JSON");
+        let (_, secret) = keypair.private_key().to_bytes();
+
+        let result = build_executable_batch_transaction(
+            "mixed-batch-chain".to_owned(),
+            account_json_literal(&authority),
+            vec![instruction_entry.clone(), call_entry, instruction_entry],
+            authority_fee_payment_json_with_gas(10_000),
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+            Uint8Array::from(secret),
+            Some("ed25519".to_owned()),
+        )
+        .expect("mixed batch transaction");
+
+        let tx = decode_signed_transaction(result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(&tx.instructions().encode()[..4], &4_u32.to_le_bytes());
+        let Executable::Batch(entries) = tx.instructions() else {
+            panic!("expected batch executable")
+        };
+        assert_eq!(entries.len(), 3);
+        assert!(matches!(entries[0], ExecutableBatchItem::Instruction(_)));
+        let ExecutableBatchItem::ContractCall(invocation) = &entries[1] else {
+            panic!("expected contract call in the middle")
+        };
+        assert_eq!(invocation.contract_address, contract_address);
+        assert_eq!(invocation.expected_code_hash, expected_code_hash);
+        assert_eq!(invocation.entrypoint, "run");
+        assert_eq!(
+            invocation.arguments.as_deref(),
+            Some(&[0x4b, 0x4f, 0x54, 0x4f][..])
+        );
+        assert!(matches!(entries[2], ExecutableBatchItem::Instruction(_)));
+    }
+
+    #[test]
+    fn executable_batch_parser_requires_gas_for_contract_calls() {
+        let fee_payment = FeePaymentIntent::authority(Vec::new(), None);
+        let error = checked_batch_executable(
+            vec![ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                expected_code_hash: Hash::new(b"js-host-missing-gas"),
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            })],
+            &fee_payment,
+        )
+        .expect_err("contract call requires gas");
+        assert!(error.reason.contains("gas limit is required"));
     }
 
     #[test]
@@ -21851,7 +22706,8 @@ seiyaku Privacy {
             account_json_literal(&authority),
             proved_json,
             attachment_json,
-            Some(r#"{"gas_limit":1000}"#.to_owned()),
+            authority_fee_payment_json_with_gas(1_000),
+            None,
             Some(1_700_000_000_000),
             Some(5_000),
             Some(42),
@@ -21997,7 +22853,7 @@ seiyaku Privacy {
         let instruction = Shield::new(
             asset_definition,
             authority.clone(),
-            7,
+            7_u128,
             [0x11; 32],
             iroha_data_model::confidential::ConfidentialEncryptedPayload::new(
                 [0x22; 32],
@@ -22026,6 +22882,7 @@ seiyaku Privacy {
             chain_id.to_string(),
             authority_i105,
             vec![instruction_json],
+            authority_fee_payment_json(),
             None,
             None,
             None,
@@ -22081,6 +22938,7 @@ seiyaku Privacy {
             chain_id,
             authority,
             Vec::new(),
+            authority_fee_payment_json(),
             None,
             None,
             None,
@@ -22167,6 +23025,112 @@ seiyaku Privacy {
             })
         });
         assert!(value_to_instruction(negative).is_err());
+
+        let mut unknown_payload = json::to_value(&settle).expect("settle JSON");
+        unknown_payload
+            .as_object_mut()
+            .expect("settlement payload object")
+            .insert("compatibility".to_owned(), Value::Bool(true));
+        let unknown_field = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": unknown_payload
+            })
+        });
+        let error = value_to_instruction(unknown_field)
+            .expect_err("SettleFxCorridor must reject unknown fields");
+        assert!(error.reason.contains("unexpected field"));
+
+        let mut missing_payload = json::to_value(&settle).expect("settle JSON");
+        missing_payload
+            .as_object_mut()
+            .expect("settlement payload object")
+            .remove("expected_policy_revision");
+        let missing_field = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": missing_payload
+            })
+        });
+        let error = value_to_instruction(missing_field)
+            .expect_err("SettleFxCorridor must reject missing fields");
+        assert!(error.reason.contains("missing field"));
+
+        let extra_envelope = norito_json!({
+            "Settlement": norito_json!({
+                "SettleFxCorridor": json::to_value(&settle).expect("settle JSON")
+            }),
+            "compatibility": true
+        });
+        let error = value_to_instruction(extra_envelope)
+            .expect_err("Settlement must use the explicit envelope parser");
+        assert!(error.reason.contains("envelope contains unexpected field"));
+    }
+
+    #[test]
+    fn embedded_source_revision_reports_the_build_marker() {
+        assert_eq!(
+            embedded_source_revision(),
+            option_env!("IROHA_GIT_COMMIT_HASH").unwrap_or("unknown")
+        );
+    }
+
+    #[test]
+    fn register_account_json_uses_the_explicit_strict_envelope_parser() {
+        let account = NewAccount::new(AccountId::new(
+            KeyPair::random_with_algorithm(Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        ));
+        let account_json = json::to_value(&account).expect("serialize new account");
+        let canonical = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json.clone()
+            })
+        });
+        value_to_instruction(canonical).expect("parse canonical account registration");
+
+        let account_id = account_json
+            .get("id")
+            .cloned()
+            .expect("serialized account id");
+        let defaults = norito_json!({
+            "Register": norito_json!({
+                "Account": norito_json!({
+                    "id": account_id
+                })
+            })
+        });
+        value_to_instruction(defaults).expect("current optional account defaults");
+
+        let mut unknown_account_json = account_json.clone();
+        unknown_account_json
+            .as_object_mut()
+            .expect("account JSON object")
+            .insert("compatibility".to_owned(), json::Value::Bool(true));
+        let unknown_field = norito_json!({
+            "Register": norito_json!({
+                "Account": unknown_account_json
+            })
+        });
+        assert!(value_to_instruction(unknown_field).is_err());
+
+        let extra_variant = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json.clone(),
+                "Compatibility": norito_json!({})
+            })
+        });
+        assert!(value_to_instruction(extra_variant).is_err());
+
+        let extra_envelope = norito_json!({
+            "Register": norito_json!({
+                "Account": account_json
+            }),
+            "SetParameter": norito_json!({})
+        });
+        let error = value_to_instruction(extra_envelope)
+            .expect_err("Register envelope must reject sibling instructions");
+        assert!(error.reason.contains("envelope contains unexpected field"));
+        assert!(value_to_instruction(norito_json!({"Register": json::Value::Null})).is_err());
     }
 
     #[test]

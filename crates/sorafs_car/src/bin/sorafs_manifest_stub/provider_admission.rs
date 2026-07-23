@@ -21,8 +21,8 @@ use sorafs_manifest::{
     ProviderAdmissionRevocationV1, ProviderAdvertBodyV1, ProviderAdvertV1, ProviderVrfPublicKeyV1,
     StakePointer, StreamBudgetV1, TransportHintV1, TransportProtocol, compute_advert_body_digest,
     compute_envelope_authorization_digest, compute_envelope_digest, compute_proposal_digest,
-    provider_advert::ProviderCapabilitySoranetPqV1, verify_advert_against_record,
-    verify_revocation_signatures_untrusted_signers,
+    deal::XorQuantity, provider_advert::ProviderCapabilitySoranetPqV1,
+    verify_advert_against_record, verify_revocation_signatures_untrusted_signers,
 };
 
 use super::{
@@ -73,7 +73,7 @@ fn run_proposal(args: Vec<String>) -> Result<(), String> {
                 opts.profile_handle = Some(parse_profile_handle(value, "--chunker-profile")?)
             }
             "--stake-pool-id" => opts.stake_pool_id = Some(parse_hex_array(value)?),
-            "--stake-amount" => opts.stake_amount = Some(parse_u128(value)?),
+            "--stake-amount" => opts.stake_amount = Some(parse_xor_quantity(value)?),
             "--advert-key" => opts.advert_key = Some(parse_hex_array(value)?),
             "--por-vrf-key" => opts.por_vrf_key = Some(parse_provider_vrf_key(value)?),
             "--jurisdiction" | "--jurisdiction-code" => {
@@ -232,7 +232,10 @@ fn run_proposal(args: Vec<String>) -> Result<(), String> {
         "profile_id".into(),
         Value::from(proposal.profile_id.clone()),
     );
-    report.insert("stake_amount".into(), Value::from(stake_amount.to_string()));
+    report.insert(
+        "stake_amount".into(),
+        Value::from(proposal.stake.stake_amount.to_string()),
+    );
     report.insert(
         "capability_count".into(),
         Value::from(proposal.capabilities.len() as u64),
@@ -810,7 +813,7 @@ fn run_revoke(args: Vec<String>) -> Result<(), String> {
 
 fn proposal_usage() -> &'static str {
     "usage: sorafs_manifest_stub provider-admission proposal --provider-id=<hex32> \
-        --chunker-profile=<handle> --stake-pool-id=<hex32> --stake-amount=<amount> \
+        --chunker-profile=<handle> --stake-pool-id=<hex32> --stake-amount=<canonical_xor_quantity> \
         --advert-key=<hex32> --por-vrf-key=<normal:hex48|small:hex96> \
         --jurisdiction-code=<ISO3166-1> --endpoint=<kind:host> \
         [--endpoint-attestation-kind=<kind>] \
@@ -852,7 +855,7 @@ struct ProposalOptions {
     provider_id: Option<[u8; 32]>,
     profile_handle: Option<String>,
     stake_pool_id: Option<[u8; 32]>,
-    stake_amount: Option<u128>,
+    stake_amount: Option<XorQuantity>,
     advert_key: Option<[u8; 32]>,
     por_vrf_key: Option<ProviderVrfPublicKeyV1>,
     jurisdiction: Option<String>,
@@ -1295,8 +1298,16 @@ fn read_file_bytes_path(path: &Path) -> Result<Vec<u8>, String> {
     fs::read(path).map_err(|err| format!("failed to read {path:?}: {err}"))
 }
 
-fn parse_u128(value: &str) -> Result<u128, String> {
-    super::parse_u128(value)
+fn parse_xor_quantity(value: &str) -> Result<XorQuantity, String> {
+    let quantity = value
+        .parse::<XorQuantity>()
+        .map_err(|err| format!("invalid XOR quantity `{value}`: {err}"))?;
+    if quantity.to_string() != value {
+        return Err(format!(
+            "XOR quantity `{value}` must use the canonical decimal spelling"
+        ));
+    }
+    Ok(quantity)
 }
 
 fn now_secs() -> u64 {
@@ -1315,6 +1326,25 @@ mod tests {
         match signing_key_from_bytes(&[0u8; 32]) {
             Err(err) => assert!(err.contains("all zero"), "unexpected error: {err}"),
             Ok(_) => panic!("all-zero council signing seed must fail"),
+        }
+    }
+
+    #[test]
+    fn stake_amount_parser_is_exact_canonical_and_not_u128_bounded() {
+        assert_eq!(
+            parse_xor_quantity("0.000000001")
+                .expect("sub-micro quantity")
+                .to_string(),
+            "0.000000001"
+        );
+        assert_eq!(
+            parse_xor_quantity("340282366920938463463374607431768211456")
+                .expect("quantity wider than u128")
+                .to_string(),
+            "340282366920938463463374607431768211456"
+        );
+        for value in ["", "01", "1.0", "+1", "-1", " 1", "1 "] {
+            parse_xor_quantity(value).expect_err("noncanonical XOR quantity must fail");
         }
     }
 

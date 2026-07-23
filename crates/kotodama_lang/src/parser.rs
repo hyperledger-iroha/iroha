@@ -400,6 +400,7 @@ pub(crate) fn validate_nesting(
                     budget.max_nesting()
                 ),
                 Some(SourceSpan {
+                    package_identity: source.package_identity().map(str::to_owned),
                     source: Some(source.name().to_owned()),
                     start: SourcePosition {
                         line: start.line,
@@ -430,6 +431,7 @@ fn parse_diagnostic_bundle(source: &SourceFile, mut errors: Vec<ParseError>) -> 
                 DiagnosticPhase::Parse,
                 error.message,
                 Some(SourceSpan {
+                    package_identity: source.package_identity().map(str::to_owned),
                     source: Some(source.name().to_owned()),
                     start: SourcePosition {
                         line: start.line,
@@ -937,7 +939,7 @@ impl<'a> CstAstLowerer<'a> {
                     if kind == SourceUnitKind::Module {
                         return Err(self.error(
                             self.tokens[self.pos].clone(),
-                            "module units cannot declare entrypoints",
+                            "module units cannot declare `kotoage`/`言挙げ` functions",
                         ));
                     }
                     self.bump(); // kotoage / 言挙げ
@@ -958,7 +960,7 @@ impl<'a> CstAstLowerer<'a> {
                     if kind == SourceUnitKind::Module {
                         return Err(self.error(
                             self.tokens[self.pos].clone(),
-                            "module units cannot declare entrypoints",
+                            "module units cannot declare `view fn` functions",
                         ));
                     }
                     self.bump(); // view
@@ -1211,6 +1213,10 @@ impl<'a> CstAstLowerer<'a> {
         self.finish_node(node);
         Ok(Item::Trigger(TriggerDecl {
             name,
+            location: SourceLocation {
+                line: name_token.line,
+                column: name_token.column,
+            },
             call,
             filter,
             repeats,
@@ -1831,7 +1837,7 @@ impl<'a> CstAstLowerer<'a> {
                 self.bump();
                 ret_ty = Some(self.parse_type_expr()?);
             }
-            // Caller authorization is mandatory for mutating public entrypoints
+            // Caller authorization is mandatory for mutating public kotoage
             // and optional for read-only views.
             while !self.peek(TokenKind::LBrace) && !self.peek(TokenKind::EOF) {
                 if self.peek(TokenKind::Authorize) {
@@ -1863,7 +1869,7 @@ impl<'a> CstAstLowerer<'a> {
                     if !matches!(modifiers.kind, FunctionKind::Kotoage | FunctionKind::View) {
                         return Err(Box::new(ParseError {
                             code: "K1001",
-                            message: "`authorize(...)` is only valid on entrypoints".into(),
+                            message: "`authorize(...)` is only valid on `kotoage`/`言挙げ` and `view fn` declarations".into(),
                             line: self.tokens[self.pos.saturating_sub(1)].line,
                             column: self.tokens[self.pos.saturating_sub(1)].column,
                             snippet: String::new(),
@@ -3126,9 +3132,9 @@ impl<'a> CstAstLowerer<'a> {
     }
 
     fn parse_named_primary(&mut self, ident_token: Token, mut name: String) -> ParseResult<Expr> {
-        // Keyword tokens stay reserved as bindings and declarations. The two
-        // canonical V1 namespace positions that intentionally use keywords are
-        // admitted only while parsing a `::` path.
+        // Keyword tokens stay reserved as bindings and declarations. Canonical
+        // V1 capability paths that intentionally use branded keywords admit
+        // them only after `::`; they never become ordinary identifiers.
         while self.peek(TokenKind::ColonColon) {
             self.bump();
             let segment = self.expect_namespace_segment()?;
@@ -3431,7 +3437,7 @@ impl<'a> CstAstLowerer<'a> {
         while !self.peek(TokenKind::RParen) {
             let is_named = matches!(
                 self.tokens.get(self.pos).map(|token| &token.kind),
-                Some(TokenKind::Ident(_))
+                Some(TokenKind::Ident(_) | TokenKind::Kotoage)
             ) && self.peek_n(1, TokenKind::Colon);
             if let Some(expected_named) = named_mode
                 && expected_named != is_named
@@ -3444,8 +3450,12 @@ impl<'a> CstAstLowerer<'a> {
                 );
                 if let Some(parameter_names) = parameter_names {
                     if is_named {
-                        let TokenKind::Ident(current_name) = &token.kind else {
-                            unreachable!("named argument lookahead requires an identifier")
+                        let current_name = match &token.kind {
+                            TokenKind::Ident(name) => name.as_str(),
+                            TokenKind::Kotoage => "kotoage",
+                            _ => unreachable!(
+                                "named argument lookahead requires an identifier or contextual kotoage"
+                            ),
                         };
                         let positional_names = parameter_names.get(..args.len());
                         if let Some(positional_names) = positional_names
@@ -3485,8 +3495,12 @@ impl<'a> CstAstLowerer<'a> {
             let parsed_argument = (|| -> ParseResult<(Option<String>, Expr)> {
                 let name = if is_named {
                     let token = self.bump();
-                    let TokenKind::Ident(name) = token.kind.clone() else {
-                        unreachable!("named argument lookahead requires an identifier")
+                    let name = match token.kind.clone() {
+                        TokenKind::Ident(name) => name,
+                        TokenKind::Kotoage => "kotoage".to_owned(),
+                        _ => unreachable!(
+                            "named argument lookahead requires an identifier or contextual kotoage"
+                        ),
                     };
                     if names.contains(&name) {
                         return Err(self.coded_error(
@@ -3635,6 +3649,8 @@ impl<'a> CstAstLowerer<'a> {
         match &tok.kind {
             TokenKind::Ident(name) => Ok(name.clone()),
             TokenKind::Trigger if self.peek(TokenKind::ColonColon) => Ok("trigger".to_owned()),
+            TokenKind::Seiyaku if self.peek(TokenKind::ColonColon) => Ok("seiyaku".to_owned()),
+            TokenKind::Kotoage => Ok("kotoage".to_owned()),
             _ => {
                 let mut error = self.error(tok, "namespace segment");
                 error.expected = Some(SyntaxKind::Ident);
@@ -5074,6 +5090,25 @@ mod tests {
             "seiyaku Legacy { kotoage fn run() permission(Admin) {} }",
         ] {
             parse(source).expect_err("English declaration spelling must be rejected");
+        }
+    }
+
+    #[test]
+    fn branded_keywords_are_contextual_namespace_segments_only() {
+        for source in [
+            "module M { fn f() { context::kotoage(); ledger::seiyaku::grant_kotoage(); test::invoke_kotoage(kotoage: \"run\", arguments: Json::parse(\"{}\")); } }",
+            "module M { fn f() { context::言挙げ(); ledger::誓約::grant_kotoage(); test::invoke_kotoage(言挙げ: \"run\", arguments: Json::parse(\"{}\")); } }",
+        ] {
+            parse(source).expect("branded capability path must parse");
+        }
+
+        for source in [
+            "module M { fn f() { kotoage(); } }",
+            "module M { fn f() { seiyaku::grant_kotoage(); } }",
+            "module M { fn f() { let kotoage = 1; } }",
+            "module M { fn f() { let seiyaku = 1; } }",
+        ] {
+            parse(source).expect_err("branded declaration keyword must stay reserved");
         }
     }
 

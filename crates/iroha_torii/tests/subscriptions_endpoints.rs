@@ -34,9 +34,11 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::{ExposedPrivateKey, Repeats},
     subscription::{
-        ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY, AccountAliasAutoRenewMetadata,
-        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SubscriptionInvoice,
-        SubscriptionInvoiceStatus, SubscriptionState, SubscriptionStatus,
+        SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY,
+        SUBSCRIPTION_PLAN_METADATA_KEY, SubscriptionBillFor, SubscriptionBilling,
+        SubscriptionCadence, SubscriptionFixedPeriodCadence, SubscriptionFixedPricing,
+        SubscriptionInvoice, SubscriptionInvoiceStatus, SubscriptionPlan, SubscriptionPricing,
+        SubscriptionState, SubscriptionStatus,
     },
     trigger::{Trigger, TriggerId, action::Action},
 };
@@ -62,23 +64,32 @@ struct SubscriptionHarness {
     billing_trigger_id: TriggerId,
 }
 
-fn build_alias_auto_renew_settings(alias: &str) -> AccountAliasAutoRenewMetadata {
-    AccountAliasAutoRenewMetadata {
-        alias: alias.to_owned(),
-        term_years: 1,
-        max_charge_amount: Quantity::from(200_u32),
-        retry_backoff_ms: 500,
-        max_failures: 3,
+fn build_subscription_plan(charge_asset_id: AssetDefinitionId) -> SubscriptionPlan {
+    SubscriptionPlan {
+        provider: ALICE_ID.clone(),
+        billing: SubscriptionBilling {
+            cadence: SubscriptionCadence::FixedPeriod(SubscriptionFixedPeriodCadence {
+                period_ms: 1_000,
+            }),
+            bill_for: SubscriptionBillFor::NextPeriod,
+            retry_backoff_ms: 500,
+            max_failures: 3,
+            grace_ms: 1_000,
+        },
+        pricing: SubscriptionPricing::Fixed(SubscriptionFixedPricing {
+            amount: Quantity::from(25_u32),
+            asset_definition: charge_asset_id,
+        }),
     }
 }
 
-fn build_alias_subscription_state(
-    charge_asset_id: AssetDefinitionId,
+fn build_subscription_state(
+    plan_id: AssetDefinitionId,
     billing_trigger_id: TriggerId,
     status: SubscriptionStatus,
 ) -> SubscriptionState {
     SubscriptionState {
-        plan_id: charge_asset_id,
+        plan_id,
         provider: ALICE_ID.clone(),
         subscriber: BOB_ID.clone(),
         status,
@@ -93,7 +104,7 @@ fn build_alias_subscription_state(
     }
 }
 
-fn build_alias_subscription_invoice(
+fn build_subscription_invoice(
     subscription_id: NftId,
     charge_asset_id: AssetDefinitionId,
 ) -> SubscriptionInvoice {
@@ -139,43 +150,49 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         domain_id.clone(),
         Name::from_str("fee").expect("asset name"),
     );
+    let plan_id = AssetDefinitionId::new(
+        domain_id.clone(),
+        Name::from_str("subscription_plan").expect("asset name"),
+    );
     let subscription_id = NftId::of(
         domain_id.clone(),
-        Name::from_str("alias_auto_renew").expect("subscription name"),
+        Name::from_str("subscription").expect("subscription name"),
     );
-    let billing_trigger_id: TriggerId = "bill_alias_router".parse().expect("trigger id");
+    let billing_trigger_id: TriggerId = "bill_subscription_router".parse().expect("trigger id");
 
     let mut metadata = Metadata::default();
     metadata.insert(
         Name::from_str(SUBSCRIPTION_METADATA_KEY).expect("subscription metadata key"),
-        IrohaJson::new(build_alias_subscription_state(
-            charge_asset_id.clone(),
+        IrohaJson::new(build_subscription_state(
+            plan_id.clone(),
             billing_trigger_id.clone(),
             status,
         )),
     );
     metadata.insert(
         Name::from_str(SUBSCRIPTION_INVOICE_METADATA_KEY).expect("invoice metadata key"),
-        IrohaJson::new(build_alias_subscription_invoice(
+        IrohaJson::new(build_subscription_invoice(
             subscription_id.clone(),
             charge_asset_id.clone(),
         )),
-    );
-    metadata.insert(
-        Name::from_str(ACCOUNT_ALIAS_AUTO_RENEW_METADATA_KEY).expect("alias metadata key"),
-        IrohaJson::new(build_alias_auto_renew_settings("member@universal")),
     );
 
     let domain = Domain::new(domain_id).build(&ALICE_ID);
     let provider_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let subscriber_account = Account::new(BOB_ID.clone()).build(&BOB_ID);
-    let asset_definition =
+    let mut plan_definition =
+        AssetDefinition::new(plan_id, NumericSpec::integer()).build(&ALICE_ID);
+    plan_definition.metadata.insert(
+        Name::from_str(SUBSCRIPTION_PLAN_METADATA_KEY).expect("plan metadata key"),
+        IrohaJson::new(build_subscription_plan(charge_asset_id.clone())),
+    );
+    let charge_asset_definition =
         AssetDefinition::new(charge_asset_id.clone(), NumericSpec::integer()).build(&ALICE_ID);
     let nft = Nft::new(subscription_id.clone(), metadata).build(&BOB_ID);
     let mut world = World::with_assets(
         [domain],
         [provider_account, subscriber_account],
-        [asset_definition],
+        [plan_definition, charge_asset_definition],
         [],
         [nft],
     );
@@ -290,7 +307,7 @@ async fn subscription_mutation_routes_are_registered() {
 }
 
 #[tokio::test]
-async fn subscription_list_and_get_return_alias_auto_renew_without_plan_metadata() {
+async fn subscription_list_and_get_return_generic_plan_metadata() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
 
@@ -310,10 +327,9 @@ async fn subscription_list_and_get_return_alias_auto_renew_without_plan_metadata
         items[0]["subscription_id"].as_str(),
         Some(subscription_id.as_str())
     );
-    assert!(
-        items[0]["plan"].is_null(),
-        "alias subscriptions should not require a plan payload"
-    );
+    let list_plan: SubscriptionPlan =
+        norito::json::from_value(items[0]["plan"].clone()).expect("subscription plan");
+    assert_eq!(list_plan.provider, *ALICE_ID);
     let list_state: SubscriptionState =
         norito::json::from_value(items[0]["subscription"].clone()).expect("subscription state");
     assert_eq!(list_state.status, SubscriptionStatus::Paused);
@@ -331,10 +347,9 @@ async fn subscription_list_and_get_return_alias_auto_renew_without_plan_metadata
     .await;
     assert_eq!(get_resp.status(), StatusCode::OK);
     let get_json = response_json(get_resp).await;
-    assert!(
-        get_json["plan"].is_null(),
-        "alias subscriptions should serialize without a plan payload"
-    );
+    let get_plan: SubscriptionPlan =
+        norito::json::from_value(get_json["plan"].clone()).expect("subscription plan");
+    assert_eq!(get_plan.provider, *ALICE_ID);
     let get_state: SubscriptionState =
         norito::json::from_value(get_json["subscription"].clone()).expect("subscription state");
     assert_eq!(get_state.status, SubscriptionStatus::Paused);
@@ -344,7 +359,7 @@ async fn subscription_list_and_get_return_alias_auto_renew_without_plan_metadata
 }
 
 #[tokio::test]
-async fn subscription_resume_route_supports_alias_auto_renew_nfts() {
+async fn subscription_resume_route_rebuilds_generic_billing_schedule() {
     let harness = build_subscription_harness(SubscriptionStatus::Paused);
     let subscription_id = harness.subscription_id.to_string();
     let body = json_object(vec![
@@ -401,8 +416,8 @@ async fn subscription_resume_route_supports_alias_auto_renew_nfts() {
     assert_eq!(resumed_state.status, SubscriptionStatus::Active);
     assert_eq!(resumed_state.failure_count, 0);
     assert_eq!(resumed_state.next_charge_ms, 5_000);
-    assert_eq!(resumed_state.current_period_start_ms, 1_000);
-    assert_eq!(resumed_state.current_period_end_ms, 2_000);
+    assert_eq!(resumed_state.current_period_start_ms, 5_000);
+    assert_eq!(resumed_state.current_period_end_ms, 6_000);
     assert!(
         view.world()
             .triggers()

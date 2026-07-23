@@ -874,17 +874,6 @@ fn is_dead_code_eliminable(instruction: &Instr) -> bool {
     }
 }
 
-/// Whether this function can allocate exclusively from caller-saved argument
-/// registers without crossing an instruction that uses the host-call ABI.
-pub(crate) fn uses_caller_saved_pool(function: &Function) -> bool {
-    function.blocks.iter().all(|block| {
-        block
-            .instrs
-            .iter()
-            .all(instruction_preserves_argument_registers)
-    })
-}
-
 fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
     matches!(
         instruction,
@@ -920,6 +909,76 @@ fn instruction_preserves_argument_registers(instruction: &Instr) -> bool {
     )
 }
 
+#[derive(Debug)]
+struct ArgumentRegisterClobber {
+    position: usize,
+    internal_call: bool,
+    uses: HashSet<Temp>,
+}
+
+fn collect_argument_register_clobbers(function: &Function) -> Vec<ArgumentRegisterClobber> {
+    let mut clobbers = Vec::new();
+    let mut position = 0usize;
+    for block in &function.blocks {
+        for instruction in &block.instrs {
+            if !instruction_preserves_argument_registers(instruction) {
+                let mut uses = HashSet::new();
+                visit_instr_uses(instruction, |temp| {
+                    uses.insert(temp);
+                });
+                clobbers.push(ArgumentRegisterClobber {
+                    position,
+                    internal_call: matches!(
+                        instruction,
+                        Instr::Call { .. } | Instr::CallMulti { .. }
+                    ),
+                    uses,
+                });
+            }
+            position = position.saturating_add(1);
+        }
+        position = position.saturating_add(1);
+    }
+    clobbers
+}
+
+fn interval_can_use_argument_registers(
+    interval: Interval,
+    clobbers: &[ArgumentRegisterClobber],
+) -> bool {
+    clobbers.iter().all(|clobber| {
+        let crosses = interval.start < clobber.position && clobber.position < interval.end;
+        let unsafe_host_operand = !clobber.internal_call
+            && clobber.uses.contains(&interval.temp)
+            && interval.start <= clobber.position
+            && clobber.position <= interval.end;
+        !crosses && !unsafe_host_operand
+    })
+}
+
+fn reload_range_survives_clobber(
+    start: usize,
+    end: usize,
+    clobbers: &[ArgumentRegisterClobber],
+) -> bool {
+    clobbers
+        .iter()
+        .any(|clobber| start <= clobber.position && clobber.position < end)
+}
+
+fn split_candidate_can_use_argument_registers(
+    candidate: SplitCandidate,
+    clobbers: &[ArgumentRegisterClobber],
+) -> bool {
+    !reload_range_survives_clobber(candidate.start, candidate.end, clobbers)
+        && clobbers.iter().all(|clobber| {
+            clobber.internal_call
+                || !clobber.uses.contains(&candidate.temp)
+                || clobber.position < candidate.start
+                || candidate.end < clobber.position
+        })
+}
+
 /// Whether a direct function call can overwrite the return-address register.
 pub(crate) fn has_internal_calls(function: &Function) -> bool {
     function.blocks.iter().any(|block| {
@@ -930,10 +989,10 @@ pub(crate) fn has_internal_calls(function: &Function) -> bool {
     })
 }
 
-fn precolored_argument_temps(function: &Function, enabled: bool) -> HashMap<Temp, usize> {
-    if !enabled {
-        return HashMap::new();
-    }
+fn precolored_argument_temps(
+    function: &Function,
+    argument_register_temps: &HashSet<Temp>,
+) -> HashMap<Temp, usize> {
     let Some(entry) = function
         .blocks
         .iter()
@@ -950,6 +1009,9 @@ fn precolored_argument_temps(function: &Function, enabled: bool) -> HashMap<Temp
             let Instr::LoadVar { dest, name } = instruction else {
                 return None;
             };
+            if !argument_register_temps.contains(dest) {
+                return None;
+            }
             let index = function.params.iter().position(|param| param == name)?;
             ARG_REGS
                 .get(index)
@@ -1093,20 +1155,50 @@ fn collect_live_intervals(func: &Function) -> Vec<Interval> {
     interval_list
 }
 
+fn register_allowed_for_interval(register: usize, can_use_argument_register: bool) -> bool {
+    ALLOC_POOL.contains(&register) || can_use_argument_register && ARG_REGS.contains(&register)
+}
+
+fn take_preferred_free_register(
+    free_registers: &mut Vec<usize>,
+    can_use_argument_register: bool,
+) -> Option<usize> {
+    let preferred = ARG_REGS
+        .iter()
+        .rev()
+        .filter(|_| can_use_argument_register)
+        .chain(ALLOC_POOL.iter().rev());
+    for register in preferred.copied() {
+        if let Some(index) = free_registers
+            .iter()
+            .position(|candidate| *candidate == register)
+        {
+            return Some(free_registers.swap_remove(index));
+        }
+    }
+    None
+}
+
 fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation {
     let mut allocation = Allocation {
         regs: HashMap::new(),
         stack: HashMap::new(),
         frame_size: 0,
     };
-    let use_caller_saved_pool = uses_caller_saved_pool(func);
-    let precolored = precolored_argument_temps(func, use_caller_saved_pool);
+    let clobbers = collect_argument_register_clobbers(func);
+    let argument_register_temps = interval_list
+        .iter()
+        .copied()
+        .filter(|interval| interval_can_use_argument_registers(*interval, &clobbers))
+        .map(|interval| interval.temp)
+        .collect::<HashSet<_>>();
+    let precolored = precolored_argument_temps(func, &argument_register_temps);
     let mut active: Vec<(usize, Temp, usize)> = Vec::new();
-    let mut free_regs: Vec<usize> = if use_caller_saved_pool {
-        ARG_REGS.to_vec()
-    } else {
-        ALLOC_POOL.to_vec()
-    };
+    let mut free_regs = ALLOC_POOL
+        .iter()
+        .chain(ARG_REGS.iter())
+        .copied()
+        .collect::<Vec<_>>();
     let mut spilled = HashSet::new();
 
     for interval in interval_list.iter().copied() {
@@ -1129,17 +1221,22 @@ fn allocate_intervals(func: &Function, interval_list: &[Interval]) -> Allocation
             continue;
         }
 
-        if let Some(reg) = free_regs.pop() {
+        let can_use_argument_register = argument_register_temps.contains(&interval.temp);
+        if let Some(reg) = take_preferred_free_register(&mut free_regs, can_use_argument_register) {
             allocation.regs.insert(interval.temp, reg);
             active.push((interval.end, interval.temp, reg));
             active.sort_by_key(|(end, _, _)| *end);
             continue;
         }
 
-        if let Some((idx, _)) = active
+        if let Some((idx, _, _, _)) = active
             .iter()
             .enumerate()
-            .max_by_key(|(_, (end, _, _))| *end)
+            .filter_map(|(index, (end, temp, register))| {
+                register_allowed_for_interval(*register, can_use_argument_register)
+                    .then_some((index, *end, *temp, *register))
+            })
+            .max_by_key(|(_, end, temp, register)| (*end, temp.0, *register))
         {
             let (spill_end, spill_temp, spill_reg) = active[idx];
             if spill_end > interval.end {
@@ -1263,7 +1360,7 @@ fn split_candidate_uses<F: FnMut(Temp)>(instruction: &Instr, mut visit: F) {
                 visit(*temp);
             }
         }
-        Instr::Valcom { value, blind, .. } => {
+        Instr::Valcom { value, blind, .. } | Instr::PrivateNumericValcom { value, blind, .. } => {
             visit(*value);
             visit(*blind);
         }
@@ -1338,13 +1435,23 @@ fn fused_relational_operands(block: &BasicBlock) -> Option<(Temp, Temp)> {
     }
 }
 
-fn push_split_clusters(candidates: &mut Vec<SplitCandidate>, temp: Temp, positions: &[usize]) {
+fn push_split_clusters(
+    candidates: &mut Vec<SplitCandidate>,
+    temp: Temp,
+    positions: &[usize],
+    clobbers: &[ArgumentRegisterClobber],
+) {
     let mut cluster_start = 0usize;
     while cluster_start < positions.len() {
         let mut cluster_end = cluster_start + 1;
         while cluster_end < positions.len()
             && positions[cluster_end].saturating_sub(positions[cluster_end - 1])
                 <= MAX_SPLIT_USE_GAP
+            && !reload_range_survives_clobber(
+                positions[cluster_start],
+                positions[cluster_end],
+                clobbers,
+            )
         {
             cluster_end += 1;
         }
@@ -1364,6 +1471,7 @@ fn push_split_clusters(candidates: &mut Vec<SplitCandidate>, temp: Temp, positio
 fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCandidate> {
     let mut candidates = Vec::new();
     let mut position = 0usize;
+    let clobbers = collect_argument_register_clobbers(func);
     // Literal-like values may be materialized directly by code generation, so
     // their nominal IR use count is not proof of repeated spill traffic. Leave
     // them to the rematerialization paths instead of scheduling speculative
@@ -1444,7 +1552,7 @@ fn collect_split_candidates(func: &Function, home: &Allocation) -> Vec<SplitCand
         let mut block_uses = uses.into_iter().collect::<Vec<_>>();
         block_uses.sort_unstable_by_key(|((temp, epoch), _)| (temp.0, *epoch));
         for ((temp, _), positions) in block_uses {
-            push_split_clusters(&mut candidates, temp, &positions);
+            push_split_clusters(&mut candidates, temp, &positions, &clobbers);
         }
     }
     candidates
@@ -1459,22 +1567,17 @@ fn build_split_segments(
         return Vec::new();
     }
 
-    let caller_saved_pool = uses_caller_saved_pool(func);
+    let clobbers = collect_argument_register_clobbers(func);
     let home_registers = home.regs.values().copied().collect::<BTreeSet<_>>();
-    let register_pool = if caller_saved_pool {
-        ARG_REGS.to_vec()
-    } else {
-        // Reusing a callee-saved register that already has a home interval
-        // avoids adding prologue/epilogue traffic merely to save reloads.
-        ALLOC_POOL
-            .iter()
-            .copied()
-            .filter(|register| home_registers.contains(register))
-            .collect()
-    };
-    if register_pool.is_empty() {
-        return Vec::new();
-    }
+    // Reusing a preserved register that already has a home interval avoids
+    // adding prologue/epilogue traffic merely to save reloads. Caller-saved
+    // holes are always available to clobber-local segments.
+    let preserved_register_pool = ALLOC_POOL
+        .iter()
+        .rev()
+        .copied()
+        .filter(|register| home_registers.contains(register))
+        .collect::<Vec<_>>();
 
     let mut occupied: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
     for interval in intervals {
@@ -1502,7 +1605,15 @@ fn build_split_segments(
 
     let mut segments = Vec::new();
     for candidate in candidates {
-        let register = register_pool.iter().rev().copied().find(|register| {
+        let can_use_argument_register =
+            split_candidate_can_use_argument_registers(candidate, &clobbers);
+        let register_pool = ARG_REGS
+            .iter()
+            .rev()
+            .filter(|_| can_use_argument_register)
+            .copied()
+            .chain(preserved_register_pool.iter().copied());
+        let register = register_pool.into_iter().find(|register| {
             occupied.get(register).is_none_or(|ranges| {
                 ranges.iter().all(|(start, end)| {
                     !ranges_overlap(candidate.start, candidate.end, *start, *end)
@@ -1842,7 +1953,7 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
             }
         }
         Pubkgen { src, .. } => f(*src),
-        Valcom { value, blind, .. } => {
+        Valcom { value, blind, .. } | PrivateNumericValcom { value, blind, .. } => {
             f(*value);
             f(*blind);
         }
@@ -2234,7 +2345,6 @@ pub(crate) fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         Instr::GetPrivateInput { index, .. } => f(*index),
         Instr::GetPublicInput { key, .. } => f(*key),
-        Instr::UseNullifier { nullifier } => f(*nullifier),
         StateGet { path, .. } => f(*path),
         StateSet { path, value } => {
             f(*path);
@@ -2415,6 +2525,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::Poseidon6 { dest, .. }
         | Instr::Pubkgen { dest, .. }
         | Instr::Valcom { dest, .. }
+        | Instr::PrivateNumericValcom { dest, .. }
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
         | Instr::SysvarAuthority { dest }
@@ -2585,7 +2696,6 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::TransferBatchBegin
         | Instr::TransferBatchEnd
         | Instr::TransferBatchApply { .. }
-        | Instr::UseNullifier { .. }
         | Instr::CommitOutput
         | Instr::SmartContractLifecycle { .. }
         | Instr::ExpectRejectAs { .. } => None,
@@ -2629,6 +2739,68 @@ pub(crate) fn visit_instr_defs<F: FnMut(Temp)>(instruction: &Instr, mut visit: F
 mod tests {
     use super::*;
     use crate::ir::{self, BasicBlock, Instr, Terminator};
+
+    #[test]
+    fn private_numeric_commitment_reports_each_pointer_operand_once() {
+        let value = Temp(1);
+        let blind = Temp(2);
+        let instruction = Instr::PrivateNumericValcom {
+            dest: Temp(3),
+            value,
+            blind,
+        };
+
+        let mut uses = Vec::new();
+        visit_instr_uses(&instruction, |used| uses.push(used));
+
+        assert_eq!(uses, vec![value, blind]);
+    }
+
+    #[test]
+    fn private_numeric_instruction_visitors_preserve_aliased_uses_and_definitions() {
+        let shared = Temp(1);
+        let commitment_dest = Temp(2);
+        let commitment = Instr::PrivateNumericValcom {
+            dest: commitment_dest,
+            value: shared,
+            blind: shared,
+        };
+        let mut commitment_uses = Vec::new();
+        let mut commitment_defs = Vec::new();
+        visit_instr_uses(&commitment, |used| commitment_uses.push(used));
+        visit_instr_defs(&commitment, |defined| commitment_defs.push(defined));
+        assert_eq!(commitment_uses, vec![shared, shared]);
+        assert_eq!(commitment_defs, vec![commitment_dest]);
+
+        let private_input = Instr::GetPrivateInput {
+            dest: shared,
+            index: shared,
+            kind: ivm_abi::private_input::PrivateInputKindV1::Quantity,
+        };
+        let mut private_input_uses = Vec::new();
+        let mut private_input_defs = Vec::new();
+        visit_instr_uses(&private_input, |used| private_input_uses.push(used));
+        visit_instr_defs(&private_input, |defined| private_input_defs.push(defined));
+        assert_eq!(private_input_uses, vec![shared]);
+        assert_eq!(private_input_defs, vec![shared]);
+    }
+
+    #[test]
+    fn rounded_decimal_conversion_reports_its_mode_operand_once() {
+        let value = Temp(1);
+        let mode = Temp(2);
+        let instruction = Instr::DecimalToInt {
+            dest: Temp(3),
+            value,
+            mode: Some(mode),
+            op: ir::DecimalToIntOp::Round,
+        };
+
+        let mut uses = Vec::new();
+        visit_instr_uses(&instruction, |used| uses.push(used));
+
+        assert_eq!(uses, vec![value, mode]);
+    }
 
     #[test]
     fn virtual_tuple_copy_keeps_constant_field_live_until_state_value_extraction() {
@@ -2753,8 +2925,343 @@ mod tests {
         assert_eq!(alloc.regs.get(&parameter), Some(&RET_REG));
         assert!(alloc.stack.is_empty());
         assert_eq!(alloc.frame_size, 0);
-        assert!(uses_caller_saved_pool(&func));
         assert!(!has_internal_calls(&func));
+    }
+
+    #[test]
+    fn call_aware_allocation_preserves_only_values_live_across_the_call() {
+        let carried = Temp(0);
+        let argument = Temp(1);
+        let call_result = Temp(2);
+        let result = Temp(3);
+        let function = Function {
+            name: "call_aware".into(),
+            params: Vec::new(),
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: carried,
+                        value: 7,
+                    },
+                    Instr::Const {
+                        dest: argument,
+                        value: 11,
+                    },
+                    Instr::Call {
+                        callee: "helper".into(),
+                        args: vec![argument],
+                        dest: Some(call_result),
+                    },
+                    Instr::Binary {
+                        dest: result,
+                        op: crate::ast::BinaryOp::Add,
+                        left: carried,
+                        right: call_result,
+                    },
+                ],
+                terminator: Terminator::Return(Some(result)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+        assert!(ARG_REGS.contains(&allocation.regs[&argument]));
+        assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
+        assert!(allocation.stack.is_empty());
+    }
+
+    #[test]
+    fn parameter_precolouring_is_kept_only_when_it_does_not_cross_a_call() {
+        let parameter = Temp(0);
+        let call_result = Temp(1);
+        let dead_at_call = Function {
+            name: "dead_at_call".into(),
+            params: vec!["value".into()],
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::LoadVar {
+                        dest: parameter,
+                        name: "value".into(),
+                    },
+                    Instr::Call {
+                        callee: "helper".into(),
+                        args: vec![parameter],
+                        dest: Some(call_result),
+                    },
+                ],
+                terminator: Terminator::Return(Some(call_result)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+        assert_eq!(allocate(&dead_at_call).regs[&parameter], RET_REG);
+
+        let after_call = Temp(2);
+        let live_across_call = Function {
+            name: "live_across_call".into(),
+            params: vec!["value".into()],
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::LoadVar {
+                        dest: parameter,
+                        name: "value".into(),
+                    },
+                    Instr::Call {
+                        callee: "helper".into(),
+                        args: Vec::new(),
+                        dest: Some(call_result),
+                    },
+                    Instr::Binary {
+                        dest: after_call,
+                        op: crate::ast::BinaryOp::Add,
+                        left: parameter,
+                        right: call_result,
+                    },
+                ],
+                terminator: Terminator::Return(Some(after_call)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+        let allocation = allocate(&live_across_call);
+        assert_ne!(allocation.regs[&parameter], RET_REG);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&parameter]));
+    }
+
+    #[test]
+    fn values_between_multiple_calls_reuse_argument_registers() {
+        let carried = Temp(0);
+        let first_result = Temp(1);
+        let second_result = Temp(2);
+        let result = Temp(3);
+        let function = Function {
+            name: "multiple_calls".into(),
+            params: Vec::new(),
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: carried,
+                        value: 5,
+                    },
+                    Instr::Call {
+                        callee: "first".into(),
+                        args: Vec::new(),
+                        dest: Some(first_result),
+                    },
+                    Instr::Call {
+                        callee: "second".into(),
+                        args: vec![first_result],
+                        dest: Some(second_result),
+                    },
+                    Instr::Binary {
+                        dest: result,
+                        op: crate::ast::BinaryOp::Add,
+                        left: carried,
+                        right: second_result,
+                    },
+                ],
+                terminator: Terminator::Return(Some(result)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+        assert!(ARG_REGS.contains(&allocation.regs[&first_result]));
+        assert!(ARG_REGS.contains(&allocation.regs[&second_result]));
+        assert_eq!(allocation, allocate(&function));
+    }
+
+    #[test]
+    fn loop_carried_value_uses_a_preserved_home_across_calls() {
+        let carried = Temp(0);
+        let call_result = Temp(1);
+        let function = Function {
+            name: "call_in_loop".into(),
+            params: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    label: Label(0),
+                    instrs: vec![Instr::Const {
+                        dest: carried,
+                        value: 1,
+                    }],
+                    terminator: Terminator::Jump(Label(1)),
+                },
+                BasicBlock {
+                    label: Label(1),
+                    instrs: vec![Instr::Call {
+                        callee: "tick".into(),
+                        args: Vec::new(),
+                        dest: Some(call_result),
+                    }],
+                    terminator: Terminator::Branch {
+                        cond: carried,
+                        then_bb: Label(1),
+                        else_bb: Label(2),
+                    },
+                },
+                BasicBlock {
+                    label: Label(2),
+                    instrs: Vec::new(),
+                    terminator: Terminator::Return(Some(carried)),
+                },
+            ],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+        assert!(ARG_REGS.contains(&allocation.regs[&call_result]));
+    }
+
+    #[test]
+    fn join_live_value_uses_a_preserved_home_across_one_branch_call() {
+        let carried = Temp(0);
+        let call_result = Temp(1);
+        let function = Function {
+            name: "call_before_join".into(),
+            params: Vec::new(),
+            blocks: vec![
+                BasicBlock {
+                    label: Label(0),
+                    instrs: vec![Instr::Const {
+                        dest: carried,
+                        value: 1,
+                    }],
+                    terminator: Terminator::Branch {
+                        cond: carried,
+                        then_bb: Label(1),
+                        else_bb: Label(2),
+                    },
+                },
+                BasicBlock {
+                    label: Label(1),
+                    instrs: vec![Instr::Call {
+                        callee: "branch_call".into(),
+                        args: Vec::new(),
+                        dest: Some(call_result),
+                    }],
+                    terminator: Terminator::Jump(Label(3)),
+                },
+                BasicBlock {
+                    label: Label(2),
+                    instrs: Vec::new(),
+                    terminator: Terminator::Jump(Label(3)),
+                },
+                BasicBlock {
+                    label: Label(3),
+                    instrs: Vec::new(),
+                    terminator: Terminator::Return(Some(carried)),
+                },
+            ],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+    }
+
+    #[test]
+    fn host_call_operands_are_preserved_while_results_use_argument_registers() {
+        let actor = Temp(0);
+        let account = Temp(1);
+        let function = Function {
+            name: "host_operand".into(),
+            params: Vec::new(),
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Const {
+                        dest: actor,
+                        value: 1,
+                    },
+                    Instr::ActorAccount {
+                        dest: account,
+                        actor,
+                    },
+                ],
+                terminator: Terminator::Return(Some(account)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(ALLOC_POOL.contains(&allocation.regs[&actor]));
+        assert!(ARG_REGS.contains(&allocation.regs[&account]));
+    }
+
+    #[test]
+    fn call_local_pressure_uses_the_full_caller_saved_window_without_spills() {
+        let carried = Temp(0);
+        let warmup = Temp(1);
+        let arguments = (0..ARG_REGS.len())
+            .map(|index| Temp(index + 2))
+            .collect::<Vec<_>>();
+        let call_result = Temp(ARG_REGS.len() + 2);
+        let result = Temp(ARG_REGS.len() + 3);
+        let mut instructions = vec![
+            Instr::Const {
+                dest: carried,
+                value: 1,
+            },
+            Instr::Call {
+                callee: "warmup".into(),
+                args: Vec::new(),
+                dest: Some(warmup),
+            },
+        ];
+        instructions.extend(
+            arguments
+                .iter()
+                .enumerate()
+                .map(|(index, temp)| Instr::Const {
+                    dest: *temp,
+                    value: index as i64,
+                }),
+        );
+        instructions.push(Instr::Call {
+            callee: "consume".into(),
+            args: arguments.clone(),
+            dest: Some(call_result),
+        });
+        instructions.push(Instr::Binary {
+            dest: result,
+            op: crate::ast::BinaryOp::Add,
+            left: carried,
+            right: call_result,
+        });
+        let function = Function {
+            name: "call_pressure".into(),
+            params: Vec::new(),
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: instructions,
+                terminator: Terminator::Return(Some(result)),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+
+        let allocation = allocate(&function);
+        assert!(allocation.stack.is_empty(), "{allocation:#?}");
+        assert!(ALLOC_POOL.contains(&allocation.regs[&carried]));
+        assert!(
+            arguments
+                .iter()
+                .all(|temp| ARG_REGS.contains(&allocation.regs[temp]))
+        );
+        assert_eq!(allocation, allocate(&function));
     }
 
     #[test]
@@ -3207,7 +3714,7 @@ mod tests {
 
     #[test]
     fn spills_when_live_set_exceeds_pool() {
-        let live = ALLOC_POOL.len() + 4;
+        let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
         let mut blocks = Vec::new();
         let mut instrs = Vec::new();
         for i in 0..live {
@@ -3299,11 +3806,8 @@ mod tests {
         assert_eq!(segments[0].end, first_use_position + 1);
         assert_eq!(segments[0].use_count, 4);
         assert!(
-            baseline
-                .regs
-                .values()
-                .any(|register| *register == segments[0].register),
-            "a non-leaf split must reuse an already-preserved register"
+            ARG_REGS.contains(&segments[0].register),
+            "a clobber-local split should reuse a caller-saved hole"
         );
         assert_eq!(plan.frame_size, baseline.frame_size);
         assert_eq!(plan.reloads_at(first_use_position).len(), 1);
@@ -3376,6 +3880,78 @@ mod tests {
                 },
             ],
             "a definition must terminate the prior read-only split segment"
+        );
+    }
+
+    #[test]
+    fn split_reload_segments_stop_at_internal_call_clobbers() {
+        let value = Temp(0);
+        let function = Function {
+            name: "split_at_call".into(),
+            params: Vec::new(),
+            blocks: vec![BasicBlock {
+                label: Label(0),
+                instrs: vec![
+                    Instr::Binary {
+                        dest: Temp(1),
+                        op: crate::ast::BinaryOp::Add,
+                        left: value,
+                        right: value,
+                    },
+                    Instr::Binary {
+                        dest: Temp(2),
+                        op: crate::ast::BinaryOp::Add,
+                        left: value,
+                        right: value,
+                    },
+                    Instr::Call {
+                        callee: "clobber".into(),
+                        args: vec![value],
+                        dest: None,
+                    },
+                    Instr::Binary {
+                        dest: Temp(3),
+                        op: crate::ast::BinaryOp::Add,
+                        left: value,
+                        right: value,
+                    },
+                    Instr::Binary {
+                        dest: Temp(4),
+                        op: crate::ast::BinaryOp::Add,
+                        left: value,
+                        right: value,
+                    },
+                ],
+                terminator: Terminator::Return(None),
+            }],
+            entry: Label(0),
+            location: crate::ast::SourceLocation { line: 1, column: 1 },
+        };
+        let home = Allocation {
+            regs: HashMap::new(),
+            stack: [(value, 0)].into_iter().collect(),
+            frame_size: 16,
+        };
+        let intervals = [Interval {
+            temp: value,
+            start: 0,
+            end: 4,
+        }];
+
+        let mut segments = build_split_segments(&function, &intervals, &home);
+        segments.sort_unstable_by_key(|segment| segment.start);
+        assert_eq!(segments.len(), 2, "{segments:#?}");
+        assert_eq!((segments[0].start, segments[0].end), (0, 2));
+        assert_eq!((segments[1].start, segments[1].end), (3, 4));
+        assert!(
+            segments
+                .iter()
+                .all(|segment| ARG_REGS.contains(&segment.register))
+        );
+        assert!(
+            segments
+                .iter()
+                .all(|segment| { !(segment.start <= 2 && 2 < segment.end) })
         );
     }
 
@@ -3456,8 +4032,8 @@ mod tests {
             location: crate::ast::SourceLocation { line: 1, column: 1 },
         };
         let alloc = allocate(&func);
-        let expected_first = *ALLOC_POOL.last().expect("alloc pool");
-        let expected_second = ALLOC_POOL[ALLOC_POOL.len() - 2];
+        let expected_first = *ARG_REGS.last().expect("argument register pool");
+        let expected_second = ARG_REGS[ARG_REGS.len() - 2];
         assert_eq!(alloc.regs.get(&dest0), Some(&expected_first));
         assert_eq!(alloc.regs.get(&dest1), Some(&expected_second));
     }
@@ -3482,7 +4058,7 @@ mod tests {
             });
         }
 
-        let live = ALLOC_POOL.len() + 4;
+        let live = ALLOC_POOL.len() + ARG_REGS.len() + 4;
         let mut one_phase = Vec::new();
         let mut next_temp = 0;
         pressure_phase(&mut one_phase, &mut next_temp, live);

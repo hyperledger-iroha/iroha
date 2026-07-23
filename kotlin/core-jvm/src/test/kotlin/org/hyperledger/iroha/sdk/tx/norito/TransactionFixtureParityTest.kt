@@ -5,6 +5,9 @@ import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
+import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
+import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.WirePayload
 import org.hyperledger.iroha.sdk.norito.NoritoAdapters
@@ -21,6 +24,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 
 class TransactionFixtureParityTest {
     private val adapter = NoritoJavaCodecAdapter()
@@ -44,6 +48,13 @@ class TransactionFixtureParityTest {
             )
             assertEquals(fixture.nonce, payload.nonce, "${fixture.name}: nonce mismatch")
 
+            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
+                assertIs<Executable.Ivm>(payload.executable)
+                assertNull(payload.feePayment.gasLimit)
+                assertFailsWith<NoritoException> { adapter.encodeTransaction(payload) }
+                continue
+            }
+
             val encoded = adapter.encodeTransaction(payload)
             fixture.encodedBase64?.let { expected ->
                 assertEquals(
@@ -59,14 +70,35 @@ class TransactionFixtureParityTest {
     }
 
     @Test
-    fun `typed metadata fixture preserves gas limit as json number`() {
+    fun `typed fee payment fixture preserves pipeline gas limits`() {
         val fixture = AndroidFixtureSupport.loadPayloadFixtures()
-            .single { it.name == "typed_metadata_gas_limit" }
+            .single { it.name == "typed_fee_payment_gas_limit" }
         val payload = fixture.materializePayload(adapter)
 
-        assertEquals(JsonValue.string("xor#universal"), payload.metadata["gas_asset_id"])
-        assertEquals(JsonValue.number(1000), payload.metadata["gas_limit"])
+        val feePayment = assertIs<FeePaymentIntent.Authority>(payload.feePayment)
+        assertEquals(1000L, feePayment.gasLimit)
+        val charge = feePayment.chargeLimits.single()
+        assertEquals(FeeChargeKind.PIPELINE_GAS, charge.kind)
+        assertEquals("7EAD8EFYUx1aVKZPUU1fyKvr8dF1", charge.assetDefinitionId)
+        assertEquals("1000", charge.maxAmount)
+        assertEquals(null, payload.metadata["gas_asset_id"])
+        assertEquals(null, payload.metadata["gas_limit"])
         assertEquals(JsonValue.bool(true), payload.metadata["checked"])
+    }
+
+    @Test
+    fun `mixed executable fixture preserves instruction call instruction order`() {
+        val fixture = AndroidFixtureSupport.loadPayloadFixtures()
+            .single { it.name == "mixed_executable_batch" }
+        val payload = fixture.materializePayload(adapter)
+
+        val batch = assertIs<Executable.Batch>(payload.executable)
+        assertEquals(3, batch.entries.size)
+        assertIs<ExecutableBatchItem.Instruction>(batch.entries[0])
+        val invocation = assertIs<ExecutableBatchItem.ContractCall>(batch.entries[1]).invocation
+        assertEquals("run", invocation.entrypoint)
+        assertContentEquals(byteArrayOf(1, 2, 3, 4), invocation.arguments)
+        assertIs<ExecutableBatchItem.Instruction>(batch.entries[2])
     }
 
     @Test
@@ -112,11 +144,17 @@ class TransactionFixtureParityTest {
                 fixture.payloadHash,
                 "${fixture.name}: payload_hash mismatch",
             )
-            assertEquals(
-                SignedTransactionHasher.hashCanonicalHex(signedBytes),
-                fixture.signedHash,
-                "${fixture.name}: signed_hash mismatch",
-            )
+            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
+                assertFailsWith<IllegalArgumentException> {
+                    SignedTransactionHasher.hashCanonicalHex(signedBytes)
+                }
+            } else {
+                assertEquals(
+                    SignedTransactionHasher.hashCanonicalHex(signedBytes),
+                    fixture.signedHash,
+                    "${fixture.name}: signed_hash mismatch",
+                )
+            }
 
             val payload = adapter.decodeTransaction(payloadBytes)
             assertEquals(fixture.chain, payload.chainId, "${fixture.name}: chain mismatch")
@@ -140,11 +178,17 @@ class TransactionFixtureParityTest {
                 payload.nonce,
                 "${fixture.name}: nonce mismatch",
             )
-            assertContentEquals(
-                payloadBytes,
-                adapter.encodeTransaction(payload),
-                "${fixture.name}: Kotlin payload re-encoding drift",
-            )
+            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
+                assertIs<Executable.Ivm>(payload.executable)
+                assertNull(payload.feePayment.gasLimit)
+                assertFailsWith<NoritoException> { adapter.encodeTransaction(payload) }
+            } else {
+                assertContentEquals(
+                    payloadBytes,
+                    adapter.encodeTransaction(payload),
+                    "${fixture.name}: Kotlin payload re-encoding drift",
+                )
+            }
 
             val sourceFixture = checkNotNull(payloadFixturesByName[fixture.name]) {
                 "${fixture.name}: manifest fixture missing payload source"
@@ -168,6 +212,10 @@ class TransactionFixtureParityTest {
                 byteArrayOf(),
                 SIGNED_SCHEMA,
             )
+            if (fixture.name == LEGACY_GASLESS_IVM_FIXTURE) {
+                assertFailsWith<NoritoException> { SignedTransactionEncoder.encode(signed) }
+                continue
+            }
             assertContentEquals(
                 signedBytes,
                 SignedTransactionEncoder.encode(signed),
@@ -190,7 +238,6 @@ class TransactionFixtureParityTest {
                 versioned.copyOfRange(1, versioned.size),
                 "${fixture.name}: versioned signed payload mismatch",
             )
-
             val decodedSigned = SignedTransactionEncoder.decode(signedBytes)
             assertContentEquals(
                 payloadBytes,

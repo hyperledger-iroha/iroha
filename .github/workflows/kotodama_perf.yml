@@ -46,6 +46,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  sdk-and-codec-guards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject retired codecs
+        run: bash scripts/check_no_legacy_codec.sh
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: "true"
+          shared-key: kotodama-js-native
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: javascript/iroha_js/package-lock.json
+      - name: Install JavaScript SDK dependencies
+        run: npm ci --ignore-scripts --prefix javascript/iroha_js
+      - name: Build the Rust native binding and run the complete JavaScript suite
+        run: npm test --prefix javascript/iroha_js
+
   representative-regression:
     # Benchmark the base and candidate on the same controlled Iroha runner.
     # Shared GitHub-hosted runners have enough host-to-host variance to make a
@@ -87,31 +111,29 @@ jobs:
       - name: Clear cached benchmark evidence
         run: rm -rf "$CARGO_TARGET_DIR/criterion"
 
-      - name: Require every representative base workload
+      # Benchmark sources are revision-native. The policy requires every
+      # comparable identity exactly once in both revisions and every
+      # candidate-only identity exactly once in the candidate and zero times
+      # in the base, preventing a new harness from fabricating old evidence.
+      - name: Require explicit revision benchmark inventories
         run: |
           python3 - <<'PY'
           import runpy
           from pathlib import Path
 
           policy = runpy.run_path("candidate/scripts/check_kotodama_perf.py")
-          sources = "\n".join(
-              path.read_text(encoding="utf-8")
-              for path in (
+          policy["validate_revision_inventories"](
+              base_sources=(
                   Path("baseline/crates/ivm/benches/bench_kotodama.rs"),
                   Path("baseline/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
                   Path("baseline/crates/iroha_core/benches/queries.rs"),
-              )
+              ),
+              candidate_sources=(
+                  Path("candidate/crates/ivm/benches/bench_kotodama.rs"),
+                  Path("candidate/crates/iroha_core/benches/kotodama_runtime_cache.rs"),
+                  Path("candidate/crates/iroha_core/benches/queries.rs"),
+              ),
           )
-          missing = [
-              name
-              for name in policy["REGRESSION_BENCHMARKS"]
-              if f'"{name}"' not in sources
-          ]
-          if missing:
-              raise SystemExit(
-                  "comparison base is missing representative benchmarks: "
-                  + ", ".join(missing)
-              )
           PY
 
       - name: Measure base revision

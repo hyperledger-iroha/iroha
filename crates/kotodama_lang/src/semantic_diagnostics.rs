@@ -9,11 +9,15 @@
 
 use crate::{
     diagnostic::{
-        Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticLabel, DiagnosticPhase, SourceSpan,
+        Diagnostic, DiagnosticBundle, DiagnosticFix, DiagnosticLabel, SourceSpan,
+        phase_for_semantic_failure,
     },
     resolved::ResolvedProgram,
     source::{SourceFile, SourceRange},
 };
+
+#[cfg(test)]
+use crate::diagnostic::DiagnosticPhase;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct SemanticDiagnosticLabel {
@@ -205,8 +209,12 @@ pub(crate) fn from_semantic_failures(
                             })
                         })
                 };
-                let mut diagnostic =
-                    Diagnostic::error(code, DiagnosticPhase::Semantic, message, primary_span);
+                let mut diagnostic = Diagnostic::error(
+                    code,
+                    phase_for_semantic_failure(code),
+                    message,
+                    primary_span,
+                );
                 if let Some(semantic) = semantic
                     && let Some(source) = source
                 {
@@ -233,7 +241,10 @@ pub(crate) fn from_semantic_failures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::source::{SourceId, TextRange};
+    use crate::{
+        session::{CompileRequest, CompilerSession},
+        source::{SourceId, TextRange},
+    };
 
     fn range(source: SourceId, text: &str, needle: &str) -> SourceRange {
         let start = text.find(needle).expect("fixture substring");
@@ -265,7 +276,60 @@ mod tests {
                 None,
             );
             assert_eq!(bundle.diagnostics[0].code, "K2002");
+            assert_eq!(bundle.diagnostics[0].phase, DiagnosticPhase::Resolve);
             assert_eq!(bundle.diagnostics[0].message, message);
+        }
+    }
+
+    #[test]
+    fn independent_trigger_failures_retain_their_exact_name_spans() {
+        let source = r#"seiyaku Timers {
+  view fn inspect() {}
+  trigger morning -> inspect { on time pre_commit; }
+  trigger evening -> inspect { on time pre_commit; }
+}"#;
+        let diagnostics = CompilerSession::default()
+            .check(CompileRequest {
+                source,
+                source_name: Some("timers.ko"),
+            })
+            .expect_err("view-targeting triggers must fail semantic analysis");
+        let trigger_diagnostics = diagnostics
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "E_TRIGGER_VIEW_TARGET")
+            .collect::<Vec<_>>();
+
+        assert_eq!(trigger_diagnostics.len(), 2, "{diagnostics:?}");
+        assert_eq!(
+            trigger_diagnostics
+                .iter()
+                .map(|diagnostic| {
+                    let range = diagnostic
+                        .primary_span
+                        .as_ref()
+                        .and_then(|span| span.byte_range)
+                        .expect("trigger diagnostic must carry an exact byte range");
+                    &source[range.start as usize..range.end as usize]
+                })
+                .collect::<Vec<_>>(),
+            ["morning", "evening"]
+        );
+    }
+
+    #[test]
+    fn phase_adapter_only_promotes_registry_owned_resolver_failures() {
+        for code in [
+            "K2002",
+            "E_DUPLICATE_DECLARATION",
+            "E_RESERVED_DECLARATION",
+            "E_DUPLICATE_ERROR_CODE",
+            "E_INTERNAL_RESOLUTION",
+        ] {
+            assert_eq!(phase_for_semantic_failure(code), DiagnosticPhase::Resolve);
+        }
+        for code in ["K0004", "K2003", "E_BRANCH_TYPE_MISMATCH", "UNKNOWN"] {
+            assert_eq!(phase_for_semantic_failure(code), DiagnosticPhase::Semantic);
         }
     }
 

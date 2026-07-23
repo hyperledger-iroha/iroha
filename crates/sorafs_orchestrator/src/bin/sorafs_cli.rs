@@ -17,7 +17,7 @@ use std::{
         atomic::{AtomicUsize, Ordering as AtomicOrdering},
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 #[cfg(unix)]
@@ -56,7 +56,7 @@ use iroha_data_model::{
         TaikaiStreamId, TaikaiTrackMetadata,
     },
 };
-use iroha_version::codec::EncodeVersioned;
+use iroha_primitives::numeric::Quantity;
 use ivm::kotodama::session::{CompileRequest, CompilerSession};
 use norito::{
     decode_from_bytes,
@@ -65,6 +65,7 @@ use norito::{
     to_bytes,
 };
 use reqwest::{StatusCode, blocking::Client as HttpClient, header::CONTENT_TYPE};
+#[cfg(test)]
 use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
 use sorafs_car::{
@@ -103,7 +104,7 @@ use sorafs_orchestrator::{
         AppealClass, AppealClassConfig, AppealDecision, AppealDisbursementError,
         AppealDisbursementInput, AppealDisbursementPlan, AppealPricingConfig, AppealQuote,
         AppealQuoteInput, AppealSettlementBreakdown, AppealSettlementConfig, AppealSettlementError,
-        AppealUrgency, AppealVerdict,
+        AppealUrgency, AppealVerdict, parse_appeal_quantity_literal,
     },
     bindings::{
         config_from_json as orchestrator_config_from_json,
@@ -125,8 +126,6 @@ use url::{Url, form_urlencoded::Serializer};
 
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
 const DEFAULT_IDENTITY_TOKEN_ENV: &str = "SIGSTORE_ID_TOKEN";
-const DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS: u64 = 30_000;
-const DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS: u64 = 1_000;
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
 const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
@@ -181,6 +180,7 @@ fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+#[cfg(test)]
 fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, String> {
     require_canonical_decimal_token(flag, raw, context)?;
     let value = raw
@@ -227,6 +227,7 @@ fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Res
     Ok(())
 }
 
+#[cfg(test)]
 fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
         return Err(format!(
@@ -837,9 +838,13 @@ struct ManifestRegisterSubmission {
     response_bytes: Vec<u8>,
     response_value: Value,
     submission_mode: &'static str,
-    fallback_reason: Option<String>,
-    chain_id_hint: Option<String>,
-    failure_message: Option<String>,
+}
+
+struct ManifestSubmitRequest<'a> {
+    client: &'a HttpClient,
+    torii_base_url: &'a Url,
+    private_key: &'a PrivateKey,
+    alias_inputs: Option<&'a AliasInputs>,
 }
 
 fn deploy(raw_args: Vec<String>) -> Result<(), String> {
@@ -1030,13 +1035,11 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     let submit_request = ManifestSubmitRequest {
         client: &client,
         torii_base_url: &torii_base_url,
-        authority: &authority,
         private_key: &client_config.private_key,
-        gas_asset_id: None,
         alias_inputs: None,
     };
     let registration = if errors.is_empty() {
-        submit_pin_register_with_fallback(
+        submit_pin_register(
             &submit_request,
             &authority_literal,
             &artifacts.manifest,
@@ -1062,8 +1065,7 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
     match registration {
         Ok(response) => {
             write_bytes(&register_response_path, &response.response_bytes)?;
-            let fallback_failure = response.failure_message.clone();
-            registration_ok = response.status.is_success() && fallback_failure.is_none();
+            registration_ok = response.status.is_success();
             registration_summary.insert(
                 "status".into(),
                 Value::from(response.status.as_u16() as u64),
@@ -1077,17 +1079,8 @@ fn deploy(raw_args: Vec<String>) -> Result<(), String> {
                 "submission_mode".into(),
                 Value::from(response.submission_mode),
             );
-            if let Some(reason) = response.fallback_reason {
-                registration_summary.insert("fallback_reason".into(), Value::from(reason));
-            }
-            if let Some(chain_id) = response.chain_id_hint {
-                registration_summary.insert("chain_id".into(), Value::from(chain_id));
-            }
             registration_summary.insert("success".into(), Value::from(registration_ok));
             paid_pin_fee = paid_pin_fee_from_register_response(&response.response_value);
-            if let Some(message) = fallback_failure {
-                errors.push(message);
-            }
             if !registration_ok {
                 let body = String::from_utf8_lossy(&response.response_bytes);
                 errors.push(format!(
@@ -1505,7 +1498,7 @@ fn read_gateway_expectation(
     })
 }
 
-fn submit_pin_register_with_fallback(
+fn submit_pin_register(
     request: &ManifestSubmitRequest<'_>,
     authority_literal: &str,
     manifest: &ManifestV1,
@@ -1522,7 +1515,6 @@ fn submit_pin_register_with_fallback(
         request.private_key.clone(),
         manifest,
         submitted_epoch,
-        request.gas_asset_id,
         request.alias_inputs,
         successor_digest,
     )?;
@@ -1549,47 +1541,12 @@ fn submit_pin_register_with_fallback(
             response_value: decode_response_value_or_text(&response_bytes),
             response_bytes,
             submission_mode: "pin_register_http",
-            fallback_reason: None,
-            chain_id_hint: None,
-            failure_message: None,
-        });
-    }
-
-    if should_fallback_manifest_submit_status(status) {
-        let fallback = submit_manifest_via_transaction_endpoint(
-            &ManifestSubmitRequest {
-                client: request.client,
-                torii_base_url: request.torii_base_url,
-                authority: request.authority,
-                private_key: request.private_key,
-                gas_asset_id: request.gas_asset_id,
-                alias_inputs: request.alias_inputs,
-            },
-            manifest,
-            submitted_epoch,
-            successor_digest,
-        )
-        .map_err(|err| {
-            format!(
-                "Torii pin-register endpoint returned {status}; generic /transaction fallback failed: {err}"
-            )
-        })?;
-        return Ok(ManifestRegisterSubmission {
-            endpoint_requested: requested_endpoint,
-            endpoint_used: fallback.endpoint,
-            status: fallback.status,
-            response_bytes: fallback.response_bytes,
-            response_value: fallback.response_value,
-            submission_mode: "transaction_fallback",
-            fallback_reason: Some(format!("pin register route returned {status}")),
-            chain_id_hint: Some(fallback.chain_id),
-            failure_message: fallback.failure_message,
         });
     }
 
     let body_text = String::from_utf8_lossy(&response_bytes);
     Err(format!(
-        "Torii returned {status} when submitting manifest: {body_text}"
+        "Torii pin-register route returned {status}; generic transaction fallback is not supported: {body_text}"
     ))
 }
 
@@ -3141,7 +3098,7 @@ fn usage() -> String {
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
   sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
   sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
-  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--gas-asset-id=ASSET_ID] [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
+  sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
@@ -12178,7 +12135,7 @@ fn appeal_quote(raw_args: Vec<String>) -> Result<(), String> {
 }
 
 fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
-    let mut deposit: Option<Decimal> = None;
+    let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
     let mut panel_size_override: Option<u32> = None;
     let mut format = String::from("table");
@@ -12193,7 +12150,11 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--deposit" => {
-                deposit = Some(parse_decimal_arg("deposit", value, CONTEXT_APPEAL_SETTLE)?);
+                deposit = Some(parse_appeal_quantity_literal("deposit", value).map_err(
+                    |error| {
+                        format!("failed to parse `deposit` for `{CONTEXT_APPEAL_SETTLE}`: {error}")
+                    },
+                )?);
             }
             "--outcome" => {
                 verdict = Some(parse_appeal_verdict(value)?);
@@ -12230,12 +12191,12 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
         .ok_or_else(|| format!("missing required `--outcome` for `{CONTEXT_APPEAL_SETTLE}`"))?;
     let panel_size = panel_size_override.unwrap_or_else(|| config.default_panel_size());
     let breakdown = config
-        .settle(deposit, panel_size, verdict)
+        .settle(deposit.clone(), panel_size, verdict)
         .map_err(|err| match err {
             AppealSettlementError::MissingDecisionRule { decision } => {
                 format!("settlement config is missing a rule for `{decision}`")
             }
-            AppealSettlementError::InvalidDeposit | AppealSettlementError::InvalidPanelSize => {
+            AppealSettlementError::InvalidPanelSize | AppealSettlementError::Arithmetic(_) => {
                 err.to_string()
             }
         })?;
@@ -12261,7 +12222,7 @@ fn appeal_settle(raw_args: Vec<String>) -> Result<(), String> {
 }
 
 fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
-    let mut deposit: Option<Decimal> = None;
+    let mut deposit: Option<Quantity> = None;
     let mut verdict: Option<AppealVerdict> = None;
     let mut panel_size_override: Option<u32> = None;
     let mut format = String::from("table");
@@ -12281,10 +12242,12 @@ fn appeal_disburse(raw_args: Vec<String>) -> Result<(), String> {
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
         match key {
             "--deposit" => {
-                deposit = Some(parse_decimal_arg(
-                    "deposit",
-                    value,
-                    CONTEXT_APPEAL_DISBURSE,
+                deposit = Some(parse_appeal_quantity_literal("deposit", value).map_err(
+                    |error| {
+                        format!(
+                            "failed to parse `deposit` for `{CONTEXT_APPEAL_DISBURSE}`: {error}"
+                        )
+                    },
                 )?);
             }
             "--outcome" => verdict = Some(parse_appeal_verdict(value)?),
@@ -12424,7 +12387,7 @@ struct AppealQuoteInputs<'a> {
 
 struct AppealSettlementInputs<'a> {
     config: &'a AppealSettlementConfig,
-    deposit_xor: Decimal,
+    deposit_xor: Quantity,
     panel_size: u32,
     verdict: AppealVerdict,
     breakdown: AppealSettlementBreakdown,
@@ -12440,36 +12403,36 @@ fn print_appeal_quote_table(class_cfg: &AppealClassConfig, ctx: &AppealQuoteInpu
     println!("  class: {:<8} urgency: {}", ctx.class, ctx.urgency);
     println!(
         "  deposit: {} XOR (raw {} XOR, min {}, max {})",
-        format_decimal(ctx.quote.deposit_xor, 2),
-        format_decimal(ctx.quote.breakdown.raw_deposit_xor, 2),
-        format_decimal(class_cfg.min_deposit_xor, 2),
-        format_decimal(class_cfg.max_deposit_xor, 2),
+        format_exact(&ctx.quote.deposit_xor),
+        format_exact(&ctx.quote.breakdown.raw_deposit_xor),
+        format_exact(&class_cfg.min_deposit_xor),
+        format_exact(&class_cfg.max_deposit_xor),
     );
     println!(
         "  backlog: {} (target {}), factor {}",
         ctx.backlog,
         class_cfg.backlog_target,
-        format_decimal(ctx.quote.breakdown.backlog_factor, 4)
+        format_exact(&ctx.quote.breakdown.backlog_factor)
     );
     println!(
         "  evidence_size_mb: {} (divisor {}), size multiplier {}",
         ctx.evidence_size_mb,
-        format_decimal(class_cfg.size_divisor_mb, 0),
-        format_decimal(ctx.quote.breakdown.size_multiplier, 4),
+        format_exact(&class_cfg.size_divisor_mb),
+        format_exact(&ctx.quote.breakdown.size_multiplier),
     );
     println!(
         "  urgency multiplier: {}",
-        format_decimal(ctx.quote.breakdown.urgency_multiplier, 4)
+        format_exact(&ctx.quote.breakdown.urgency_multiplier)
     );
     println!(
         "  panel multiplier: {} (panel {} / default {})",
-        format_decimal(ctx.quote.breakdown.panel_multiplier, 4),
+        format_exact(&ctx.quote.breakdown.panel_multiplier),
         ctx.panel_size,
         ctx.config.default_panel_size()
     );
     println!(
         "  surge multiplier: {}",
-        format_decimal(ctx.quote.breakdown.surge_multiplier, 4)
+        format_exact(&ctx.quote.breakdown.surge_multiplier)
     );
     if let Some(expiry) = ctx.valid_until_unix {
         println!("  valid until (unix): {expiry}");
@@ -12480,39 +12443,39 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     let mut breakdown = Map::new();
     breakdown.insert(
         "base_rate_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.base_rate_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.base_rate_xor)),
     );
     breakdown.insert(
         "backlog_factor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.backlog_factor, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.backlog_factor)),
     );
     breakdown.insert(
         "size_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.size_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.size_multiplier)),
     );
     breakdown.insert(
         "urgency_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.urgency_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.urgency_multiplier)),
     );
     breakdown.insert(
         "panel_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.panel_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.panel_multiplier)),
     );
     breakdown.insert(
         "surge_multiplier".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.surge_multiplier, 4)),
+        Value::String(format_exact(&ctx.quote.breakdown.surge_multiplier)),
     );
     breakdown.insert(
         "raw_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.raw_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.raw_deposit_xor)),
     );
     breakdown.insert(
         "min_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.min_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.min_deposit_xor)),
     );
     breakdown.insert(
         "max_deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.breakdown.max_deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.breakdown.max_deposit_xor)),
     );
 
     let mut root = Map::new();
@@ -12530,7 +12493,7 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
     );
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.quote.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.quote.deposit_xor)),
     );
     root.insert(
         "backlog_open_cases".into(),
@@ -12569,24 +12532,21 @@ fn print_appeal_quote_json(ctx: &AppealQuoteInputs<'_>) -> Result<(), String> {
 fn print_appeal_settlement_table(ctx: &AppealSettlementInputs<'_>) {
     println!("Appeal settlement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.verdict);
-    println!("  deposit: {} XOR", format_decimal(ctx.deposit_xor, 2));
-    println!(
-        "  refund: {} XOR",
-        format_decimal(ctx.breakdown.refund_xor, 2)
-    );
+    println!("  deposit: {} XOR", format_exact(&ctx.deposit_xor));
+    println!("  refund: {} XOR", format_exact(&ctx.breakdown.refund_xor));
     println!(
         "  treasury transfer: {} XOR",
-        format_decimal(ctx.breakdown.treasury_xor, 2)
+        format_exact(&ctx.breakdown.treasury_xor)
     );
     println!(
         "  held in escrow: {} XOR",
-        format_decimal(ctx.breakdown.held_xor, 2)
+        format_exact(&ctx.breakdown.held_xor)
     );
     println!(
         "  panel reward: {} jurors × {} XOR + bonus = {} XOR",
         ctx.panel_size,
-        format_decimal(ctx.breakdown.panel_reward_per_juror_xor, 2),
-        format_decimal(ctx.breakdown.panel_reward_total_xor, 2)
+        format_exact(&ctx.breakdown.panel_reward_per_juror_xor),
+        format_exact(&ctx.breakdown.panel_reward_total_xor)
     );
 }
 
@@ -12599,19 +12559,19 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
     root.insert("outcome".into(), Value::String(ctx.verdict.to_string()));
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.deposit_xor)),
     );
     root.insert(
         "refund_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.refund_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.refund_xor)),
     );
     root.insert(
         "treasury_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.treasury_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.treasury_xor)),
     );
     root.insert(
         "held_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.held_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.held_xor)),
     );
     root.insert(
         "panel_size".into(),
@@ -12619,11 +12579,11 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
     );
     root.insert(
         "panel_reward_per_juror_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.panel_reward_per_juror_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.panel_reward_per_juror_xor)),
     );
     root.insert(
         "panel_reward_total_xor".into(),
-        Value::String(format_decimal(ctx.breakdown.panel_reward_total_xor, 2)),
+        Value::String(format_exact(&ctx.breakdown.panel_reward_total_xor)),
     );
     let json = to_string_pretty(&Value::Object(root))
         .map_err(|err| format!("failed to render JSON settlement: {err}"))?;
@@ -12634,23 +12594,23 @@ fn print_appeal_settlement_json(ctx: &AppealSettlementInputs<'_>) -> Result<(), 
 fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
     println!("Appeal disbursement ({})", ctx.config.version());
     println!("  outcome: {}", ctx.plan.verdict);
-    println!("  deposit: {} XOR", format_decimal(ctx.plan.deposit_xor, 2));
+    println!("  deposit: {} XOR", format_exact(&ctx.plan.deposit_xor));
     println!(
         "  refund -> {}: {} XOR",
         ctx.plan.refund_account,
-        format_decimal(ctx.plan.settlement.refund_xor, 2)
+        format_exact(&ctx.plan.settlement.refund_xor)
     );
     println!(
         "  treasury -> {}: {} XOR (deposit) + {} XOR (forfeited rewards) = {} XOR",
         ctx.plan.treasury_account,
-        format_decimal(ctx.plan.settlement.treasury_xor, 2),
-        format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2),
-        format_decimal(ctx.plan.total_treasury_xor, 2)
+        format_exact(&ctx.plan.settlement.treasury_xor),
+        format_exact(&ctx.plan.rewards_forfeited_treasury_xor),
+        format_exact(&ctx.plan.total_treasury_xor)
     );
     println!(
         "  held in escrow -> {}: {} XOR",
         ctx.plan.escrow_account,
-        format_decimal(ctx.plan.settlement.held_xor, 2)
+        format_exact(&ctx.plan.settlement.held_xor)
     );
     println!(
         "  attendance: {}/{} jurors paid",
@@ -12659,17 +12619,17 @@ fn print_appeal_disbursement_table(ctx: &AppealDisbursementInputs<'_>) {
     );
     println!(
         "  panel rewards: {} XOR available; {} XOR paid; {} XOR forfeited to treasury",
-        format_decimal(ctx.plan.rewards_available_xor, 2),
-        format_decimal(ctx.plan.rewards_paid_total_xor, 2),
-        format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)
+        format_exact(&ctx.plan.rewards_available_xor),
+        format_exact(&ctx.plan.rewards_paid_total_xor),
+        format_exact(&ctx.plan.rewards_forfeited_treasury_xor)
     );
     for payout in &ctx.plan.juror_payouts {
         println!(
             "    - {}: stipend {} XOR + bonus {} XOR = {} XOR",
             payout.juror,
-            format_decimal(payout.stipend_xor, 2),
-            format_decimal(payout.bonus_xor, 2),
-            format_decimal(payout.total(), 2)
+            format_exact(&payout.stipend_xor),
+            format_exact(&payout.bonus_xor),
+            format_exact(&payout.total().expect("validated payout arithmetic"))
         );
     }
     if !ctx.plan.no_show_accounts.is_empty() {
@@ -12692,7 +12652,7 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     root.insert(
         "deposit_xor".into(),
-        Value::String(format_decimal(ctx.plan.deposit_xor, 2)),
+        Value::String(format_exact(&ctx.plan.deposit_xor)),
     );
     root.insert(
         "panel_size".into(),
@@ -12706,7 +12666,7 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     refund.insert(
         "amount_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.refund_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.refund_xor)),
     );
     root.insert("refund".into(), Value::Object(refund));
 
@@ -12717,15 +12677,15 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     treasury.insert(
         "deposit_component_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.treasury_xor)),
     );
     treasury.insert(
         "forfeited_rewards_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
     );
     treasury.insert(
         "total_xor".into(),
-        Value::String(format_decimal(ctx.plan.total_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.total_treasury_xor)),
     );
     root.insert("treasury".into(), Value::Object(treasury));
 
@@ -12736,22 +12696,22 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     );
     held.insert(
         "amount_xor".into(),
-        Value::String(format_decimal(ctx.plan.settlement.held_xor, 2)),
+        Value::String(format_exact(&ctx.plan.settlement.held_xor)),
     );
     root.insert("held".into(), Value::Object(held));
 
     let mut rewards = Map::new();
     rewards.insert(
         "available_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_available_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_available_xor)),
     );
     rewards.insert(
         "paid_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_paid_total_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_paid_total_xor)),
     );
     rewards.insert(
         "forfeited_xor".into(),
-        Value::String(format_decimal(ctx.plan.rewards_forfeited_treasury_xor, 2)),
+        Value::String(format_exact(&ctx.plan.rewards_forfeited_treasury_xor)),
     );
     rewards.insert(
         "attending".into(),
@@ -12776,15 +12736,17 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
             entry.insert("account".into(), Value::String(payout.juror.to_string()));
             entry.insert(
                 "stipend_xor".into(),
-                Value::String(format_decimal(payout.stipend_xor, 2)),
+                Value::String(format_exact(&payout.stipend_xor)),
             );
             entry.insert(
                 "bonus_xor".into(),
-                Value::String(format_decimal(payout.bonus_xor, 2)),
+                Value::String(format_exact(&payout.bonus_xor)),
             );
             entry.insert(
                 "total_xor".into(),
-                Value::String(format_decimal(payout.total(), 2)),
+                Value::String(format_exact(
+                    &payout.total().expect("validated payout arithmetic"),
+                )),
             );
             Value::Object(entry)
         })
@@ -12798,8 +12760,8 @@ fn print_appeal_disbursement_json(ctx: &AppealDisbursementInputs<'_>) -> Result<
     Ok(())
 }
 
-fn format_decimal(value: Decimal, places: u32) -> String {
-    value.round_dp(places).to_string()
+fn format_exact(value: &impl std::fmt::Display) -> String {
+    value.to_string()
 }
 
 #[cfg(test)]
@@ -15810,7 +15772,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let mut authority_network_prefix: Option<u16> = None;
     let mut private_key_inline: Option<String> = None;
     let mut private_key_path: Option<PathBuf> = None;
-    let mut gas_asset_id: Option<String> = None;
     let mut alias_namespace: Option<String> = None;
     let mut alias_name: Option<String> = None;
     let mut alias_proof_path: Option<PathBuf> = None;
@@ -15865,7 +15826,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
                 }
                 private_key_path = Some(PathBuf::from(value));
             }
-            "--gas-asset-id" => gas_asset_id = Some(value.to_string()),
             "--alias-namespace" => alias_namespace = Some(value.to_string()),
             "--alias-name" => alias_name = Some(value.to_string()),
             "--alias-proof" => alias_proof_path = Some(PathBuf::from(value)),
@@ -16011,13 +15971,11 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         }
     };
 
-    let submission = submit_pin_register_with_fallback(
+    let submission = submit_pin_register(
         &ManifestSubmitRequest {
             client: &client,
             torii_base_url: &torii_base_url,
-            authority: &authority,
             private_key: &private_key,
-            gas_asset_id: gas_asset_id.as_deref(),
             alias_inputs: alias_inputs.as_ref(),
         },
         &authority_literal,
@@ -16050,13 +16008,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
         "submission_mode".into(),
         Value::from(submission.submission_mode),
     );
-    if let Some(asset_id) = gas_asset_id
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty())
-    {
-        summary.insert("gas_asset_id".into(), Value::from(asset_id));
-    }
     summary.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -16097,12 +16048,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(hex) = successor_hex.as_ref() {
         summary.insert("successor_of_hex".into(), Value::from(hex.clone()));
     }
-    if let Some(reason) = submission.fallback_reason {
-        summary.insert("fallback_reason".into(), Value::from(reason));
-    }
-    if let Some(chain_id) = submission.chain_id_hint {
-        summary.insert("chain_id".into(), Value::from(chain_id));
-    }
     summary.insert("torii_response".into(), submission.response_value);
 
     let rendered = to_string_pretty(&Value::Object(summary))
@@ -16110,9 +16055,6 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     println!("{rendered}");
     if let Some(path) = summary_out {
         write_text(&path, rendered.as_bytes())?;
-    }
-    if let Some(message) = submission.failure_message {
-        return Err(message);
     }
     Ok(())
 }
@@ -16430,492 +16372,11 @@ fn storage_files_to_json_value(files: Option<&[StorageFileEntryOwned]>) -> Value
     }
 }
 
-fn should_fallback_manifest_submit_status(status: StatusCode) -> bool {
-    matches!(
-        status,
-        StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED | StatusCode::NOT_IMPLEMENTED
-    )
-}
-
-struct ManifestSubmitFallback {
-    status: StatusCode,
-    endpoint: String,
-    response_bytes: Vec<u8>,
-    response_value: Value,
-    chain_id: String,
-    failure_message: Option<String>,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TransactionConfirmationKind {
-    Queued,
-    Approved,
-    Committed,
-    Applied,
-    Rejected,
-    Expired,
-}
-
-struct TransactionConfirmation {
-    kind: TransactionConfirmationKind,
-    block_height: Option<u64>,
-    pipeline_response: Value,
-    rejection_message: Option<String>,
-}
-
-struct ManifestSubmitRequest<'a> {
-    client: &'a HttpClient,
-    torii_base_url: &'a Url,
-    authority: &'a AccountId,
-    private_key: &'a PrivateKey,
-    gas_asset_id: Option<&'a str>,
-    alias_inputs: Option<&'a AliasInputs>,
-}
-
-fn sign_manifest_submit_fallback_transaction(
-    builder: iroha_data_model::transaction::signed::TransactionBuilder,
-    private_key: &PrivateKey,
-) -> Result<iroha_data_model::transaction::signed::SignedTransaction, String> {
-    builder
-        .try_sign(private_key)
-        .map_err(|err| format!("failed to sign fallback manifest transaction: {err}"))
-}
-
-fn submit_manifest_via_transaction_endpoint(
-    request: &ManifestSubmitRequest<'_>,
-    manifest: &ManifestV1,
-    submitted_epoch: u64,
-    successor_digest: Option<[u8; 32]>,
-) -> Result<ManifestSubmitFallback, String> {
-    use iroha_data_model::{
-        ChainId,
-        metadata::Metadata,
-        prelude::{InstructionBox, Json, TransactionBuilder},
-        sorafs::pin_registry::{ManifestAliasBinding, ManifestDigest},
-    };
-    let chain_id = resolve_chain_id_from_sorafs_registry(request.client, request.torii_base_url)?;
-    let manifest_payload = manifest
-        .encode()
-        .map_err(|err| format!("failed to encode canonical manifest payload: {err}"))?;
-    let alias = request.alias_inputs.map(|inputs| ManifestAliasBinding {
-        namespace: inputs.namespace.clone(),
-        name: inputs.name.clone(),
-        proof: inputs.proof.clone(),
-    });
-    let successor_of = successor_digest.map(ManifestDigest::new);
-    let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-        manifest_payload,
-        submitted_epoch,
-        alias,
-        successor_of,
-    );
-    let mut tx_metadata = Metadata::default();
-    if let Some(asset_id) = request
-        .gas_asset_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        let gas_asset_key =
-            Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
-        tx_metadata.insert(gas_asset_key, Json::new(asset_id.to_owned()));
-    }
-    let transaction = sign_manifest_submit_fallback_transaction(
-        TransactionBuilder::new(ChainId::from(chain_id.clone()), request.authority.clone())
-            .with_instructions([InstructionBox::from(instruction)])
-            .with_metadata(tx_metadata),
-        request.private_key,
-    )?;
-    let tx_hash_hex = hex_encode(transaction.hash().as_ref());
-    let tx_endpoint = request
-        .torii_base_url
-        .join("transaction")
-        .map_err(|err| format!("failed to build Torii transaction endpoint URL: {err}"))?;
-    let request_builder = request
-        .client
-        .post(tx_endpoint.as_str())
-        .header(CONTENT_TYPE, "application/x-norito");
-    let response = request_builder
-        .body(transaction.encode_versioned())
-        .send()
-        .map_err(|err| format!("failed to submit fallback transaction to Torii: {err}"))?;
-    let status = response.status();
-    let response_bytes = response
-        .bytes()
-        .map_err(|err| format!("failed to read fallback Torii response: {err}"))?
-        .to_vec();
-    if !status.is_success() {
-        let body_text = String::from_utf8_lossy(&response_bytes);
-        return Err(format!(
-            "Torii transaction endpoint `{}` returned {status}: {body_text}",
-            tx_endpoint
-        ));
-    }
-
-    let confirmation = wait_for_transaction_confirmation(
-        request.client,
-        request.torii_base_url,
-        &tx_hash_hex,
-    )
-    .map_err(|err| {
-        format!(
-            "submitted fallback transaction `{tx_hash_hex}` but failed to confirm the result: {err}"
-        )
-    })?;
-
-    let mut map = Map::new();
-    map.insert(
-        "status".into(),
-        Value::from(match confirmation.kind {
-            TransactionConfirmationKind::Queued => "QUEUED",
-            TransactionConfirmationKind::Approved => "APPROVED",
-            TransactionConfirmationKind::Committed => "COMMITTED",
-            TransactionConfirmationKind::Applied => "APPLIED",
-            TransactionConfirmationKind::Rejected => "REJECTED",
-            TransactionConfirmationKind::Expired => "EXPIRED",
-        }),
-    );
-    map.insert("transport".into(), Value::from("transaction_fallback"));
-    map.insert("tx_hash_hex".into(), Value::from(tx_hash_hex.clone()));
-    map.insert(
-        "transaction_endpoint".into(),
-        Value::from(tx_endpoint.as_str().to_string()),
-    );
-    map.insert("chain_id".into(), Value::from(chain_id.clone()));
-    map.insert(
-        "confirmation_source".into(),
-        Value::from("v1/pipeline/transactions/status"),
-    );
-    if let Some(block_height) = confirmation.block_height {
-        map.insert("block_height".into(), Value::from(block_height));
-    }
-    if let Some(message) = confirmation.rejection_message.clone() {
-        map.insert("rejection_message".into(), Value::from(message));
-    }
-    map.insert("pipeline_response".into(), confirmation.pipeline_response);
-    let response_value = Value::Object(map);
-    let response_bytes = to_string_pretty(&response_value)
-        .map_err(|err| format!("failed to render fallback response JSON: {err}"))?
-        .into_bytes();
-    let failure_message = match confirmation.kind {
-        TransactionConfirmationKind::Rejected => Some(match confirmation.rejection_message {
-            Some(message) => {
-                format!("fallback transaction `{tx_hash_hex}` was rejected: {message}")
-            }
-            None => format!("fallback transaction `{tx_hash_hex}` was rejected"),
-        }),
-        TransactionConfirmationKind::Expired => Some(format!(
-            "fallback transaction `{tx_hash_hex}` expired before commit"
-        )),
-        _ => None,
-    };
-
-    Ok(ManifestSubmitFallback {
-        status,
-        endpoint: tx_endpoint.as_str().to_string(),
-        response_bytes,
-        response_value,
-        chain_id,
-        failure_message,
-    })
-}
-
-fn wait_for_transaction_confirmation(
-    client: &HttpClient,
-    torii_base_url: &Url,
-    tx_hash_hex: &str,
-) -> Result<TransactionConfirmation, String> {
-    let status_endpoint = torii_base_url
-        .join("v1/pipeline/transactions/status")
-        .map_err(|err| format!("failed to build transaction status endpoint URL: {err}"))?;
-    let deadline =
-        Instant::now() + Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS);
-    let poll_interval = Duration::from_millis(DEFAULT_MANIFEST_SUBMIT_CONFIRM_POLL_MS);
-    let mut last_observed_status = "QUEUED".to_string();
-
-    loop {
-        let response = client
-            .get(status_endpoint.as_str())
-            .query(&[("hash", tx_hash_hex)])
-            .header("Accept", "application/json")
-            .send()
-            .map_err(|err| {
-                format!(
-                    "failed to query transaction status at `{}`: {err}",
-                    status_endpoint
-                )
-            })?;
-        let status = response.status();
-        let response_bytes = response
-            .bytes()
-            .map_err(|err| format!("failed to read transaction status response: {err}"))?
-            .to_vec();
-
-        match status {
-            StatusCode::OK | StatusCode::ACCEPTED => {
-                if !response_bytes.is_empty() {
-                    let value: Value = from_slice(&response_bytes).map_err(|err| {
-                        format!(
-                            "failed to decode transaction status JSON from `{}`: {err}",
-                            status_endpoint
-                        )
-                    })?;
-                    let confirmation = parse_transaction_confirmation(&value).ok_or_else(|| {
-                        format!(
-                            "transaction status payload from `{}` does not expose a status kind",
-                            status_endpoint
-                        )
-                    })?;
-                    last_observed_status = match confirmation.kind {
-                        TransactionConfirmationKind::Queued => "QUEUED".to_string(),
-                        TransactionConfirmationKind::Approved => "APPROVED".to_string(),
-                        TransactionConfirmationKind::Committed => "COMMITTED".to_string(),
-                        TransactionConfirmationKind::Applied => "APPLIED".to_string(),
-                        TransactionConfirmationKind::Rejected => "REJECTED".to_string(),
-                        TransactionConfirmationKind::Expired => "EXPIRED".to_string(),
-                    };
-                    match confirmation.kind {
-                        TransactionConfirmationKind::Queued
-                        | TransactionConfirmationKind::Approved => {}
-                        TransactionConfirmationKind::Rejected => {
-                            let explorer_rejection_message = fetch_transaction_rejection_message(
-                                client,
-                                torii_base_url,
-                                tx_hash_hex,
-                            );
-                            let detailed_rejection_message = explorer_rejection_message
-                                .clone()
-                                .filter(|message| !looks_like_generic_rejection_message(message))
-                                .or_else(|| confirmation.rejection_message.clone())
-                                .or(explorer_rejection_message);
-                            return Ok(TransactionConfirmation {
-                                rejection_message: detailed_rejection_message,
-                                ..confirmation
-                            });
-                        }
-                        TransactionConfirmationKind::Committed
-                        | TransactionConfirmationKind::Applied
-                        | TransactionConfirmationKind::Expired => return Ok(confirmation),
-                    }
-                }
-            }
-            StatusCode::NO_CONTENT | StatusCode::NOT_FOUND => {}
-            other => {
-                return Err(format!(
-                    "transaction status endpoint `{}` returned {}: {}",
-                    status_endpoint,
-                    other,
-                    String::from_utf8_lossy(&response_bytes)
-                ));
-            }
-        }
-
-        if Instant::now() >= deadline {
-            return Err(format!(
-                "transaction `{tx_hash_hex}` remained {last_observed_status} after {}ms",
-                DEFAULT_MANIFEST_SUBMIT_CONFIRM_TIMEOUT_MS
-            ));
-        }
-        thread::sleep(poll_interval);
-    }
-}
-
-fn parse_transaction_confirmation(payload: &Value) -> Option<TransactionConfirmation> {
-    let status_value = payload
-        .get("content")
-        .and_then(|content| content.get("status"))
-        .or_else(|| payload.get("status"))?;
-    let block_height = pipeline_status_block_height(payload, status_value);
-
-    match status_value {
-        Value::String(kind) => Some(TransactionConfirmation {
-            kind: parse_transaction_confirmation_kind(kind)?,
-            block_height,
-            pipeline_response: payload.clone(),
-            rejection_message: None,
-        }),
-        Value::Object(map) => {
-            let kind = map.get("kind").and_then(Value::as_str)?;
-            let rejection_message = map
-                .get("message")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                .or_else(|| {
-                    map.get("content")
-                        .and_then(Value::as_str)
-                        .and_then(decode_rejection_message_hint)
-                });
-            Some(TransactionConfirmation {
-                kind: parse_transaction_confirmation_kind(kind)?,
-                block_height,
-                pipeline_response: payload.clone(),
-                rejection_message,
-            })
-        }
-        _ => None,
-    }
-}
-
-fn parse_transaction_confirmation_kind(kind: &str) -> Option<TransactionConfirmationKind> {
-    match kind {
-        "Queued" => Some(TransactionConfirmationKind::Queued),
-        "Approved" => Some(TransactionConfirmationKind::Approved),
-        "Committed" => Some(TransactionConfirmationKind::Committed),
-        "Applied" => Some(TransactionConfirmationKind::Applied),
-        "Rejected" => Some(TransactionConfirmationKind::Rejected),
-        "Expired" => Some(TransactionConfirmationKind::Expired),
-        _ => None,
-    }
-}
-
-fn pipeline_status_block_height(payload: &Value, status_value: &Value) -> Option<u64> {
-    match status_value {
-        Value::Object(map) => map
-            .get("block_height")
-            .and_then(Value::as_u64)
-            .or_else(|| {
-                payload
-                    .get("content")
-                    .and_then(|content| content.get("block_height"))
-                    .and_then(Value::as_u64)
-            })
-            .or_else(|| payload.get("block_height").and_then(Value::as_u64)),
-        _ => payload
-            .get("content")
-            .and_then(|content| content.get("block_height"))
-            .and_then(Value::as_u64)
-            .or_else(|| payload.get("block_height").and_then(Value::as_u64)),
-    }
-}
-
-fn fetch_transaction_rejection_message(
-    client: &HttpClient,
-    torii_base_url: &Url,
-    tx_hash_hex: &str,
-) -> Option<String> {
-    let endpoint = torii_base_url
-        .join(&format!("v1/explorer/transactions/{tx_hash_hex}"))
-        .ok()?;
-    let response = client
-        .get(endpoint.as_str())
-        .header("Accept", "application/json")
-        .send()
-        .ok()?;
-    if !response.status().is_success() {
-        return None;
-    }
-    let body = response.bytes().ok()?;
-    let value: Value = from_slice(&body).ok()?;
-    value
-        .get("rejection_reason")
-        .and_then(|reason| reason.get("message"))
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-}
-
-fn looks_like_generic_rejection_message(message: &str) -> bool {
-    let lower = message.to_ascii_lowercase();
-    lower.contains("validation failed") || lower.contains("invalid instruction parameter")
-}
-
-fn decode_rejection_message_hint(encoded: &str) -> Option<String> {
-    let bytes = BASE64_STANDARD.decode(encoded.trim()).ok()?;
-    extract_ascii_message(&bytes)
-}
-
-fn extract_ascii_message(bytes: &[u8]) -> Option<String> {
-    let mut best = String::new();
-    let mut current = String::new();
-
-    for &byte in bytes {
-        if byte.is_ascii_graphic() || byte == b' ' {
-            current.push(byte as char);
-        } else {
-            if current.len() > best.len() {
-                best = current.clone();
-            }
-            current.clear();
-        }
-    }
-    if current.len() > best.len() {
-        best = current;
-    }
-
-    let trimmed = best.trim();
-    if trimmed.len() >= 12 {
-        Some(trimmed.to_string())
-    } else {
-        None
-    }
-}
-
 fn decode_response_value_or_text(response: &[u8]) -> Value {
     match from_slice(response) {
         Ok(value) => value,
         Err(_) => Value::from(String::from_utf8_lossy(response).to_string()),
     }
-}
-
-fn resolve_chain_id_from_sorafs_registry(
-    client: &HttpClient,
-    torii_base_url: &Url,
-) -> Result<String, String> {
-    let mut last_error: Option<String> = None;
-    for route in ["v1/sorafs/pin", "v1/sorafs/aliases"] {
-        let endpoint = torii_base_url
-            .join(route)
-            .map_err(|err| format!("failed to build Torii registry endpoint URL: {err}"))?;
-        let response = match client
-            .get(endpoint.as_str())
-            .header("Accept", "application/json")
-            .send()
-        {
-            Ok(response) => response,
-            Err(err) => {
-                last_error = Some(format!("failed to query `{}`: {err}", endpoint));
-                continue;
-            }
-        };
-        let status = response.status();
-        let response_bytes = response.bytes().map_err(|err| {
-            format!(
-                "failed to read registry response from `{}`: {err}",
-                endpoint
-            )
-        })?;
-        let body = response_bytes.to_vec();
-        if !status.is_success() {
-            last_error = Some(format!(
-                "registry endpoint `{}` returned {}: {}",
-                endpoint,
-                status,
-                String::from_utf8_lossy(&body)
-            ));
-            continue;
-        }
-        let value: Value = from_slice(&body)
-            .map_err(|err| format!("failed to decode registry JSON from `{}`: {err}", endpoint))?;
-        match resolve_chain_id_from_registry_value(&value) {
-            Ok(chain_id) => return Ok(chain_id),
-            Err(err) => {
-                last_error = Some(format!(
-                    "failed to resolve chain id from `{}`: {err}",
-                    endpoint
-                ));
-            }
-        }
-    }
-
-    Err(last_error
-        .unwrap_or_else(|| "failed to resolve chain id from SoraFS registry endpoints".to_string()))
-}
-
-fn resolve_chain_id_from_registry_value(value: &Value) -> Result<String, String> {
-    let chain_id = find_status_value(value, &["attestation", "chain_id"])
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| "registry JSON is missing `attestation.chain_id`".to_string())?;
-    Ok(chain_id.to_string())
 }
 
 fn resolve_submitted_epoch_from_status(
@@ -22471,7 +21932,6 @@ fn build_pin_register_payload(
     private_key: PrivateKey,
     manifest: &ManifestV1,
     submitted_epoch: u64,
-    gas_asset_id: Option<&str>,
     alias: Option<&AliasInputs>,
     successor_of: Option<[u8; 32]>,
 ) -> Result<Value, String> {
@@ -22494,12 +21954,6 @@ fn build_pin_register_payload(
         Value::from(BASE64_STANDARD.encode(manifest_payload)),
     );
     map.insert("submitted_epoch".into(), Value::from(submitted_epoch));
-    if let Some(gas_asset_id) = gas_asset_id
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-    {
-        map.insert("gas_asset_id".into(), Value::from(gas_asset_id));
-    }
 
     if let Some(alias) = alias {
         let mut alias_map = Map::new();
@@ -22714,6 +22168,43 @@ mod tests {
 
     fn fixture_account(seed: u8) -> AccountId {
         AccountId::new(fixture_keypair(seed).public_key().clone())
+    }
+
+    #[test]
+    fn report_markdown_preserves_exact_sub_micro_slashing_amount() {
+        let report = PorWeeklyReportV1 {
+            version: sorafs_manifest::por::POR_WEEKLY_REPORT_VERSION_V1,
+            cycle: PorReportIsoWeek {
+                year: 2026,
+                week: 28,
+            },
+            generated_at: 1,
+            challenges_total: 1,
+            challenges_verified: 0,
+            challenges_failed: 1,
+            forced_challenges: 0,
+            repairs_enqueued: 0,
+            repairs_completed: 0,
+            mean_latency_ms: None,
+            p95_latency_ms: None,
+            slashing_events: vec![sorafs_manifest::por::PorSlashingEventV1 {
+                provider_id: [1; 32],
+                manifest_digest: [2; 32],
+                penalty_xor: "0.000000001"
+                    .parse()
+                    .expect("sub-micro XOR quantity is canonical"),
+                verdict_cid: "bafy-verdict".to_owned(),
+                decided_at: 2,
+            }],
+            providers_missing_vrf: Vec::new(),
+            top_offenders: Vec::new(),
+            notes: None,
+        };
+
+        let rendered = render_report_markdown(&report);
+
+        assert!(rendered.contains("penalty 0.000000001 XOR"));
+        assert!(!rendered.contains("penalty 0.000000 XOR"));
     }
 
     #[test]
@@ -23034,35 +22525,6 @@ mod tests {
     }
 
     #[test]
-    fn manifest_submit_fallback_transaction_checked_signing_verifies() {
-        use iroha_data_model::{
-            ChainId,
-            prelude::{InstructionBox, TransactionBuilder},
-            sorafs::pin_registry::ManifestDigest,
-        };
-        let manifest = sample_manifest();
-        let instruction = iroha_data_model::isi::sorafs::RegisterPinManifest::new(
-            manifest.encode().expect("canonical manifest payload"),
-            42,
-            None,
-            Some(ManifestDigest::new([0xDD; 32])),
-        );
-        let keypair = fixture_keypair(0xA5);
-        let authority = AccountId::new(keypair.public_key().clone());
-
-        let tx = sign_manifest_submit_fallback_transaction(
-            TransactionBuilder::new(ChainId::from("test-chain".to_owned()), authority.clone())
-                .with_instructions([InstructionBox::from(instruction)]),
-            keypair.private_key(),
-        )
-        .expect("checked fallback transaction signing");
-
-        assert_eq!(tx.authority(), &authority);
-        tx.verify_signature()
-            .expect("checked fallback transaction signature should verify");
-    }
-
-    #[test]
     fn parse_account_id_arg_with_prefix_accepts_matching_i105_discriminant() {
         let account = fixture_account(0x5A);
         let encoded = account
@@ -23143,7 +22605,6 @@ mod tests {
             99,
             None,
             None,
-            None,
         )
         .expect("build payload");
 
@@ -23160,6 +22621,7 @@ mod tests {
             expected_manifest_payload
         );
         assert_eq!(payload["submitted_epoch"], Value::from(99_u64));
+        assert!(payload.get("gas_asset_id").is_none());
         assert!(payload.get("manifest_digest_hex").is_none());
         assert!(payload.get("chunk_digest_sha3_256_hex").is_none());
         assert!(payload.get("pin_policy").is_none());
@@ -23204,29 +22666,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_chain_id_from_registry_value_reads_attestation_chain_id() {
-        let mut attestation = Map::new();
-        attestation.insert("chain_id".into(), Value::from("test-chain"));
-        let mut root = Map::new();
-        root.insert("attestation".into(), Value::Object(attestation));
-
-        assert_eq!(
-            resolve_chain_id_from_registry_value(&Value::Object(root)).expect("chain id"),
-            "test-chain"
-        );
-    }
-
-    #[test]
-    fn resolve_chain_id_from_registry_value_rejects_missing_attestation_chain_id() {
-        let err = resolve_chain_id_from_registry_value(&Value::Object(Map::new()))
-            .expect_err("missing attestation chain id should fail");
-        assert!(
-            err.contains("attestation.chain_id"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn governance_payload_kind_cli_labels_external_payload() {
         use sorafs_manifest::GovernanceExternalPayloadV1;
 
@@ -23242,22 +22681,6 @@ mod tests {
         });
 
         assert_eq!(governance_payload_kind_cli(&payload), "external_payload");
-    }
-
-    #[test]
-    fn manifest_submit_status_fallback_detects_missing_route() {
-        assert!(should_fallback_manifest_submit_status(
-            StatusCode::METHOD_NOT_ALLOWED
-        ));
-        assert!(should_fallback_manifest_submit_status(
-            StatusCode::NOT_FOUND
-        ));
-        assert!(should_fallback_manifest_submit_status(
-            StatusCode::NOT_IMPLEMENTED
-        ));
-        assert!(!should_fallback_manifest_submit_status(
-            StatusCode::BAD_REQUEST
-        ));
     }
 
     #[test]
@@ -24141,7 +23564,6 @@ fn render_status_table(entries: &[PorChallengeStatusV1]) -> String {
 }
 
 fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
-    const MICRO_XOR_PER_XOR: f64 = 1_000_000.0;
     let mut out = String::new();
     let _ = writeln!(&mut out, "# PoR Weekly Health — {}", report.cycle);
     let _ = writeln!(&mut out, "\nGenerated (unix): {}", report.generated_at);
@@ -24221,11 +23643,10 @@ fn render_report_markdown(report: &PorWeeklyReportV1) -> String {
         for event in &report.slashing_events {
             let provider = hex_prefix(&event.provider_id, 12);
             let manifest = hex_prefix(&event.manifest_digest, 12);
-            let penalty_xor = event.penalty_xor.as_micro() as f64 / MICRO_XOR_PER_XOR;
             let _ = writeln!(
                 &mut out,
-                "- Provider {} manifest {} penalty {:.6} XOR (verdict `{}`, decided unix {})",
-                provider, manifest, penalty_xor, event.verdict_cid, event.decided_at
+                "- Provider {} manifest {} penalty {} XOR (verdict `{}`, decided unix {})",
+                provider, manifest, event.penalty_xor, event.verdict_cid, event.decided_at
             );
         }
     }

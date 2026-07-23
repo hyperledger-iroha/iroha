@@ -27,7 +27,10 @@ use tokio::{task::spawn_blocking, time::Instant};
 
 const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 
-fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId>) {
+fn produce_instructions(
+    prefix: &str,
+    owner: &AccountId,
+) -> Result<(Vec<InstructionBox>, BTreeSet<DomainId>)> {
     let domains = (0..4)
         .map(|domain_index: usize| {
             DomainId::try_new(format!("{prefix}{domain_index}"), "universal")
@@ -36,12 +39,10 @@ fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId
         .collect::<Vec<_>>();
     let expected = domains.iter().cloned().collect::<BTreeSet<_>>();
     let instructions = domains
-        .into_iter()
-        .map(Domain::new)
-        .map(Register::domain)
-        .map(InstructionBox::from)
-        .collect::<Vec<_>>();
-    (instructions, expected)
+        .iter()
+        .map(|domain| domain_setup_instruction(domain, owner))
+        .collect::<Result<Vec<_>>>()?;
+    Ok((instructions, expected))
 }
 
 fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
@@ -71,26 +72,18 @@ fn genesis_client(network: &Network) -> Client {
         )
 }
 
-fn genesis_domain_lease_bootstrap(domains: &BTreeSet<DomainId>) -> Result<Vec<InstructionBox>> {
+fn genesis_alias_payment_bootstrap() -> Result<Vec<InstructionBox>> {
     let genesis_id = genesis_account_id();
     let payment_asset_definition =
         AssetDefinitionId::parse_address_literal(SNS_LEASE_PAYMENT_ASSET_DEFINITION)
             .wrap_err("parse SNS lease payment asset definition")?;
-    let mut instructions = vec![
+    Ok(vec![
         Mint::asset_quantity(
             500_000_u32,
             AssetId::new(payment_asset_definition, genesis_id.clone()),
         )
         .into(),
-    ];
-    for domain in domains {
-        instructions.push(domain_registration_lease_instruction_for_owner_payer(
-            domain,
-            &genesis_id,
-            &genesis_id,
-        )?);
-    }
-    Ok(instructions)
+    ])
 }
 
 async fn transaction_execution_should_produce_events(
@@ -101,8 +94,6 @@ async fn transaction_execution_should_produce_events(
     mut expected_domains: BTreeSet<DomainId>,
 ) -> Result<()> {
     let executable = executable.into();
-    ensure_domain_registration_leases_for_executable(client, &executable)?;
-
     // Wait for Torii to come up before subscribing to events.
     let status = get_status_with_retry_async(client)
         .await
@@ -120,7 +111,7 @@ async fn transaction_execution_should_produce_events(
     let result = async {
         {
             let client = client.clone();
-            let tx = client.build_transaction(executable, <_>::default());
+            let tx = client.build_transaction(executable, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), <_>::default());
             let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
@@ -246,11 +237,14 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     {
         let client = network.client();
         spawn_blocking(move || {
-            client.submit_all_blocking::<InstructionBox>([
-                register_role.into(),
-                grant_role.into(),
-                unregister_role.into(),
-            ])
+            client.submit_all_blocking::<InstructionBox>(
+                [
+                    register_role.into(),
+                    grant_role.into(),
+                    unregister_role.into(),
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
         })
         .await??;
     }
@@ -389,16 +383,16 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
 #[tokio::test]
 #[allow(clippy::large_futures, clippy::too_many_lines)]
 async fn data_event_scenarios() -> Result<()> {
-    let (instruction_instructions, instruction_expected) = produce_instructions("instr");
-    let (ivm_instructions, ivm_expected) = produce_instructions("ivm");
-    let mut lease_domains = instruction_expected.clone();
-    lease_domains.extend(ivm_expected.iter().cloned());
-    let lease_bootstrap = genesis_domain_lease_bootstrap(&lease_domains)?;
+    let genesis_id = genesis_account_id();
+    let (instruction_instructions, instruction_expected) =
+        produce_instructions("instr", &genesis_id)?;
+    let (ivm_instructions, ivm_expected) = produce_instructions("ivm", &genesis_id)?;
+    let payment_bootstrap = genesis_alias_payment_bootstrap()?;
 
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
-            .with_genesis_post_topology_isi(lease_bootstrap),
+            .with_genesis_post_topology_isi(payment_bootstrap),
         "data_events",
     )
     .await?

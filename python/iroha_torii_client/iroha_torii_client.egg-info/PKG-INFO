@@ -18,4 +18,5 @@ Classifier: Programming Language :: Python :: 3.11
 Classifier: Programming Language :: Python :: 3.12
 Classifier: Topic :: Software Development :: Libraries :: Python Modules
 Requires-Python: >=3.9
+Requires-Dist: blake3>=1.0
 Requires-Dist: requests>=2.31

@@ -53,9 +53,9 @@ Grafana + Alertmanager كي يتمكن مراجعو الاقتصاد والحو�
      --ndjson-out artifacts/sorafs_reserve/ledger/provider-alpha-apr.ndjson \
      --out-prom artifacts/sorafs_reserve/ledger/provider-alpha-apr.prom
    ```
-   يقوم مساعد الملخص بتطبيع إجماليات micro-XOR إلى XOR، ويسجل ما إذا كان الإسقاط يستوفي
-   underwriting، ويُصدر مقاييس موجز التحويلات `sorafs_reserve_ledger_transfer_xor`
-   و`sorafs_reserve_ledger_instruction_total`. عندما يلزم معالجة عدة دفاتر (مثلا دفعة
+   The first-release digest validates canonical exact XOR strings, preserves all nine
+   fractional digits and values wider than `u128`, rejects retired micro-XOR fields and
+   ambiguous JSON, and emits `sorafs_reserve_ledger_transfer_xor` plus `sorafs_reserve_ledger_instruction_total`.
    من المزودين)، كرر أزواج `--ledger`/`--label` وسيكتب المساعد ملف NDJSON/Prometheus
    واحدا يحتوي كل الملخصات لكي تلتقط لوحات المراقبة الدورة كاملة دون glue مخصص.
    يستهدف ملف `--out-prom` جامع textfile لـ node-exporter - ضع ملف `.prom` في الدليل

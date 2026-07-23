@@ -26,6 +26,7 @@ use iroha_config::{
 use iroha_data_model::{
     block::consensus::PERMISSIONED_TAG,
     da::types::DaRentQuote,
+    prelude::Quantity,
     soranet::privacy_metrics::{
         SoranetPrivacyBucketMetricsV1, SoranetPrivacyModeV1, SoranetPrivacySuppressionReasonV1,
     },
@@ -1792,7 +1793,6 @@ impl Clone for SorafsNodeOtel {
 #[derive(
     Debug,
     Clone,
-    Copy,
     PartialEq,
     Eq,
     Default,
@@ -1801,16 +1801,16 @@ impl Clone for SorafsNodeOtel {
     crate::json_macros::JsonDeserialize,
 )]
 pub struct MicropaymentCreditSnapshot {
-    /// Deterministic charge accumulated during the sample (nano XOR).
-    pub deterministic_charge: u128,
-    /// Credit produced by micropayment winnings (nano XOR).
-    pub credit_generated: u128,
-    /// Credit immediately applied against the deterministic charge (nano XOR).
-    pub credit_applied: u128,
-    /// Credit carried forward for future windows (nano XOR).
-    pub credit_carry: u128,
-    /// Outstanding balance after applying credit (nano XOR).
-    pub outstanding: u128,
+    /// Exact deterministic charge accumulated during the sample.
+    pub deterministic_charge: Quantity,
+    /// Exact credit produced by micropayment winnings.
+    pub credit_generated: Quantity,
+    /// Exact credit immediately applied against the deterministic charge.
+    pub credit_applied: Quantity,
+    /// Exact credit carried forward for future windows.
+    pub credit_carry: Quantity,
+    /// Exact outstanding balance after applying credit.
+    pub outstanding: Quantity,
 }
 
 /// Lottery ticket counters observed during micropayment sampling.
@@ -2047,10 +2047,10 @@ impl SorafsNodeOtel {
         &self,
         provider_id: &str,
         status: &str,
-        expected_charge_nano: u128,
-        client_debit_nano: u128,
-        bond_slash_nano: u128,
-        outstanding_nano: u128,
+        expected_charge: &Quantity,
+        client_debit: &Quantity,
+        bond_slash: &Quantity,
+        outstanding: &Quantity,
     ) {
         #[cfg(feature = "otel-exporter")]
         {
@@ -2062,13 +2062,13 @@ impl SorafsNodeOtel {
             ];
             self.deal_settlements_total.add(1, &settlement_attrs);
             self.deal_expected_charge_nano
-                .record(expected_charge_nano as f64, &provider_attrs);
+                .record(quantity_to_nano_f64(expected_charge), &provider_attrs);
             self.deal_client_debit_nano
-                .record(client_debit_nano as f64, &provider_attrs);
+                .record(quantity_to_nano_f64(client_debit), &provider_attrs);
             self.deal_outstanding_nano
-                .record(outstanding_nano as f64, &provider_attrs);
-            if bond_slash_nano > 0 {
-                let increment = u128::min(bond_slash_nano, u64::MAX as u128) as u64;
+                .record(quantity_to_nano_f64(outstanding), &provider_attrs);
+            if !bond_slash.is_zero() {
+                let increment = quantity_to_nano_f64(bond_slash).min(u64::MAX as f64) as u64;
                 self.deal_bond_slash_nano.add(increment, &provider_attrs);
             }
         }
@@ -2077,10 +2077,10 @@ impl SorafsNodeOtel {
             let _ = (
                 provider_id,
                 status,
-                expected_charge_nano,
-                client_debit_nano,
-                bond_slash_nano,
-                outstanding_nano,
+                expected_charge,
+                client_debit,
+                bond_slash,
+                outstanding,
             );
         }
     }
@@ -2125,15 +2125,15 @@ impl SorafsNodeOtel {
             let provider = provider_id.to_string();
             let attrs = [KeyValue::new("provider_id", provider)];
             self.micropayment_charge_nano
-                .record(*deterministic_charge as f64, &attrs);
+                .record(quantity_to_nano_f64(deterministic_charge), &attrs);
             self.micropayment_credit_generated_nano
-                .record(*credit_generated as f64, &attrs);
+                .record(quantity_to_nano_f64(credit_generated), &attrs);
             self.micropayment_credit_applied_nano
-                .record(*credit_applied as f64, &attrs);
+                .record(quantity_to_nano_f64(credit_applied), &attrs);
             self.micropayment_credit_carry_nano
-                .record(*credit_carry as f64, &attrs);
+                .record(quantity_to_nano_f64(credit_carry), &attrs);
             self.micropayment_outstanding_nano
-                .record(*outstanding as f64, &attrs);
+                .record(quantity_to_nano_f64(outstanding), &attrs);
             if *tickets_processed > 0 {
                 self.micropayment_tickets_processed_total
                     .add(*tickets_processed, &attrs);
@@ -2176,11 +2176,11 @@ impl Default for SorafsNodeOtel {
 impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
         let payload = (
-            self.deterministic_charge,
-            self.credit_generated,
-            self.credit_applied,
-            self.credit_carry,
-            self.outstanding,
+            self.deterministic_charge.clone(),
+            self.credit_generated.clone(),
+            self.credit_applied.clone(),
+            self.credit_carry.clone(),
+            self.outstanding.clone(),
         );
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
@@ -2189,11 +2189,11 @@ impl norito::core::NoritoSerialize for MicropaymentCreditSnapshot {
 impl<'a> norito::core::NoritoDeserialize<'a> for MicropaymentCreditSnapshot {
     fn deserialize(archived: &'a norito::core::Archived<Self>) -> Self {
         let (deterministic_charge, credit_generated, credit_applied, credit_carry, outstanding): (
-            u128,
-            u128,
-            u128,
-            u128,
-            u128,
+            Quantity,
+            Quantity,
+            Quantity,
+            Quantity,
+            Quantity,
         ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
         Self {
             deterministic_charge,
@@ -2210,7 +2210,7 @@ impl<'a> DecodeFromSlice<'a> for MicropaymentCreditSnapshot {
         let (
             (deterministic_charge, credit_generated, credit_applied, credit_carry, outstanding),
             used,
-        ) = <(u128, u128, u128, u128, u128)>::decode_from_slice(bytes)?;
+        ) = <(Quantity, Quantity, Quantity, Quantity, Quantity)>::decode_from_slice(bytes)?;
         Ok((
             Self {
                 deterministic_charge,
@@ -2277,7 +2277,11 @@ pub struct MicropaymentSampleStatus {
 
 impl norito::core::NoritoSerialize for MicropaymentSampleStatus {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
-        let payload = (self.provider_id_hex.clone(), self.credits, self.tickets);
+        let payload = (
+            self.provider_id_hex.clone(),
+            self.credits.clone(),
+            self.tickets,
+        );
         norito::core::NoritoSerialize::serialize(&payload, writer)
     }
 }
@@ -2644,11 +2648,11 @@ mod tests {
         otel.record_micropayment_sample(
             "provider",
             MicropaymentCreditSnapshot {
-                deterministic_charge: 10,
-                credit_generated: 5,
-                credit_applied: 4,
-                credit_carry: 1,
-                outstanding: 2,
+                deterministic_charge: 10_u64.into(),
+                credit_generated: 5_u64.into(),
+                credit_applied: 4_u64.into(),
+                credit_carry: 1_u64.into(),
+                outstanding: 2_u64.into(),
             },
             MicropaymentTicketCounters {
                 processed: 3,
@@ -2656,6 +2660,28 @@ mod tests {
                 duplicate: 0,
             },
         );
+    }
+
+    #[test]
+    fn micropayment_credit_snapshot_norito_roundtrip_preserves_exact_quantities() {
+        let snapshot = MicropaymentCreditSnapshot {
+            deterministic_charge: "0.0000000001".parse().expect("canonical sub-nano quantity"),
+            credit_generated: "340282366920938463463374607431768211456"
+                .parse()
+                .expect("canonical quantity wider than u128"),
+            credit_applied: "1.25".parse().expect("canonical fractional quantity"),
+            credit_carry: 0_u64.into(),
+            outstanding: "0.000000000000000001"
+                .parse()
+                .expect("canonical exact quantity"),
+        };
+
+        let bytes = to_bytes(&snapshot).expect("encode exact micropayment snapshot");
+        let archived = from_bytes::<MicropaymentCreditSnapshot>(&bytes)
+            .expect("archive exact micropayment snapshot");
+        let decoded = MicropaymentCreditSnapshot::deserialize(archived);
+
+        assert_eq!(decoded, snapshot);
     }
 
     #[cfg(not(feature = "otel-exporter"))]
@@ -16142,19 +16168,19 @@ impl Metrics {
         let labels = [cluster, storage_class];
         self.torii_da_rent_base_micro_total
             .with_label_values(&labels)
-            .inc_by(u128_to_f64(quote.base_rent.as_micro()));
+            .inc_by(quantity_to_micro_f64(quote.base_rent.as_quantity()));
         self.torii_da_protocol_reserve_micro_total
             .with_label_values(&labels)
-            .inc_by(u128_to_f64(quote.protocol_reserve.as_micro()));
+            .inc_by(quantity_to_micro_f64(quote.protocol_reserve.as_quantity()));
         self.torii_da_provider_reward_micro_total
             .with_label_values(&labels)
-            .inc_by(u128_to_f64(quote.provider_reward.as_micro()));
+            .inc_by(quantity_to_micro_f64(quote.provider_reward.as_quantity()));
         self.torii_da_pdp_bonus_micro_total
             .with_label_values(&labels)
-            .inc_by(u128_to_f64(quote.pdp_bonus.as_micro()));
+            .inc_by(quantity_to_micro_f64(quote.pdp_bonus.as_quantity()));
         self.torii_da_potr_bonus_micro_total
             .with_label_values(&labels)
-            .inc_by(u128_to_f64(quote.potr_bonus.as_micro()));
+            .inc_by(quantity_to_micro_f64(quote.potr_bonus.as_quantity()));
     }
 
     /// Record a DA receipt ingest outcome and optionally advance the cursor gauge.
@@ -17325,8 +17351,8 @@ impl Metrics {
     }
 
     /// Record the latest SoraFS fee projection for `provider`.
-    pub fn record_sorafs_fee_projection(&self, provider: &str, fee_nanos: u128) {
-        let gauge_value = u128_to_f64(fee_nanos);
+    pub fn record_sorafs_fee_projection(&self, provider: &str, fee: &Quantity) {
+        let gauge_value = quantity_to_nano_f64(fee);
         self.torii_sorafs_fee_projection_nanos
             .with_label_values(&[provider])
             .set(gauge_value);
@@ -18523,6 +18549,18 @@ fn u128_to_f64(value: u128) -> f64 {
     u64::try_from(value).map_or(f64::MAX, u64_to_f64)
 }
 
+fn quantity_to_micro_f64(value: &iroha_data_model::prelude::Quantity) -> f64 {
+    let micros = value.as_numeric().to_f64_lossy() * 1_000_000.0;
+    if micros.is_finite() { micros } else { f64::MAX }
+}
+
+/// Project an exact quantity into the legacy nano-unit `f64` used only by
+/// telemetry instruments. This projection never feeds consensus state.
+fn quantity_to_nano_f64(value: &Quantity) -> f64 {
+    let nanos = value.as_numeric().to_f64_lossy() * 1_000_000_000.0;
+    if nanos.is_finite() { nanos } else { f64::MAX }
+}
+
 fn family_has_lane_labels(family: &prometheus::proto::MetricFamily) -> bool {
     family
         .get_metric()
@@ -18550,6 +18588,18 @@ mod test {
         assert!(
             (actual - expected).abs() < f64::EPSILON,
             "{context}: expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn quantity_micro_projection_preserves_fractional_xor() {
+        let value = "0.0015"
+            .parse::<iroha_data_model::prelude::Quantity>()
+            .expect("canonical quantity");
+        assert_float_metric_eq(
+            quantity_to_micro_f64(&value),
+            1_500.0,
+            "quantity micro projection",
         );
     }
 
@@ -19983,7 +20033,17 @@ mod test {
         let otel = SorafsNodeOtel::new();
         otel.record_storage("provider123", 512, 1_024, 10, 1);
         otel.record_storage("provider123", 768, 1_024, 12, 2);
-        otel.record_deal_settlement("provider123", "completed", 850_000_000, 600_000_000, 0, 0);
+        let expected_charge = "0.85".parse().expect("canonical quantity");
+        let client_debit = "0.6".parse().expect("canonical quantity");
+        let zero = Quantity::zero();
+        otel.record_deal_settlement(
+            "provider123",
+            "completed",
+            &expected_charge,
+            &client_debit,
+            &zero,
+            &zero,
+        );
         let _ = global_sorafs_node_otel();
     }
 

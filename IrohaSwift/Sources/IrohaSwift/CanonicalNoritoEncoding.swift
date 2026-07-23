@@ -444,6 +444,11 @@ struct CompactNoritoWriter {
         writeLength(UInt64(payload.count))
         writeBytes(payload)
     }
+
+    mutating func wipe() {
+        data.resetBytes(in: 0..<data.count)
+        data.removeAll(keepingCapacity: false)
+    }
 }
 
 enum CompactNorito {

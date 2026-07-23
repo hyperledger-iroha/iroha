@@ -46,8 +46,8 @@ Canonical payloads `crates/iroha_data_model/src/block/consensus.rs` میں ہی�
 ### `LaneSettlementReceipt`
 
 - `source_id` — transaction hash یا caller-provided id.
-- `local_amount_micro` — dataspace gas token debit.
-- `xor_due_micro` / `xor_after_haircut_micro` / `xor_variance_micro` — deterministic XOR book entries اور فی receipt safety margin (`due - after haircut`).
+- `local_amount` — dataspace gas token debit.
+- `xor_due` / `xor_after_haircut` / `xor_variance` — deterministic XOR book entries اور فی receipt safety margin (`due - after haircut`).
 - `timestamp_ms` — settlement کے دوران لیا گیا UTC millisecond timestamp.
 
 Receipts، `SettlementEngine` کے deterministic quoting rules inherit کرتے ہیں اور ہر `LaneBlockCommitment` میں aggregate ہوتے ہیں۔
@@ -65,7 +65,7 @@ Optional metadata جو quoting کے دوران استعمال ہونے والے 
 ہر lane کا خلاصہ جو ہر block کے ساتھ store ہوتا ہے:
 
 - Header: `block_height`, `lane_id`, `dataspace_id`, `tx_count`.
-- Totals: `total_local_micro`, `total_xor_due_micro`, `total_xor_after_haircut_micro`, `total_xor_variance_micro`.
+- Totals: `total_local_amount`, `total_xor_due`, `total_xor_after_haircut`, `total_xor_variance`.
 - Optional `swap_metadata`.
 - Ordered `receipts` vector.
 
@@ -123,7 +123,7 @@ merge ring کو lane commitment قبول کرنے سے پہلے یہ شرائط 
   `dashboards/grafana/nexus_lanes.json` lane backlog، DA availability signals، اور اوپر بیان کردہ settlement totals دکھاتا ہے۔ Alert definitions کو page کرنا چاہئے جب:
   - `nexus_scheduler_dataspace_age_slots` policy کو breach کرے۔
   - `sumeragi_da_gate_block_total{reason="missing_local_data"}` مسلسل بڑھے۔
-  - `total_xor_variance_micro` historical norms سے deviate کرے۔
+  - `total_xor_variance` historical norms سے deviate کرے۔
 - **Evidence bundles:**  
   ہر release کو `LaneBlockCommitment` exports، Grafana/Alertmanager snapshots، اور relay DA manifests کو `artifacts/nexus/cross-lane/<date>/` میں attach کرنا چاہئے۔ یہ bundle NX-4 readiness reports جمع کراتے وقت canonical proof set بنتا ہے۔
 

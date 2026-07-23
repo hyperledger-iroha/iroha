@@ -13,7 +13,28 @@
 //! collection-extraction, adapter-contract, WAL-byte, cross-tool, and liveness
 //! boundaries that remain before a complete production-correctness claim.
 
-use vstd::prelude::*;
+use vstd::{assert_seqs_equal, prelude::*};
+
+use crate::refinement::{
+    BOUNDARY_ACKNOWLEDGE_WAL, BOUNDARY_BEGIN_WAL, BOUNDARY_COMPLETE_APPLICATION, BOUNDARY_NONE,
+    BOUNDARY_RESUME_AFTER_REPLAY, CERTIFICATE_EVIDENCE_ABSENT, CERTIFICATE_EVIDENCE_INCOMING,
+    CERTIFICATE_EVIDENCE_LOCAL, CONTINUATION_DECIDE, CONTINUATION_INSTALL_TIMEOUT,
+    CONTINUATION_NONE, CONTINUATION_SIGN, EFFECT_PERSIST, EVENT_PERSISTED,
+    EVENT_PERSISTENCE_FAILED, EVENT_RESUME_AFTER_REPLAY, EVENT_SIGNED, IDENTITY_DOMAIN_CONTEXT,
+    IDENTITY_DOMAIN_DURABLE_ARTIFACT, IDENTITY_DOMAIN_PAYLOAD, IDENTITY_DOMAIN_PEER,
+    IDENTITY_DOMAIN_SUBJECT, IDENTITY_KIND_BLOCK_HEADER, IDENTITY_KIND_CANONICAL_PAYLOAD,
+    IDENTITY_KIND_CONSENSUS_CONTEXT, IDENTITY_KIND_CONSENSUS_SUBJECT,
+    IDENTITY_KIND_DURABLE_BODY_FRAME, IDENTITY_KIND_EXECUTED_BLOCK_WIRE,
+    IDENTITY_KIND_EXECUTION_COMMITMENT, IDENTITY_KIND_FINALITY_ARTIFACT, IDENTITY_KIND_MERGE_ENTRY,
+    IDENTITY_KIND_NETWORK_RESPONSE, IDENTITY_KIND_PAYLOAD_MANIFEST, IDENTITY_KIND_PEER,
+    IDENTITY_KIND_QUORUM_CERTIFICATE, IDENTITY_KIND_REFERENCE_DIGEST, IDENTITY_KIND_REPLY_PAYLOAD,
+    IDENTITY_KIND_SIDECAR_CHUNK, IDENTITY_KIND_SIDECAR_PAYLOAD, IDENTITY_KIND_SIDECAR_REQUEST,
+    IDENTITY_KIND_SIDECAR_RESPONSE, IDENTITY_KIND_WIRE_BLOCK_SUBJECT,
+    IDENTITY_KIND_WIRE_HEIGHT_CONTEXT, REPLAY_EFFECT_NONE, WAL_RECORD_DECISION,
+    WAL_RECORD_INSTALL_TIMEOUT, WAL_RECORD_LOCK_AND_COMMIT, WAL_RECORD_NONE,
+    WAL_RECORD_OBSERVE_PREPARE, WAL_RECORD_PREPARE_INTENT, WAL_RECORD_PROPOSAL_INTENT,
+    WAL_RECORD_TIMEOUT_INTENT,
+};
 
 // These expressions are instantiated both as specifications and as executable
 // Verus functions.  The PrepareIntent and TimeoutIntent WAL guards below are
@@ -33,6 +54,8 @@ macro_rules! same_certificate_body {
                     && $left.height == $right.height
                     && $left.prepare == $right.prepare
                     && $left.view == $right.view
+                    && $left.proposal_height == $right.proposal_height
+                    && $left.proposal_view == $right.proposal_view
                     && $left.subject == $right.subject))
     }};
 }
@@ -45,6 +68,18 @@ macro_rules! same_certificate_evidence_body {
     }};
 }
 
+// Compose the source-linked EnterView gate and the exact effect-count checks
+// once for both the closed specification and its branch-factored executable
+// Verus instances.
+#[allow(unused_macros)]
+macro_rules! production_enter_view_exact_body {
+    ($projection:expr) => {{
+        enter_view_projection_gate_body!($projection.enter_view)
+            && $projection.enter_view.enter_count == effect_count_body!($projection.effects, 8u8)
+            && $projection.enter_view.fetch_count == effect_count_body!($projection.effects, 2u8)
+    }};
+}
+
 verus! {
 
 /// Largest value representable by every production height/view/generation/WAL
@@ -52,6 +87,531 @@ verus! {
 pub open spec fn machine_u64_max() -> int {
     18_446_744_073_709_551_615
 }
+
+// ---------------------------------------------------------------------------
+// Production persisted-continuation ordering / abstract causal FIFO seam
+// ---------------------------------------------------------------------------
+
+/// Mathematical result of the production `rev()` plus `push_front` loop.
+///
+/// `continuation.reverse()` is the order visited by the iterator and the
+/// second reverse is the effect of pushing every visited item to the front.
+/// The old pending tail is never reordered. This models the exact generic
+/// helper called by `V2Adapter::drive_effects`, not a second effect executor.
+pub open spec fn production_reverse_push_front(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+) -> Seq<int> {
+    continuation.reverse().reverse().add(old_tail)
+}
+
+/// The production synchronous expansion is exactly continuation-before-tail
+/// FIFO order. In particular, replacing the production reverse iterator with
+/// forward iteration would leave only the first reverse and violate this
+/// relation for every non-palindromic continuation.
+pub proof fn production_reverse_push_front_refines_fifo(
+    old_tail: Seq<int>,
+    continuation: Seq<int>,
+)
+    ensures
+        production_reverse_push_front(old_tail, continuation)
+            =~= continuation.add(old_tail),
+{
+    assert(continuation.reverse().reverse() =~= continuation);
+}
+
+/// Stable first-owner filter used at the production/TLA+ projection boundary.
+///
+/// Integers stand for exact projected causal-candidate identities. `owned`
+/// must be the union of every production scheduler owner (admitted, deferred,
+/// causal, outstanding I/O, ready, and local worker state). Consequently this
+/// function is deliberately conditional on faithful identity and ownership
+/// extraction; `drive_effects` itself does not perform scheduler-wide
+/// coalescing.
+///
+/// TODO: replace this conditional integer/set projection with the
+/// machine-checked production effect-to-TLA candidate identity/ownership map
+/// and its Completion-capacity product-rank proof before promoting the
+/// temporal liveness obligation.
+pub open spec fn production_fresh_causal_successors(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors(owned, remaining)
+        } else {
+            seq![candidate].add(production_fresh_causal_successors(
+                owned.insert(candidate),
+                remaining,
+            ))
+        }
+    }
+}
+
+/// Standard subsequence relation used to state that first-owner filtering
+/// preserves the source order. Combined with the exact filter body and output
+/// uniqueness, this excludes either reversing or prepending recursive output.
+pub open spec fn production_stable_subsequence(
+    subsequence: Seq<int>,
+    source: Seq<int>,
+) -> bool
+    decreases source.len(),
+{
+    if subsequence.len() == 0 {
+        true
+    } else if source.len() == 0 {
+        false
+    } else if subsequence.first() == source.first() {
+        production_stable_subsequence(subsequence.drop_first(), source.drop_first())
+    } else {
+        production_stable_subsequence(subsequence, source.drop_first())
+    }
+}
+
+/// Every retained successor is absent from the complete prior-owner set.
+pub proof fn production_fresh_causal_successors_excludes_prior_owners(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        forall|index: int|
+            0 <= index < production_fresh_causal_successors(owned, successors).len()
+                ==> !owned.contains(
+                    production_fresh_causal_successors(owned, successors)[index],
+                ),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        assert(successors =~= seq![candidate].add(remaining));
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_excludes_prior_owners(owned, remaining);
+            assert(
+                production_fresh_causal_successors(owned, successors)
+                    =~= production_fresh_causal_successors(owned, remaining)
+            );
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_excludes_prior_owners(next_owned, remaining);
+            assert forall|index: int|
+                0 <= index < seq![candidate].add(tail).len()
+                    implies !owned.contains(seq![candidate].add(tail)[index]) by {
+                if index != 0 {
+                    assert(0 <= index - 1 < tail.len());
+                    assert(seq![candidate].add(tail)[index] == tail[index - 1]);
+                    assert(!next_owned.contains(tail[index - 1]));
+                }
+            }
+            assert(
+                production_fresh_causal_successors(owned, successors)
+                    =~= seq![candidate].add(tail)
+            );
+        }
+    }
+}
+
+/// Every emitted identity that was not already owned is retained. Together
+/// with prior-owner exclusion, uniqueness, and stable-subsequence order, this
+/// prevents an implementation that silently drops all fresh successors.
+pub proof fn production_fresh_causal_successors_keeps_every_fresh_value(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        forall|candidate: int|
+            successors.contains(candidate) && !owned.contains(candidate)
+                ==> production_fresh_causal_successors(owned, successors)
+                    .contains(candidate),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        assert(successors =~= seq![candidate].add(remaining));
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_keeps_every_fresh_value(owned, remaining);
+            assert forall|value: int|
+                successors.contains(value) && !owned.contains(value)
+                    implies production_fresh_causal_successors(owned, remaining)
+                        .contains(value) by {
+                assert(value != candidate);
+                assert(remaining.contains(value));
+            }
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_keeps_every_fresh_value(
+                next_owned,
+                remaining,
+            );
+            assert forall|value: int|
+                successors.contains(value) && !owned.contains(value)
+                    implies seq![candidate].add(tail).contains(value) by {
+                if value == candidate {
+                    assert(seq![candidate].contains(value));
+                } else {
+                    assert(remaining.contains(value));
+                    assert(!next_owned.contains(value));
+                    assert(tail.contains(value));
+                }
+            }
+        }
+    }
+}
+
+/// Stable first ownership emits each projected identity at most once.
+pub proof fn production_fresh_causal_successors_has_unique_values(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        production_fresh_causal_successors(owned, successors).no_duplicates(),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_fresh_causal_successors_has_unique_values(owned, remaining);
+        } else {
+            let next_owned = owned.insert(candidate);
+            let tail = production_fresh_causal_successors(next_owned, remaining);
+            production_fresh_causal_successors_has_unique_values(next_owned, remaining);
+            production_fresh_causal_successors_excludes_prior_owners(next_owned, remaining);
+            assert(seq![candidate].no_duplicates());
+            assert forall|left: int, right: int|
+                0 <= left < seq![candidate].len() && 0 <= right < tail.len()
+                    implies seq![candidate][left] != tail[right] by {
+                assert(left == 0);
+                assert(seq![candidate][left] == candidate);
+                assert(next_owned.contains(candidate));
+                assert(!next_owned.contains(tail[right]));
+            }
+            vstd::seq_lib::lemma_no_dup_in_concat(seq![candidate], tail);
+        }
+    }
+}
+
+/// The exact first-owner output is a stable subsequence of emitted identities.
+pub proof fn production_fresh_causal_successors_preserves_first_owner_order(
+    owned: Set<int>,
+    successors: Seq<int>,
+)
+    ensures
+        production_stable_subsequence(
+            production_fresh_causal_successors(owned, successors),
+            successors,
+        ),
+    decreases successors.len(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    if successors.len() != 0 {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            let filtered = production_fresh_causal_successors(owned, remaining);
+            production_fresh_causal_successors_preserves_first_owner_order(
+                owned,
+                remaining,
+            );
+            production_fresh_causal_successors_excludes_prior_owners(owned, remaining);
+            if filtered.len() != 0 {
+                assert(!owned.contains(filtered.first()));
+                assert(filtered.first() != candidate);
+            }
+        } else {
+            production_fresh_causal_successors_preserves_first_owner_order(
+                owned.insert(candidate),
+                remaining,
+            );
+        }
+    }
+}
+
+/// Abstract causal FIFO after one completely expanded production effect batch.
+///
+/// The production adapter drains its private expansion queue synchronously.
+/// The refinement then projects the stable emitted sequence, coalesces exact
+/// scheduler-wide owners once, and appends the fresh sequence to the abstract
+/// queue tail, matching `FreshCommandSuccessors`/`AppendCausalSuccessors`.
+pub open spec fn production_async_causal_fifo_after_batch(
+    old_queue: Seq<int>,
+    owned: Set<int>,
+    emitted: Seq<int>,
+) -> Seq<int> {
+    old_queue.add(production_fresh_causal_successors(owned, emitted))
+}
+
+/// Under a faithful scheduler-owner projection, a batch preserves the old
+/// causal prefix and appends a disjoint, unique, stable first-owner suffix.
+/// This theorem does not identify concrete `Effect` values with TLA+ values.
+pub proof fn production_async_causal_fifo_after_batch_preserves_fresh_tail(
+    old_queue: Seq<int>,
+    owned: Set<int>,
+    emitted: Seq<int>,
+)
+    requires
+        old_queue.no_duplicates(),
+        old_queue.to_set().subset_of(owned),
+    ensures
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            =~= old_queue.add(production_fresh_causal_successors(owned, emitted)),
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .take(old_queue.len() as int)
+            =~= old_queue,
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .skip(old_queue.len() as int)
+            =~= production_fresh_causal_successors(owned, emitted),
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .no_duplicates(),
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+
+    let fresh = production_fresh_causal_successors(owned, emitted);
+    production_fresh_causal_successors_excludes_prior_owners(owned, emitted);
+    production_fresh_causal_successors_has_unique_values(owned, emitted);
+    assert forall|left: int, right: int|
+        0 <= left < old_queue.len() && 0 <= right < fresh.len()
+            implies old_queue[left] != fresh[right] by {
+        old_queue.lemma_index_contains(left);
+        assert(old_queue.to_set().contains(old_queue[left]));
+        assert(owned.contains(old_queue[left]));
+        assert(!owned.contains(fresh[right]));
+    }
+    vstd::seq_lib::lemma_no_dup_in_concat(old_queue, fresh);
+    assert_seqs_equal!(
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .take(old_queue.len() as int)
+            == old_queue
+    );
+    assert_seqs_equal!(
+        production_async_causal_fifo_after_batch(old_queue, owned, emitted)
+            .skip(old_queue.len() as int)
+            == fresh
+    );
+}
+
+/// Deliberately inverted owner predicate used only by the concrete mutation
+/// witness below.
+pub open spec fn production_inverted_owner_filter_mutant(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            seq![candidate].add(production_inverted_owner_filter_mutant(
+                owned.insert(candidate),
+                remaining,
+            ))
+        } else {
+            production_inverted_owner_filter_mutant(owned, remaining)
+        }
+    }
+}
+
+/// The inverted predicate retains the prior owner and drops the fresh value.
+pub proof fn production_inverted_owner_filter_mutant_is_rejected()
+    ensures
+        production_inverted_owner_filter_mutant(
+            Set::<int>::empty().insert(1int),
+            seq![1int, 2int],
+        ) =~= seq![1int],
+        production_fresh_causal_successors(
+            Set::<int>::empty().insert(1int),
+            seq![1int, 2int],
+        ) =~= seq![2int],
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+    reveal_with_fuel(production_inverted_owner_filter_mutant, 3);
+    reveal_with_fuel(production_fresh_causal_successors, 3);
+}
+
+/// Deliberately appends each first owner after its recursive suffix, reversing
+/// every all-fresh batch.
+pub open spec fn production_reversed_fresh_order_mutant(
+    owned: Set<int>,
+    successors: Seq<int>,
+) -> Seq<int>
+    decreases successors.len(),
+{
+    if successors.len() == 0 {
+        Seq::empty()
+    } else {
+        let candidate = successors.first();
+        let remaining = successors.drop_first();
+        if owned.contains(candidate) {
+            production_reversed_fresh_order_mutant(owned, remaining)
+        } else {
+            production_reversed_fresh_order_mutant(
+                owned.insert(candidate),
+                remaining,
+            ).add(seq![candidate])
+        }
+    }
+}
+
+/// Recursive append reverses the reviewed three-element stable batch.
+pub proof fn production_reversed_fresh_order_mutant_is_rejected()
+    ensures
+        production_reversed_fresh_order_mutant(
+            Set::<int>::empty(),
+            seq![1int, 2int, 3int],
+        ) =~= seq![3int, 2int, 1int],
+        production_fresh_causal_successors(
+            Set::<int>::empty(),
+            seq![1int, 2int, 3int],
+        ) =~= seq![1int, 2int, 3int],
+{
+    broadcast use vstd::seq_lib::group_seq_properties;
+    broadcast use vstd::set::group_set_axioms;
+    reveal_with_fuel(production_reversed_fresh_order_mutant, 4);
+    reveal_with_fuel(production_fresh_causal_successors, 4);
+}
+
+// ---------------------------------------------------------------------------
+// Production timer/FIFO scheduling kernel
+// ---------------------------------------------------------------------------
+
+/// Fixed-width projection of one production scheduling decision.
+pub struct ScheduleDecisionProjection {
+    /// `1 = Timeout`, `2 = PeriodicTimer`, `3 = Fifo`, `4 = Idle`.
+    pub work: u8,
+    /// Whether an admitted FIFO command is owed the next non-timeout slot.
+    pub fifo_owed: bool,
+}
+
+/// Exact branch relation instantiated by `ScheduleState::select` in
+/// production. The macro body is owned by the source-linked scheduler module,
+/// so the executable runtime and this proof cannot drift independently.
+pub open spec fn schedule_decision(
+    fifo_owed: bool,
+    timeout_due: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+) -> ScheduleDecisionProjection {
+    schedule_select_body!(
+        fifo_owed,
+        timeout_due,
+        periodic_timer_due,
+        fifo_ready,
+        ScheduleDecisionProjection { work: 1, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 2, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 3, fifo_owed: false },
+        ScheduleDecisionProjection { work: 4, fifo_owed: false },
+    )
+}
+
+/// Executable Verus instance of the exact production arbitration branches.
+pub fn verified_schedule_decision(
+    fifo_owed: bool,
+    timeout_due: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+) -> (decision: ScheduleDecisionProjection)
+    ensures
+        decision == schedule_decision(
+            fifo_owed,
+            timeout_due,
+            periodic_timer_due,
+            fifo_ready,
+        ),
+{
+    let decision = schedule_select_body!(
+        fifo_owed,
+        timeout_due,
+        periodic_timer_due,
+        fifo_ready,
+        ScheduleDecisionProjection { work: 1, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 2, fifo_owed: fifo_ready },
+        ScheduleDecisionProjection { work: 3, fifo_owed: false },
+        ScheduleDecisionProjection { work: 4, fifo_owed: false },
+    );
+    proof {
+        reveal(schedule_decision);
+    }
+    decision
+}
+
+/// The absolute timeout always preempts periodic work and FIFO debt.
+pub proof fn schedule_timeout_has_absolute_priority(
+    fifo_owed: bool,
+    periodic_timer_due: bool,
+    fifo_ready: bool,
+)
+    ensures
+        schedule_decision(
+            fifo_owed,
+            true,
+            periodic_timer_due,
+            fifo_ready,
+        ).work == 1,
+        schedule_decision(
+            fifo_owed,
+            true,
+            periodic_timer_due,
+            fifo_ready,
+        ).fifo_owed == fifo_ready,
+{
+    reveal(schedule_decision);
+}
+
+/// Once periodic service incurs FIFO debt, the next non-timeout slot drains
+/// the FIFO even when the periodic timer remains due.
+pub proof fn schedule_fifo_debt_prevents_periodic_starvation(
+    periodic_timer_due: bool,
+)
+    ensures
+        schedule_decision(true, false, periodic_timer_due, true).work == 3,
+        !schedule_decision(true, false, periodic_timer_due, true).fifo_owed,
+{
+    reveal(schedule_decision);
+}
+
+/// A periodic tick which precedes ready FIFO work records the exact debt used
+/// by the previous theorem, giving an admitted command a two-invocation rank.
+pub proof fn schedule_periodic_delay_is_bounded()
+    ensures
+        schedule_decision(false, false, true, true).work == 2,
+        schedule_decision(false, false, true, true).fifo_owed,
+        schedule_decision(
+            schedule_decision(false, false, true, true).fifo_owed,
+            false,
+            true,
+            true,
+        ).work == 3,
+{
+    reveal(schedule_decision);
+}
+
+
 
 // ---------------------------------------------------------------------------
 // Common certificate and quorum facts
@@ -69,6 +629,10 @@ pub struct CertificateProjection {
     pub prepare: bool,
     /// Certificate view at the frozen height.
     pub view: int,
+    /// Immutable proposal height authenticated by the certificate.
+    pub proposal_height: int,
+    /// Immutable proposal view authenticated by the certificate.
+    pub proposal_view: int,
     /// Certified subject identity.
     pub subject: int,
     /// Number of canonical distinct voting-validator signers.
@@ -89,6 +653,8 @@ pub open spec fn absent_certificate() -> CertificateProjection {
         height: 0,
         prepare: true,
         view: 0,
+        proposal_height: 0,
+        proposal_view: 0,
         subject: 0,
         signer_count: 0,
         signer_power: 0,
@@ -102,6 +668,22 @@ pub open spec fn same_certificate(
     right: CertificateProjection,
 ) -> bool {
     same_certificate_body!(left, right)
+}
+
+/// Stable Commit decision identity, excluding only the finality view.
+pub open spec fn same_commit_decision(
+    left: CertificateProjection,
+    right: CertificateProjection,
+) -> bool {
+    left.present
+        && right.present
+        && !left.prepare
+        && !right.prepare
+        && left.context == right.context
+        && left.height == right.height
+        && left.proposal_height == right.proposal_height
+        && left.proposal_view == right.proposal_view
+        && left.subject == right.subject
 }
 
 /// Equality of the complete carried certificate, including its signer and
@@ -126,6 +708,8 @@ pub open spec fn valid_prepare(certificate: CertificateProjection) -> bool {
         && certificate.prepare
         && 0 <= certificate.height <= machine_u64_max()
         && 0 <= certificate.view <= machine_u64_max()
+        && certificate.proposal_height == certificate.height
+        && certificate.proposal_view == certificate.view
 }
 
 /// A well-formed projected CommitQC.
@@ -134,6 +718,8 @@ pub open spec fn valid_commit(certificate: CertificateProjection) -> bool {
         && !certificate.prepare
         && 0 <= certificate.height <= machine_u64_max()
         && 0 <= certificate.view <= machine_u64_max()
+        && certificate.proposal_height == certificate.height
+        && 0 <= certificate.proposal_view <= certificate.view
 }
 
 /// Equal-view certificates do not conflict and a higher one may replace one.
@@ -621,6 +1207,10 @@ pub struct WalRetirementProjection {
     pub decision_certificate_height: int,
     /// CommitQC view carried by the reducer decision.
     pub decision_certificate_view: int,
+    /// Immutable proposal height carried by the reducer decision.
+    pub decision_proposal_height: int,
+    /// Immutable proposal view carried by the reducer decision.
+    pub decision_proposal_view: int,
     /// Commit phase discriminator carried by the reducer decision.
     pub decision_certificate_phase: int,
     /// CommitQC subject carried by the reducer decision.
@@ -637,6 +1227,10 @@ pub struct WalRetirementProjection {
     pub receipt_certificate_height: int,
     /// Trusted Kura certificate view.
     pub receipt_certificate_view: int,
+    /// Trusted Kura proposal height.
+    pub receipt_proposal_height: int,
+    /// Trusted Kura proposal view.
+    pub receipt_proposal_view: int,
     /// Trusted Kura certificate phase.
     pub receipt_certificate_phase: int,
     /// Trusted Kura certificate subject.
@@ -660,6 +1254,8 @@ pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> boo
         step.decision_certificate_context,
         step.decision_certificate_height,
         step.decision_certificate_view,
+        step.decision_proposal_height,
+        step.decision_proposal_view,
         step.decision_certificate_phase,
         wal_commit_phase_code(),
         step.decision_certificate_subject,
@@ -669,6 +1265,8 @@ pub open spec fn wal_retirement_authorized(step: WalRetirementProjection) -> boo
         step.receipt_certificate_context,
         step.receipt_certificate_height,
         step.receipt_certificate_view,
+        step.receipt_proposal_height,
+        step.receipt_proposal_view,
         step.receipt_certificate_phase,
         step.receipt_certificate_subject,
     )
@@ -691,6 +1289,10 @@ pub proof fn wal_retirement_requires_exact_durable_kura_receipt(
         step.decision_certificate_context == step.receipt_certificate_context,
         step.decision_certificate_height == step.receipt_certificate_height,
         step.decision_certificate_view == step.receipt_certificate_view,
+        step.decision_proposal_height == step.receipt_proposal_height,
+        step.decision_proposal_view == step.receipt_proposal_view,
+        step.decision_height == step.decision_proposal_height,
+        step.decision_proposal_view <= step.decision_certificate_view,
         step.decision_certificate_phase == wal_commit_phase_code(),
         step.decision_certificate_phase == step.receipt_certificate_phase,
         step.decision_certificate_subject == step.receipt_certificate_subject,
@@ -734,6 +1336,10 @@ pub enum WalRecordProjection {
         height: int,
         /// Vote view.
         view: int,
+        /// Vote proposal height.
+        proposal_height: int,
+        /// Vote proposal view.
+        proposal_view: int,
         /// Vote subject.
         subject: int,
         /// Frozen-roster index of the vote signer.
@@ -754,6 +1360,12 @@ pub enum WalRecordProjection {
         prepare: CertificateProjection,
         /// Commit vote view.
         vote_view: int,
+        /// Commit vote height.
+        vote_height: int,
+        /// Immutable proposal height carried by the Commit vote.
+        vote_proposal_height: int,
+        /// Immutable proposal view carried by the Commit vote.
+        vote_proposal_view: int,
         /// Commit vote subject.
         vote_subject: int,
         /// Projection of local Commit vote validation.
@@ -887,6 +1499,58 @@ pub open spec fn unique_insert_allowed(
     !intents.dom().contains(view) || intents[view] == subject
 }
 
+/// Whether durable local Prepare evidence ranks any proposal origin above the
+/// candidate historical Commit. This is the exact safety projection of
+/// `DurableState::has_higher_prepare_evidence`: proposal origin is part of
+/// decision identity, so equal subject bytes do not make a higher Prepare
+/// compatible with an older-origin Commit.
+pub open spec fn has_higher_prepare_evidence(
+    before: WalStateProjection,
+    prepare: CertificateProjection,
+) -> bool {
+    (exists |higher_view: int|
+        before.prepare_intents.dom().contains(higher_view)
+            && higher_view > prepare.view)
+        || (before.highest_prepare.present
+            && before.highest_prepare.height == prepare.height
+            && before.highest_prepare.view > prepare.view)
+}
+
+/// The two production-legal round branches for `LockAndCommit`.
+///
+/// A current-round Commit remains behind that round's timeout fence.  The
+/// only historical exception reconstructs the exact retained lock and is
+/// rejected after any higher local Prepare or highest PrepareQC, including
+/// one for equal subject bytes at a different proposal origin.
+pub open spec fn lock_and_commit_round_is_admissible(
+    before: WalStateProjection,
+    prepare: CertificateProjection,
+    vote_view: int,
+    vote_proposal_view: int,
+) -> bool {
+    vote_view == before.view
+        && !before.timeout_intents.dom().contains(vote_view)
+        && (vote_proposal_view == vote_view
+            || (vote_proposal_view < before.view
+                && same_certificate(before.locked, prepare)
+                && !has_higher_prepare_evidence(before, prepare)))
+}
+
+/// A second TC for the immediately preceding round may install only a
+/// strictly higher selected Prepare origin while retaining the current view.
+pub open spec fn strict_same_round_timeout_upgrade(
+    before: WalStateProjection,
+    tc_view: int,
+    selected_prepare: CertificateProjection,
+) -> bool {
+    tc_view + 1 == before.view
+        && before.last_timeout_view == tc_view
+        && selected_prepare.present
+        && (!before.highest_prepare.present
+            || selected_prepare.view > before.highest_prepare.view)
+        && (!before.locked.present || selected_prepare.view > before.locked.view)
+}
+
 /// A projected frame passes every production pre-state check, but has not yet
 /// changed the state.  This is the guard half of `DurableState::apply`.
 pub open spec fn wal_frame_admissible(
@@ -913,12 +1577,16 @@ pub open spec fn wal_frame_admissible(
                 context,
                 height,
                 view,
+                proposal_height,
+                proposal_view,
                 subject,
                 signer,
                 is_prepare,
             } => {
                 context == before.context
                     && height == before.height
+                    && proposal_height == height
+                    && proposal_view == view
                     && is_prepare
                     && signer == before.local_validator
                     && 0 <= signer
@@ -939,6 +1607,9 @@ pub open spec fn wal_frame_admissible(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_height,
+                vote_proposal_height,
+                vote_proposal_view,
                 vote_subject,
                 local_vote_valid,
                 certificate_valid,
@@ -946,10 +1617,18 @@ pub open spec fn wal_frame_admissible(
                 local_vote_valid
                     && certificate_valid
                     && valid_prepare(prepare)
-                    && vote_view == before.view
-                    && vote_view == prepare.view
+                    && vote_height == before.height
+                    && vote_proposal_height == vote_height
+                    && vote_proposal_height == prepare.proposal_height
+                    && vote_proposal_view == prepare.proposal_view
                     && vote_subject == prepare.subject
-                    && !before.timeout_intents.dom().contains(vote_view)
+                    && lock_and_commit_round_is_admissible(
+                        before,
+                        prepare,
+                        vote_view,
+                        vote_proposal_view,
+                    )
+                    && !before.decision.present
                     && unique_insert_allowed(before.commit_intents, vote_view, vote_subject)
                     && compatible_highest_update(before.highest_prepare, prepare)
                     && (!before.locked.present
@@ -983,7 +1662,12 @@ pub open spec fn wal_frame_admissible(
                 selected_prepare,
             } => {
                 certificate_valid
-                    && tc_view >= before.view
+                    && (tc_view >= before.view
+                        || strict_same_round_timeout_upgrade(
+                            before,
+                            tc_view,
+                            selected_prepare,
+                        ))
                     && 0 <= tc_view < machine_u64_max()
                     && (!selected_prepare.present || valid_prepare(selected_prepare))
                     && (!selected_prepare.present || selected_prepare.view <= tc_view)
@@ -1001,7 +1685,7 @@ pub open spec fn wal_frame_admissible(
                 certificate_valid
                     && valid_commit(certificate)
                     && (!before.decision.present
-                        || same_certificate(before.decision, certificate))
+                        || same_commit_decision(before.decision, certificate))
             }
         }
 }
@@ -1073,6 +1757,7 @@ pub open spec fn wal_apply(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_proposal_view,
                 vote_subject,
                 ..
             } => {
@@ -1117,7 +1802,12 @@ pub open spec fn wal_apply(
                 selected_prepare,
                 ..
             } => {
-                after.view == tc_view + 1
+                after.view
+                    == if strict_same_round_timeout_upgrade(before, tc_view, selected_prepare) {
+                        before.view
+                    } else {
+                        tc_view + 1
+                    }
                     && after.proposal_intents =~= before.proposal_intents
                     && after.prepare_intents =~= before.prepare_intents
                     && after.commit_intents =~= before.commit_intents
@@ -1500,7 +2190,9 @@ pub proof fn observe_prepare_branch_postcondition(
 }
 
 /// LockAndCommit atomically installs the exact lock and matching unique Commit
-/// intent in the same acknowledged frame.
+/// intent in the same acknowledged frame.  Its current-round branch remains
+/// behind the timeout fence; its only historical branch reconstructs the
+/// exact retained lock without crossing any higher Prepare-origin evidence.
 pub proof fn lock_and_commit_branch_is_atomic(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -1513,15 +2205,26 @@ pub proof fn lock_and_commit_branch_is_atomic(
             WalRecordProjection::LockAndCommit {
                 prepare,
                 vote_view,
+                vote_proposal_view,
                 vote_subject,
                 ..
             } => {
                 same_certificate(after.locked, prepare)
                     && after.commit_intents.dom().contains(vote_view)
                     && after.commit_intents[vote_view] == vote_subject
-                    && prepare.view == vote_view
+                    && prepare.view == vote_proposal_view
                     && prepare.subject == vote_subject
                     && lock_extends(before.locked, after.locked)
+                    && lock_and_commit_round_is_admissible(
+                        before,
+                        prepare,
+                        vote_view,
+                        vote_proposal_view,
+                    )
+                    && !before.timeout_intents.dom().contains(vote_view)
+                    && (vote_proposal_view < before.view
+                        ==> (same_certificate(before.locked, prepare)
+                            && !has_higher_prepare_evidence(before, prepare)))
             }
             _ => true,
         },
@@ -1602,8 +2305,9 @@ pub proof fn timeout_intent_branch_postcondition(
     }
 }
 
-/// InstallTimeout is the only durable branch that advances view; its selected
-/// PrepareQC cannot regress the lock.
+/// InstallTimeout is the only durable branch that can advance view; a strict
+/// same-round high-QC upgrade retains the view and every branch preserves the
+/// lock rank.
 pub proof fn install_timeout_branch_postcondition(
     before: WalStateProjection,
     frame: WalFrameProjection,
@@ -1613,10 +2317,21 @@ pub proof fn install_timeout_branch_postcondition(
         wal_apply(before, frame, after),
     ensures
         match frame.record {
-            WalRecordProjection::InstallTimeout { tc_view, .. } => {
+            WalRecordProjection::InstallTimeout {
+                tc_view,
+                selected_prepare,
+                ..
+            } => {
                 after.last_timeout_view == tc_view
-                    && after.view == tc_view + 1
-                    && after.view > before.view
+                    && (if strict_same_round_timeout_upgrade(
+                        before,
+                        tc_view,
+                        selected_prepare,
+                    ) {
+                        after.view == before.view
+                    } else {
+                        after.view == tc_view + 1 && after.view > before.view
+                    })
                     && lock_extends(before.locked, after.locked)
             }
             _ => true,
@@ -2095,7 +2810,10 @@ pub open spec fn is_persistence_completion(event: EventProjection) -> bool {
 
 /// The `NoDurableChange` branch enforces the recovery and pending-write fences,
 /// may retransmit Apply only on the timer path, and may request the next
-/// already-authorized signature only after Signed.
+/// already-authorized signature only after Signed. This safety projection
+/// intentionally erases Fetch/Store/Validate; their exact Decision identity,
+/// stage, mutual exclusion, and ordering are checked by the complete production
+/// effect trace below.
 pub open spec fn no_change_effects_match_input(
     before: ReducerProjection,
     input: ReducerInputProjection,
@@ -2399,7 +3117,8 @@ pub proof fn reducer_step_preserves_effect_ordering(
         effects.persist ==> after.pending,
         signing_effect_is_safe(after, effects.sign),
         apply_effect_is_safe(after, effects),
-        effects.enter_view ==> after.durable.view > before.durable.view,
+        effects.enter_view ==> after.durable.view >= before.durable.view,
+        effects.enter_view ==> after.generation == before.generation + 1,
 {
     match path {
         ReducerPathProjection::AcknowledgePersistence => {
@@ -2536,12 +3255,1244 @@ pub proof fn crash_recovery_preserves_safety(
 // Exact executable production commit gate
 // ---------------------------------------------------------------------------
 
+/// Verus-side primitive durable-intent ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionDurableIntentTraceProjection {
+    pub event_tag: ProductionTagProjection,
+    pub owner_tag_before: ProductionTagProjection,
+    pub owner_tag_after: ProductionTagProjection,
+    pub event_kind: u8,
+    pub event_persistence_id: u64,
+    pub pending_before: ProductionPendingProjection,
+    pub pending_after: ProductionPendingProjection,
+    pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
+    pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
+    pub effects: ProductionEffectTraceProjection,
+    pub durable_sequence_before: u64,
+    pub durable_sequence_after: u64,
+}
+
+/// Verus-side primitive ownership facts for one validated durable lock.
+#[derive(Copy, Clone)]
+pub struct LockedCommitProgressWitnessProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub current_height: u64,
+    pub current_view: u64,
+    pub local_validator_present: bool,
+    pub local_validator: int,
+    pub locked_context_id: CanonicalIdentityProjection,
+    pub locked_height: u64,
+    pub locked_view: u64,
+    pub locked_subject: CanonicalIdentityProjection,
+    pub commit_intent_present: bool,
+    pub commit_context_id: CanonicalIdentityProjection,
+    pub commit_height: u64,
+    pub commit_view: u64,
+    pub commit_proposal_height: u64,
+    pub commit_proposal_view: u64,
+    pub commit_phase: u8,
+    pub commit_subject: CanonicalIdentityProjection,
+    pub commit_signer: int,
+    pub commit_signature_pending: bool,
+    pub commit_pooled: bool,
+    pub pending: ProductionPendingProjection,
+    pub timeout_intent_present: bool,
+    pub timeout_intent_durable: bool,
+    pub timeout_context_id: CanonicalIdentityProjection,
+    pub timeout_height: u64,
+    pub timeout_view: u64,
+    pub timeout_signer: int,
+}
+
+/// Verus-side complete semantic Decision identity.
+#[derive(Copy, Clone)]
+pub struct ProductionDecisionIdentityProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
+    pub phase: u8,
+    pub subject: CanonicalIdentityProjection,
+    pub block_hash: CanonicalIdentityProjection,
+    pub payload_hash: CanonicalIdentityProjection,
+    pub execution_commitment: CanonicalIdentityProjection,
+    pub executed_block_wire_hash: CanonicalIdentityProjection,
+}
+
+/// Verus-side complete quorum-certificate identity.
+#[derive(Copy, Clone)]
+pub struct ProductionQuorumCertificateIdentityProjection {
+    pub decision: ProductionDecisionIdentityProjection,
+    pub certificate: CanonicalIdentityProjection,
+    pub signer_count: u64,
+    pub aggregate_signature_len: u64,
+}
+
+/// Verus-side exact durable-body identity.
+#[derive(Copy, Clone)]
+pub struct ProductionDurableBodyIdentityProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub subject: CanonicalIdentityProjection,
+    pub block_hash: CanonicalIdentityProjection,
+    pub payload_hash: CanonicalIdentityProjection,
+    pub manifest: CanonicalIdentityProjection,
+    pub frame: CanonicalIdentityProjection,
+}
+
+/// Verus-side primitive pending-Decision recovery trace.
+#[derive(Copy, Clone)]
+pub struct ProductionDecisionRecoveryTraceProjection {
+    pub state_height: u64,
+    pub expected_context_id: CanonicalIdentityProjection,
+    pub expected_height: u64,
+    pub expected_block_hash: CanonicalIdentityProjection,
+    pub frozen_context_id: CanonicalIdentityProjection,
+    pub frozen_height: u64,
+    pub replay_tag: ProductionTagProjection,
+    pub owner_tag: ProductionTagProjection,
+    pub replay_generation: u64,
+    pub commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub manifest_round: ProductionTagProjection,
+    pub manifest_subject: CanonicalIdentityProjection,
+    pub manifest: CanonicalIdentityProjection,
+    pub durable_body: ProductionDurableBodyIdentityProjection,
+    pub validated_body: ProductionDurableBodyIdentityProjection,
+    pub validated_execution_commitment: CanonicalIdentityProjection,
+    pub stage: u8,
+}
+
+/// Verus-side primitive scheduler ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionSchedulerTraceProjection {
+    pub fifo_owed_before: bool,
+    pub timeout_due: bool,
+    pub periodic_timer_due: bool,
+    pub fifo_ready: bool,
+    pub selected: u8,
+    pub fifo_owed_after: bool,
+}
+
+/// Verus-side primitive ingress identity and service-class trace.
+#[derive(Copy, Clone)]
+pub struct ProductionIngressIdentityAndClassTraceProjection {
+    pub incoming_height: u64,
+    pub incoming_view: u64,
+    pub incoming_generation: u64,
+    pub incoming_class: u8,
+    pub stored_height: u64,
+    pub stored_view: u64,
+    pub stored_generation: u64,
+    pub stored_class: u8,
+    pub queue_len_before: u64,
+    pub queue_len_after: u64,
+    pub queue_capacity: u64,
+}
+
+/// Verus-side primitive two-stage daemon retry trace.
+#[derive(Copy, Clone)]
+pub struct ProductionTwoStageRelayRetryTraceProjection {
+    pub daemon_source_capacity_matches_two_upstream_lanes: bool,
+    pub class_corridor_covers_authenticated_sources: bool,
+    pub authenticated_source_matches_resource_owner: bool,
+    pub retry_route_same_delivery: bool,
+    pub retry_route_active: bool,
+    pub selected_eligible: bool,
+    pub ready_sources_before: u64,
+    pub selected_source_rank_before: u64,
+    pub ready_sources_after: u64,
+    pub selected_source_rank_after: u64,
+    pub source_depth_before: u64,
+    pub selected_item_rank_before: u64,
+    pub source_depth_after: u64,
+    pub selected_item_rank_after: u64,
+    pub total_depth_before: u64,
+    pub total_depth_after: u64,
+    pub source_capacity: u64,
+    pub total_capacity: u64,
+}
+
+/// Verus-side primitive writer-flush ownership trace.
+#[derive(Copy, Clone)]
+pub struct ProductionReliableFlushTraceProjection {
+    pub status: u8,
+    pub semantic_target: CanonicalIdentityProjection,
+    pub authenticated_source: CanonicalIdentityProjection,
+    pub source_key_identity: CanonicalIdentityProjection,
+    pub delivery_route_identity: CanonicalIdentityProjection,
+    pub writer_occurrence_identity: CanonicalIdentityProjection,
+    pub requester: CanonicalIdentityProjection,
+    pub responder: CanonicalIdentityProjection,
+    pub connection_tenure_ordinal_high: u64,
+    pub connection_tenure_ordinal_low: u64,
+    pub delivery_ordinal_high: u64,
+    pub delivery_ordinal_low: u64,
+    pub ticket_id: u64,
+    pub ticket_rank: u64,
+    pub ticket_topic: u8,
+    pub canonical_request_digest: CanonicalIdentityProjection,
+    pub stream_wire_bytes: u64,
+    pub request_id: CanonicalIdentityProjection,
+    pub entry_hash: CanonicalIdentityProjection,
+    pub encoded_len: u64,
+    pub epoch_id: u64,
+    pub reference_digest: CanonicalIdentityProjection,
+    pub canonical_response_hash: CanonicalIdentityProjection,
+    pub sidecar_response_hash: CanonicalIdentityProjection,
+    pub chunk_hash: CanonicalIdentityProjection,
+    pub payload_digest: CanonicalIdentityProjection,
+    pub chunk_index: u64,
+    pub chunk_count: u64,
+    pub message_cursor_before: u64,
+    pub message_cursor_after: u64,
+    pub chunk_cursor_before: u64,
+    pub chunk_cursor_after: u64,
+    pub flushing_before: u64,
+    pub flushing_after: u64,
+    pub admitted_before: u64,
+    pub admitted_after: u64,
+    pub capacity: u64,
+}
+
+/// Verus-side exact lane application of one actor-confirmed writer flush.
+#[derive(Copy, Clone)]
+pub struct ProductionReliableFlushApplicationProjection {
+    pub semantic_target: CanonicalIdentityProjection,
+    pub authenticated_source: CanonicalIdentityProjection,
+    pub source_key_identity: CanonicalIdentityProjection,
+    pub delivery_route_identity: CanonicalIdentityProjection,
+    pub writer_occurrence_identity: CanonicalIdentityProjection,
+    pub requester: CanonicalIdentityProjection,
+    pub responder: CanonicalIdentityProjection,
+    pub connection_tenure_ordinal_high: u64,
+    pub connection_tenure_ordinal_low: u64,
+    pub delivery_ordinal_high: u64,
+    pub delivery_ordinal_low: u64,
+    pub ticket_id: u64,
+    pub ticket_rank: u64,
+    pub ticket_topic: u8,
+    pub canonical_request_digest: CanonicalIdentityProjection,
+    pub stream_wire_bytes: u64,
+    pub request_id: CanonicalIdentityProjection,
+    pub entry_hash: CanonicalIdentityProjection,
+    pub encoded_len: u64,
+    pub epoch_id: u64,
+    pub reference_digest: CanonicalIdentityProjection,
+    pub canonical_response_hash: CanonicalIdentityProjection,
+    pub sidecar_response_hash: CanonicalIdentityProjection,
+    pub chunk_hash: CanonicalIdentityProjection,
+    pub payload_digest: CanonicalIdentityProjection,
+    pub chunk_index: u64,
+    pub chunk_count: u64,
+    pub message_cursor_before: u64,
+    pub message_cursor_after: u64,
+    pub chunk_cursor_before: u64,
+    pub chunk_cursor_after: u64,
+    pub marker_request_id: CanonicalIdentityProjection,
+    pub marker_entry_hash: CanonicalIdentityProjection,
+    pub marker_encoded_len: u64,
+    pub marker_epoch_id: u64,
+    pub marker_reference_digest: CanonicalIdentityProjection,
+    pub marker_requester: CanonicalIdentityProjection,
+    pub marker_responder: CanonicalIdentityProjection,
+    pub marker_canonical_response_hash: CanonicalIdentityProjection,
+    pub marker_sidecar_response_hash: CanonicalIdentityProjection,
+    pub marker_chunk_hash: CanonicalIdentityProjection,
+    pub marker_payload_digest: CanonicalIdentityProjection,
+    pub marker_chunk_index: u64,
+    pub marker_chunk_count: u64,
+    pub marker_topic: u8,
+    pub claim_acquired: bool,
+    pub gate_marker_present_before: bool,
+    pub gate_marker_present_after: bool,
+    pub gate_cursor_before: u64,
+    pub gate_cursor_after: u64,
+    pub gate_complete_after: bool,
+    pub gate_attempt_present_after: bool,
+    pub outbound_attempt_present_before: bool,
+    pub outbound_route_bound_before: bool,
+    pub outbound_route_active_before: bool,
+    pub outbound_cursor_before: u64,
+    pub outbound_cursor_after: u64,
+    pub outbound_in_flight_before_present: bool,
+    pub outbound_in_flight_before: u64,
+    pub outbound_queued_before: bool,
+    pub outbound_order_count_before: u64,
+    pub outbound_order_rank_before: u64,
+    pub sibling_order_len_before: u64,
+    pub outbound_attempt_present_after: bool,
+    pub outbound_in_flight_after_present: bool,
+    pub outbound_queued_after: bool,
+    pub outbound_order_count_after: u64,
+    pub outbound_order_rank_after: u64,
+    pub sibling_order_len_after: u64,
+    pub inserted_preserved: bool,
+    pub inserted_equals_now: bool,
+    pub target_gate_residual_records_equal: bool,
+    pub target_gate_residual_before: CanonicalIdentityProjection,
+    pub target_gate_residual_after: CanonicalIdentityProjection,
+    pub target_outbound_residual_records_equal: bool,
+    pub target_outbound_residual_before: CanonicalIdentityProjection,
+    pub target_outbound_residual_after: CanonicalIdentityProjection,
+    pub shared_transfer_present_before: bool,
+    pub shared_transfer_present_after: bool,
+    pub shared_transfer_other_attempts_before: bool,
+    pub shared_transfer_records_equal: bool,
+    pub shared_transfer_state_before: CanonicalIdentityProjection,
+    pub shared_transfer_state_after: CanonicalIdentityProjection,
+    pub sibling_records_equal: bool,
+    pub sibling_state_before: CanonicalIdentityProjection,
+    pub sibling_state_after: CanonicalIdentityProjection,
+}
+
+/// Verus-side primitive durable application-completion trace.
+#[derive(Copy, Clone)]
+pub struct ProductionApplicationTraceProjection {
+    pub task_tag: ProductionTagProjection,
+    pub owner_tag: ProductionTagProjection,
+    pub task_generation: u64,
+    pub context_id: CanonicalIdentityProjection,
+    pub context_height: u64,
+    pub commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub validated_body: ProductionDurableBodyIdentityProjection,
+    pub validated_execution_commitment: CanonicalIdentityProjection,
+    pub proposal_block_hash: CanonicalIdentityProjection,
+    pub proposal_payload_hash: CanonicalIdentityProjection,
+    pub committed_block_hash: CanonicalIdentityProjection,
+    pub executed_block_wire_hash: CanonicalIdentityProjection,
+    pub kura_decision: ProductionDecisionIdentityProjection,
+    pub kura_artifact_hash: CanonicalIdentityProjection,
+    pub artifact_context_id: CanonicalIdentityProjection,
+    pub artifact_height: u64,
+    pub artifact_subject: CanonicalIdentityProjection,
+    pub artifact_block_hash: CanonicalIdentityProjection,
+    pub artifact_commit_qc: ProductionQuorumCertificateIdentityProjection,
+    pub artifact_hash: CanonicalIdentityProjection,
+    pub state_height_after: u64,
+    pub task_work_id: u64,
+    pub completion_work_id: u64,
+}
+
+/// Verus-side exact application boundary before successor construction.
+#[derive(Copy, Clone)]
+pub struct ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub context_height: u64,
+    pub receipt_context_id: CanonicalIdentityProjection,
+    pub receipt_height: u64,
+    pub receipt_block_hash: CanonicalIdentityProjection,
+    pub receipt_artifact_hash: CanonicalIdentityProjection,
+    pub artifact_context_id: CanonicalIdentityProjection,
+    pub artifact_height: u64,
+    pub artifact_block_hash: CanonicalIdentityProjection,
+    pub artifact_hash: CanonicalIdentityProjection,
+    pub predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub pending_successor_activation_present: bool,
+}
+
+/// Verus-side complete immutable identity of one durable predecessor.
+#[derive(Copy, Clone)]
+pub struct ProductionDurablePredecessorIdentityProjection {
+    pub height: u64,
+    pub block_hash: CanonicalIdentityProjection,
+    pub artifact_hash: CanonicalIdentityProjection,
+}
+
+/// Verus-side exact predecessor binding returned by successor construction.
+#[derive(Copy, Clone)]
+pub struct ProductionSuccessorPredecessorBindingProjection {
+    pub expected_predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub authority_predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub successor_context_id: CanonicalIdentityProjection,
+}
+
+/// Verus-side prepared successor status and exact activation marker.
+#[derive(Copy, Clone)]
+pub struct ProductionSuccessorSnapshotProjection {
+    pub expected_context_id: CanonicalIdentityProjection,
+    pub published_context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub last_committed_height: u64,
+    pub view: u64,
+    pub generation: u64,
+    pub marker_context_id: CanonicalIdentityProjection,
+    pub marker_height: u64,
+    pub marker_view: u64,
+    pub marker_generation: u64,
+    pub marker_kind: u8,
+    pub marker_age_ms: u64,
+}
+
+/// Verus-side applied-predecessor activation trace.
+#[derive(Copy, Clone)]
+pub struct ProductionAppliedSuccessorTraceProjection {
+    pub authority_kind: u8,
+    pub binding: ProductionSuccessorPredecessorBindingProjection,
+    pub predecessor_status_height: u64,
+    pub predecessor_stage_before: u8,
+    pub predecessor_stage_after: u8,
+    pub successor: ProductionSuccessorSnapshotProjection,
+}
+
+/// Verus-side complete-tip or snapshot recovery activation trace.
+#[derive(Copy, Clone)]
+pub struct ProductionRecoveredSuccessorTraceProjection {
+    pub authority_kind: u8,
+    pub predecessor: ProductionDurablePredecessorIdentityProjection,
+    pub snapshot_record_hash: CanonicalIdentityProjection,
+    pub snapshot_height: u64,
+    pub snapshot_block_hash: CanonicalIdentityProjection,
+    pub authority_context_id: CanonicalIdentityProjection,
+    pub published_status_height_before: u64,
+    pub successor: ProductionSuccessorSnapshotProjection,
+}
+
+/// Verus-side successor startup lifecycle transition.
+#[derive(Copy, Clone)]
+pub struct ProductionSuccessorStartupLifecycleProjection {
+    pub transition_kind: u8,
+    pub authority_kind: u8,
+    pub status_height: u64,
+    pub stage_before: u8,
+    pub stage_after: u8,
+    pub published_height_before: u64,
+    pub published_height_after: u64,
+    pub restart_required_before: bool,
+    pub restart_required_after: bool,
+}
+
+/// Verus-side authenticated historical CommitQC reducer handoff.
+#[derive(Copy, Clone)]
+pub struct ProductionHistoricalCertificateTraceProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub context_height: u64,
+    pub certificate_context_id: CanonicalIdentityProjection,
+    pub certificate_height: u64,
+    pub request_hash: CanonicalIdentityProjection,
+    pub response_request_hash: CanonicalIdentityProjection,
+    pub response_certificate: CanonicalIdentityProjection,
+    pub message_certificate: CanonicalIdentityProjection,
+    pub message_hash: CanonicalIdentityProjection,
+    pub admitted_message_hash: CanonicalIdentityProjection,
+    pub request_present_before: bool,
+    pub request_present_after: bool,
+}
+
+/// Verus-side authenticated certified-body handoff into the ordinary pipeline.
+#[derive(Copy, Clone)]
+pub struct ProductionHistoricalBodyPipelineTraceProjection {
+    pub context_id: CanonicalIdentityProjection,
+    pub context_height: u64,
+    pub request_hash: CanonicalIdentityProjection,
+    pub pending_request_hash: CanonicalIdentityProjection,
+    pub authenticated_request_hash: CanonicalIdentityProjection,
+    pub fetch_tag: ProductionTagProjection,
+    pub round_context_id: CanonicalIdentityProjection,
+    pub round_height: u64,
+    pub round_view: u64,
+    pub subject: CanonicalIdentityProjection,
+    pub manifest_round_context_id: CanonicalIdentityProjection,
+    pub manifest_round_height: u64,
+    pub manifest_round_view: u64,
+    pub manifest_subject: CanonicalIdentityProjection,
+    pub response_manifest: CanonicalIdentityProjection,
+    pub ready_manifest: CanonicalIdentityProjection,
+    pub subject_payload_hash: CanonicalIdentityProjection,
+    pub body_payload_hash: CanonicalIdentityProjection,
+    pub owner_present_after: bool,
+    pub owner_tag: ProductionTagProjection,
+    pub owner_round_context_id: CanonicalIdentityProjection,
+    pub owner_round_height: u64,
+    pub owner_round_view: u64,
+    pub owner_subject: CanonicalIdentityProjection,
+    pub pending_fetch_present_after: bool,
+    pub request_present_after: bool,
+}
+
+/// Exact typed applied-successor projection consumed by the cross-tool theorem.
+pub closed spec fn production_applied_successor_trace_projection(
+    projection: ProductionAppliedSuccessorTraceProjection,
+) -> ProductionAppliedSuccessorTraceProjection {
+    projection
+}
+
+/// Exact typed recovered-successor projection consumed by the cross-tool theorem.
+pub closed spec fn production_recovered_successor_trace_projection(
+    projection: ProductionRecoveredSuccessorTraceProjection,
+) -> ProductionRecoveredSuccessorTraceProjection {
+    projection
+}
+
+/// Exact typed startup-lifecycle projection consumed by the cross-tool theorem.
+pub closed spec fn production_successor_startup_lifecycle_projection(
+    projection: ProductionSuccessorStartupLifecycleProjection,
+) -> ProductionSuccessorStartupLifecycleProjection {
+    projection
+}
+
+/// Exact typed historical-certificate projection consumed by the cross-tool theorem.
+pub closed spec fn production_historical_certificate_trace_projection(
+    projection: ProductionHistoricalCertificateTraceProjection,
+) -> ProductionHistoricalCertificateTraceProjection {
+    projection
+}
+
+/// Exact typed historical-body projection consumed by the cross-tool theorem.
+pub closed spec fn production_historical_body_pipeline_trace_projection(
+    projection: ProductionHistoricalBodyPipelineTraceProjection,
+) -> ProductionHistoricalBodyPipelineTraceProjection {
+    projection
+}
+
+/// Exact typed durable-intent projection consumed by the cross-tool theorem.
+pub closed spec fn production_durable_intent_trace_projection(
+    projection: ProductionDurableIntentTraceProjection,
+) -> ProductionDurableIntentTraceProjection {
+    projection
+}
+
+/// Exact typed locked-Commit progress projection consumed by the cross-tool theorem.
+pub closed spec fn locked_commit_progress_witness_projection(
+    projection: LockedCommitProgressWitnessProjection,
+) -> LockedCommitProgressWitnessProjection {
+    projection
+}
+
+/// Exact typed pending-Decision projection consumed by the cross-tool theorem.
+pub closed spec fn production_decision_recovery_trace_projection(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> ProductionDecisionRecoveryTraceProjection {
+    projection
+}
+
+/// Exact typed scheduler projection consumed by the cross-tool theorem.
+pub closed spec fn production_scheduler_trace_projection(
+    projection: ProductionSchedulerTraceProjection,
+) -> ProductionSchedulerTraceProjection {
+    projection
+}
+
+/// Exact typed ingress projection consumed by the cross-tool theorem.
+pub closed spec fn production_ingress_identity_and_class_trace_projection(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> ProductionIngressIdentityAndClassTraceProjection {
+    projection
+}
+
+/// Exact typed two-stage retry projection consumed by the cross-tool theorem.
+pub closed spec fn production_two_stage_relay_retry_trace_projection(
+    projection: ProductionTwoStageRelayRetryTraceProjection,
+) -> ProductionTwoStageRelayRetryTraceProjection {
+    projection
+}
+
+/// Exact typed flush projection consumed by the cross-tool theorem.
+pub closed spec fn production_reliable_flush_trace_projection(
+    projection: ProductionReliableFlushTraceProjection,
+) -> ProductionReliableFlushTraceProjection {
+    projection
+}
+
+/// Exact typed lane-application projection consumed by the linked theorem.
+pub closed spec fn production_reliable_flush_application_projection(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> ProductionReliableFlushApplicationProjection {
+    projection
+}
+
+/// Exact typed application projection consumed by the cross-tool theorem.
+pub closed spec fn production_application_trace_projection(
+    projection: ProductionApplicationTraceProjection,
+) -> ProductionApplicationTraceProjection {
+    projection
+}
+
+/// Exact typed terminal-application boundary consumed by the cross-tool theorem.
+pub closed spec fn production_terminal_application_without_successor_activation_projection(
+    projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+) -> ProductionTerminalApplicationWithoutSuccessorActivationProjection {
+    projection
+}
+
+/// Exact Verus mirror of the durable predecessor production gate.
+pub closed spec fn production_durable_predecessor_identity_kernel(
+    projection: ProductionDurablePredecessorIdentityProjection,
+) -> bool {
+    durable_predecessor_is_canonical_body!(projection)
+}
+
+/// Exact Verus mirror of the successor-construction ownership gate.
+pub closed spec fn production_successor_predecessor_binding_kernel(
+    projection: ProductionSuccessorPredecessorBindingProjection,
+) -> bool {
+    production_successor_predecessor_binding_body!(projection)
+}
+
+/// Exact Verus mirror of the applied-successor publication gate.
+pub closed spec fn production_applied_successor_trace_refines_indexed_activation_kernel(
+    projection: ProductionAppliedSuccessorTraceProjection,
+) -> bool {
+    production_applied_successor_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the recovered-successor publication gate.
+pub closed spec fn production_recovered_successor_trace_refines_indexed_activation_kernel(
+    projection: ProductionRecoveredSuccessorTraceProjection,
+) -> bool {
+    production_recovered_successor_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the successor startup failure/restart gate.
+pub closed spec fn production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+    projection: ProductionSuccessorStartupLifecycleProjection,
+) -> bool {
+    production_startup_failure_and_restart_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the historical CommitQC reducer-admission gate.
+pub closed spec fn production_historical_certificate_trace_refines_indexed_async_kernel(
+    projection: ProductionHistoricalCertificateTraceProjection,
+) -> bool {
+    production_historical_certificate_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the historical certified-body pipeline-admission gate.
+pub closed spec fn production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+    projection: ProductionHistoricalBodyPipelineTraceProjection,
+) -> bool {
+    production_historical_body_pipeline_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the reducer durable-intent production kernel.
+pub closed spec fn production_durable_intent_trace_refines_progress_witness_kernel(
+    projection: ProductionDurableIntentTraceProjection,
+) -> bool {
+    production_durable_intent_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the validated-lock progress-witness production kernel.
+pub closed spec fn locked_commit_progress_witness_is_valid_kernel(
+    projection: LockedCommitProgressWitnessProjection,
+) -> bool {
+    locked_commit_progress_witness_body!(projection)
+}
+
+/// Exact Verus mirror of the pending-Decision recovery production kernel.
+pub closed spec fn production_decision_trace_refines_recovery_witness_kernel(
+    projection: ProductionDecisionRecoveryTraceProjection,
+) -> bool {
+    production_decision_recovery_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the scheduler ownership production kernel.
+pub closed spec fn production_scheduler_trace_refines_protected_ownership_kernel(
+    projection: ProductionSchedulerTraceProjection,
+) -> bool {
+    production_scheduler_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the ingress identity/class production kernel.
+pub closed spec fn production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+) -> bool {
+    production_ingress_identity_and_class_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the two-stage relay retry fairness kernel.
+pub closed spec fn production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+    projection: ProductionTwoStageRelayRetryTraceProjection,
+) -> bool {
+    production_two_stage_relay_retry_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the writer-flush ownership production kernel.
+pub closed spec fn production_reliable_flush_trace_refines_outbound_ownership_kernel(
+    projection: ProductionReliableFlushTraceProjection,
+) -> bool {
+    production_reliable_flush_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the lane-side writer-flush application kernel.
+pub closed spec fn production_reliable_flush_application_refines_source_lane_kernel(
+    projection: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_application_body!(projection)
+}
+
+/// Exact Verus mirror of the worker-to-lane occurrence linkage kernel.
+pub closed spec fn production_reliable_flush_two_phase_link_kernel(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+) -> bool {
+    production_reliable_flush_two_phase_link_body!(worker, application)
+}
+
+/// Exact Verus mirror of the durable application production kernel.
+pub closed spec fn production_application_trace_refines_decision_completion_kernel(
+    projection: ProductionApplicationTraceProjection,
+) -> bool {
+    production_application_trace_body!(projection)
+}
+
+/// Exact Verus mirror of the application/successor boundary separation gate.
+pub closed spec fn production_terminal_application_without_successor_activation_kernel(
+    projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+) -> bool {
+    production_terminal_application_without_successor_activation_body!(projection)
+}
+
+/// Exact applied predecessor ownership and the prepared successor marker admit
+/// only the next indexed context and consume Running into Complete.
+pub proof fn production_applied_successor_trace_refines_indexed_activation(
+    projection: ProductionAppliedSuccessorTraceProjection,
+)
+    requires
+        production_applied_successor_trace_body!(projection),
+    ensures
+        production_applied_successor_trace_refines_indexed_activation_kernel(
+            production_applied_successor_trace_projection(projection),
+        ),
+        projection.predecessor_stage_before
+            == refinement_tag_value!(SUCCESSOR_STAGE_RUNNING),
+        projection.predecessor_stage_after
+            == refinement_tag_value!(SUCCESSOR_STAGE_COMPLETE),
+        projection.successor.height
+            == projection.binding.expected_predecessor.height + 1u64,
+        projection.successor.marker_height == projection.successor.height,
+{
+    reveal(production_applied_successor_trace_refines_indexed_activation_kernel);
+    reveal(production_applied_successor_trace_projection);
+    assert(production_applied_successor_trace_refines_indexed_activation_kernel(
+        production_applied_successor_trace_projection(projection),
+    ));
+}
+
+/// A foreign same-height block or artifact identity cannot satisfy the exact
+/// construction-ownership gate.
+pub proof fn production_foreign_same_height_predecessor_is_rejected(
+    projection: ProductionSuccessorPredecessorBindingProjection,
+)
+    requires
+        durable_predecessor_is_canonical_body!(projection.expected_predecessor),
+        durable_predecessor_is_canonical_body!(projection.authority_predecessor),
+        projection.expected_predecessor.height == projection.authority_predecessor.height,
+        !canonical_identity_equal_body!(
+            projection.expected_predecessor.block_hash,
+            projection.authority_predecessor.block_hash
+        ) || !canonical_identity_equal_body!(
+            projection.expected_predecessor.artifact_hash,
+            projection.authority_predecessor.artifact_hash
+        ),
+        canonical_identity_is_typed_body!(
+            projection.successor_context_id,
+            refinement_tag_value!(IDENTITY_DOMAIN_CONTEXT),
+            refinement_tag_value!(IDENTITY_KIND_WIRE_HEIGHT_CONTEXT)
+        ),
+    ensures
+        !production_successor_predecessor_binding_kernel(projection),
+{
+    reveal(production_successor_predecessor_binding_kernel);
+}
+
+/// Complete-tip recovery and audited snapshot bootstrap both publish the
+/// exact next context, but their authorities remain structurally disjoint.
+pub proof fn production_recovered_successor_trace_refines_indexed_activation(
+    projection: ProductionRecoveredSuccessorTraceProjection,
+)
+    requires
+        production_recovered_successor_trace_body!(projection),
+    ensures
+        production_recovered_successor_trace_refines_indexed_activation_kernel(
+            production_recovered_successor_trace_projection(projection),
+        ),
+        projection.published_status_height_before == 0u64,
+        projection.successor.last_committed_height < u64::MAX,
+        projection.successor.height
+            == projection.successor.last_committed_height + 1u64,
+        projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_RECOVERED_COMPLETE_TIP)
+            || projection.authority_kind
+                == refinement_tag_value!(SUCCESSOR_AUTHORITY_SNAPSHOT_BOOTSTRAP),
+{
+    reveal(production_recovered_successor_trace_refines_indexed_activation_kernel);
+    reveal(production_recovered_successor_trace_projection);
+    assert(production_recovered_successor_trace_refines_indexed_activation_kernel(
+        production_recovered_successor_trace_projection(projection),
+    ));
+}
+
+/// Startup failure preserves the Running owner, while a fresh retry can use
+/// only its explicitly distinguished complete-tip or snapshot authority.
+pub proof fn production_startup_failure_and_restart_refines_indexed_lifecycle(
+    projection: ProductionSuccessorStartupLifecycleProjection,
+)
+    requires
+        production_startup_failure_and_restart_trace_body!(projection),
+    ensures
+        production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+            production_successor_startup_lifecycle_projection(projection),
+        ),
+        projection.status_height > 0u64,
+        projection.published_height_after == projection.published_height_before,
+        projection.transition_kind == refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+            ==> projection.stage_after == projection.stage_before
+                && projection.restart_required_after,
+        projection.transition_kind != refinement_tag_value!(SUCCESSOR_LIFECYCLE_FAIL)
+            ==> !projection.restart_required_after,
+{
+    reveal(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel);
+    reveal(production_successor_startup_lifecycle_projection);
+    assert(production_startup_failure_and_restart_refines_indexed_lifecycle_kernel(
+        production_successor_startup_lifecycle_projection(projection),
+    ));
+}
+
+/// An authenticated historical CommitQC can retire discovery ownership only
+/// after its exact certificate envelope entered reducer ingress.
+pub proof fn production_historical_certificate_trace_refines_indexed_async(
+    projection: ProductionHistoricalCertificateTraceProjection,
+)
+    requires
+        production_historical_certificate_trace_body!(projection),
+    ensures
+        production_historical_certificate_trace_refines_indexed_async_kernel(
+            production_historical_certificate_trace_projection(projection),
+        ),
+        projection.context_height > 0u64,
+        projection.certificate_height == projection.context_height,
+        projection.request_present_before,
+        !projection.request_present_after,
+        canonical_identity_equal_body!(
+            projection.message_hash,
+            projection.admitted_message_hash
+        ),
+{
+    reveal(production_historical_certificate_trace_refines_indexed_async_kernel);
+    reveal(production_historical_certificate_trace_projection);
+    assert(production_historical_certificate_trace_refines_indexed_async_kernel(
+        production_historical_certificate_trace_projection(projection),
+    ));
+}
+
+/// An authenticated historical body can retire its signed request only after
+/// the exact canonical bytes entered the original reducer-owned body pipeline.
+pub proof fn production_historical_body_pipeline_trace_refines_indexed_async(
+    projection: ProductionHistoricalBodyPipelineTraceProjection,
+)
+    requires
+        production_historical_body_pipeline_trace_body!(projection),
+    ensures
+        production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+            production_historical_body_pipeline_trace_projection(projection),
+        ),
+        projection.owner_present_after,
+        projection.owner_tag.height == projection.fetch_tag.height,
+        projection.owner_tag.view == projection.fetch_tag.view,
+        projection.owner_tag.generation == projection.fetch_tag.generation,
+        !projection.pending_fetch_present_after,
+        !projection.request_present_after,
+{
+    reveal(production_historical_body_pipeline_trace_refines_indexed_async_kernel);
+    reveal(production_historical_body_pipeline_trace_projection);
+    assert(production_historical_body_pipeline_trace_refines_indexed_async_kernel(
+        production_historical_body_pipeline_trace_projection(projection),
+    ));
+}
+
+/// A reducer step which satisfies the primitive WAL lifecycle owns either its
+/// unchanged pending intent or the exact next durable sequence position.
+pub proof fn production_durable_intent_trace_refines_progress_witness(
+    projection: ProductionDurableIntentTraceProjection,
+)
+    requires
+        production_durable_intent_trace_body!(projection),
+    ensures
+        production_durable_intent_trace_refines_progress_witness_kernel(
+            production_durable_intent_trace_projection(projection),
+        ),
+        effect_slots_authorized_body!(projection.effects),
+        effect_count_body!(projection.effects, refinement_tag_value!(EFFECT_PERSIST)) <= 1u64,
+        projection.durable_sequence_after >= projection.durable_sequence_before,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.durable_sequence_before < u64::MAX,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.pending_after.persistence_id
+                == projection.durable_sequence_before + 1,
+        projection.boundary_claimed.kind == BOUNDARY_BEGIN_WAL
+            ==> projection.durable_sequence_after == projection.durable_sequence_before,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.durable_sequence_before < u64::MAX,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.durable_sequence_after
+                == projection.durable_sequence_before + 1,
+        projection.boundary_claimed.kind == BOUNDARY_ACKNOWLEDGE_WAL
+            ==> projection.pending_before.persistence_id
+                == projection.durable_sequence_after,
+{
+    reveal(production_durable_intent_trace_refines_progress_witness_kernel);
+    reveal(production_durable_intent_trace_projection);
+    assert(production_durable_intent_trace_refines_progress_witness_kernel(
+        production_durable_intent_trace_projection(projection),
+    ));
+}
+
+/// An exact active Commit, pending LockAndCommit, or durable current-view
+/// timeout retains a reconstruction path for the immutable locked origin.
+pub proof fn locked_commit_progress_witness_is_valid(
+    projection: LockedCommitProgressWitnessProjection,
+)
+    requires
+        locked_commit_progress_witness_body!(projection),
+    ensures
+        locked_commit_progress_witness_is_valid_kernel(
+            locked_commit_progress_witness_projection(projection),
+        ),
+{
+    reveal(locked_commit_progress_witness_is_valid_kernel);
+    reveal(locked_commit_progress_witness_projection);
+    assert(locked_commit_progress_witness_is_valid_kernel(
+        locked_commit_progress_witness_projection(projection),
+    ));
+}
+
+/// A startup pending-tip classification reconstructs the exact durable
+/// Decision height and its pending Kura application owner.
+pub proof fn production_decision_trace_refines_recovery_witness(
+    projection: ProductionDecisionRecoveryTraceProjection,
+)
+    requires
+        production_decision_recovery_trace_body!(projection),
+    ensures
+        production_decision_trace_refines_recovery_witness_kernel(
+            production_decision_recovery_trace_projection(projection),
+        ),
+        projection.expected_height > 0u64,
+        projection.state_height <= projection.expected_height,
+        projection.expected_height - projection.state_height <= 1u64,
+        projection.durable_body.height == projection.frozen_height,
+        projection.stage == 1u8,
+        projection.replay_tag.height == projection.owner_tag.height,
+        projection.replay_tag.view == projection.owner_tag.view,
+        projection.replay_tag.generation == projection.owner_tag.generation,
+        projection.manifest_round.view == projection.durable_body.view,
+        projection.durable_body.view == projection.commit_qc.decision.proposal_view,
+{
+    reveal(production_decision_trace_refines_recovery_witness_kernel);
+    reveal(production_decision_recovery_trace_projection);
+    assert(production_decision_trace_refines_recovery_witness_kernel(
+        production_decision_recovery_trace_projection(projection),
+    ));
+}
+
+/// One scheduler selection preserves the exact protected FIFO/timer owner.
+pub proof fn production_scheduler_trace_refines_protected_ownership(
+    projection: ProductionSchedulerTraceProjection,
+)
+    requires
+        projection.timeout_due
+            ==> projection.selected == 1u8
+                && projection.fifo_owed_after == projection.fifo_ready,
+        !projection.timeout_due && projection.fifo_ready && projection.fifo_owed_before
+            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
+        !projection.timeout_due
+            && !(projection.fifo_ready && projection.fifo_owed_before)
+            && projection.periodic_timer_due
+            ==> projection.selected == 2u8
+                && projection.fifo_owed_after == projection.fifo_ready,
+        !projection.timeout_due
+            && !(projection.fifo_ready && projection.fifo_owed_before)
+            && !projection.periodic_timer_due
+            && projection.fifo_ready
+            ==> projection.selected == 3u8 && !projection.fifo_owed_after,
+        !projection.timeout_due
+            && !projection.fifo_ready
+            && !projection.periodic_timer_due
+            ==> projection.selected == 0u8 && !projection.fifo_owed_after,
+    ensures
+        production_scheduler_trace_refines_protected_ownership_kernel(
+            production_scheduler_trace_projection(projection),
+        ),
+        projection.selected <= 3u8,
+        projection.timeout_due ==> projection.selected == 1u8,
+        !projection.timeout_due
+                && !projection.fifo_ready
+                && !projection.periodic_timer_due
+            ==> projection.selected == 0u8 && !projection.fifo_owed_after,
+{
+    reveal(production_scheduler_trace_refines_protected_ownership_kernel);
+    reveal(production_scheduler_trace_projection);
+    assert(production_scheduler_trace_refines_protected_ownership_kernel(
+        production_scheduler_trace_projection(projection),
+    ));
+}
+
+/// One bounded ingress admission preserves its complete tag and service class.
+pub proof fn production_ingress_identity_and_class_trace_refines_protected_ownership(
+    projection: ProductionIngressIdentityAndClassTraceProjection,
+)
+    requires
+        projection.incoming_height == projection.stored_height,
+        projection.incoming_view == projection.stored_view,
+        projection.incoming_generation == projection.stored_generation,
+        projection.incoming_class == projection.stored_class,
+        projection.incoming_class >= 1u8,
+        projection.incoming_class <= 3u8,
+        projection.queue_len_before < u64::MAX,
+        projection.queue_len_after == projection.queue_len_before + 1u64,
+        projection.queue_len_after <= projection.queue_capacity,
+    ensures
+        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            production_ingress_identity_and_class_trace_projection(projection),
+        ),
+        projection.incoming_height == projection.stored_height,
+        projection.incoming_view == projection.stored_view,
+        projection.incoming_generation == projection.stored_generation,
+        projection.incoming_class == projection.stored_class,
+        projection.queue_len_after > projection.queue_len_before,
+        projection.queue_len_after <= projection.queue_capacity,
+{
+    reveal(production_ingress_identity_and_class_trace_refines_protected_ownership_kernel);
+    reveal(production_ingress_identity_and_class_trace_projection);
+    assert(
+        production_ingress_identity_and_class_trace_refines_protected_ownership_kernel(
+            production_ingress_identity_and_class_trace_projection(projection),
+        )
+    );
+}
+
+/// One exact retry preserves its authenticated source owner and rotates both
+/// the outer source and inner-source FIFO item to finite fair ranks.
+pub proof fn production_two_stage_relay_retry_trace_refines_source_fairness(
+    projection: ProductionTwoStageRelayRetryTraceProjection,
+)
+    requires
+        production_two_stage_relay_retry_trace_body!(projection),
+    ensures
+        production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+            production_two_stage_relay_retry_trace_projection(projection),
+        ),
+        projection.daemon_source_capacity_matches_two_upstream_lanes,
+        projection.class_corridor_covers_authenticated_sources,
+        projection.total_depth_after == projection.total_depth_before,
+        projection.selected_source_rank_after == projection.ready_sources_after - 1u64,
+        projection.selected_item_rank_after == projection.source_depth_after - 1u64,
+        projection.source_depth_after <= projection.source_capacity,
+{
+    reveal(production_two_stage_relay_retry_trace_refines_source_fairness_kernel);
+    reveal(production_two_stage_relay_retry_trace_projection);
+    assert(production_two_stage_relay_retry_trace_refines_source_fairness_kernel(
+        production_two_stage_relay_retry_trace_projection(projection),
+    ));
+}
+
+/// Writer completion and lane application are one linked occurrence: the
+/// exact marker and cursors advance once, sibling state is unchanged, and the
+/// target is either retained at its fair rank or removed completely.
+pub proof fn production_reliable_flush_trace_refines_outbound_ownership(
+    worker: ProductionReliableFlushTraceProjection,
+    application: ProductionReliableFlushApplicationProjection,
+)
+    requires
+        production_reliable_flush_trace_body!(worker),
+        production_reliable_flush_application_body!(application),
+        production_reliable_flush_two_phase_link_body!(worker, application),
+    ensures
+        production_reliable_flush_trace_refines_outbound_ownership_kernel(
+            production_reliable_flush_trace_projection(worker),
+        ),
+        production_reliable_flush_application_refines_source_lane_kernel(
+            production_reliable_flush_application_projection(application),
+        ),
+        production_reliable_flush_two_phase_link_kernel(
+            production_reliable_flush_trace_projection(worker),
+            production_reliable_flush_application_projection(application),
+        ),
+        worker.status == 2u8,
+        application.claim_acquired,
+        application.gate_marker_present_before,
+        !application.gate_marker_present_after,
+        application.gate_cursor_after == application.gate_cursor_before + 1u64,
+        application.chunk_cursor_after == application.gate_cursor_after,
+        application.sibling_records_equal,
+        canonical_identity_equal_body!(
+            application.sibling_state_before,
+            application.sibling_state_after
+        ),
+        application.outbound_order_count_after <= 1u64,
+        application.sibling_order_len_after == application.sibling_order_len_before,
+        canonical_identity_equal_body!(
+            worker.source_key_identity,
+            application.source_key_identity
+        ),
+        canonical_identity_equal_body!(
+            worker.delivery_route_identity,
+            application.delivery_route_identity
+        ),
+        canonical_identity_equal_body!(
+            worker.writer_occurrence_identity,
+            application.writer_occurrence_identity
+        ),
+        canonical_identity_equal_body!(worker.chunk_hash, application.chunk_hash),
+{
+    reveal(production_reliable_flush_trace_refines_outbound_ownership_kernel);
+    reveal(production_reliable_flush_application_refines_source_lane_kernel);
+    reveal(production_reliable_flush_two_phase_link_kernel);
+    reveal(production_reliable_flush_trace_projection);
+    reveal(production_reliable_flush_application_projection);
+    assert(production_reliable_flush_trace_refines_outbound_ownership_kernel(
+        production_reliable_flush_trace_projection(worker),
+    ));
+    assert(production_reliable_flush_application_refines_source_lane_kernel(
+        production_reliable_flush_application_projection(application),
+    ));
+    assert(production_reliable_flush_two_phase_link_kernel(
+        production_reliable_flush_trace_projection(worker),
+        production_reliable_flush_application_projection(application),
+    ));
+}
+
+/// A returned application completion binds the task to the exact durable
+/// receipt, finality artifact, and committed State height.
+pub proof fn production_application_trace_refines_decision_completion(
+    projection: ProductionApplicationTraceProjection,
+)
+    requires
+        production_application_trace_body!(projection),
+    ensures
+        production_application_trace_refines_decision_completion_kernel(
+            production_application_trace_projection(projection),
+        ),
+        projection.context_height > 0u64,
+        projection.state_height_after == projection.context_height,
+        projection.artifact_height == projection.context_height,
+        projection.completion_work_id == projection.task_work_id,
+        canonical_identity_equal_body!(
+            projection.artifact_context_id,
+            projection.context_id
+        ),
+        projection.task_tag.height == projection.owner_tag.height,
+        projection.task_tag.view == projection.owner_tag.view,
+        projection.task_tag.generation == projection.owner_tag.generation,
+        projection.validated_body.view == projection.commit_qc.decision.proposal_view,
+{
+    reveal(production_application_trace_refines_decision_completion_kernel);
+    reveal(production_application_trace_projection);
+    assert(production_application_trace_refines_decision_completion_kernel(
+        production_application_trace_projection(projection),
+    ));
+}
+
+/// Exact application finalization has no pending successor activation; the
+/// runner constructs that independently only after this authenticated seam.
+pub proof fn production_terminal_application_without_successor_activation_refines_indexed_terminal(
+    projection: ProductionTerminalApplicationWithoutSuccessorActivationProjection,
+)
+    requires
+        production_terminal_application_without_successor_activation_body!(projection),
+    ensures
+        production_terminal_application_without_successor_activation_kernel(
+            production_terminal_application_without_successor_activation_projection(projection),
+        ),
+        projection.context_height > 0u64,
+        projection.receipt_height == projection.context_height,
+        projection.artifact_height == projection.context_height,
+        projection.predecessor.height == projection.context_height,
+        !projection.pending_successor_activation_present,
+        canonical_identity_equal_body!(
+            projection.receipt_context_id,
+            projection.context_id
+        ),
+        canonical_identity_equal_body!(
+            projection.artifact_context_id,
+            projection.context_id
+        ),
+{
+    reveal(production_terminal_application_without_successor_activation_kernel);
+    reveal(production_terminal_application_without_successor_activation_projection);
+    assert(production_terminal_application_without_successor_activation_kernel(
+        production_terminal_application_without_successor_activation_projection(projection),
+    ));
+}
+
 /// Verus-side shape of one fixed-width effect capability key.
 #[derive(Copy, Clone)]
 pub struct ProductionTagProjection {
     pub height: u64,
     pub view: u64,
     pub generation: u64,
+}
+
+
+/// Verus-side complete safety identity of one optional quorum certificate.
+///
+/// The roster-indexed signer bitmap and quorum totals preserve the complete
+/// signer set. The evidence class is produced by full concrete certificate
+/// equality, including canonical signature/evidence bytes, against the local
+/// and incoming transition anchors.
+#[derive(Copy, Clone)]
+pub struct CanonicalIdentityProjection {
+    pub domain: u8,
+    pub kind: u8,
+    pub word0: u64,
+    pub word1: u64,
+    pub word2: u64,
+    pub word3: u64,
+}
+
+#[derive(Copy, Clone)]
+pub struct CertificateIdentityProjection {
+    pub present: bool,
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub phase: u8,
+    pub subject: CanonicalIdentityProjection,
+    pub signer_bitmap: u128,
+    pub signer_bitmap_count: u64,
+    pub signer_count: u64,
+    pub voting_power: u64,
+    pub evidence_class: u8,
+}
+
+/// Verus-side identity of one optional timeout certificate and its selected
+/// highest `PrepareQC`.
+#[derive(Copy, Clone)]
+pub struct TimeoutIdentityProjection {
+    pub present: bool,
+    pub context_id: CanonicalIdentityProjection,
+    pub height: u64,
+    pub view: u64,
+    pub highest_prepare: CertificateIdentityProjection,
+}
+
+/// Exact persisted-TC `EnterView` macro-step projected by the production
+/// reducer.
+///
+/// This shape deliberately stops at the serialized reducer boundary: it names
+/// the selected lock and immediate recovery fetch, but makes no asynchronous
+/// ownership, scheduling, or temporal-fairness claim.
+#[derive(Copy, Clone)]
+pub struct EnterViewProjection {
+    pub active: bool,
+    pub context_id: CanonicalIdentityProjection,
+    pub before_tag: ProductionTagProjection,
+    pub after_tag: ProductionTagProjection,
+    pub pending_record_kind: u8,
+    pub pending_continuation: u8,
+    pub pending_record_timeout: TimeoutIdentityProjection,
+    pub pending_continuation_timeout: TimeoutIdentityProjection,
+    pub durable_timeout_after: TimeoutIdentityProjection,
+    pub effect_timeout: TimeoutIdentityProjection,
+    pub local_lock_before: CertificateIdentityProjection,
+    pub durable_lock_after: CertificateIdentityProjection,
+    pub effect_protected_lock: CertificateIdentityProjection,
+    pub following_fetch_lock: CertificateIdentityProjection,
+    pub enter_count: u64,
+    pub fetch_count: u64,
+    pub enter_index: u8,
+    pub following_fetch_index: u8,
 }
 
 /// Verus-side shape of a concrete requested/granted effect capability.
@@ -2552,20 +4503,41 @@ pub struct ProductionEffectCapabilityKeyProjection {
     pub context_id: int,
     pub height: u64,
     pub view: u64,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
     pub phase: u8,
     pub subject: int,
     pub actor: int,
     pub persistence_id: u64,
     pub record_kind: u8,
+    pub auxiliary_present: bool,
     pub auxiliary_context_id: int,
     pub auxiliary_height: u64,
     pub auxiliary_view: u64,
+    pub auxiliary_proposal_height: u64,
+    pub auxiliary_proposal_view: u64,
     pub auxiliary_phase: u8,
     pub auxiliary_subject: int,
     pub manifest_payload: int,
     pub manifest_chunks: int,
     pub manifest_len: u64,
     pub manifest_count: u64,
+}
+
+/// Verus-side shape of one exact durable replay-plan item.
+#[derive(Copy, Clone)]
+pub struct ProductionReplayPlanSlotProjection {
+    pub kind: u8,
+    pub capability: ProductionEffectCapabilityKeyProjection,
+}
+
+/// Verus-side fixed projection of the complete three-item recovery FIFO.
+#[derive(Copy, Clone)]
+pub struct ProductionReplayPlanProjection {
+    pub len: u8,
+    pub slot0: ProductionReplayPlanSlotProjection,
+    pub slot1: ProductionReplayPlanSlotProjection,
+    pub slot2: ProductionReplayPlanSlotProjection,
 }
 
 /// Verus-side shape of one effect vector slot.
@@ -2646,10 +4618,13 @@ pub struct ProductionPendingProjection {
     pub record_kind: u8,
     pub continuation: u8,
     pub persistence_id: u64,
-    pub context_id: int,
+    pub context_id: CanonicalIdentityProjection,
     pub height: u64,
     pub view: u64,
-    pub subject: int,
+    pub proposal_present: bool,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
+    pub subject: CanonicalIdentityProjection,
 }
 
 /// Verus-side durable-boundary capability key.
@@ -2661,8 +4636,22 @@ pub struct ProductionBoundaryCapabilityKeyProjection {
     pub replay_effect_kind: u8,
     pub persistence_id: u64,
     pub context_id: int,
+    pub context_identity: CanonicalIdentityProjection,
     pub tag: ProductionTagProjection,
     pub subject: ProductionSubjectProjection,
+    pub subject_identity: CanonicalIdentityProjection,
+    pub proposal_present: bool,
+    pub proposal_height: u64,
+    pub proposal_view: u64,
+    pub auxiliary_present: bool,
+    pub auxiliary_context_id: int,
+    pub auxiliary_height: u64,
+    pub auxiliary_view: u64,
+    pub auxiliary_proposal_height: u64,
+    pub auxiliary_proposal_view: u64,
+    pub auxiliary_phase: u8,
+    pub auxiliary_subject: int,
+    pub replay_plan: ProductionReplayPlanProjection,
 }
 
 /// Verus-side primitive projection supplied to the exact production kernel.
@@ -2701,6 +4690,7 @@ pub struct ProductionTransitionProjection {
     pub volatile_after: ProductionVolatileSummaryProjection,
     pub boundary_claimed: ProductionBoundaryCapabilityKeyProjection,
     pub boundary_granted: ProductionBoundaryCapabilityKeyProjection,
+    pub enter_view: EnterViewProjection,
     pub effects: ProductionEffectTraceProjection,
 }
 
@@ -2731,14 +4721,435 @@ pub struct ProductionTransitionFactsProjection {
     pub acknowledge_persist_exact: bool,
     pub application_transition_exact: bool,
     pub acknowledgement_continuation: u8,
+    pub enter_view_exact: bool,
     pub effects: ProductionEffectTraceProjection,
 }
 
+/// Lock selected by the persisted-TC view transition: the incoming highest
+/// `PrepareQC` replaces the local lock only when it has a strictly higher view.
+pub open spec fn production_enter_view_selected_lock(
+    projection: EnterViewProjection,
+) -> CertificateIdentityProjection {
+    let local = projection.local_lock_before;
+    let incoming = projection.pending_record_timeout.highest_prepare;
+    if !local.present {
+        incoming
+    } else if !incoming.present || incoming.view <= local.view {
+        local
+    } else {
+        incoming
+    }
+}
+
+/// Whether the effect immediately following `EnterView` is the one exact
+/// durable-lock recovery fetch.
+pub open spec fn production_enter_view_has_exact_following_fetch(
+    projection: EnterViewProjection,
+) -> bool {
+    projection.fetch_count == 1
+        && certificate_identity_equal_body!(
+            projection.following_fetch_lock,
+            projection.durable_lock_after
+        )
+        && projection.enter_index < 254
+        && projection.following_fetch_index == projection.enter_index + 1
+}
+
+/// Exact source-linked reducer relation for the persisted-TC `EnterView`
+/// macro-step.
+pub open spec fn production_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> bool {
+    enter_view_projection_gate_body!(projection)
+}
+
+/// Full locked-PrepareQC identity preserved across every persisted-TC seam.
+pub open spec fn production_enter_view_preserves_locked_prepare_qc_identity(
+    projection: EnterViewProjection,
+) -> bool {
+    enter_view_locked_prepare_qc_identity_body!(projection)
+}
+
 /// Exact fact derivation shared with the executable production kernel.
-pub open spec fn production_facts_from_projection(
+pub closed spec fn production_facts_from_projection(
     projection: ProductionTransitionProjection,
 ) -> ProductionTransitionFactsProjection {
     transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+}
+
+/// The EnterView component of the source-linked fact constructor, isolated so
+/// its certificate-identity cases can be discharged independently of the
+/// remaining transition fields.
+pub closed spec fn production_enter_view_exact_fact(
+    projection: ProductionTransitionProjection,
+) -> bool {
+    production_enter_view_projection_relation(projection.enter_view)
+        && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8)
+}
+
+/// The full source-linked constructor projects the isolated exact EnterView
+/// fact. Case splitting keeps this definitional bridge within the normal root
+/// verifier budget without weakening either side of the equality.
+pub proof fn production_enter_view_fact_projection_is_exact(
+    projection: ProductionTransitionProjection,
+)
+    ensures
+        production_facts_from_projection(projection).enter_view_exact
+            == production_enter_view_exact_fact(projection),
+{
+    let enter_view = projection.enter_view;
+    let local = enter_view.local_lock_before;
+    let incoming = enter_view.pending_record_timeout.highest_prepare;
+    if !enter_view.active {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else if !local.present {
+        if !incoming.present {
+            reveal(production_facts_from_projection);
+            reveal(production_enter_view_exact_fact);
+        } else {
+            reveal(production_facts_from_projection);
+            reveal(production_enter_view_exact_fact);
+        }
+    } else if !incoming.present {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else if incoming.view <= local.view {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    } else {
+        reveal(production_facts_from_projection);
+        reveal(production_enter_view_exact_fact);
+    }
+}
+
+/// Equality of invariant, fence, and action-classification facts.
+pub open spec fn production_classification_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    left.before_invariant == right.before_invariant
+        && left.after_invariant == right.after_invariant
+        && left.context_unchanged == right.context_unchanged
+        && left.whole_state_unchanged == right.whole_state_unchanged
+        && left.tag_matches == right.tag_matches
+        && left.busy_fence_open == right.busy_fence_open
+        && left.event_kind == right.event_kind
+        && left.action_kind == right.action_kind
+        && left.wal_record_kind == right.wal_record_kind
+        && left.signed_message_kind == right.signed_message_kind
+        && left.replay_effect_kind == right.replay_effect_kind
+        && left.validator_count == right.validator_count
+}
+
+/// Equality of volatile, durable-delta, capability, and effect facts.
+pub open spec fn production_delta_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    left.volatile_before == right.volatile_before
+        && left.volatile_after == right.volatile_after
+        && left.durable_unchanged == right.durable_unchanged
+        && left.pending_unchanged == right.pending_unchanged
+        && left.generation_unchanged == right.generation_unchanged
+        && left.application_unchanged == right.application_unchanged
+        && left.begin_persist_exact == right.begin_persist_exact
+        && left.acknowledge_persist_exact == right.acknowledge_persist_exact
+        && left.application_transition_exact == right.application_transition_exact
+        && left.acknowledgement_continuation == right.acknowledgement_continuation
+        && left.effects == right.effects
+}
+
+/// Field equality for every production transition fact except the separately
+/// factored EnterView certificate relation.
+pub open spec fn production_non_enter_view_facts_equal(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+) -> bool {
+    production_classification_facts_equal(left, right)
+        && production_delta_facts_equal(left, right)
+}
+
+/// Equality of the factored EnterView field plus all remaining fields is
+/// extensional equality of the complete production fact projection.
+pub proof fn production_transition_fact_extensionality(
+    left: ProductionTransitionFactsProjection,
+    right: ProductionTransitionFactsProjection,
+)
+    requires
+        left.enter_view_exact == right.enter_view_exact,
+        production_non_enter_view_facts_equal(left, right),
+    ensures
+        left == right,
+{
+    reveal(production_non_enter_view_facts_equal);
+    reveal(production_classification_facts_equal);
+    reveal(production_delta_facts_equal);
+}
+
+/// Executable projection of invariant, fence, and classification facts from
+/// the exact shared constructor.
+pub fn verified_classification_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (facts: ProductionTransitionFactsProjection)
+    ensures
+        production_classification_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        ),
+{
+    let facts = transition_facts_from_projection_body!(
+        projection,
+        ProductionTransitionFactsProjection
+    );
+    proof {
+        reveal(production_classification_facts_equal);
+        reveal(production_facts_from_projection);
+    }
+    facts
+}
+
+/// Executable projection of volatile, durable-delta, capability, and effect
+/// facts from the exact shared constructor.
+#[verifier::spinoff_prover]
+pub fn verified_delta_facts_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (facts: ProductionTransitionFactsProjection)
+    ensures
+        production_delta_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        ),
+{
+    let facts = transition_facts_from_projection_body!(
+        projection,
+        ProductionTransitionFactsProjection
+    );
+    proof {
+        assert(production_delta_facts_equal(
+            facts,
+            production_facts_from_projection(projection),
+        )) by {
+            reveal(production_delta_facts_equal);
+            reveal(production_facts_from_projection);
+        }
+    }
+    facts
+}
+
+/// Exact EnterView fact when the transition is inactive.
+#[verifier::spinoff_prover]
+pub fn verified_inactive_enter_view_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        !projection.enter_view.active,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when neither a local nor incoming lock exists.
+#[verifier::spinoff_prover]
+pub fn verified_empty_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        !projection.enter_view.local_lock_before.present,
+        !projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when only the incoming highest `PrepareQC`
+/// exists.
+#[verifier::spinoff_prover]
+pub fn verified_incoming_only_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        !projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when only the pre-transition local lock exists.
+#[verifier::spinoff_prover]
+pub fn verified_local_only_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        !projection.enter_view.pending_record_timeout.highest_prepare.present,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = production_enter_view_exact_body!(projection);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when the local lock is at least as high as the
+/// incoming highest `PrepareQC`.
+#[verifier::spinoff_prover]
+pub fn verified_local_max_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> (accepted: bool)
+    requires
+        projection.active,
+        projection.local_lock_before.present,
+        projection.pending_record_timeout.highest_prepare.present,
+        projection.pending_record_timeout.highest_prepare.view
+            <= projection.local_lock_before.view,
+    ensures
+        accepted == production_enter_view_projection_relation(projection),
+{
+    let accepted = enter_view_projection_gate_body!(projection);
+    proof {
+        assert(accepted == production_enter_view_projection_relation(projection)) by {
+            reveal(production_enter_view_projection_relation);
+        }
+    }
+    accepted
+}
+
+/// Compose the isolated local-lock-maximal relation with the exact effect
+/// counts from the complete production transition projection.
+#[verifier::spinoff_prover]
+pub fn verified_local_max_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.view
+            <= projection.enter_view.local_lock_before.view,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = verified_local_max_enter_view_projection_relation(
+        projection.enter_view,
+    ) && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Exact active EnterView fact when the incoming highest `PrepareQC` is
+/// strictly higher than the local lock.
+#[verifier::spinoff_prover]
+pub fn verified_incoming_max_enter_view_projection_relation(
+    projection: EnterViewProjection,
+) -> (accepted: bool)
+    requires
+        projection.active,
+        projection.local_lock_before.present,
+        projection.pending_record_timeout.highest_prepare.present,
+        projection.pending_record_timeout.highest_prepare.view
+            > projection.local_lock_before.view,
+    ensures
+        accepted == production_enter_view_projection_relation(projection),
+{
+    let accepted = enter_view_projection_gate_body!(projection);
+    proof {
+        assert(accepted == production_enter_view_projection_relation(projection)) by {
+            reveal(production_enter_view_projection_relation);
+        }
+    }
+    accepted
+}
+
+/// Compose the isolated higher-incoming-lock relation with the exact effect
+/// counts from the complete production transition projection.
+#[verifier::spinoff_prover]
+pub fn verified_incoming_max_enter_view_lock_fact(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    requires
+        projection.enter_view.active,
+        projection.enter_view.local_lock_before.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.present,
+        projection.enter_view.pending_record_timeout.highest_prepare.view
+            > projection.enter_view.local_lock_before.view,
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view_exact = verified_incoming_max_enter_view_projection_relation(
+        projection.enter_view,
+    ) && projection.enter_view.enter_count == effect_count_body!(projection.effects, 8u8)
+        && projection.enter_view.fetch_count == effect_count_body!(projection.effects, 2u8);
+    proof {
+        assert(enter_view_exact == production_enter_view_exact_fact(projection)) by {
+            reveal(production_enter_view_exact_fact);
+        }
+    }
+    enter_view_exact
+}
+
+/// Executable projection of only the exact EnterView fact from the same shared
+/// constructor. The selected-certificate cases are discharged separately from
+/// the remaining transition structure.
+pub fn verified_enter_view_fact_from_projection(
+    projection: ProductionTransitionProjection,
+) -> (enter_view_exact: bool)
+    ensures
+        enter_view_exact == production_enter_view_exact_fact(projection),
+{
+    let enter_view = projection.enter_view;
+    let local = enter_view.local_lock_before;
+    let incoming = enter_view.pending_record_timeout.highest_prepare;
+    if !enter_view.active {
+        verified_inactive_enter_view_fact(projection)
+    } else if !local.present {
+        if incoming.present {
+            verified_incoming_only_enter_view_lock_fact(projection)
+        } else {
+            verified_empty_enter_view_lock_fact(projection)
+        }
+    } else if !incoming.present {
+        verified_local_only_enter_view_lock_fact(projection)
+    } else if incoming.view <= local.view {
+        verified_local_max_enter_view_lock_fact(projection)
+    } else {
+        verified_incoming_max_enter_view_lock_fact(projection)
+    }
 }
 
 /// Executable fact derivation used to prove that action and authorization
@@ -2749,7 +5160,47 @@ pub fn verified_facts_from_projection(
     ensures
         facts == production_facts_from_projection(projection),
 {
-    transition_facts_from_projection_body!(projection, ProductionTransitionFactsProjection)
+    let classification_facts = verified_classification_facts_from_projection(projection);
+    let delta_facts = verified_delta_facts_from_projection(projection);
+    let enter_view_exact = verified_enter_view_fact_from_projection(projection);
+    let facts = ProductionTransitionFactsProjection {
+        before_invariant: classification_facts.before_invariant,
+        after_invariant: classification_facts.after_invariant,
+        context_unchanged: classification_facts.context_unchanged,
+        whole_state_unchanged: classification_facts.whole_state_unchanged,
+        tag_matches: classification_facts.tag_matches,
+        busy_fence_open: classification_facts.busy_fence_open,
+        event_kind: classification_facts.event_kind,
+        action_kind: classification_facts.action_kind,
+        wal_record_kind: classification_facts.wal_record_kind,
+        signed_message_kind: classification_facts.signed_message_kind,
+        replay_effect_kind: classification_facts.replay_effect_kind,
+        validator_count: classification_facts.validator_count,
+        volatile_before: delta_facts.volatile_before,
+        volatile_after: delta_facts.volatile_after,
+        durable_unchanged: delta_facts.durable_unchanged,
+        pending_unchanged: delta_facts.pending_unchanged,
+        generation_unchanged: delta_facts.generation_unchanged,
+        application_unchanged: delta_facts.application_unchanged,
+        begin_persist_exact: delta_facts.begin_persist_exact,
+        acknowledge_persist_exact: delta_facts.acknowledge_persist_exact,
+        application_transition_exact: delta_facts.application_transition_exact,
+        acknowledgement_continuation: delta_facts.acknowledgement_continuation,
+        enter_view_exact,
+        effects: delta_facts.effects,
+    };
+    proof {
+        let expected = production_facts_from_projection(projection);
+        production_enter_view_fact_projection_is_exact(projection);
+        assert(enter_view_exact == expected.enter_view_exact);
+        assert(production_non_enter_view_facts_equal(facts, expected)) by {
+            reveal(production_non_enter_view_facts_equal);
+            reveal(production_classification_facts_equal);
+            reveal(production_delta_facts_equal);
+        }
+        production_transition_fact_extensionality(facts, expected);
+    }
+    facts
 }
 
 /// Names of the TLA+ `SumeragiV2Core` actions represented at the reducer's
@@ -3193,20 +5644,13 @@ pub open spec fn production_transition_branch_relation(
 pub closed spec fn production_transition_action_relation(
     facts: ProductionTransitionFactsProjection,
 ) -> bool {
-    facts.before_invariant
-        && facts.after_invariant
-        && facts.context_unchanged
-        && production_volatile_summary_well_formed(
-            facts.volatile_before,
-            facts.validator_count,
-        )
-        && production_volatile_summary_well_formed(
-            facts.volatile_after,
-            facts.validator_count,
-        )
-        && production_named_action_relation(facts)
-        && production_effect_trace_relation(facts.effects, facts.event_kind)
-        && production_transition_branch_relation(facts)
+    production_transition_gate_body!(
+        facts,
+        production_volatile_summary_well_formed,
+        production_named_action_relation,
+        production_effect_trace_relation,
+        production_transition_branch_relation,
+    )
 }
 
 /// Every accepted production action has an explicit TLA+ macro-step name and
@@ -3635,6 +6079,62 @@ pub closed spec fn production_kernel_relation(
     production_transition_action_relation(production_facts_from_projection(projection))
 }
 
+/// An accepted active persisted-TC transition selects the maximum of the
+/// pre-transition lock and the TC's highest `PrepareQC`, carries that exact
+/// durable lock in `EnterView`, and emits one immediately following recovery
+/// fetch exactly when the selected lock is present.
+///
+/// This is a serialized transition theorem only. It intentionally makes no
+/// claim that asynchronous transport or executor work is eventually serviced.
+pub proof fn accepted_core_enter_view_projection_selects_post_install_lock(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        production_kernel_relation(projection),
+        projection.enter_view.active,
+    ensures
+        production_enter_view_projection_relation(projection.enter_view),
+        production_enter_view_preserves_locked_prepare_qc_identity(projection.enter_view),
+        certificate_identity_equal_body!(
+            projection.enter_view.durable_lock_after,
+            production_enter_view_selected_lock(projection.enter_view)
+        ),
+        certificate_identity_equal_body!(
+            projection.enter_view.effect_protected_lock,
+            projection.enter_view.durable_lock_after
+        ),
+        projection.enter_view.durable_lock_after.present
+            <==> production_enter_view_has_exact_following_fetch(projection.enter_view),
+        !projection.enter_view.durable_lock_after.present
+            ==> projection.enter_view.fetch_count == 0
+                && !projection.enter_view.following_fetch_lock.present,
+{
+    reveal(production_kernel_relation);
+    reveal(production_transition_action_relation);
+    reveal(production_facts_from_projection);
+    reveal(production_enter_view_projection_relation);
+    reveal(production_enter_view_preserves_locked_prepare_qc_identity);
+    reveal(production_enter_view_selected_lock);
+    reveal(production_enter_view_has_exact_following_fetch);
+}
+
+/// An accepted active persisted-TC transition exposes the complete exact
+/// `EnterView` fact consumed by the effective-lock production refinement.
+pub proof fn accepted_core_enter_view_has_exact_fact(
+    projection: ProductionTransitionProjection,
+)
+    requires
+        production_kernel_relation(projection),
+        projection.enter_view.active,
+    ensures
+        production_enter_view_exact_fact(projection),
+{
+    reveal(production_kernel_relation);
+    reveal(production_transition_action_relation);
+    reveal(production_facts_from_projection);
+    reveal(production_enter_view_exact_fact);
+}
+
 /// Exact executable kernel called conceptually by `refinement::accepts`:
 /// derive facts from concrete primitives first, then evaluate the established
 /// transition gate.  No authorization or action-exactness boolean is an input.
@@ -3710,6 +6210,9 @@ pub proof fn accepted_production_transition_refines_action(
             facts.validator_count,
         ),
         production_named_action_relation(facts),
+        facts.enter_view_exact,
+        production_effect_trace_relation(facts.effects, facts.event_kind),
+        production_transition_branch_relation(facts),
         (!facts.tag_matches || !facts.busy_fence_open)
             ==> facts.whole_state_unchanged,
         facts.effects.len <= 8,
@@ -3743,5 +6246,7 @@ pub proof fn accepted_production_transition_refines_action(
 {
     reveal(production_transition_action_relation);
 }
+
+
 
 } // verus!

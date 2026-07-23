@@ -66,7 +66,7 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
-    gov_cfg.min_bond_amount = 10;
+    gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = receiver_id.clone();
     state.set_gov(gov_cfg);
@@ -118,7 +118,7 @@ fn lock_slash_restitute(
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 200,
         direction: 0,
     };
@@ -130,7 +130,7 @@ fn lock_slash_restitute(
     let slash = iroha_data_model::isi::governance::SlashGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 4,
+        amount: 4_u64.into(),
         reason: "policy_violation".to_string(),
     };
     slash
@@ -141,7 +141,7 @@ fn lock_slash_restitute(
     let restitute = iroha_data_model::isi::governance::RestituteGovernanceLock {
         referendum_id: referendum_id.to_string(),
         owner: owner.clone(),
-        amount: 2,
+        amount: 2_u64.into(),
         reason: "appeal".to_string(),
     };
     restitute
@@ -192,8 +192,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(referendum_id)
         .expect("locks after slash");
     let rec = locks.locks.get(&alice_id).expect("alice lock after slash");
-    assert_eq!(rec.amount, 8);
-    assert_eq!(rec.slashed, 2);
+    assert_eq!(rec.amount, Quantity::from(8_u64));
+    assert_eq!(rec.slashed, Quantity::from(2_u64));
 
     let ledger = sblock
         .world
@@ -201,8 +201,8 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
         .get(referendum_id)
         .expect("slash ledger");
     let entry = ledger.slashes.get(&alice_id).expect("slash ledger entry");
-    assert_eq!(entry.total_slashed, 4);
-    assert_eq!(entry.total_restituted, 2);
+    assert_eq!(entry.total_slashed, Quantity::from(4_u64));
+    assert_eq!(entry.total_restituted, Quantity::from(2_u64));
     assert_eq!(
         entry.last_reason,
         iroha_data_model::events::data::governance::GovernanceSlashReason::Restitution

@@ -111,7 +111,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
     public let orderId: Data?
     public let side: SorafsOrderbookSide
     public let tier: SorafsOrderbookTier
-    public let pricePerGibMicroXor: String
+    public let pricePerGib: String
     public let quantityGib: UInt64
     public let remainingGib: UInt64?
     public let ownerAccount: Data
@@ -124,7 +124,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
         orderId: Data? = nil,
         side: SorafsOrderbookSide,
         tier: SorafsOrderbookTier,
-        pricePerGibMicroXor: String,
+        pricePerGib: String,
         quantityGib: UInt64,
         remainingGib: UInt64? = nil,
         ownerAccount: Data,
@@ -136,7 +136,7 @@ public struct SorafsSignedOrderbookOrderRequestFields: Sendable {
         self.orderId = orderId
         self.side = side
         self.tier = tier
-        self.pricePerGibMicroXor = pricePerGibMicroXor
+        self.pricePerGib = pricePerGib
         self.quantityGib = quantityGib
         self.remainingGib = remainingGib
         self.ownerAccount = ownerAccount
@@ -174,9 +174,9 @@ public struct SorafsSignedOrderbookSettlementReceiptFields: Sendable {
     public let rangeEnd: UInt64
     public let chunkHash: Data
     public let bytesDelivered: UInt64
-    public let xorDebitedMicroXor: String
-    public let providerCreditMicroXor: String
-    public let feeAmountMicroXor: String
+    public let xorDebited: String
+    public let providerCredit: String
+    public let feeAmount: String
     public let issuedAtUnix: UInt64
 
     public init(
@@ -187,9 +187,9 @@ public struct SorafsSignedOrderbookSettlementReceiptFields: Sendable {
         rangeEnd: UInt64,
         chunkHash: Data,
         bytesDelivered: UInt64,
-        xorDebitedMicroXor: String,
-        providerCreditMicroXor: String,
-        feeAmountMicroXor: String,
+        xorDebited: String,
+        providerCredit: String,
+        feeAmount: String,
         issuedAtUnix: UInt64
     ) {
         self.receiptId = receiptId
@@ -199,9 +199,9 @@ public struct SorafsSignedOrderbookSettlementReceiptFields: Sendable {
         self.rangeEnd = rangeEnd
         self.chunkHash = chunkHash
         self.bytesDelivered = bytesDelivered
-        self.xorDebitedMicroXor = xorDebitedMicroXor
-        self.providerCreditMicroXor = providerCreditMicroXor
-        self.feeAmountMicroXor = feeAmountMicroXor
+        self.xorDebited = xorDebited
+        self.providerCredit = providerCredit
+        self.feeAmount = feeAmount
         self.issuedAtUnix = issuedAtUnix
     }
 }
@@ -336,7 +336,7 @@ public enum SorafsReferenceValidators {
                 "orderId must equal the canonical owner-and-nonce derivation"
             )
         }
-        try requireDecimal(fields.pricePerGibMicroXor, "pricePerGibMicroXor", positive: true)
+        try requireXorQuantity(fields.pricePerGib, "pricePerGib", positive: true)
         try requireFeeBps(fields.makerFeeBps, "makerFeeBps")
         try requireFeeBps(fields.takerFeeBps, "takerFeeBps")
         try requirePrivateKey(privateKey)
@@ -344,7 +344,7 @@ public enum SorafsReferenceValidators {
             orderId: canonicalOrderId,
             side: fields.side.rawValue,
             tier: fields.tier.rawValue,
-            pricePerGibMicroXor: fields.pricePerGibMicroXor,
+            pricePerGib: fields.pricePerGib,
             quantityGib: fields.quantityGib,
             remainingGib: remainingGib,
             ownerAccount: fields.ownerAccount,
@@ -411,9 +411,9 @@ public enum SorafsReferenceValidators {
         try requirePositive(fields.rangeEnd, "rangeEnd")
         try requireFixed32(fields.chunkHash, "chunkHash")
         try requirePositive(fields.bytesDelivered, "bytesDelivered")
-        try requireDecimal(fields.xorDebitedMicroXor, "xorDebitedMicroXor", positive: true)
-        try requireDecimal(fields.providerCreditMicroXor, "providerCreditMicroXor", positive: false)
-        try requireDecimal(fields.feeAmountMicroXor, "feeAmountMicroXor", positive: false)
+        try requireXorQuantity(fields.xorDebited, "xorDebited", positive: true)
+        try requireXorQuantity(fields.providerCredit, "providerCredit", positive: false)
+        try requireXorQuantity(fields.feeAmount, "feeAmount", positive: false)
         try requirePositive(fields.issuedAtUnix, "issuedAtUnix")
         try requirePrivateKey(privateKey)
         let nativeFields = NativeSorafsOrderbookSettlementReceiptFields(
@@ -424,9 +424,9 @@ public enum SorafsReferenceValidators {
             rangeEnd: fields.rangeEnd,
             chunkHash: fields.chunkHash,
             bytesDelivered: fields.bytesDelivered,
-            xorDebitedMicroXor: fields.xorDebitedMicroXor,
-            providerCreditMicroXor: fields.providerCreditMicroXor,
-            feeAmountMicroXor: fields.feeAmountMicroXor,
+            xorDebited: fields.xorDebited,
+            providerCredit: fields.providerCredit,
+            feeAmount: fields.feeAmount,
             issuedAtUnix: fields.issuedAtUnix
         )
         guard let signed = NoritoNativeBridge.shared.sorafsReferenceBuildSignedOrderbookSettlementReceipt(
@@ -664,13 +664,40 @@ public enum SorafsReferenceValidators {
         }
     }
 
-    private static func requireDecimal(_ value: String, _ field: String, positive: Bool) throws {
-        guard !value.isEmpty, value.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }) else {
+    private static func requireXorQuantity(_ value: String, _ field: String, positive: Bool) throws {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard value.utf8.count <= 155,
+              parts.count == 1 || parts.count == 2,
+              let integer = parts.first,
+              !integer.isEmpty,
+              integer.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 }),
+              integer == "0" || (integer.first != "0") else {
             throw SorafsReferenceValidationError.invalidOrderbookField(
-                "\(field) must be an unsigned decimal integer"
+                "\(field) must be a canonical non-negative XOR quantity"
             )
         }
-        if positive && !value.utf8.contains(where: { $0 != 48 }) {
+        let fractional = parts.count == 2 ? parts[1] : Substring()
+        guard fractional.count <= 9,
+              parts.count == 1 || (!fractional.isEmpty
+                  && fractional.utf8.allSatisfy({ $0 >= 48 && $0 <= 57 })
+                  && fractional.last != "0") else {
+            throw SorafsReferenceValidationError.invalidOrderbookField(
+                "\(field) must be canonical with at most 9 fractional decimal places"
+            )
+        }
+        let mantissa = String((integer + fractional).drop(while: { $0 == "0" }))
+        let normalizedMantissa = mantissa.isEmpty ? "0" : mantissa
+        let maximum =
+            "6703903964971298549787012499102923063739682910296196688861780721860882015" +
+            "0367734884009371490834517138450159290932430254268769414059732849732168245" +
+            "03042047"
+        guard normalizedMantissa.count < maximum.count
+                || (normalizedMantissa.count == maximum.count && normalizedMantissa <= maximum) else {
+            throw SorafsReferenceValidationError.invalidOrderbookField(
+                "\(field) exceeds the 512-bit signed quantity domain"
+            )
+        }
+        if positive && normalizedMantissa == "0" {
             throw SorafsReferenceValidationError.invalidOrderbookField("\(field) must be greater than zero")
         }
     }

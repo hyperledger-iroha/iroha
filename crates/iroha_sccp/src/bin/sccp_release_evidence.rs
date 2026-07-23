@@ -79,7 +79,7 @@ const SEMANTIC_ARTIFACT_ROLES: [(&str, &str, &str); 7] = [
     ("honest-witness", "honest-witness", "honest-witness.bin"),
     ("honest-proof", "honest-proof", "honest-proof.norito"),
 ];
-const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 57] = [
+const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 67] = [
     "3908a9df4eb45c2c3eb744f5a5fde5af87f346a59a4995378e95c3895b9e2d5d",
     "4baed4d3a15b3269ab5e710393de6f01944c3af9691dc7a8661474ced9a033f2",
     "0ffb0e0e942b1f2250eb5674aa5674334cb0e84a7374369cc9d9ec636392198e",
@@ -137,6 +137,16 @@ const FORBIDDEN_FIXTURE_PUBLIC_KEYS: [&str; 57] = [
     "767d5f1d8bc1af4f98ff6d3ec5ee44875ed6204d10a0dec3183f081f61604e41",
     "88b93e7928d64e691463998ab2610e7348a6295e32809e23bc5930ed745c4de9",
     "8426f827df88c96562a1e10d5ed154a8796ab83dd35c7b03bf0052357c9a21e0",
+    "ad84d36ddf0fbd60c70de9021a018c909d1d83443b48d1add46ef3959a61ab1c",
+    "4ea79cb34e0fae4e46a051852c8f649afad7e26c9e2cfd10b56cacd01de05ea5",
+    "eaacd450eb2a2b841138668261a89e9174d49337712020c83495a9964c53df74",
+    "a57061eb537a96ccc110a42c30875354f4c1939356b30018e80fc731400a6087",
+    "fffc070b38e8fe79f58372450d6d235679d4c53409dd5ab71d65fb898a3939d8",
+    "224ee4a3491eb6dd8cb8669402b795c94766857d9ed42efd8ea98cdb379b1218",
+    "14e856453288b642c8a670c52c3559c229b358fd83c356cf6dd522fb6d128284",
+    "e61d512ed09e72e6d680872844ac1c3632f2bb4f676155eab5492a8439132232",
+    "55e4ba52faa1a07a3e8630dcdd1c0472153d58497bb81e2c92dfcbf7d172f857",
+    "bd463cf2379a295d6efdd6e3815d9f8724f5e4118a3a9e430192d3a0480e6f4e",
 ];
 const REQUIRED_PHASES: [&str; 12] = [
     "rust-sccp",
@@ -3294,7 +3304,7 @@ mod tests {
         let validated = validate_sora_finality_anchor_policy(&anchor).unwrap();
         assert_eq!(
             lowercase_hex(&validated.anchor_hash),
-            "690888c1b9a1409ea47fc682be915184e86a817a2f0b3439eef82e64e08e990b"
+            "94be7710f3064ff4936d24f51355ca037bf53e653b7712abcd798ba47be20727"
         );
 
         for mutation in 0..=10 {
@@ -3389,6 +3399,297 @@ mod tests {
                 .expect("typed release fixture must have canonical Norito JSON");
             assert_eq!(format!("{canonical}\n"), fixture);
         }
+    }
+
+    fn release_trust_policy_with_proof_string(
+        proof_index: usize,
+        field: &str,
+        replacement: &str,
+    ) -> ReleaseTrustPolicyV1 {
+        let mut document = norito::json::parse_value(include_str!(
+            "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
+        ))
+        .expect("release trust-policy fixture must be JSON");
+        let proof = document
+            .get_mut("proof_systems")
+            .and_then(norito::json::Value::as_array_mut)
+            .and_then(|proofs| proofs.get_mut(proof_index))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("release trust-policy fixture must contain the selected proof policy");
+        let value = proof
+            .get_mut(field)
+            .unwrap_or_else(|| panic!("release proof policy must contain `{field}`"));
+        *value = norito::json::Value::String(replacement.to_owned());
+        let json = norito::json::to_json(&document)
+            .expect("mutated release trust policy must remain canonical JSON");
+        norito::json::from_str(&json)
+            .expect("mutated release trust policy must retain the typed JSON shape")
+    }
+
+    #[test]
+    fn full_release_trust_policy_json_path_rejects_diagnostic_circuit_forms() {
+        let baseline = norito::json::from_str::<ReleaseTrustPolicyV1>(include_str!(
+            "../../../../fixtures/sccp/release_evidence_v1/test-trust-policy.json"
+        ))
+        .expect("release trust-policy fixture must use the typed JSON schema");
+        validate_release_trust_policy(&baseline, "test-fixture", &mut BTreeSet::new())
+            .expect("release trust-policy fixture must remain a valid signed baseline");
+
+        let forbidden_artifact_digest = lowercase_hex(&FORBIDDEN_SIGNAL_BINDING_CIRCUIT_SHA256);
+        for (proof_index, field, replacement, expected_error) in [
+            (
+                1,
+                "circuit_id",
+                "sccp-bsc-labeled-signal-binding-v1",
+                "semantic proof-system policy is invalid",
+            ),
+            (
+                0,
+                "circuit_id",
+                "public-signal-binding-material-only",
+                "semantic proof-system policy is invalid",
+            ),
+            (
+                0,
+                "circuit_artifact_sha256_hex",
+                forbidden_artifact_digest.as_str(),
+                "labeled-signal-only circuit is forbidden in release policy",
+            ),
+        ] {
+            let candidate = release_trust_policy_with_proof_string(proof_index, field, replacement);
+            let error =
+                validate_release_trust_policy(&candidate, "test-fixture", &mut BTreeSet::new())
+                    .err()
+                    .expect("diagnostic circuit mutation must be rejected");
+            assert_eq!(error, expected_error);
+        }
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn exact_evm_destination_readback_route()
+    -> (SccpGovernedRouteV1, SccpEvmDestinationDeploymentV1) {
+        use iroha_data_model::bridge::{SccpRouteActivationV1, SccpSourceEmitterV1};
+
+        let mut route = iroha_sccp::sccp_exact_evm_governed_route_test_fixture_v1(
+            SccpNetworkV1::EthereumMainnet,
+            SccpRouteActivationV1::Bidirectional,
+        );
+        let SccpDestinationDeploymentV1::Evm(mut deployment) = route.destination else {
+            panic!("exact EVM route fixture must contain an EVM deployment")
+        };
+        deployment.token_code_hash = keccak256(&[0x60, 0x00]);
+        deployment.verifier_code_hash = keccak256(&[0x60, 0x01]);
+        deployment.route_code_hash = keccak256(&[0x60, 0x02]);
+        route.destination = SccpDestinationDeploymentV1::Evm(deployment);
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact EVM readback route configuration must be valid");
+        let SccpSourceEmitterV1::Evm(emitter) = &mut route.source_identity.emitter else {
+            panic!("exact EVM route fixture must contain an EVM source emitter")
+        };
+        emitter.runtime_code_hash = deployment.route_code_hash;
+        emitter.route_config_hash = route_configuration_hash;
+        route
+            .validate()
+            .expect("exact EVM readback route must remain governed and valid");
+        (route, deployment)
+    }
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn evm_destination_readback_rejects_each_outbound_policy_hash_independently() {
+        let (route, deployment) = exact_evm_destination_readback_route();
+        let semantic_profile_hash = deployment
+            .outbound_proof_policy
+            .semantic_profile_hash()
+            .expect("exact EVM semantic profile must hash");
+        let sora_finality_anchor_hash = deployment
+            .outbound_proof_policy
+            .sora_finality_anchor_hash()
+            .expect("exact EVM finality anchor must hash");
+        let destination_binding_hash = route
+            .destination_binding_hash()
+            .expect("exact EVM destination binding must hash");
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact EVM destination route configuration must hash");
+        let governed_route_configuration_hash = route
+            .route_configuration_hash()
+            .expect("exact governed EVM route configuration must hash");
+        let readback =
+            |semantic_proof_profile_hash, sora_finality_anchor_hash| EvmDestinationReadback {
+                deployment,
+                token_bridge_address: deployment.route_address,
+                route_token_address: deployment.token_address,
+                route_verifier_address: deployment.verifier_address,
+                token_runtime_code_hex: "6000",
+                verifier_runtime_code_hex: "6001",
+                route_runtime_code_hex: "6002",
+                verifier_key_hash: deployment.verifier_key_hash,
+                semantic_proof_profile_hash,
+                sora_finality_anchor_hash,
+                route_revision: route.revision,
+                verifying_key: deployment.verifying_key,
+                destination_binding_hash,
+                route_configuration_hash,
+                governed_route_configuration_hash,
+                observed_at_unix_ms: 1,
+                finality_height: 1,
+                finality_block_hash: [0x91; 32],
+            };
+
+        validate_destination_readback(
+            &route,
+            readback(semantic_profile_hash, sora_finality_anchor_hash),
+        )
+        .expect("exact EVM destination readback must validate");
+
+        let mut mutated_semantic_profile_hash = semantic_profile_hash;
+        mutated_semantic_profile_hash[0] ^= 1;
+        assert!(
+            validate_destination_readback(
+                &route,
+                readback(mutated_semantic_profile_hash, sora_finality_anchor_hash),
+            )
+            .is_err()
+        );
+
+        let mut mutated_sora_finality_anchor_hash = sora_finality_anchor_hash;
+        mutated_sora_finality_anchor_hash[0] ^= 1;
+        assert!(
+            validate_destination_readback(
+                &route,
+                readback(semantic_profile_hash, mutated_sora_finality_anchor_hash),
+            )
+            .is_err()
+        );
+    }
+
+    #[cfg(feature = "test-fixtures")]
+    fn exact_tron_destination_readback_route()
+    -> (SccpGovernedRouteV1, SccpTronDestinationDeploymentV1) {
+        use iroha_data_model::bridge::{
+            SccpLaneIdV1, SccpSourceEmitterV1, SccpTronSourceEmitterV1,
+        };
+
+        let (mut route, evm_deployment) = exact_evm_destination_readback_route();
+        let deployment = SccpTronDestinationDeploymentV1 {
+            token_address: evm_deployment.token_address,
+            token_code_hash: evm_deployment.token_code_hash,
+            verifier_address: evm_deployment.verifier_address,
+            verifier_code_hash: evm_deployment.verifier_code_hash,
+            verifying_key: evm_deployment.verifying_key,
+            verifier_key_hash: evm_deployment.verifier_key_hash,
+            outbound_proof_policy: evm_deployment.outbound_proof_policy,
+            route_address: evm_deployment.route_address,
+            route_code_hash: evm_deployment.route_code_hash,
+            taira_to_token_multiplier: evm_deployment.taira_to_token_multiplier,
+        };
+        let lane = SccpLaneIdV1 {
+            source: SccpNetworkV1::TronMainnet,
+            target: SccpNetworkV1::SoraTaira,
+        };
+        route.lane_id = lane;
+        route.route_id = iroha_sccp::SCCP_TAIRA_TRON_XOR_ROUTE_ID_V1.to_owned();
+        route.destination = SccpDestinationDeploymentV1::Tron(deployment);
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact TRON readback route configuration must be valid");
+        route.source_identity = SccpSourceIdentityV1 {
+            lane,
+            emitter: SccpSourceEmitterV1::Tron(SccpTronSourceEmitterV1 {
+                address: deployment.route_address,
+                runtime_code_hash: deployment.route_code_hash,
+                route_config_hash: route_configuration_hash,
+            }),
+        };
+        route
+            .validate()
+            .expect("exact TRON readback route must remain governed and valid");
+        (route, deployment)
+    }
+
+    #[test]
+    #[cfg(feature = "test-fixtures")]
+    fn tron_destination_readback_rejects_each_outbound_policy_hash_independently() {
+        let (route, deployment) = exact_tron_destination_readback_route();
+        let semantic_proof_profile_hash = deployment
+            .outbound_proof_policy
+            .semantic_profile_hash()
+            .expect("exact TRON semantic profile must hash");
+        let sora_finality_anchor_hash = deployment
+            .outbound_proof_policy
+            .sora_finality_anchor_hash()
+            .expect("exact TRON finality anchor must hash");
+        let route_configuration_hash = route
+            .destination
+            .route_configuration_hash(
+                route.lane_id,
+                &route.route_id,
+                &route.asset_key,
+                route.revision,
+                route.settlement.payload_amount_scale,
+            )
+            .expect("exact TRON destination route configuration must hash");
+        let mut state = TronDestinationStateV1 {
+            schema: "sccp-tron-destination-state-v1".to_owned(),
+            profile: SccpNetworkV1::TronMainnet,
+            observed_at_unix_ms: 1,
+            solid_block_height: 1,
+            solid_block_hash: [0x92; 32],
+            network_magic: 0x2b66_53dc,
+            network_identity_hash: sccp_network_identity_hash_v1(SccpNetworkV1::TronMainnet),
+            governed_route: route.clone(),
+            route_revision: route.revision,
+            token_bridge_address: deployment.route_address,
+            route_token_address: deployment.token_address,
+            route_verifier_address: deployment.verifier_address,
+            token_runtime_code_hex: "6000".to_owned(),
+            verifier_runtime_code_hex: "6001".to_owned(),
+            route_runtime_code_hex: "6002".to_owned(),
+            verifier_key_hash: deployment.verifier_key_hash,
+            semantic_proof_profile_hash,
+            sora_finality_anchor_hash,
+            verifying_key: deployment.verifying_key,
+            destination_binding_hash: route
+                .destination_binding_hash()
+                .expect("exact TRON destination binding must hash"),
+            route_configuration_hash,
+            governed_route_configuration_hash: route
+                .route_configuration_hash()
+                .expect("exact governed TRON route configuration must hash"),
+        };
+
+        validate_tron_destination_readback(&state, &route, deployment)
+            .expect("exact TRON destination readback must validate");
+
+        state.semantic_proof_profile_hash[0] ^= 1;
+        assert!(validate_tron_destination_readback(&state, &route, deployment).is_err());
+        state.semantic_proof_profile_hash = semantic_proof_profile_hash;
+
+        state.sora_finality_anchor_hash[0] ^= 1;
+        assert!(validate_tron_destination_readback(&state, &route, deployment).is_err());
     }
 
     fn validated_destination() -> ValidatedDestinationStateV1 {

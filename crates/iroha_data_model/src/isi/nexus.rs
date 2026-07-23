@@ -1,8 +1,12 @@
 use super::*;
 use crate::{
     account::AccountId,
+    asset::AssetDefinitionId,
     metadata::Metadata,
-    nexus::{FeeSponsorPolicy, FeeSponsorPolicyId, LaneId, LaneRelayEnvelope, ProofBlob},
+    nexus::{
+        FeeSponsorProgram, FeeSponsorProgramId, FeeSponsorProgramRevision, LaneId,
+        LaneRelayEnvelope, ProofBlob,
+    },
     peer::PeerId,
 };
 use iroha_primitives::numeric::Quantity;
@@ -41,7 +45,11 @@ iroha_data_model_derive::model_single! {
         pub envelope: LaneRelayEnvelope,
         /// FASTPQ/AXT proof blob used to verify the relay payload.
         pub proof_blob: ProofBlob,
-        /// Optional FASTPQ/AXT business-effect proof whose binding is persisted for contracts.
+        /// Reserved business-effect proof slot.
+        ///
+        /// The first-release runtime deterministically rejects `Some` until an
+        /// effect-specific statement is derived from a finalized, QC-anchored
+        /// settlement ledger entry. Callers must submit `None`.
         #[norito(skip_serializing_if = "Option::is_none")]
         #[norito(default)]
         pub effect_proof_blob: Option<ProofBlob>,
@@ -54,17 +62,33 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Persist a verified Nexus public XOR fee-budget cache for asynchronous DPN fee admission.
-    pub struct RegisterVerifiedNexusFeeBudget {
-        /// Sponsor or payer account whose Nexus public XOR balance was verified.
-        pub sponsor_account_id: AccountId,
-        /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
-        pub fee_asset_id: String,
-        /// Verified public Nexus balance for the sponsor and fee asset.
-        pub verified_balance: Quantity,
+    /// Persist a proof-backed cross-lane sponsor-vault spend allocation.
+    ///
+    /// Execution requires the sponsor or its delegated program manager, rejects source heights
+    /// beyond the executing block, and permits at most one unexpired lease for each
+    /// program/revision/asset/source-dataspace route.
+    pub struct RegisterVerifiedFeeSponsorVaultAllocation {
+        /// Exact sponsor program authorized to spend the allocation.
+        pub program_id: FeeSponsorProgramId,
+        /// Immutable program revision bound by the source proof.
+        pub program_revision: u64,
+        /// Canonical fee asset allocated by the source vault.
+        pub asset_definition_id: AssetDefinitionId,
+        /// Maximum amount authorized by this spend lease.
+        pub verified_allocation: Quantity,
+        /// Dataspace containing the authoritative source vault.
+        pub source_dataspace_id: DataSpaceId,
+        /// Monotonic source consensus height bound by the proof.
+        pub source_height: u64,
+        /// Source state root committing the vault and budget state.
+        pub source_state_root: iroha_crypto::Hash,
+        /// Consensus height after which the spend lease expires.
+        pub expires_at_height: u64,
+        /// Globally unique proof-bound spend lease identifier.
+        pub lease_id: iroha_crypto::Hash,
         /// Manifest root committed by the balance proof.
         pub manifest_root: [u8; 32],
-        /// FASTPQ/AXT proof blob used to verify the public balance claim.
+        /// FASTPQ/AXT proof blob used to verify the allocation claim.
         pub proof_blob: ProofBlob,
     }
 }
@@ -75,10 +99,10 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Create or replace a sponsor-owned Nexus fee sponsor policy.
-    pub struct UpsertFeeSponsorPolicy {
-        /// Policy to persist.
-        pub policy: FeeSponsorPolicy,
+    /// Create a staged sponsor-owned fee sponsor program.
+    pub struct CreateFeeSponsorProgram {
+        /// Initial fail-closed lifecycle record to persist.
+        pub program: FeeSponsorProgram,
     }
 }
 
@@ -88,10 +112,135 @@ iroha_data_model_derive::model_single! {
     #[derive(Decode, Encode)]
     #[derive(iroha_schema::IntoSchema)]
     #[getset(get = "pub")]
-    /// Remove a sponsor-owned Nexus fee sponsor policy.
-    pub struct RemoveFeeSponsorPolicy {
-        /// Policy identifier to remove.
-        pub id: FeeSponsorPolicyId,
+    /// Stage one immutable fee sponsor program revision.
+    pub struct StageFeeSponsorProgramRevision {
+        /// Immutable revision to validate and stage.
+        pub revision: FeeSponsorProgramRevision,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Schedule a staged sponsor-program revision for activation.
+    pub struct ActivateFeeSponsorProgramRevision {
+        /// Program whose staged revision will become active.
+        pub program_id: FeeSponsorProgramId,
+        /// Exact staged revision number.
+        pub revision: u64,
+        /// Earliest consensus height at which activation may take effect.
+        ///
+        /// The runtime postpones activation until every spend lease from an older revision has
+        /// expired.
+        pub activate_at_height: u64,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Pause an active fee sponsor program.
+    pub struct PauseFeeSponsorProgram {
+        /// Program to pause.
+        pub program_id: FeeSponsorProgramId,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Begin the fail-closed drain phase for a fee sponsor program.
+    pub struct BeginCloseFeeSponsorProgram {
+        /// Program that must stop accepting new sponsorship.
+        pub program_id: FeeSponsorProgramId,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Permanently close a fully drained fee sponsor program.
+    pub struct CloseFeeSponsorProgram {
+        /// Program to convert into a permanent tombstone.
+        pub program_id: FeeSponsorProgramId,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Enroll an exact canonical account in a fee sponsor program.
+    pub struct EnrollFeeSponsorBeneficiary {
+        /// Program granting eligibility.
+        pub program_id: FeeSponsorProgramId,
+        /// Canonical beneficiary account to enroll.
+        pub beneficiary: AccountId,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Remove an exact canonical account from a fee sponsor program.
+    pub struct UnenrollFeeSponsorBeneficiary {
+        /// Program revoking eligibility.
+        pub program_id: FeeSponsorProgramId,
+        /// Canonical beneficiary account to remove.
+        pub beneficiary: AccountId,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Transfer assets into a program-isolated fee vault allocation.
+    pub struct FundFeeSponsorProgram {
+        /// Program receiving the allocation.
+        pub program_id: FeeSponsorProgramId,
+        /// Canonical asset definition to allocate.
+        pub asset_definition_id: AssetDefinitionId,
+        /// Positive amount transferred into protocol custody.
+        pub amount: Quantity,
+    }
+}
+
+iroha_data_model_derive::model_single! {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(getset::Getters)]
+    #[derive(Decode, Encode)]
+    #[derive(iroha_schema::IntoSchema)]
+    #[getset(get = "pub")]
+    /// Withdraw assets from a paused or closing program vault allocation.
+    pub struct WithdrawFeeSponsorProgram {
+        /// Program whose allocation is reduced.
+        pub program_id: FeeSponsorProgramId,
+        /// Canonical asset definition to withdraw.
+        pub asset_definition_id: AssetDefinitionId,
+        /// Positive amount released from protocol custody.
+        pub amount: Quantity,
+        /// Canonical account receiving the withdrawn asset.
+        pub destination: AccountId,
     }
 }
 
@@ -107,47 +256,62 @@ impl Ord for RegisterVerifiedLaneRelay {
     }
 }
 
-impl PartialOrd for RegisterVerifiedNexusFeeBudget {
+impl PartialOrd for RegisterVerifiedFeeSponsorVaultAllocation {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for RegisterVerifiedNexusFeeBudget {
+impl Ord for RegisterVerifiedFeeSponsorVaultAllocation {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.encode().cmp(&other.encode())
     }
 }
 
-impl PartialOrd for UpsertFeeSponsorPolicy {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
+macro_rules! impl_instruction_ord {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl PartialOrd for $ty {
+                fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+                    Some(self.cmp(other))
+                }
+            }
+
+            impl Ord for $ty {
+                fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+                    self.encode().cmp(&other.encode())
+                }
+            }
+        )+
+    };
 }
 
-impl Ord for UpsertFeeSponsorPolicy {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.encode().cmp(&other.encode())
-    }
-}
-
-impl PartialOrd for RemoveFeeSponsorPolicy {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for RemoveFeeSponsorPolicy {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.encode().cmp(&other.encode())
-    }
-}
+impl_instruction_ord!(
+    CreateFeeSponsorProgram,
+    StageFeeSponsorProgramRevision,
+    ActivateFeeSponsorProgramRevision,
+    PauseFeeSponsorProgram,
+    BeginCloseFeeSponsorProgram,
+    CloseFeeSponsorProgram,
+    EnrollFeeSponsorBeneficiary,
+    UnenrollFeeSponsorBeneficiary,
+    FundFeeSponsorProgram,
+    WithdrawFeeSponsorProgram,
+);
 
 impl crate::seal::Instruction for SetLaneRelayEmergencyValidators {}
 impl crate::seal::Instruction for RegisterVerifiedLaneRelay {}
-impl crate::seal::Instruction for RegisterVerifiedNexusFeeBudget {}
-impl crate::seal::Instruction for UpsertFeeSponsorPolicy {}
-impl crate::seal::Instruction for RemoveFeeSponsorPolicy {}
+impl crate::seal::Instruction for RegisterVerifiedFeeSponsorVaultAllocation {}
+impl crate::seal::Instruction for CreateFeeSponsorProgram {}
+impl crate::seal::Instruction for StageFeeSponsorProgramRevision {}
+impl crate::seal::Instruction for ActivateFeeSponsorProgramRevision {}
+impl crate::seal::Instruction for PauseFeeSponsorProgram {}
+impl crate::seal::Instruction for BeginCloseFeeSponsorProgram {}
+impl crate::seal::Instruction for CloseFeeSponsorProgram {}
+impl crate::seal::Instruction for EnrollFeeSponsorBeneficiary {}
+impl crate::seal::Instruction for UnenrollFeeSponsorBeneficiary {}
+impl crate::seal::Instruction for FundFeeSponsorProgram {}
+impl crate::seal::Instruction for WithdrawFeeSponsorProgram {}
 
 fn nexus_decode_flags() -> u8 {
     norito::core::effective_decode_flags().unwrap_or_else(norito::core::default_encode_flags)
@@ -232,90 +396,84 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedLaneRelay {
     }
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for RegisterVerifiedNexusFeeBudget {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
+macro_rules! impl_decode_fields {
+    ($ty:ident { $($field:ident: $field_ty:ty),+ $(,)? }) => {
+        impl<'a> norito::core::DecodeFromSlice<'a> for $ty {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+                let flags = nexus_decode_flags();
+                if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
+                    return super::decode_packed_instruction_payload::<Self>(bytes);
+                }
 
-        let mut offset = 0usize;
-        let sponsor_account_id = super::decode_aos_canonical_field::<AccountId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let fee_asset_id = super::decode_aos_canonical_field::<String>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let verified_balance = super::decode_aos_canonical_field::<Quantity>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let manifest_root = super::decode_aos_canonical_field::<[u8; 32]>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        let proof_blob = super::decode_aos_canonical_field::<ProofBlob>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
+                let mut offset = 0usize;
+                $(
+                    let $field = super::decode_aos_canonical_field::<$field_ty>(
+                        super::read_aos_field(bytes, &mut offset, flags)?,
+                        flags,
+                    )?;
+                )+
+                if offset != bytes.len() {
+                    return Err(norito::core::Error::LengthMismatch);
+                }
+                norito::core::note_payload_access(bytes, offset);
+                Ok((Self { $($field),+ }, offset))
+            }
         }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((
-            Self {
-                sponsor_account_id,
-                fee_asset_id,
-                verified_balance,
-                manifest_root,
-                proof_blob,
-            },
-            offset,
-        ))
-    }
+    };
 }
 
-impl<'a> norito::core::DecodeFromSlice<'a> for UpsertFeeSponsorPolicy {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-
-        let mut offset = 0usize;
-        let policy = super::decode_aos_canonical_field::<FeeSponsorPolicy>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((Self { policy }, offset))
-    }
-}
-
-impl<'a> norito::core::DecodeFromSlice<'a> for RemoveFeeSponsorPolicy {
-    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let flags = nexus_decode_flags();
-        if flags & norito::core::header_flags::PACKED_STRUCT != 0 {
-            return super::decode_packed_instruction_payload::<Self>(bytes);
-        }
-
-        let mut offset = 0usize;
-        let id = super::decode_aos_canonical_field::<FeeSponsorPolicyId>(
-            super::read_aos_field(bytes, &mut offset, flags)?,
-            flags,
-        )?;
-        if offset != bytes.len() {
-            return Err(norito::core::Error::LengthMismatch);
-        }
-        norito::core::note_payload_access(bytes, offset);
-        Ok((Self { id }, offset))
-    }
-}
+impl_decode_fields!(RegisterVerifiedFeeSponsorVaultAllocation {
+    program_id: FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: AssetDefinitionId,
+    verified_allocation: Quantity,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
+    source_state_root: iroha_crypto::Hash,
+    expires_at_height: u64,
+    lease_id: iroha_crypto::Hash,
+    manifest_root: [u8; 32],
+    proof_blob: ProofBlob,
+});
+impl_decode_fields!(CreateFeeSponsorProgram {
+    program: FeeSponsorProgram
+});
+impl_decode_fields!(StageFeeSponsorProgramRevision {
+    revision: FeeSponsorProgramRevision
+});
+impl_decode_fields!(ActivateFeeSponsorProgramRevision {
+    program_id: FeeSponsorProgramId,
+    revision: u64,
+    activate_at_height: u64,
+});
+impl_decode_fields!(PauseFeeSponsorProgram {
+    program_id: FeeSponsorProgramId
+});
+impl_decode_fields!(BeginCloseFeeSponsorProgram {
+    program_id: FeeSponsorProgramId
+});
+impl_decode_fields!(CloseFeeSponsorProgram {
+    program_id: FeeSponsorProgramId
+});
+impl_decode_fields!(EnrollFeeSponsorBeneficiary {
+    program_id: FeeSponsorProgramId,
+    beneficiary: AccountId,
+});
+impl_decode_fields!(UnenrollFeeSponsorBeneficiary {
+    program_id: FeeSponsorProgramId,
+    beneficiary: AccountId,
+});
+impl_decode_fields!(FundFeeSponsorProgram {
+    program_id: FeeSponsorProgramId,
+    asset_definition_id: AssetDefinitionId,
+    amount: Quantity,
+});
+impl_decode_fields!(WithdrawFeeSponsorProgram {
+    program_id: FeeSponsorProgramId,
+    asset_definition_id: AssetDefinitionId,
+    amount: Quantity,
+    destination: AccountId,
+});
 
 #[cfg(test)]
 mod tests {
@@ -330,15 +488,22 @@ mod tests {
     use crate::{
         block::{BlockHeader, consensus::LaneBlockCommitment},
         nexus::{
-            FeeSponsorPolicy, FeeSponsorPolicyId, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
+            FeeSponsorAssetBudget, FeeSponsorEligibility, FeeSponsorProgram, FeeSponsorProgramId,
+            FeeSponsorProgramRevision, FeeSponsorRule, FeeSponsorRuleEffect, LaneId,
         },
     };
 
     #[derive(Encode)]
-    struct ForgedRegisterVerifiedNexusFeeBudget {
-        sponsor_account_id: AccountId,
-        fee_asset_id: String,
-        verified_balance: Numeric,
+    struct ForgedRegisterVerifiedFeeSponsorVaultAllocation {
+        program_id: FeeSponsorProgramId,
+        program_revision: u64,
+        asset_definition_id: AssetDefinitionId,
+        verified_allocation: Numeric,
+        source_dataspace_id: DataSpaceId,
+        source_height: u64,
+        source_state_root: iroha_crypto::Hash,
+        expires_at_height: u64,
+        lease_id: iroha_crypto::Hash,
         manifest_root: [u8; 32],
         proof_blob: ProofBlob,
     }
@@ -350,10 +515,10 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(2),
             tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
+            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: Vec::new(),
             nexus_fee_receipts: Vec::new(),
@@ -425,26 +590,54 @@ mod tests {
         }
     }
 
-    fn sample_fee_budget_instruction() -> RegisterVerifiedNexusFeeBudget {
-        RegisterVerifiedNexusFeeBudget {
-            sponsor_account_id: sponsor_account_id(),
-            fee_asset_id: "xor#universal".to_owned(),
-            verified_balance: Quantity::from(10_u32),
+    fn sample_fee_budget_instruction() -> RegisterVerifiedFeeSponsorVaultAllocation {
+        RegisterVerifiedFeeSponsorVaultAllocation {
+            program_id: sample_fee_sponsor_program().id,
+            program_revision: 1,
+            asset_definition_id: sample_fee_asset_id(),
+            verified_allocation: Quantity::from(10_u32),
+            source_dataspace_id: DataSpaceId::new(2),
+            source_height: 8,
+            source_state_root: iroha_crypto::Hash::new(b"source-state-root"),
+            expires_at_height: 108,
+            lease_id: iroha_crypto::Hash::new(b"spend-lease"),
             manifest_root: [0x11; 32],
             proof_blob: sample_proof_blob(0x02),
         }
     }
 
-    fn sample_fee_sponsor_policy() -> FeeSponsorPolicy {
-        let policy_id = FeeSponsorPolicyId::new(
+    fn sample_fee_asset_id() -> AssetDefinitionId {
+        "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+            .parse()
+            .expect("canonical asset definition id")
+    }
+
+    fn sample_fee_sponsor_program() -> FeeSponsorProgram {
+        let program_id = FeeSponsorProgramId::new(
             sponsor_account_id(),
-            "default".parse().expect("policy name"),
+            "default".parse().expect("program name"),
         );
-        FeeSponsorPolicy {
-            id: policy_id,
-            enabled: true,
-            max_fee: Some(Quantity::from(10_u32)),
-            rules: vec![FeeSponsorRule::new(FeeSponsorRuleEffect::Allow)],
+        FeeSponsorProgram::new(program_id)
+    }
+
+    fn sample_fee_sponsor_revision(program_id: FeeSponsorProgramId) -> FeeSponsorProgramRevision {
+        FeeSponsorProgramRevision {
+            program_id,
+            revision: 1,
+            eligibility: FeeSponsorEligibility::EnrolledOnly,
+            rules: vec![FeeSponsorRule::new(
+                "allow_transfer".parse().expect("rule name"),
+                FeeSponsorRuleEffect::Allow,
+            )],
+            asset_budgets: vec![FeeSponsorAssetBudget {
+                asset_definition_id: sample_fee_asset_id(),
+                per_transaction: Quantity::from(1_u32),
+                per_block: Quantity::from(10_u32),
+                per_program_epoch: Quantity::from(100_u32),
+                per_beneficiary_epoch: Quantity::from(5_u32),
+                reserve_floor: "0.1".parse().expect("reserve floor"),
+                epoch_length_blocks: NonZeroU64::new(100).expect("nonzero epoch"),
+            }],
         }
     }
 
@@ -496,9 +689,9 @@ mod tests {
     }
 
     #[test]
-    fn register_verified_nexus_fee_budget_order_uses_canonical_encoding() {
+    fn register_verified_fee_sponsor_allocation_order_uses_canonical_encoding() {
         let left = sample_fee_budget_instruction();
-        let right = RegisterVerifiedNexusFeeBudget {
+        let right = RegisterVerifiedFeeSponsorVaultAllocation {
             proof_blob: sample_proof_blob(0x03),
             ..left.clone()
         };
@@ -515,27 +708,71 @@ mod tests {
         assert_slice_roundtrip(sample_emergency_validators_instruction());
         assert_slice_roundtrip(sample_lane_relay_instruction());
         assert_slice_roundtrip(sample_fee_budget_instruction());
-        let policy = sample_fee_sponsor_policy();
-        assert_slice_roundtrip(UpsertFeeSponsorPolicy {
-            policy: policy.clone(),
+        let program = sample_fee_sponsor_program();
+        let id = program.id.clone();
+        let beneficiary = sponsor_account_id();
+        assert_slice_roundtrip(CreateFeeSponsorProgram {
+            program: program.clone(),
         });
-        assert_slice_roundtrip(RemoveFeeSponsorPolicy { id: policy.id });
+        assert_slice_roundtrip(StageFeeSponsorProgramRevision {
+            revision: sample_fee_sponsor_revision(id.clone()),
+        });
+        assert_slice_roundtrip(ActivateFeeSponsorProgramRevision {
+            program_id: id.clone(),
+            revision: 1,
+            activate_at_height: 10,
+        });
+        assert_slice_roundtrip(PauseFeeSponsorProgram {
+            program_id: id.clone(),
+        });
+        assert_slice_roundtrip(BeginCloseFeeSponsorProgram {
+            program_id: id.clone(),
+        });
+        assert_slice_roundtrip(CloseFeeSponsorProgram {
+            program_id: id.clone(),
+        });
+        assert_slice_roundtrip(EnrollFeeSponsorBeneficiary {
+            program_id: id.clone(),
+            beneficiary: beneficiary.clone(),
+        });
+        assert_slice_roundtrip(UnenrollFeeSponsorBeneficiary {
+            program_id: id.clone(),
+            beneficiary: beneficiary.clone(),
+        });
+        assert_slice_roundtrip(FundFeeSponsorProgram {
+            program_id: id.clone(),
+            asset_definition_id: sample_fee_asset_id(),
+            amount: Quantity::from(10_u32),
+        });
+        assert_slice_roundtrip(WithdrawFeeSponsorProgram {
+            program_id: id,
+            asset_definition_id: sample_fee_asset_id(),
+            amount: Quantity::from(1_u32),
+            destination: beneficiary,
+        });
     }
 
     #[test]
     fn negative_numeric_payload_cannot_decode_as_verified_nexus_balance() {
-        let forged = ForgedRegisterVerifiedNexusFeeBudget {
-            sponsor_account_id: sponsor_account_id(),
-            fee_asset_id: "xor#universal".to_owned(),
-            verified_balance: Numeric::new(-1_i32, 0),
+        let valid = sample_fee_budget_instruction();
+        let forged = ForgedRegisterVerifiedFeeSponsorVaultAllocation {
+            program_id: valid.program_id,
+            program_revision: valid.program_revision,
+            asset_definition_id: valid.asset_definition_id,
+            verified_allocation: Numeric::new(-1_i32, 0),
+            source_dataspace_id: valid.source_dataspace_id,
+            source_height: valid.source_height,
+            source_state_root: valid.source_state_root,
+            expires_at_height: valid.expires_at_height,
+            lease_id: valid.lease_id,
             manifest_root: [0x11; 32],
             proof_blob: sample_proof_blob(0x02),
         };
         let encoded = forged.encode();
 
         assert!(
-            RegisterVerifiedNexusFeeBudget::decode(&mut encoded.as_slice()).is_err(),
-            "a signed negative payload must not cross the verified-balance boundary"
+            RegisterVerifiedFeeSponsorVaultAllocation::decode(&mut encoded.as_slice()).is_err(),
+            "a signed negative payload must not cross the verified-allocation boundary"
         );
     }
 
@@ -546,11 +783,31 @@ mod tests {
                 "nexus::SetLaneRelayEmergencyValidators",
             )
             .register_with_id_slice::<RegisterVerifiedLaneRelay>("nexus::RegisterVerifiedLaneRelay")
-            .register_with_id_slice::<RegisterVerifiedNexusFeeBudget>(
-                "nexus::RegisterVerifiedNexusFeeBudget",
+            .register_with_id_slice::<RegisterVerifiedFeeSponsorVaultAllocation>(
+                "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
             )
-            .register_with_id_slice::<UpsertFeeSponsorPolicy>("nexus::UpsertFeeSponsorPolicy")
-            .register_with_id_slice::<RemoveFeeSponsorPolicy>("nexus::RemoveFeeSponsorPolicy");
+            .register_with_id_slice::<CreateFeeSponsorProgram>("nexus::CreateFeeSponsorProgram")
+            .register_with_id_slice::<StageFeeSponsorProgramRevision>(
+                "nexus::StageFeeSponsorProgramRevision",
+            )
+            .register_with_id_slice::<ActivateFeeSponsorProgramRevision>(
+                "nexus::ActivateFeeSponsorProgramRevision",
+            )
+            .register_with_id_slice::<PauseFeeSponsorProgram>("nexus::PauseFeeSponsorProgram")
+            .register_with_id_slice::<BeginCloseFeeSponsorProgram>(
+                "nexus::BeginCloseFeeSponsorProgram",
+            )
+            .register_with_id_slice::<CloseFeeSponsorProgram>("nexus::CloseFeeSponsorProgram")
+            .register_with_id_slice::<EnrollFeeSponsorBeneficiary>(
+                "nexus::EnrollFeeSponsorBeneficiary",
+            )
+            .register_with_id_slice::<UnenrollFeeSponsorBeneficiary>(
+                "nexus::UnenrollFeeSponsorBeneficiary",
+            )
+            .register_with_id_slice::<FundFeeSponsorProgram>("nexus::FundFeeSponsorProgram")
+            .register_with_id_slice::<WithdrawFeeSponsorProgram>(
+                "nexus::WithdrawFeeSponsorProgram",
+            );
 
         assert_registry_decodes(
             &registry,
@@ -564,21 +821,88 @@ mod tests {
         );
         assert_registry_decodes(
             &registry,
-            "nexus::RegisterVerifiedNexusFeeBudget",
+            "nexus::RegisterVerifiedFeeSponsorVaultAllocation",
             sample_fee_budget_instruction(),
         );
-        let policy = sample_fee_sponsor_policy();
+        let program = sample_fee_sponsor_program();
+        let id = program.id.clone();
+        let beneficiary = sponsor_account_id();
         assert_registry_decodes(
             &registry,
-            "nexus::UpsertFeeSponsorPolicy",
-            UpsertFeeSponsorPolicy {
-                policy: policy.clone(),
+            "nexus::CreateFeeSponsorProgram",
+            CreateFeeSponsorProgram { program },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::StageFeeSponsorProgramRevision",
+            StageFeeSponsorProgramRevision {
+                revision: sample_fee_sponsor_revision(id.clone()),
             },
         );
         assert_registry_decodes(
             &registry,
-            "nexus::RemoveFeeSponsorPolicy",
-            RemoveFeeSponsorPolicy { id: policy.id },
+            "nexus::ActivateFeeSponsorProgramRevision",
+            ActivateFeeSponsorProgramRevision {
+                program_id: id.clone(),
+                revision: 1,
+                activate_at_height: 10,
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::PauseFeeSponsorProgram",
+            PauseFeeSponsorProgram {
+                program_id: id.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::BeginCloseFeeSponsorProgram",
+            BeginCloseFeeSponsorProgram {
+                program_id: id.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::CloseFeeSponsorProgram",
+            CloseFeeSponsorProgram {
+                program_id: id.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::EnrollFeeSponsorBeneficiary",
+            EnrollFeeSponsorBeneficiary {
+                program_id: id.clone(),
+                beneficiary: beneficiary.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::UnenrollFeeSponsorBeneficiary",
+            UnenrollFeeSponsorBeneficiary {
+                program_id: id.clone(),
+                beneficiary: beneficiary.clone(),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::FundFeeSponsorProgram",
+            FundFeeSponsorProgram {
+                program_id: id.clone(),
+                asset_definition_id: sample_fee_asset_id(),
+                amount: Quantity::from(10_u32),
+            },
+        );
+        assert_registry_decodes(
+            &registry,
+            "nexus::WithdrawFeeSponsorProgram",
+            WithdrawFeeSponsorProgram {
+                program_id: id,
+                asset_definition_id: sample_fee_asset_id(),
+                amount: Quantity::from(1_u32),
+                destination: beneficiary,
+            },
         );
     }
 }

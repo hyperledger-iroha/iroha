@@ -27,8 +27,10 @@ import {
 import {
   buildMultisigContractCallProposeRequest,
   buildMultisigProposeRequest,
+  canonicalRequestSignatureMessage,
   noritoEncodeMultisigContractCallProposeRequest,
   normalizeAccountId,
+  signEd25519,
   ValidationError,
   ValidationErrorCode,
 } from "../src/index.js";
@@ -82,6 +84,25 @@ function cloneFixture(value) {
 
 function canonicalSignatureBase64Fixture() {
   return Buffer.alloc(64, 0x01).toString("base64");
+}
+
+function authorityFeePayment(gasLimit = null) {
+  return {
+    payer: "authority",
+    value: { charge_limits: [], gas_limit: gasLimit },
+  };
+}
+
+function sponsorFeePayment(sponsor, gasLimit, programRevision = 1) {
+  return {
+    payer: "sponsor",
+    value: {
+      program_id: { sponsor, name: "contracts" },
+      program_revision: programRevision,
+      charge_limits: [],
+      gas_limit: gasLimit,
+    },
+  };
 }
 
 function noncanonicalStandardBase64PadBitAlias(encoded) {
@@ -237,7 +258,7 @@ function assertMultisigProposeInstructionWireId(body, expectedWireId, label) {
     "public_key_hex",
     "signature_b64",
     "creation_time_ms",
-    "fee_sponsor",
+    "fee_payment",
     "memo",
     "validation_fee_policy_version",
     "validation_fee_policy_hash",
@@ -308,7 +329,164 @@ function sampleAccountForms() {
 
 const SAMPLE_ACCOUNT_FORMS = sampleAccountForms();
 const SAMPLE_ACCOUNT_ID = SAMPLE_ACCOUNT_FORMS.canonical;
-const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(248)}`;
+const CANONICAL_AUTH_ALIAS = "alice-1@wonderland";
+const SAMPLE_VPN_HELPER_TICKET_HEX = `5356504e48543100${"00".repeat(656)}`;
+
+function sampleVpnProfilePayload() {
+  return {
+    available: true,
+    relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+    supported_exit_classes: ["standard", "low-latency", "high-security"],
+    default_exit_class: "standard",
+    lease_secs: 600,
+    dns_push_interval_secs: 90,
+    meter_family: "soranet.vpn.standard",
+    route_pushes: [],
+    excluded_routes: [],
+    dns_servers: ["1.1.1.1"],
+    tunnel_addresses: ["10.208.0.2/32"],
+    mtu_bytes: 1280,
+    display_billing_label: "standard",
+    fee_asset_id: "xor#universal.universal",
+    escrow_account_id: SAMPLE_ACCOUNT_ID,
+    operator_account_id: SAMPLE_ACCOUNT_ID,
+    lease_fee: "1000000.25",
+    settlement_grace_secs: 120,
+    flow_label_bits: 24,
+    padding_budget_ms: 80,
+    relay_tls_spki_sha256_hex: "ac".repeat(32),
+  };
+}
+
+function sampleVpnSessionPayload(helperTicketHex = SAMPLE_VPN_HELPER_TICKET_HEX) {
+  const sessionId = "ab".repeat(32);
+  const quoteId = "cd".repeat(32);
+  return {
+    session_id: sessionId,
+    account_id: SAMPLE_ACCOUNT_ID,
+    exit_class: "standard",
+    relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+    lease_secs: 600,
+    expires_at_ms: 1_700_000_000_000,
+    connected_at_ms: 1_699_999_400_000,
+    meter_family: "soranet.vpn.standard",
+    quote_id: quoteId,
+    payment_reference: quoteId,
+    payment_tx_hash: "ef".repeat(32),
+    fee_asset_id: "xor#universal.universal",
+    escrow_account_id: SAMPLE_ACCOUNT_ID,
+    operator_account_id: SAMPLE_ACCOUNT_ID,
+    lease_fee: "1000000.25",
+    flow_label_bits: 24,
+    padding_budget_ms: 80,
+    relay_tls_spki_sha256_hex: "ac".repeat(32),
+    route_pushes: [],
+    excluded_routes: [],
+    dns_servers: ["1.1.1.1"],
+    tunnel_addresses: ["10.208.0.2/32"],
+    mtu_bytes: 1280,
+    helper_ticket_hex: helperTicketHex,
+    bytes_in: 0,
+    bytes_out: 0,
+    status: "active",
+  };
+}
+
+function sampleVpnQuotePayload() {
+  const profile = sampleVpnProfilePayload();
+  const instruction = {
+    wire_id: "OpenVpnLeaseEscrow",
+    payload_hex: "abcd",
+  };
+  return {
+    quote_id: "cd".repeat(32),
+    lease_id_hex: "ab".repeat(32),
+    session_id_hex: "ef".repeat(16),
+    payment_reference: "vpn-payment-reference",
+    account_id: SAMPLE_ACCOUNT_ID,
+    exit_class: "standard",
+    relay_endpoint: profile.relay_endpoint,
+    lease_secs: profile.lease_secs,
+    quote_expires_at_ms: 1_700_000_000_000,
+    fee_asset_id: profile.fee_asset_id,
+    escrow_account_id: profile.escrow_account_id,
+    operator_account_id: profile.operator_account_id,
+    lease_fee: profile.lease_fee,
+    route_pushes: profile.route_pushes,
+    excluded_routes: profile.excluded_routes,
+    dns_servers: profile.dns_servers,
+    tunnel_addresses: profile.tunnel_addresses,
+    mtu_bytes: profile.mtu_bytes,
+    meter_family: profile.meter_family,
+    flow_label_bits: profile.flow_label_bits,
+    padding_budget_ms: profile.padding_budget_ms,
+    relay_tls_spki_sha256_hex: profile.relay_tls_spki_sha256_hex,
+    metering_public_key_hex: "12".repeat(32),
+    open_lease_instruction: instruction,
+    tx_instructions: [instruction],
+  };
+}
+
+function sampleVpnReceiptPayload() {
+  const session = sampleVpnSessionPayload();
+  return {
+    session_id: session.session_id,
+    account_id: session.account_id,
+    exit_class: session.exit_class,
+    relay_endpoint: session.relay_endpoint,
+    meter_family: session.meter_family,
+    connected_at_ms: session.connected_at_ms,
+    disconnected_at_ms: session.connected_at_ms + 60_000,
+    duration_ms: 60_000,
+    bytes_in: 1024,
+    bytes_out: 2048,
+    status: "disconnected",
+    receipt_source: "torii",
+    quote_id: session.quote_id,
+    payment_tx_hash: session.payment_tx_hash,
+    fee_asset_id: session.fee_asset_id,
+    escrow_account_id: session.escrow_account_id,
+    operator_account_id: session.operator_account_id,
+    lease_fee: session.lease_fee,
+    earned_fee: "0",
+    refunded_fee: session.lease_fee,
+    lease_id_hex: session.quote_id,
+    settle_lease_instruction: null,
+    tx_instructions: [],
+  };
+}
+
+async function parseVpnTestResponse(kind, payload) {
+  const status = kind === "quote" || kind === "session-create" ? 201 : 200;
+  const fetchImpl = async () =>
+    createResponse({
+      status,
+      jsonData: payload,
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const canonicalAuth = {
+    accountId: CANONICAL_AUTH_ALIAS,
+    privateKey: Buffer.alloc(32, 12),
+  };
+  switch (kind) {
+    case "profile":
+      return client.getVpnProfile();
+    case "quote":
+      return client.createVpnQuote(
+        { meteringPublicKeyHex: "12".repeat(32) },
+        { canonicalAuth },
+      );
+    case "session":
+      return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+    case "receipt":
+      return client.deleteVpnSession("ab".repeat(32), { canonicalAuth });
+    case "list":
+      return client.listVpnReceipts({ canonicalAuth });
+    default:
+      throw new Error(`unsupported VPN test response kind: ${kind}`);
+  }
+}
 const SAMPLE_RWA_ID =
   "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities";
 const SAMPLE_RWA_ID_UPPER =
@@ -597,6 +775,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     node_fingerprint: fakeSumeragiHash(0x11),
     build_fingerprint: fakeSumeragiHash(0x12),
     config_fingerprint: fakeSumeragiHash(0x13),
+    restart_required: false,
     height_context_id: [fakeSumeragiHash(0x14)],
     height: 10,
     view: 2,
@@ -622,6 +801,7 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     last_commit_qc: {
       certificate: {
         round: { context_id: commitContextId, height: 9, view: 1 },
+        proposal_round: { context_id: commitContextId, height: 9, view: 1 },
         phase: { phase: "commit", details: null },
         subject: { ...subject },
         execution_commitment: executionCommitment,
@@ -631,6 +811,72 @@ function createSumeragiV2StatusPayload(overrides = {}) {
       min_signers: 3,
       signed_power: 3,
       total_power: 4,
+    },
+    liveness: {
+      generation: 2,
+      prepare_quorums: [
+        {
+          round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          proposal_round: {
+            context_id: [fakeSumeragiHash(0x14)],
+            height: 10,
+            view: 1,
+          },
+          subject: { ...subject },
+          execution_commitment: { ...executionCommitment },
+          signer_count: 2,
+          signed_power: 2,
+          min_signers: 3,
+          total_power: 4,
+        },
+      ],
+      commit_quorums: [],
+      timeout_quorums: [],
+      outbound_intents: [
+        {
+          kind: { kind: "proposal", details: null },
+          round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+          proposal_round: {
+            context_id: [fakeSumeragiHash(0x14)],
+            height: 10,
+            view: 1,
+          },
+          subject: { ...subject },
+          execution_commitment: null,
+          stage: { stage: "sent", details: null },
+        },
+      ],
+      work: {
+        candidate: { stage: "idle", details: null },
+        body_recovery: { stage: "idle", details: null },
+        body_store: { stage: "idle", details: null },
+        validation: { stage: "complete", details: null },
+        application: { stage: "idle", details: null },
+        successor_height: { stage: "idle", details: null },
+      },
+      queues: [
+        {
+          queue: { queue: "network_ingress", details: null },
+          depth: 1,
+          capacity: 4,
+          oldest_age_ms: 17,
+          service_debt: 2,
+        },
+      ],
+      last_progress: {
+        generation: 2,
+        round: { context_id: [fakeSumeragiHash(0x14)], height: 10, view: 1 },
+        transition: { transition: "prepare_vote_admitted", details: null },
+        age_ms: 19,
+      },
+      no_progress_age_ms: 19,
+      blocker: { blocker: "prepare_quorum_missing", details: null },
+      ignore_counts: [
+        {
+          reason: { reason: "duplicate", details: null },
+          count: 2,
+        },
+      ],
     },
     safety_halt: {
       active: false,
@@ -685,10 +931,10 @@ function createLaneSettlementCommitment(overrides = {}) {
     lane_incarnation: fakeSumeragiHash(0x51),
     dataspace_id: 7,
     tx_count: 1,
-    total_local_micro: "10",
-    total_xor_due_micro: "5",
-    total_xor_after_haircut_micro: "4",
-    total_xor_variance_micro: "1",
+    total_local_amount: "10.25",
+    total_xor_due: "5.5",
+    total_xor_after_haircut: "4.25",
+    total_xor_variance: "1.25",
     swap_metadata: {
       epsilon_bps: 5,
       twap_window_seconds: 60,
@@ -699,10 +945,10 @@ function createLaneSettlementCommitment(overrides = {}) {
     receipts: [
       {
         source_id: fakeHashHex(0x52).toUpperCase(),
-        local_amount_micro: "10",
-        xor_due_micro: "5",
-        xor_after_haircut_micro: "4",
-        xor_variance_micro: "1",
+        local_amount: "10.25",
+        xor_due: "5.5",
+        xor_after_haircut: "4.25",
+        xor_variance: "1.25",
         timestamp_ms: 1700,
       },
     ],
@@ -833,26 +1079,26 @@ function createNativeAmxReceipt(overrides = {}) {
           lane_incarnation: fakeSumeragiHash(0x65),
           dataspace_id: 8,
           tx_count: 2,
-          total_local_micro: "0",
-          total_xor_due_micro: "0",
-          total_xor_after_haircut_micro: "0",
-          total_xor_variance_micro: "0",
+          total_local_amount: "0",
+          total_xor_due: "0",
+          total_xor_after_haircut: "0",
+          total_xor_variance: "0",
           swap_metadata: null,
           receipts: [
             {
               source_id: sourceId,
-              local_amount_micro: "0",
-              xor_due_micro: "0",
-              xor_after_haircut_micro: "0",
-              xor_variance_micro: "0",
+              local_amount: "0",
+              xor_due: "0",
+              xor_after_haircut: "0",
+              xor_variance: "0",
               timestamp_ms: 10,
             },
             {
               source_id: "CD".repeat(32),
-              local_amount_micro: "0",
-              xor_due_micro: "0",
-              xor_after_haircut_micro: "0",
-              xor_variance_micro: "0",
+              local_amount: "0",
+              xor_due: "0",
+              xor_after_haircut: "0",
+              xor_variance: "0",
               timestamp_ms: 10,
             },
           ],
@@ -3103,7 +3349,6 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     private_key: "ed25519:deadbeef",
     manifest_payload: manifestPayload,
     submitted_epoch: 42,
-    gas_asset_id: "xor#universal",
     alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
     successor_of_hex: successorHex.toUpperCase(),
   });
@@ -3115,7 +3360,6 @@ test("registerSorafsPinManifest posts payload and returns JSON", async () => {
     private_key: "ed25519:deadbeef",
     manifest_payload: manifestPayload,
     submitted_epoch: 42,
-    gas_asset_id: "xor#universal",
     alias: { namespace: "docs", name: "main", proof_base64: aliasProof },
     successor_of_hex: successorHex,
   });
@@ -3146,7 +3390,6 @@ test("registerSorafsPinManifest omits null optionals and keeps signal out of JSO
     },
   });
   const input = sorafsPinRegisterInput({
-    gas_asset_id: null,
     alias: null,
     successor_of_hex: null,
     signal: controller.signal,
@@ -3193,6 +3436,7 @@ test("registerSorafsPinManifest rejects all unknown and retired fields before fe
     ["content_length", 1],
     ["submittedEpoch", 42],
     ["gasAssetId", "xor#universal"],
+    ["gas_asset_id", "xor#universal"],
     ["aliasNamespace", "docs"],
     ["alias_namespace", "docs"],
     ["aliasName", "main"],
@@ -3309,15 +3553,6 @@ test("registerSorafsPinManifest rejects invalid scalar fields before fetch", asy
           sorafsPinRegisterInput({ private_key: privateKey }),
         ),
       /private_key/i,
-    );
-  }
-  for (const gasAssetId of ["", "   ", " xor#universal", 42, {}, []]) {
-    await assert.rejects(
-      () =>
-        client.registerSorafsPinManifest(
-          sorafsPinRegisterInput({ gas_asset_id: gasAssetId }),
-        ),
-      /gas_asset_id/i,
     );
   }
   assert.equal(fetchCalls, 0);
@@ -4075,7 +4310,6 @@ test("SoraFS reputation helpers fetch REST and SSE endpoints", async () => {
     }
     throw new Error(`unexpected URL: ${url}`);
   };
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const latest = await client.getSorafsReputationLatest({ ifNoneMatch: '"old"' });
@@ -4176,6 +4410,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   const receiptIdHex = "44".repeat(32);
   const providerIdHex = "55".repeat(32);
   const chunkHashHex = "66".repeat(32);
+  const wideXor =
+    "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824.503042047";
+  assert.equal(wideXor.length, 155);
   const signature = {
     algorithm: "Ed25519",
     public_key_hex: "AA".repeat(32),
@@ -4186,7 +4423,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     order_id_hex: `0x${orderIdHex.toUpperCase()}`,
     side: "bid",
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     quantity_gib: 4,
     remaining_gib: 2,
     owner_account_hex: "CAFE",
@@ -4202,10 +4439,10 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     maker_order_id_hex: orderIdHex,
     taker_order_id_hex: "77".repeat(32),
     tier: "hot",
-    price_per_gib_micro_xor: "1500000",
+    price_per_gib: wideXor,
     filled_gib: 2,
-    maker_fee_micro_xor: "75000",
-    taker_fee_micro_xor: "105000",
+    maker_fee: "0.000000001",
+    taker_fee: "1.000000001",
     timestamp_unix: 1_700_000_100,
   };
   const channel = {
@@ -4216,7 +4453,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     provider_id_hex: providerIdHex,
     total_bytes: 2147483648,
     remaining_bytes: 1073741824,
-    xor_locked_micro: "3000000",
+    xor_locked: wideXor,
     status: "open",
     opened_at_unix: 1_700_000_101,
     updated_at_unix: 1_700_000_102,
@@ -4229,9 +4466,9 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     range: { start: 0, end: 1024 },
     chunk_hash_hex: chunkHashHex,
     bytes_delivered: 1024,
-    xor_debited_micro: "1500",
-    provider_credit_micro: "1400",
-    fee_amount_micro: "100",
+    xor_debited: wideXor,
+    provider_credit: "1.000000001",
+    fee_amount: "0.000000001",
     issued_at_unix: 1_700_000_103,
     settlement_signature: signature,
   };
@@ -4264,7 +4501,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
               trade,
               maker_remaining_gib: 0,
               taker_remaining_gib: 2,
-              gross_value_micro_xor: "3000000",
+              gross_value: wideXor,
             },
           ],
           settlement_channels_opened: [channel],
@@ -4365,7 +4602,6 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
     }
     throw new Error(`unexpected URL: ${url}`);
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const book = await client.getSorafsOrderbook({ headers: { "X-Trace": "book" } });
@@ -4373,12 +4609,14 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(book.open_orders[0]?.order.order_id_hex, orderIdHex);
   assert.equal(book.open_orders[0]?.order.owner_account_hex, "cafe");
   assert.equal(book.open_orders[0]?.order.signature.public_key_hex, "aa".repeat(32));
+  assert.equal(book.open_orders[0]?.order.price_per_gib, wideXor);
   assert.equal(calls[0]?.url, `${BASE_URL}/v1/sorafs/orderbook/book`);
   assert.equal(calls[0]?.init?.headers?.["X-Trace"], "book");
 
   const trades = await client.listSorafsOrderbookTrades();
   assert.equal(trades.count, 1);
   assert.equal(trades.trades[0]?.trade_id_hex, tradeIdHex);
+  assert.equal(trades.trades[0]?.maker_fee, "0.000000001");
 
   const channels = await client.listSorafsOrderbookChannels();
   assert.equal(channels.channels[0]?.provider_id_hex, providerIdHex);
@@ -4386,6 +4624,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
 
   const receipts = await client.listSorafsOrderbookReceipts();
   assert.equal(receipts.receipts[0]?.range.end, 1024);
+  assert.equal(receipts.receipts[0]?.xor_debited, wideXor);
   assert.equal(receipts.receipts[0]?.settlement_signature.signature_hex, "bb".repeat(64));
 
   const events = await client.listSorafsOrderbookEvents({
@@ -4417,7 +4656,7 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   assert.equal(calls[5]?.init?.headers?.["Last-Event-ID"], "8");
 
   const canonicalAuth = {
-    accountId: FIXTURE_ALICE_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 1),
   };
   const orderPayload = Uint8Array.from([1, 2, 3]);
@@ -4427,14 +4666,14 @@ test("SoraFS orderbook read helpers fetch local mirror endpoints", async () => {
   });
   assert.equal(orderSubmit.status, "accepted");
   assert.equal(orderSubmit.sequence, 12);
-  assert.equal(orderSubmit.fills[0]?.gross_value_micro_xor, "3000000");
+  assert.equal(orderSubmit.fills[0]?.gross_value, wideXor);
   assert.equal(orderSubmit.settlement_channels_opened[0]?.channel_id_hex, channelIdHex);
   const orderCall = calls[6];
   assert.equal(orderCall?.url, `${BASE_URL}/v1/sorafs/orderbook/orders`);
   assert.deepEqual(Array.from(Buffer.from(orderCall?.init?.body)), [1, 2, 3]);
   assert.equal(orderCall?.init?.headers?.["Content-Type"], "application/octet-stream");
   assert.equal(orderCall?.init?.headers?.["X-Trace"], "order-submit");
-  assert.equal(orderCall?.init?.headers?.["X-Iroha-Account"], FIXTURE_ALICE_ID);
+  assert.equal(orderCall?.init?.headers?.["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
   assert.ok(orderCall?.init?.headers?.["X-Iroha-Signature"]);
 
   const cancelSubmit = await client.submitSorafsOrderbookCancel([4, 5], {
@@ -4501,7 +4740,7 @@ test("SoraFS orderbook read helpers validate options and cache validators", asyn
   await assert.rejects(
     () =>
       client.submitSorafsOrderbookReceipt(Buffer.alloc(0), {
-        canonicalAuth: { accountId: FIXTURE_ALICE_ID, privateKey: Buffer.alloc(32, 1) },
+        canonicalAuth: { accountId: CANONICAL_AUTH_ALIAS, privateKey: Buffer.alloc(32, 1) },
       }),
     /submitSorafsOrderbookReceipt\.payload must not be empty/,
   );
@@ -8039,7 +8278,7 @@ test("submitTransaction posts norito payload and decodes receipt response", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8103,7 +8342,7 @@ test("submitTransactionBatch posts a Norito transaction payload vector", async (
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8192,7 +8431,7 @@ test("submitTransactionBatch uses native framed Norito batch encoder when availa
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8310,7 +8549,7 @@ test("submitTransactionBatch rejects native batch encoder failures without posti
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8360,7 +8599,7 @@ test("submitTransactionBatch rejects malformed accepted-count admission headers"
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8501,7 +8740,7 @@ test("submitTransaction deframes NRT0 payloads before posting versioned pipeline
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8549,7 +8788,7 @@ test("submitTransaction retries transient failures via pipeline profile", async 
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8600,7 +8839,7 @@ test("submitTransaction retries broken pipe failures via pipeline profile", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8651,7 +8890,7 @@ test("submitTransaction retries broken pipe failures without an explicit error c
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8712,7 +8951,7 @@ test("submitTransaction rejects unavailable pipeline submit", async () => {
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8770,7 +9009,7 @@ test("submitTransaction wraps native Norito transaction payload for pipeline sub
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8852,7 +9091,7 @@ test("submitTransaction unwraps native NRT0 Norito frames before pipeline submit
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8912,7 +9151,7 @@ test("submitTransaction preserves native versioned transaction payload", async (
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -8969,7 +9208,7 @@ test("submitTransaction falls back when native transaction encoder rejects opaqu
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9027,7 +9266,7 @@ test("submitTransaction does not fall back to removed public submit route", asyn
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -9851,13 +10090,7 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
       per_byte_fee: "0",
       per_instruction_fee: "0",
       per_gas_unit_fee: "0",
-      sponsorship_enabled: false,
-      sponsor_max_fee: "0",
-      sponsor_verified_balance_safety_floor: "0",
-      canonical_sponsor_account_id: null,
-      fee_receipts_activation_height: 7,
-      external_settlement_enabled: false,
-      burn_from_unix_timestamp_ms: 0,
+      sponsor_vault_custody_account_id: "vault@system",
       settlement_mode: "direct",
       successful_claim_fee_exempt_authorities: ["authority@system"],
     },
@@ -9888,6 +10121,7 @@ test("getPipelinePreflight fetches diagnostics and classifies queue stalls", asy
   assert.equal(result.pipeline.signature_batch_max_ed25519, 64);
   assert.equal(result.queue.queued, 1);
   assert.equal(result.fees.base_fee, "0");
+  assert.equal(result.fees.sponsor_vault_custody_account_id, "vault@system");
   assert.deepEqual(result.fees.successful_claim_fee_exempt_authorities, ["authority@system"]);
   assert.equal(result.isStatusStalled(status), true);
 });
@@ -10678,16 +10912,35 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
   assert.equal(status.protocol_version, 3);
+  assert.equal(status.restart_required, false);
   assert.equal(status.height, 10);
   assert.equal(status.height_context.mode.mode, "permissioned");
   assert.equal(status.height_context.quorum.min_signers, 3);
   assert.equal(status.last_commit_qc.certificate.round.height, 9);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
   assert.equal(
     status.last_commit_qc.certificate.execution_commitment.executed_block_wire_hash,
     fakeSumeragiHash(0x37),
   );
   assert.equal(status.last_commit_qc.signed_power, 3);
-  assert.equal(status.lane_settlement_commitments[0].total_local_micro, "10");
+  assert.equal(status.liveness.generation, 2);
+  assert.equal(status.liveness.prepare_quorums[0].signer_count, 2);
+  assert.deepEqual(
+    status.liveness.prepare_quorums[0].proposal_round,
+    status.liveness.prepare_quorums[0].round,
+  );
+  assert.deepEqual(
+    status.liveness.outbound_intents[0].proposal_round,
+    status.liveness.outbound_intents[0].round,
+  );
+  assert.equal(status.liveness.queues[0].queue.queue, "network_ingress");
+  assert.equal(status.liveness.queues[0].service_debt, 2);
+  assert.equal(
+    status.liveness.last_progress.transition.transition,
+    "prepare_vote_admitted",
+  );
+  assert.equal(status.liveness.blocker.blocker, "prepare_quorum_missing");
+  assert.equal(status.lane_settlement_commitments[0].total_local_amount, "10.25");
   assert.equal(
     status.lane_settlement_commitments[0].swap_metadata.liquidity_profile.profile,
     "Tier1",
@@ -10703,6 +10956,209 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal("lane_commitments" in status, false);
 });
 
+test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  const commitQuorum = structuredClone(payload.liveness.prepare_quorums[0]);
+  commitQuorum.round.view = 2;
+  commitQuorum.proposal_round.view = 1;
+  payload.liveness.commit_quorums = [commitQuorum];
+
+  const commitIntent = structuredClone(payload.liveness.outbound_intents[0]);
+  commitIntent.kind.kind = "commit_vote";
+  commitIntent.round.view = 2;
+  commitIntent.proposal_round.view = 1;
+  commitIntent.execution_commitment = structuredClone(
+    commitQuorum.execution_commitment,
+  );
+  payload.liveness.outbound_intents = [commitIntent];
+  payload.last_commit_qc.certificate.round.view = 2;
+  payload.last_commit_qc.certificate.proposal_round.view = 1;
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.commit_quorums[0].round.view, 2);
+  assert.equal(status.liveness.commit_quorums[0].proposal_round.view, 1);
+  assert.equal(status.liveness.outbound_intents[0].round.view, 2);
+  assert.equal(status.liveness.outbound_intents[0].proposal_round.view, 1);
+  assert.equal(status.last_commit_qc.certificate.proposal_round.view, 1);
+
+  const laterCommitPayload = createSumeragiV2StatusPayload();
+  const laterCommitIntent = laterCommitPayload.liveness.outbound_intents[0];
+  laterCommitIntent.kind.kind = "commit_qc";
+  laterCommitIntent.round.view = 3;
+  laterCommitIntent.execution_commitment = structuredClone(
+    laterCommitPayload.last_commit_qc.certificate.execution_commitment,
+  );
+  const laterCommitStatus = await sumeragiClientForPayload(laterCommitPayload)
+    .getSumeragiStatusTyped();
+  assert.equal(laterCommitStatus.liveness.outbound_intents[0].round.view, 3);
+  assert.equal(
+    laterCommitStatus.liveness.outbound_intents[0].proposal_round.view,
+    1,
+  );
+
+  const timeoutPayload = createSumeragiV2StatusPayload();
+  const timeoutIntent = timeoutPayload.liveness.outbound_intents[0];
+  timeoutIntent.kind.kind = "timeout_certificate";
+  delete timeoutIntent.proposal_round;
+  delete timeoutIntent.subject;
+  const timeoutStatus = await sumeragiClientForPayload(timeoutPayload)
+    .getSumeragiStatusTyped();
+  assert.equal(timeoutStatus.liveness.outbound_intents[0].proposal_round, null);
+});
+
+test("getSumeragiStatusTyped enforces vote-quorum proposal geometry", async () => {
+  const missingOrigin = createSumeragiV2StatusPayload();
+  delete missingOrigin.liveness.prepare_quorums[0].proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingOrigin).getSumeragiStatusTyped(),
+    /proposal_round/,
+  );
+
+  const prepareReproposal = createSumeragiV2StatusPayload();
+  prepareReproposal.liveness.prepare_quorums[0].proposal_round.view = 0;
+  await assert.rejects(
+    () => sumeragiClientForPayload(prepareReproposal).getSumeragiStatusTyped(),
+    /proposal_round must equal round/,
+  );
+
+  const futureCommitOrigin = createSumeragiV2StatusPayload();
+  const commitQuorum = structuredClone(
+    futureCommitOrigin.liveness.prepare_quorums[0],
+  );
+  commitQuorum.proposal_round.view = 2;
+  futureCommitOrigin.liveness.commit_quorums = [commitQuorum];
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
+  );
+
+  const foreignOrigin = createSumeragiV2StatusPayload();
+  foreignOrigin.liveness.prepare_quorums[0].proposal_round.context_id = [
+    fakeSumeragiHash(0x55),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignOrigin).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
+
+  const wrongHeight = createSumeragiV2StatusPayload();
+  wrongHeight.liveness.prepare_quorums[0].proposal_round.height = 9;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
+});
+
+test("getSumeragiStatusTyped enforces outbound-intent proposal geometry", async () => {
+  const missingOrigin = createSumeragiV2StatusPayload();
+  delete missingOrigin.liveness.outbound_intents[0].proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingOrigin).getSumeragiStatusTyped(),
+    /inconsistent proposal_round/,
+  );
+
+  const timeoutWithOrigin = createSumeragiV2StatusPayload();
+  timeoutWithOrigin.liveness.outbound_intents[0].kind.kind = "timeout_vote";
+  timeoutWithOrigin.liveness.outbound_intents[0].subject = null;
+  await assert.rejects(
+    () => sumeragiClientForPayload(timeoutWithOrigin).getSumeragiStatusTyped(),
+    /inconsistent proposal_round/,
+  );
+
+  const prepareReproposal = createSumeragiV2StatusPayload();
+  const prepareIntent = prepareReproposal.liveness.outbound_intents[0];
+  prepareIntent.kind.kind = "prepare_vote";
+  prepareIntent.execution_commitment = structuredClone(
+    prepareReproposal.last_commit_qc.certificate.execution_commitment,
+  );
+  prepareIntent.round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(prepareReproposal).getSumeragiStatusTyped(),
+    /proposal_round must equal round/,
+  );
+
+  const futureCommitOrigin = createSumeragiV2StatusPayload();
+  const commitIntent = futureCommitOrigin.liveness.outbound_intents[0];
+  commitIntent.kind.kind = "commit_vote";
+  commitIntent.execution_commitment = structuredClone(
+    futureCommitOrigin.last_commit_qc.certificate.execution_commitment,
+  );
+  commitIntent.proposal_round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureCommitOrigin).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
+  );
+
+  const foreignOrigin = createSumeragiV2StatusPayload();
+  foreignOrigin.liveness.outbound_intents[0].proposal_round.context_id = [
+    fakeSumeragiHash(0x55),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignOrigin).getSumeragiStatusTyped(),
+    /proposal_round.*active height context/,
+  );
+});
+
+test("getSumeragiStatusTyped accepts the local-control liveness blocker", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.blocker = { blocker: "local_control_pending", details: null };
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.blocker.blocker, "local_control_pending");
+});
+
+test("getSumeragiStatusTyped accepts the unsafe-proposal ignore reason", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.ignore_counts = [
+    {
+      reason: { reason: "unsafe_proposal", details: null },
+      count: 3,
+    },
+  ];
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(status.liveness.ignore_counts[0].reason.reason, "unsafe_proposal");
+  assert.equal(status.liveness.ignore_counts[0].count, 3);
+});
+
+test("getSumeragiStatusTyped accepts all twelve ignore reasons at the bound", async () => {
+  const reasons = [
+    "wrong_height",
+    "wrong_view",
+    "stale_generation",
+    "busy",
+    "duplicate",
+    "no_matching_work",
+    "observer",
+    "view_closed",
+    "already_decided",
+    "recovery_pending",
+    "irrelevant_view",
+    "unsafe_proposal",
+  ];
+  const payload = createSumeragiV2StatusPayload();
+  payload.liveness.ignore_counts = reasons.map((reason, index) => ({
+    reason: { reason, details: null },
+    count: index + 1,
+  }));
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.deepEqual(
+    status.liveness.ignore_counts.map((entry) => entry.reason.reason),
+    reasons,
+  );
+
+  payload.liveness.ignore_counts.push({ ...payload.liveness.ignore_counts.at(-1) });
+  await assert.rejects(
+    () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+    /ignore_counts exceeds its protocol item bound/,
+  );
+});
+
 test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen contexts", async () => {
   const legacyField = createSumeragiV2StatusPayload({ mode_tag: "retired" });
   await assert.rejects(
@@ -10714,6 +11170,21 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   await assert.rejects(
     () => sumeragiClientForPayload(wrongVersion).getSumeragiStatusTyped(),
     /protocol_version must equal 3/,
+  );
+
+  const missingRestartRequired = createSumeragiV2StatusPayload();
+  delete missingRestartRequired.restart_required;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
+  );
+
+  const invalidRestartRequired = createSumeragiV2StatusPayload({
+    restart_required: 0,
+  });
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidRestartRequired).getSumeragiStatusTyped(),
+    /restart_required must be a boolean/,
   );
 
   const wrongQuorum = createSumeragiV2StatusPayload();
@@ -10744,6 +11215,70 @@ test("getSumeragiStatusTyped rejects unsupported protocol and invalid frozen con
   );
 });
 
+test("getSumeragiStatusTyped rejects malformed liveness diagnostics", async () => {
+  const futureRound = createSumeragiV2StatusPayload();
+  futureRound.liveness.prepare_quorums[0].round.view = futureRound.view + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureRound).getSumeragiStatusTyped(),
+    /view must not exceed the active view/,
+  );
+
+  const invalidIntent = createSumeragiV2StatusPayload();
+  invalidIntent.liveness.outbound_intents[0].execution_commitment = {
+    ...invalidIntent.last_commit_qc.certificate.execution_commitment,
+  };
+  await assert.rejects(
+    () => sumeragiClientForPayload(invalidIntent).getSumeragiStatusTyped(),
+    /inconsistent proposal fields/,
+  );
+
+  const duplicateQueue = createSumeragiV2StatusPayload();
+  duplicateQueue.liveness.queues.push({ ...duplicateQueue.liveness.queues[0] });
+  await assert.rejects(
+    () => sumeragiClientForPayload(duplicateQueue).getSumeragiStatusTyped(),
+    /queue is duplicated/,
+  );
+
+  const everyQueueKind = createSumeragiV2StatusPayload();
+  const queueTemplate = everyQueueKind.liveness.queues[0];
+  everyQueueKind.liveness.queues = [
+    "ingress",
+    "deferred_normal",
+    "deferred_progress",
+    "deferred_completion",
+    "runtime_normal",
+    "runtime_progress",
+    "runtime_completion",
+    "effect_completion",
+    "network_ingress",
+    "effect_dispatch",
+  ].map((queue) => ({
+    ...queueTemplate,
+    queue: { queue, details: null },
+  }));
+  const everyQueueStatus = await sumeragiClientForPayload(everyQueueKind)
+    .getSumeragiStatusTyped();
+  assert.equal(everyQueueStatus.liveness.queues.length, 10);
+
+  const tooManyQueues = createSumeragiV2StatusPayload();
+  tooManyQueues.liveness.queues = [
+    ...everyQueueKind.liveness.queues,
+    { ...queueTemplate },
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(tooManyQueues).getSumeragiStatusTyped(),
+    /queues exceeds its protocol item bound/,
+  );
+
+  const futureGeneration = createSumeragiV2StatusPayload();
+  futureGeneration.liveness.last_progress.generation =
+    futureGeneration.liveness.generation + 1;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureGeneration).getSumeragiStatusTyped(),
+    /generation is from the future/,
+  );
+});
+
 test("retired global Sumeragi RBC and collector helpers are absent", async () => {
   for (const method of [
     "getSumeragiCollectors",
@@ -10771,6 +11306,15 @@ test("retired global Sumeragi RBC and collector helpers are absent", async () =>
 });
 
 test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", async () => {
+  const bootstrap = createSumeragiV2StatusPayload({
+    last_committed_subject: null,
+    last_commit_qc: null,
+  });
+  const bootstrapStatus = await sumeragiClientForPayload(bootstrap).getSumeragiStatusTyped();
+  assert.equal(bootstrapStatus.last_committed_height, 9);
+  assert.equal(bootstrapStatus.last_committed_subject, null);
+  assert.equal(bootstrapStatus.last_commit_qc, null);
+
   const wrongSubject = createSumeragiV2StatusPayload();
   wrongSubject.last_commit_qc.certificate.subject.block_hash = fakeSumeragiHash(0x77);
   await assert.rejects(
@@ -10780,9 +11324,40 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
 
   const wrongHeight = createSumeragiV2StatusPayload();
   wrongHeight.last_commit_qc.certificate.round.height = 8;
+  wrongHeight.last_commit_qc.certificate.proposal_round.height = 8;
   await assert.rejects(
     () => sumeragiClientForPayload(wrongHeight).getSumeragiStatusTyped(),
     /does not certify the committed subject/,
+  );
+
+  const missingProposalRound = createSumeragiV2StatusPayload();
+  delete missingProposalRound.last_commit_qc.certificate.proposal_round;
+  await assert.rejects(
+    () => sumeragiClientForPayload(missingProposalRound).getSumeragiStatusTyped(),
+    /proposal_round/,
+  );
+
+  const foreignProposalRound = createSumeragiV2StatusPayload();
+  foreignProposalRound.last_commit_qc.certificate.proposal_round.context_id = [
+    fakeSumeragiHash(0x42),
+  ];
+  await assert.rejects(
+    () => sumeragiClientForPayload(foreignProposalRound).getSumeragiStatusTyped(),
+    /proposal_round must match round context/,
+  );
+
+  const wrongProposalHeight = createSumeragiV2StatusPayload();
+  wrongProposalHeight.last_commit_qc.certificate.proposal_round.height = 8;
+  await assert.rejects(
+    () => sumeragiClientForPayload(wrongProposalHeight).getSumeragiStatusTyped(),
+    /proposal_round must match round context/,
+  );
+
+  const futureProposalRound = createSumeragiV2StatusPayload();
+  futureProposalRound.last_commit_qc.certificate.proposal_round.view = 2;
+  await assert.rejects(
+    () => sumeragiClientForPayload(futureProposalRound).getSumeragiStatusTyped(),
+    /proposal_round.view must not exceed/,
   );
 
   const underpowered = createSumeragiV2StatusPayload();
@@ -10989,7 +11564,7 @@ test("getSumeragiStatusTyped rejects participant-finality tampering", async () =
     (leg) => { leg.participant_proposal.descriptor.proposal_height = 11; },
     (leg) => { leg.participant_settlement_hash = fakeSumeragiHash(0x79); },
     (leg) => { leg.participant_settlement.lane_id = 99; },
-    (leg) => { leg.participant_settlement.total_local_micro = "1"; },
+    (leg) => { leg.participant_settlement.total_local_amount = "1"; },
     (leg) => { leg.participant_settlement.receipts[0].source_id = "EF".repeat(32); },
     (leg) => { leg.participant_settlement.receipts[1].source_id = "AB".repeat(32); },
     (leg) => { leg.participant_settlement.tx_count = 1; },
@@ -11023,14 +11598,14 @@ test("getSumeragiStatusTyped rejects participant-finality tampering", async () =
 });
 
 test("getSumeragiStatusTyped rejects non-canonical settlement scalars and nested fields", async () => {
-  for (const invalid of [7, "01", (1n << 128n).toString(10)]) {
-    const settlement = createLaneSettlementCommitment({ total_local_micro: invalid });
+  for (const invalid of [7, "01", "-1", "1.0"]) {
+    const settlement = createLaneSettlementCommitment({ total_local_amount: invalid });
     const payload = createSumeragiV2StatusPayload({
       lane_settlement_commitments: [settlement],
     });
     await assert.rejects(
       () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
-      /total_local_micro must be a canonical unsigned decimal string|total_local_micro exceeds u128/,
+      /total_local_amount must be a canonical/,
     );
   }
 
@@ -12154,7 +12729,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
       status: 200,
       jsonData: {
         abi_version: 1,
-        data_model_version: 1,
+        data_model_version: 3,
         crypto: {
           sm: {
             enabled: true,
@@ -12182,7 +12757,7 @@ test("getNodeCapabilities normalizes runtime advert", async () => {
   const result = await client.getNodeCapabilities();
   assert.deepEqual(result, {
     abiVersion: 1,
-    dataModelVersion: 1,
+    dataModelVersion: 3,
     crypto: {
       sm: {
         enabled: true,
@@ -12212,7 +12787,7 @@ test("getNodeCapabilities rejects non-integer ABI version", async () => {
       status: 200,
       jsonData: {
         abi_version: 1.5,
-        data_model_version: 1,
+        data_model_version: 3,
         crypto: {
           sm: {
             enabled: true,
@@ -16274,9 +16849,7 @@ test("listContractActivity encodes contract activity filters", async () => {
             contract_alias: "dlmm_router",
             contract_entrypoint: "route_swap",
             contract_payload: { amount_in: 100, min_out: 95 },
-            gas_asset_id: "xor#universal",
-            fee_sponsor: FIXTURE_ALICE_ID,
-            gas_limit: 100000,
+            fee_payment: authorityFeePayment(100000),
           },
         ],
         total: 1,
@@ -16304,7 +16877,7 @@ test("listContractActivity encodes contract activity filters", async () => {
   assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
   assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
   assert.equal(payload.items[0].contract_payload.amount_in, 100);
-  assert.equal(payload.items[0].gas_limit, 100000);
+  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
 });
 
 test("listContractActivity rejects camelCase payload aliases", async () => {
@@ -16358,9 +16931,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
             asset_ids: ["xor#universal"],
             numeric_fields: { amount_in: 100 },
             payload: { amount_in: 100, min_out: 95 },
-            gas_asset_id: "xor#universal",
-            fee_sponsor: FIXTURE_ALICE_ID,
-            gas_limit: 100000,
+            fee_payment: authorityFeePayment(100000),
           },
         ],
         total: 1,
@@ -16395,6 +16966,7 @@ test("listContractEvents encodes generic contract event filters", async () => {
   assert.equal(parsed.searchParams.get("result_ok"), "true");
   assert.equal(payload.items[0].payload.amount_in, 100);
   assert.equal(payload.items[0].block_height, 9);
+  assert.deepEqual(payload.items[0].fee_payment, authorityFeePayment(100000));
 });
 
 test("contract query helpers reject padded selector filters before dispatch", async () => {
@@ -16480,6 +17052,46 @@ test("listContractEvents rejects camelCase payload aliases", async () => {
     () => client.listContractEvents(),
     /contract event list response\.items\[0]\.numericFields is not supported/,
   );
+});
+
+test("contract activity and event projections reject retired fee selectors", async () => {
+  const activity = {
+    entrypoint_hash: "tx1",
+    result_ok: true,
+    contract_address: "tairac1router",
+  };
+  const event = {
+    event_id: "tx1:0",
+    schema_version: 1,
+    provenance: "derived",
+    tx_hash_hex: "tx1",
+    block_height: 1,
+    block_hash_hex: "deadbeef",
+    result_ok: true,
+    contract_address: "tairac1router",
+    module: "router",
+    event_kind: "route_swap",
+  };
+  for (const [method, base] of [
+    ["listContractActivity", activity],
+    ["listContractEvents", event],
+  ]) {
+    for (const [field, value] of [
+      ["gas_asset_id", "xor#universal"],
+      ["fee_sponsor", FIXTURE_ALICE_ID],
+      ["gas_limit", 100000],
+    ]) {
+      const client = new ToriiClient(BASE_URL, {
+        fetchImpl: async () =>
+          createResponse({
+            status: 200,
+            jsonData: { items: [{ ...base, [field]: value }], total: 1 },
+            headers: { "content-type": "application/json" },
+          }),
+      });
+      await assert.rejects(() => client[method](), new RegExp(`${field} is retired`, "u"));
+    }
+  }
 });
 
 test("queryAccountTransactions posts structured envelope", async () => {
@@ -19883,270 +20495,6 @@ test("registerContractCode rejects forged branded manifest declarations before f
   assert.equal(called, false);
 });
 
-test("deployContract submits base64 payload and returns response", async () => {
-  let captured;
-  const contractAddress = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
-  const responsePayload = {
-    ok: true,
-    bundle_name: "single:router::universal",
-    bundle_digest: "d".repeat(64),
-    chain_fingerprint: `0@${"e".repeat(64)}`,
-    dry_run: false,
-    completed_stages: ["deploy:router::universal"],
-    failure_point: null,
-    contracts: [
-      {
-        name: "router::universal",
-        contract_alias: "router::universal",
-        contract_address: contractAddress,
-        previous_contract_address: null,
-        kaizen: false,
-        dataspace: "universal",
-        deploy_nonce: 7,
-        tx_hash_hex: "a".repeat(64),
-        code_hash_hex: "b".repeat(64),
-        abi_hash_hex: "c".repeat(64),
-        status: "submitted",
-      },
-    ],
-    hajimari_calls: [],
-    assertions: [],
-    operation_receipt: {
-      operation_kind: "contract_deploy",
-      status: "submitted",
-      transport: "torii",
-      dataspace: "universal",
-      contract_alias: "router::universal",
-      contract_address: contractAddress,
-      code_hash_hex: "b".repeat(64),
-      abi_hash_hex: "c".repeat(64),
-      tx_hash_hex: "a".repeat(64),
-      entrypoint: null,
-      entrypoint_hash_hex: null,
-      gas_limit: null,
-      gas_used: null,
-      gas_asset_id: null,
-      fee_sponsor: null,
-      payload_digest_hex: "f".repeat(64),
-    },
-  };
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: responsePayload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContract({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    contractAlias: "router::universal",
-    codeB64: Buffer.from("payload"),
-    leaseExpiryMs: 1234,
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/contracts/deploy`);
-  const body = JSON.parse(captured.init.body);
-  assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    contract_alias: "router::universal",
-    code_b64: Buffer.from("payload").toString("base64"),
-    lease_expiry_ms: 1234,
-  });
-  assert.deepEqual(result, responsePayload);
-});
-
-test("deployContract rejects the retired init_calls response field", async () => {
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        bundle_name: "single:router::universal",
-        bundle_digest: "d".repeat(64),
-        chain_fingerprint: `0@${"e".repeat(64)}`,
-        dry_run: false,
-        completed_stages: ["deploy:router::universal"],
-        failure_point: null,
-        contracts: [],
-        init_calls: [],
-        assertions: [],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-      }),
-    /hajimari_calls must be an array/,
-  );
-});
-
-test("deployContract exposes optional pipeline_status diagnostics", async () => {
-  const txHash = "a".repeat(64);
-  const pipelineStatus = {
-    hash: txHash,
-    status: { kind: "Queued", block_height: null, rejection_reason: null },
-    summary: "Queued",
-    diagnostics: [],
-    scope: "local",
-    resolved_from: "queue",
-  };
-  const fetchImpl = async () =>
-    createResponse({
-      status: 200,
-      jsonData: {
-        ok: true,
-        bundle_name: "single:router::universal",
-        bundle_digest: "d".repeat(64),
-        chain_fingerprint: `0@${"e".repeat(64)}`,
-        dry_run: false,
-        completed_stages: ["deploy:router::universal"],
-        failure_point: null,
-        contracts: [
-          {
-            name: "router::universal",
-            contract_alias: "router::universal",
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-            previous_contract_address: null,
-            kaizen: false,
-            dataspace: "universal",
-            deploy_nonce: 7,
-            tx_hash_hex: txHash,
-            pipeline_status: pipelineStatus,
-            code_hash_hex: "b".repeat(64),
-            abi_hash_hex: "c".repeat(64),
-            status: "submitted",
-          },
-        ],
-        hajimari_calls: [],
-        assertions: [],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContract({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    contractAlias: "router::universal",
-    codeB64: Buffer.from("payload"),
-  });
-  assert.equal(result.contracts[0].pipeline_status?.status?.kind, "Queued");
-  assert.equal(result.contracts[0].pipeline_status?.content?.hash, txHash);
-});
-
-test("deployContract rejects invalid base64 payloads", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: "YmFzZTY0*",
-      }),
-    (error) =>
-      error instanceof ValidationError &&
-      error.code === ValidationErrorCode.INVALID_STRING &&
-      /deployContract\.codeB64/.test(error.message),
-  );
-});
-
-test("contract registration and deployment cap exact artifact bytes before fetch", async () => {
-  const maxBase64Length = Math.ceil(IVM_ARTIFACT_MAX_BYTES / 3) * 4;
-  const attacks = [
-    ["A".repeat(maxBase64Length + 1), /4194304-byte artifact limit/],
-    [Buffer.alloc(IVM_ARTIFACT_MAX_BYTES + 1), /4194304-byte artifact limit/],
-    ["Y29kZQ==\n", /canonical standard base64/],
-  ];
-  for (const [artifact, expected] of attacks) {
-    for (const operation of ["register", "deploy"]) {
-      let fetchCalls = 0;
-      const client = new ToriiClient(BASE_URL, {
-        fetchImpl: async () => {
-          fetchCalls += 1;
-          throw new Error("fetch must not run for invalid artifact bytes");
-        },
-      });
-      const promise =
-        operation === "register"
-          ? client.registerContractCode({
-              authority: FIXTURE_ALICE_ID,
-              privateKey: "ed25519:deadbeef",
-              manifest: {},
-              codeBytes: artifact,
-            })
-          : client.deployContract({
-              authority: FIXTURE_ALICE_ID,
-              privateKey: "ed25519:deadbeef",
-              contractAlias: "router::universal",
-              codeB64: artifact,
-            });
-      await assert.rejects(promise, expected);
-      assert.equal(fetchCalls, 0, `${operation} must validate before fetch`);
-    }
-  }
-});
-
-test("deployContract rejects empty code bytes", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.alloc(0),
-      }),
-    /deployContract\.codeB64/,
-  );
-});
-
-test("deployContract rejects manifest and dataspace shortcuts", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-        dataspace: "universal",
-      }),
-    /deployContract\.dataspace is not accepted by \/v1\/contracts\/deploy/,
-  );
-  await assert.rejects(
-    () =>
-      client.deployContract({
-        authority: FIXTURE_ALICE_ID,
-        privateKey: "ed25519:deadbeef",
-        contractAlias: "router::universal",
-        codeB64: Buffer.from("payload"),
-        manifest: { features_bitmap: 1 },
-      }),
-    /deployContract\.manifest is not accepted by \/v1\/contracts\/deploy/,
-  );
-});
 
 test("setContractAlias posts payload and returns response", async () => {
   let captured;
@@ -20232,6 +20580,7 @@ test("setContractAlias supports clear requests and rejects lease expiry without 
 
 test("callContract posts payload metadata and normalizes response", async () => {
   let captured;
+  const feePayment = sponsorFeePayment(FIXTURE_BOB_ID, 42, 3);
   const responsePayload = {
     ok: true,
     submitted: true,
@@ -20258,8 +20607,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
       entrypoint_hash_hex: "4".repeat(64),
       gas_limit: 42,
       gas_used: null,
-      gas_asset_id: FIXTURE_ASSET_ID_D,
-      fee_sponsor: FIXTURE_BOB_ID,
+      fee_payment: feePayment,
       payload_digest_hex: "5".repeat(64),
     },
   };
@@ -20279,9 +20627,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
-    gasAssetId: FIXTURE_ASSET_ID_D,
-    feeSponsor: FIXTURE_BOB_ID,
-    gasLimit: 42n,
+    feePayment,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call`);
   const body = JSON.parse(captured.init.body);
@@ -20291,9 +20637,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
-    gas_asset_id: FIXTURE_ASSET_ID_D,
-    fee_sponsor: FIXTURE_BOB_ID,
-    gas_limit: 42,
+    fee_payment: feePayment,
   });
   assert.deepEqual(result, {
     ok: true,
@@ -20352,8 +20696,7 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
           entrypoint_hash_hex: "4".repeat(64),
           gas_limit: 42,
           gas_used: null,
-          gas_asset_id: null,
-          fee_sponsor: null,
+          fee_payment: authorityFeePayment(42),
           payload_digest_hex: "5".repeat(64),
         },
       },
@@ -20365,7 +20708,7 @@ test("callContract exposes optional pipeline_status diagnostics", async () => {
     privateKey: "ed25519:deadbeef",
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
-    gasLimit: 42,
+    feePayment: authorityFeePayment(42),
   });
   assert.equal(result.pipeline_status?.status?.kind, "Rejected");
   assert.equal(result.pipeline_status?.content?.hash, txHash);
@@ -20395,7 +20738,7 @@ test("callContract response requires operation_receipt", async () => {
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "increment",
-        gasLimit: 42,
+        feePayment: authorityFeePayment(42),
       }),
     /contractCall response\.operation_receipt must be an object/,
   );
@@ -20485,7 +20828,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
           privateKey: "ed25519:deadbeef",
           contractAddress,
           entrypoint: "increment",
-          gasLimit: 42,
+          feePayment: authorityFeePayment(42),
         }),
       pattern,
       label,
@@ -20493,7 +20836,7 @@ test("callContract rejects coercible, non-canonical, or unexpected response fiel
   }
 });
 
-test("callContract rejects missing gasLimit", async () => {
+test("callContract rejects missing feePayment", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -20507,11 +20850,11 @@ test("callContract rejects missing gasLimit", async () => {
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "ping",
       }),
-    /contractCall\.gasLimit/,
+    /contractCall\.fee_payment must be an object/,
   );
 });
 
-test("callContract rejects zero gasLimit", async () => {
+test("callContract rejects a zero feePayment gas limit", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked");
@@ -20524,9 +20867,9 @@ test("callContract rejects zero gasLimit", async () => {
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         entrypoint: "ping",
-        gasLimit: 0,
+        feePayment: authorityFeePayment(0),
       }),
-    /contractCall\.gasLimit must be a positive integer/,
+    /fee_payment\.value\.gas_limit must be a positive integer/,
   );
 });
 
@@ -20542,7 +20885,7 @@ test("callContract rejects an implicit entrypoint", async () => {
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
         contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-        gasLimit: 42,
+        feePayment: authorityFeePayment(42),
       }),
     /contractCall\.entrypoint/,
   );
@@ -20617,7 +20960,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [instruction],
-    feeSponsor: FIXTURE_BOB_ID,
+    feePayment: authorityFeePayment(),
     creationTimeMs: 123456,
     validationFeePolicyVersion: 7,
     validationFeePolicyHash: "AB".repeat(32),
@@ -20641,7 +20984,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       multisigAccountAlias: "cbdc@banka",
       signerAccountId: FIXTURE_ALICE_ID,
       instructions: [instruction],
-      feeSponsor: "sponsor@sbp",
+      feePayment: authorityFeePayment(),
       validationFeePolicyVersion: 7,
       validationFeePolicyHash: "AB".repeat(32),
       validationFeeInstructionIndex: 1,
@@ -20651,7 +20994,7 @@ test("proposeMultisig posts the native Norito request DTO", async () => {
       multisig_account_alias: "cbdc@banka",
       signer_account_id: FIXTURE_ALICE_ID,
       instructions: [instruction],
-      fee_sponsor: "sponsor@sbp",
+      fee_payment: authorityFeePayment(),
       validation_fee_policy_version: "7",
       validation_fee_policy_hash: "ab".repeat(32),
       validation_fee_instruction_index: "1",
@@ -20668,7 +21011,7 @@ test("native multisig contract-call DTO flattens selector fields", () => {
     contractAlias: "apps_mint_request::sbp",
     entrypoint: "create_mint_request",
     payload,
-    feeSponsor: "sponsor@sbp",
+    feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
   });
 
@@ -20687,7 +21030,7 @@ test("native multisig contract-call DTO encodes concrete multisig IDs canonicall
     contractAlias: "apps_mint_request::sbp",
     entrypoint: "create_mint_request",
     payload: { amount: 111 },
-    feeSponsor: "sponsor@sbp",
+    feePayment: authorityFeePayment(10_000),
     creationTimeMs: 123456,
   });
 
@@ -20707,6 +21050,7 @@ test("proposeMultisig rejects adversarial request shapes before fetch", async ()
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [{ Custom: { payload: { probe: true } } }],
+    feePayment: authorityFeePayment(),
   };
 
   await assert.rejects(
@@ -20868,6 +21212,7 @@ test("proposeMultisig rejects malformed success responses", async () => {
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     instructions: [{ Custom: { payload: { probe: true } } }],
+    feePayment: authorityFeePayment(),
   };
 
   const clientWithResponse = (jsonData) =>
@@ -20950,6 +21295,7 @@ test("multisig response decoders reject non-exact resolved account ids", async (
         ...selector,
         signerAccountId: FIXTURE_ALICE_ID,
         instructions: [{ Custom: { payload: { probe: true } } }],
+        feePayment: authorityFeePayment(),
       }),
     pattern,
   );
@@ -21007,9 +21353,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
-    gasAssetId: FIXTURE_ASSET_ID_D,
-    feeSponsor: "sponsor@sbp",
-    gasLimit: 5,
+    feePayment: authorityFeePayment(5),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
   const body = JSON.parse(captured.init.body);
@@ -21019,9 +21363,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
-    gas_asset_id: FIXTURE_ASSET_ID_D,
-    fee_sponsor: "sponsor@sbp",
-    gas_limit: 5,
+    fee_payment: authorityFeePayment(5),
   });
   assert.deepEqual(result, {
     ...responsePayload,
@@ -21030,9 +21372,9 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   });
 });
 
-test("multisig contract call request builders accept fee sponsor aliases", () => {
-  assert.equal(
-    buildMultisigContractCallProposeRequest({
+test("multisig contract call request builders reject retired sponsor aliases", () => {
+  assert.throws(
+    () => buildMultisigContractCallProposeRequest({
       multisigAccountAlias: "cbdc@hbl.sbp",
       signerAccountId: FIXTURE_ALICE_ID,
       contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
@@ -21040,8 +21382,9 @@ test("multisig contract call request builders accept fee sponsor aliases", () =>
       trigger: "probe",
       payload: { amount: "10" },
       feeSponsor: "sponsor@sbp",
-    }).fee_sponsor,
-    "sponsor@sbp",
+      feePayment: authorityFeePayment(5),
+    }),
+    /feeSponsor is retired/,
   );
 });
 
@@ -21069,14 +21412,16 @@ test("approveMultisigContractCall posts concrete selector and normalizes respons
     signerAccountId: FIXTURE_BOB_ID,
     proposalId: "b".repeat(64),
     signatureB64: "AQ==",
+    feePayment: authorityFeePayment(),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/approve`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
     multisig_account_id: FIXTURE_ALICE_ID,
     signer_account_id: FIXTURE_BOB_ID,
-      proposal_id: "b".repeat(64),
-      signature_b64: "AQ==",
+    proposal_id: "b".repeat(64),
+    signature_b64: "AQ==",
+    fee_payment: authorityFeePayment(),
   });
   assert.deepEqual(result, {
     ...responsePayload,
@@ -24111,7 +24456,7 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
           supported_exit_classes: ["standard", "low-latency", "high-security"],
           default_exit_class: "standard",
-          lease_secs: "600",
+          lease_secs: 600,
           dns_push_interval_secs: 90,
           meter_family: "soranet.vpn.standard",
           route_pushes: ["0.0.0.0/0", "::/0"],
@@ -24119,13 +24464,13 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
           dns_servers: ["1.1.1.1", "2606:4700:4700::1111"],
           tunnel_addresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
           mtu_bytes: 1280,
-          display_billing_label: "standard · soranet.vpn.standard · 1000000 nano-XOR",
+          display_billing_label: "standard · soranet.vpn.standard · 1000000.25 XOR",
           fee_asset_id: "xor#universal.universal",
           escrow_account_id: "vpn_escrow",
           operator_account_id: SAMPLE_ACCOUNT_ID,
-          lease_fee_nanos: "1000000",
+          lease_fee: "1000000.25",
           settlement_grace_secs: 120,
-          flow_label_bits: 20,
+          flow_label_bits: 24,
           padding_budget_ms: 80,
           relay_tls_spki_sha256_hex: "11".repeat(32),
         },
@@ -24154,13 +24499,13 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
     dnsServers: ["1.1.1.1", "2606:4700:4700::1111"],
     tunnelAddresses: ["10.208.0.2/32", "fd53:7261:6574::2/128"],
     mtuBytes: 1280,
-    displayBillingLabel: "standard · soranet.vpn.standard · 1000000 nano-XOR",
+    displayBillingLabel: "standard · soranet.vpn.standard · 1000000.25 XOR",
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
+    leaseFee: "1000000.25",
     settlementGraceSecs: 120,
-    flowLabelBits: 20,
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "11".repeat(32),
   });
@@ -24168,24 +24513,411 @@ test("getVpnProfile normalizes payloads and tolerates missing control plane", as
   assert.equal(missing, null);
 });
 
+test("getVpnProfile rejects noncanonical exact fee quantities", async () => {
+  for (const leaseFee of [1000000, "01", "1.0", "-1"]) {
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: {
+            available: true,
+            relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
+            supported_exit_classes: ["standard", "low-latency", "high-security"],
+            default_exit_class: "standard",
+            lease_secs: 600,
+            dns_push_interval_secs: 90,
+            meter_family: "soranet.vpn.standard",
+            route_pushes: [],
+            excluded_routes: [],
+            dns_servers: ["1.1.1.1"],
+            tunnel_addresses: ["10.208.0.2/32"],
+            mtu_bytes: 1280,
+            display_billing_label: "standard",
+            fee_asset_id: "xor#universal.universal",
+            escrow_account_id: "vpn_escrow",
+            operator_account_id: SAMPLE_ACCOUNT_ID,
+            lease_fee: leaseFee,
+            settlement_grace_secs: 120,
+            flow_label_bits: 24,
+            padding_budget_ms: 80,
+            relay_tls_spki_sha256_hex: null,
+          },
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    await assert.rejects(() => client.getVpnProfile(), /lease_fee/);
+  }
+});
+
+test("getVpnProfile requires dns_push_interval_secs of at least 30", async () => {
+  const invalidProfiles = [
+    ["missing", (payload) => delete payload.dns_push_interval_secs],
+    ["below minimum", (payload) => { payload.dns_push_interval_secs = 29; }],
+  ];
+  for (const [caseName, mutate] of invalidProfiles) {
+    const payload = sampleVpnProfilePayload();
+    mutate(payload);
+    const client = new ToriiClient(BASE_URL, {
+      fetchImpl: async () =>
+        createResponse({
+          status: 200,
+          jsonData: payload,
+          headers: { "content-type": "application/json" },
+        }),
+    });
+
+    await assert.rejects(
+      () => client.getVpnProfile(),
+      /dns_push_interval_secs/u,
+      caseName,
+    );
+  }
+});
+
+test("VPN requests reject unknown fields before dispatch", async () => {
+  const canonicalAuth = {
+    accountId: CANONICAL_AUTH_ALIAS,
+    privateKey: Buffer.alloc(32, 3),
+  };
+  let dispatched = false;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      dispatched = true;
+      throw new Error("request with unknown fields reached dispatch");
+    },
+  });
+  const cases = [
+    () =>
+      client.createVpnQuote(
+        { meteringPublicKeyHex: "ab".repeat(32), unexpected: true },
+        { canonicalAuth },
+      ),
+    () =>
+      client.createVpnSession(
+        {
+          quoteId: "cd".repeat(32),
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+          unexpected: true,
+        },
+        { canonicalAuth },
+      ),
+    () =>
+      client.submitVpnReceipt(
+        { relayReceiptHex: "abcd", clientVoucherHex: "beef", unexpected: true },
+        { canonicalAuth },
+      ),
+  ];
+
+  for (const invoke of cases) {
+    await assert.rejects(invoke, /contains unsupported fields: unexpected/u);
+  }
+  await assert.rejects(
+    () =>
+      client.createVpnSession(
+        {
+          quoteId: `0x${"cd".repeat(32)}`,
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+        },
+        { canonicalAuth },
+      ),
+    /quoteId must be an exact lowercase 32-byte hex string/u,
+  );
+  await assert.rejects(
+    () =>
+      client.createVpnQuote(
+        { exitClass: "fastest", meteringPublicKeyHex: "ab".repeat(32) },
+        { canonicalAuth },
+      ),
+    /exitClass must be one of/u,
+  );
+  await assert.rejects(
+    () =>
+      client.createVpnSession(
+        {
+          exitClass: "fastest",
+          quoteId: "cd".repeat(32),
+          paymentTxHash: "ef".repeat(32),
+          meteringPublicKeyHex: "ab".repeat(32),
+        },
+        { canonicalAuth },
+      ),
+    /exitClass must be one of/u,
+  );
+  assert.equal(dispatched, false);
+});
+
+test("VPN session paths normalize hex before signing and reject malformed IDs", async () => {
+  const normalizedSessionId = "ab".repeat(32);
+  const inputSessionId = `0X${normalizedSessionId.toUpperCase()}`;
+  const privateKey = Buffer.alloc(32, 10);
+  const captured = [];
+  const fetchImpl = async (url, init = {}) => {
+    captured.push({ url, init });
+    return createResponse({
+      status: 404,
+      jsonData: {},
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const canonicalAuth = { accountId: CANONICAL_AUTH_ALIAS, privateKey };
+
+  assert.equal(
+    await client.getVpnSession(inputSessionId, { canonicalAuth }),
+    null,
+  );
+  assert.equal(
+    await client.deleteVpnSession(inputSessionId, { canonicalAuth }),
+    null,
+  );
+  assert.equal(captured.length, 2);
+  for (const { url, init } of captured) {
+    const parsed = new URL(url);
+    assert.equal(parsed.pathname, `/v1/vpn/sessions/${normalizedSessionId}`);
+    const message = canonicalRequestSignatureMessage({
+      method: init.method,
+      path: parsed.pathname,
+      query: "",
+      body: "",
+      timestampMs: Number(init.headers["X-Iroha-Timestamp-Ms"]),
+      nonce: init.headers["X-Iroha-Nonce"],
+    });
+    assert.deepEqual(
+      Buffer.from(init.headers["X-Iroha-Signature"], "base64"),
+      signEd25519(message, privateKey),
+    );
+  }
+
+  await assert.rejects(
+    () => client.getVpnSession("not-hex", { canonicalAuth }),
+    /sessionId must be a 32-byte hex string/u,
+  );
+  await assert.rejects(
+    () => client.deleteVpnSession("ab", { canonicalAuth }),
+    /sessionId must be a 32-byte hex string/u,
+  );
+  assert.equal(captured.length, 2);
+});
+
+test("VPN session responses reject unknown fields and noncanonical IDs or hashes", async () => {
+  const canonicalAuth = {
+    accountId: CANONICAL_AUTH_ALIAS,
+    privateKey: Buffer.alloc(32, 4),
+  };
+  const requestSession = async (mutate) => {
+    const payload = sampleVpnSessionPayload();
+    mutate(payload);
+    const fetchImpl = async () =>
+      createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      });
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    return client.getVpnSession("ab".repeat(32), { canonicalAuth });
+  };
+  const invalidResponses = [
+    ["unknown field", (payload) => { payload.unexpected = true; }],
+    ["prefixed session id", (payload) => { payload.session_id = `0x${payload.session_id}`; }],
+    ["uppercase quote id", (payload) => { payload.quote_id = payload.quote_id.toUpperCase(); }],
+    ["prefixed payment hash", (payload) => { payload.payment_tx_hash = `0X${payload.payment_tx_hash}`; }],
+    ["uppercase SPKI hash", (payload) => {
+      payload.relay_tls_spki_sha256_hex = payload.relay_tls_spki_sha256_hex.toUpperCase();
+    }],
+  ];
+
+  for (const [caseName, mutate] of invalidResponses) {
+    await assert.rejects(
+      () => requestSession(mutate),
+      /contains unsupported fields|exact lowercase 32-byte hex string/u,
+      caseName,
+    );
+  }
+});
+
+test("VPN response parsers require every OpenAPI field", async () => {
+  const cases = [
+    ["profile", sampleVpnProfilePayload(), "relay_tls_spki_sha256_hex"],
+    ["quote", sampleVpnQuotePayload(), "open_lease_instruction"],
+    ["session", sampleVpnSessionPayload(), "route_pushes"],
+    ["receipt", sampleVpnReceiptPayload(), "settle_lease_instruction"],
+    ["list", { items: [sampleVpnReceiptPayload()], total: 1 }, "total"],
+  ];
+  for (const [kind, payload, missingField] of cases) {
+    delete payload[missingField];
+    await assert.rejects(
+      () => parseVpnTestResponse(kind, payload),
+      new RegExp(`missing required fields: ${missingField}`, "u"),
+      `${kind}.${missingField}`,
+    );
+  }
+
+  const nested = sampleVpnQuotePayload();
+  delete nested.open_lease_instruction.payload_hex;
+  await assert.rejects(
+    () => parseVpnTestResponse("quote", nested),
+    /missing required fields: payload_hex/u,
+  );
+
+  const nullArray = sampleVpnSessionPayload();
+  nullArray.route_pushes = null;
+  await assert.rejects(
+    () => parseVpnTestResponse("session", nullArray),
+    /route_pushes must be an array/u,
+  );
+});
+
+test("VPN response parsers reject empty minLength strings", async () => {
+  const cases = [
+    [
+      "profile",
+      sampleVpnProfilePayload,
+      [
+        "relay_endpoint",
+        "meter_family",
+        "display_billing_label",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+    [
+      "quote",
+      sampleVpnQuotePayload,
+      [
+        "payment_reference",
+        "account_id",
+        "relay_endpoint",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+        "meter_family",
+      ],
+    ],
+    [
+      "session",
+      sampleVpnSessionPayload,
+      [
+        "account_id",
+        "relay_endpoint",
+        "meter_family",
+        "payment_reference",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+    [
+      "receipt",
+      sampleVpnReceiptPayload,
+      [
+        "account_id",
+        "relay_endpoint",
+        "meter_family",
+        "fee_asset_id",
+        "escrow_account_id",
+        "operator_account_id",
+      ],
+    ],
+  ];
+  for (const [kind, payloadFactory, fields] of cases) {
+    for (const field of fields) {
+      const payload = payloadFactory();
+      payload[field] = "";
+      await assert.rejects(
+        () => parseVpnTestResponse(kind, payload),
+        new RegExp(field, "u"),
+        `${kind}.${field}`,
+      );
+    }
+  }
+
+  const instruction = sampleVpnQuotePayload();
+  instruction.open_lease_instruction.wire_id = "";
+  await assert.rejects(
+    () => parseVpnTestResponse("quote", instruction),
+    /wire_id/u,
+  );
+});
+
+test("VPN response parsers enforce OpenAPI enums and bounds", async () => {
+  const cases = [
+    ["profile exits", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.supported_exit_classes = ["standard", "standard", "high-security"];
+    }, "supported_exit_classes"],
+    ["profile lease", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.lease_secs = 0;
+    }, "lease_secs"],
+    ["profile settlement", "profile", sampleVpnProfilePayload(), (payload) => {
+      payload.settlement_grace_secs = 0;
+    }, "settlement_grace_secs"],
+    ["quote instruction count", "quote", sampleVpnQuotePayload(), (payload) => {
+      payload.tx_instructions = [];
+    }, "tx_instructions"],
+    ["quote exit", "quote", sampleVpnQuotePayload(), (payload) => {
+      payload.exit_class = "fastest";
+    }, "exit_class"],
+    ["session mtu", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.mtu_bytes = 1500;
+    }, "mtu_bytes"],
+    ["session flow", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.flow_label_bits = 20;
+    }, "flow_label_bits"],
+    ["session padding", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.padding_budget_ms = 0;
+    }, "padding_budget_ms"],
+    ["session status", "session", sampleVpnSessionPayload(), (payload) => {
+      payload.status = "connected";
+    }, "status"],
+    ["receipt status", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.status = "active";
+    }, "status"],
+    ["receipt source", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.receipt_source = "client";
+    }, "receipt_source"],
+    ["receipt instruction count", "receipt", sampleVpnReceiptPayload(), (payload) => {
+      payload.tx_instructions = [
+        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
+        { wire_id: "SettleVpnLease", payload_hex: "abcd" },
+      ];
+    }, "tx_instructions"],
+    ["receipt list item count", "list", {
+      items: Array.from({ length: 25 }, () => sampleVpnReceiptPayload()),
+      total: 24,
+    }, () => {}, "items"],
+    ["receipt list total", "list", { items: [], total: 25 }, () => {}, "total"],
+  ];
+  for (const [caseName, kind, payload, mutate, field] of cases) {
+    mutate(payload);
+    await assert.rejects(
+      () => parseVpnTestResponse(kind, payload),
+      new RegExp(field, "u"),
+      caseName,
+    );
+  }
+});
+
 test("createVpnQuote returns the native lease-open instruction", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 8),
   };
   const quoteId = "22".repeat(32);
   const sessionIdHex = "33".repeat(16);
-  const meteringPublicKeyHex = "44".repeat(32);
+  const meteringPublicKeyHex = "a4".repeat(32);
   const openInstruction = {
     wire_id: "OpenVpnLeaseEscrow",
-    payload_hex: "0xABCD",
+    payload_hex: "abcd",
   };
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/quotes`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       exit_class: "low-latency",
@@ -24206,14 +24938,14 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
+        lease_fee: "1000000.25",
         route_pushes: ["0.0.0.0/0"],
         excluded_routes: ["127.0.0.0/8"],
         dns_servers: ["1.1.1.1"],
         tunnel_addresses: ["10.208.0.2/32"],
         mtu_bytes: 1280,
         meter_family: "soranet.vpn.low-latency",
-        flow_label_bits: 20,
+        flow_label_bits: 24,
         padding_budget_ms: 80,
         relay_tls_spki_sha256_hex: "55".repeat(32),
         metering_public_key_hex: meteringPublicKeyHex,
@@ -24223,11 +24955,13 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const quote = await client.createVpnQuote(
-    { exitClass: "low-latency", meteringPublicKeyHex },
+    {
+      exitClass: "low-latency",
+      meteringPublicKeyHex: `0X${meteringPublicKeyHex.toUpperCase()}`,
+    },
     { canonicalAuth },
   );
 
@@ -24244,14 +24978,14 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
+    leaseFee: "1000000.25",
     routePushes: ["0.0.0.0/0"],
     excludedRoutes: ["127.0.0.0/8"],
     dnsServers: ["1.1.1.1"],
     tunnelAddresses: ["10.208.0.2/32"],
     mtuBytes: 1280,
     meterFamily: "soranet.vpn.low-latency",
-    flowLabelBits: 20,
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "55".repeat(32),
     meteringPublicKeyHex,
@@ -24262,18 +24996,19 @@ test("createVpnQuote returns the native lease-open instruction", async () => {
 
 test("createVpnSession signs the request and normalizes the response", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 7),
   };
   const quoteId = "66".repeat(32);
-  const paymentTxHash = "77".repeat(32);
-  const meteringPublicKeyHex = "88".repeat(32);
+  const sessionId = "55".repeat(32);
+  const paymentTxHash = "b7".repeat(32);
+  const meteringPublicKeyHex = "a8".repeat(32);
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/sessions`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       exit_class: "low-latency",
@@ -24284,7 +25019,7 @@ test("createVpnSession signs the request and normalizes the response", async () 
     return createResponse({
       status: 201,
       jsonData: {
-        session_id: "sess_123",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "low-latency",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24298,8 +25033,8 @@ test("createVpnSession signs the request and normalizes the response", async () 
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        flow_label_bits: 20,
+        lease_fee: "1000000.25",
+        flow_label_bits: 24,
         padding_budget_ms: 80,
         relay_tls_spki_sha256_hex: "99".repeat(32),
         route_pushes: [],
@@ -24315,16 +25050,20 @@ test("createVpnSession signs the request and normalizes the response", async () 
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const session = await client.createVpnSession(
-    { exitClass: "low-latency", quoteId, paymentTxHash, meteringPublicKeyHex },
+    {
+      exitClass: "low-latency",
+      quoteId,
+      paymentTxHash: `0x${paymentTxHash.toUpperCase()}`,
+      meteringPublicKeyHex: `0X${meteringPublicKeyHex.toUpperCase()}`,
+    },
     { canonicalAuth },
   );
 
   assert.deepEqual(session, {
-    sessionId: "sess_123",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "low-latency",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24338,8 +25077,8 @@ test("createVpnSession signs the request and normalizes the response", async () 
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    flowLabelBits: 20,
+    leaseFee: "1000000.25",
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "99".repeat(32),
     routePushes: [],
@@ -24352,6 +25091,41 @@ test("createVpnSession signs the request and normalizes the response", async () 
     bytesOut: 456,
     status: "active",
   });
+});
+
+test("VPN session responses require an exact lowercase 664-byte helper ticket", async () => {
+  const canonicalAuth = {
+    accountId: CANONICAL_AUTH_ALIAS,
+    privateKey: Buffer.alloc(32, 7),
+  };
+  const requestSession = async (helperTicketHex) => {
+    const fetchImpl = async () =>
+      createResponse({
+        status: 200,
+        jsonData: sampleVpnSessionPayload(helperTicketHex),
+        headers: { "content-type": "application/json" },
+      });
+    const client = new ToriiClient(BASE_URL, { fetchImpl });
+    return client.getVpnSession("55".repeat(32), { canonicalAuth });
+  };
+
+  const session = await requestSession(SAMPLE_VPN_HELPER_TICKET_HEX);
+  assert.equal(session.helperTicketHex, SAMPLE_VPN_HELPER_TICKET_HEX);
+  assert.equal(session.helperTicketHex.length, 1328);
+
+  const invalidTickets = [
+    ["prefix", `0x${SAMPLE_VPN_HELPER_TICKET_HEX}`],
+    ["uppercase", SAMPLE_VPN_HELPER_TICKET_HEX.toUpperCase()],
+    ["odd length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -1)],
+    ["wrong even length", SAMPLE_VPN_HELPER_TICKET_HEX.slice(0, -2)],
+  ];
+  for (const [caseName, helperTicketHex] of invalidTickets) {
+    await assert.rejects(
+      () => requestSession(helperTicketHex),
+      /helper_ticket_hex must contain exactly 1328 lowercase hexadecimal characters/u,
+      caseName,
+    );
+  }
 });
 
 test("createVpnSession requires canonical auth options", async () => {
@@ -24367,50 +25141,52 @@ test("createVpnSession requires canonical auth options", async () => {
 });
 
 test("deleteVpnSession returns null when the session is already missing", async () => {
+  const requestedSessionId = "13".repeat(32);
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 9),
   };
   const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_123`);
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
     assert.equal(init.method, "DELETE");
     assert.equal(init.headers.Accept, "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     return createResponse({
       status: 404,
       jsonData: {
-        session_id: "sess_123",
+        session_id: requestedSessionId,
         status: "not_found",
         disconnected_at_ms: 1_700_000_000_000,
       },
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deleteVpnSession("sess_123", { canonicalAuth });
+  const result = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.equal(result, null);
 });
 
 test("getVpnSession and listVpnReceipts normalize authenticated responses", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 5),
   };
   const quoteId = "aa".repeat(32);
+  const sessionId = "cc".repeat(32);
+  const requestedSessionId = "de".repeat(32);
   const paymentTxHash = "bb".repeat(32);
   let callCount = 0;
   const fetchImpl = async (url, init = {}) => {
     callCount += 1;
     assert.equal(init.headers.Accept, "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     if (callCount === 1) {
-      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_live`);
+      assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
       assert.equal(init.method, "GET");
       return createResponse({
         status: 200,
         jsonData: {
-          session_id: "sess_live",
+          session_id: sessionId,
           account_id: SAMPLE_ACCOUNT_ID,
           exit_class: "standard",
           relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24424,8 +25200,8 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
           fee_asset_id: "xor#universal.universal",
           escrow_account_id: "vpn_escrow",
           operator_account_id: SAMPLE_ACCOUNT_ID,
-          lease_fee_nanos: "1000000",
-          flow_label_bits: 20,
+          lease_fee: "1000000.25",
+          flow_label_bits: 24,
           padding_budget_ms: 80,
           relay_tls_spki_sha256_hex: "cc".repeat(32),
           route_pushes: ["0.0.0.0/0"],
@@ -24448,7 +25224,7 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       jsonData: {
         items: [
           {
-            session_id: "sess_live",
+            session_id: sessionId,
             account_id: SAMPLE_ACCOUNT_ID,
             exit_class: "standard",
             relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24465,9 +25241,9 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
             fee_asset_id: "xor#universal.universal",
             escrow_account_id: "vpn_escrow",
             operator_account_id: SAMPLE_ACCOUNT_ID,
-            lease_fee_nanos: "1000000",
-            earned_fee_nanos: 0,
-            refunded_fee_nanos: "1000000",
+            lease_fee: "1000000.25",
+            earned_fee: "0",
+            refunded_fee: "1000000.25",
             lease_id_hex: quoteId,
             settle_lease_instruction: null,
             tx_instructions: [],
@@ -24478,12 +25254,11 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
-  const session = await client.getVpnSession("sess_live", { canonicalAuth });
+  const session = await client.getVpnSession(requestedSessionId, { canonicalAuth });
   assert.deepEqual(session, {
-    sessionId: "sess_live",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "standard",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24497,8 +25272,8 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    flowLabelBits: 20,
+    leaseFee: "1000000.25",
+    flowLabelBits: 24,
     paddingBudgetMs: 80,
     relayTlsSpkiSha256Hex: "cc".repeat(32),
     routePushes: ["0.0.0.0/0"],
@@ -24513,9 +25288,9 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
   });
 
   const receipts = await client.listVpnReceipts({ canonicalAuth });
-  assert.deepEqual(receipts, [
-    {
-      sessionId: "sess_live",
+  assert.deepEqual(receipts, {
+    items: [{
+      sessionId,
       accountId: SAMPLE_ACCOUNT_ID,
       exitClass: "standard",
       relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24532,30 +25307,33 @@ test("getVpnSession and listVpnReceipts normalize authenticated responses", asyn
       feeAssetId: "xor#universal.universal",
       escrowAccountId: "vpn_escrow",
       operatorAccountId: SAMPLE_ACCOUNT_ID,
-      leaseFeeNanos: 1000000,
-      earnedFeeNanos: 0,
-      refundedFeeNanos: 1000000,
+      leaseFee: "1000000.25",
+      earnedFee: "0",
+      refundedFee: "1000000.25",
       leaseIdHex: quoteId,
       settleLeaseInstruction: null,
       txInstructions: [],
-    },
-  ]);
+    }],
+    total: 1,
+  });
 });
 
 test("deleteVpnSession normalizes canonical receipts", async () => {
+  const requestedSessionId = "79".repeat(32);
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 6),
   };
   const quoteId = "dd".repeat(32);
+  const sessionId = "ff".repeat(32);
   const paymentTxHash = "ee".repeat(32);
   const fetchImpl = async (url, init = {}) => {
-    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/sess_789`);
+    assert.equal(url, `${BASE_URL}/v1/vpn/sessions/${requestedSessionId}`);
     assert.equal(init.method, "DELETE");
     return createResponse({
       status: 200,
       jsonData: {
-        session_id: "sess_789",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "high-security",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24572,9 +25350,9 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        earned_fee_nanos: 0,
-        refunded_fee_nanos: "1000000",
+        lease_fee: "1000000.25",
+        earned_fee: "0",
+        refunded_fee: "1000000.25",
         lease_id_hex: quoteId,
         settle_lease_instruction: null,
         tx_instructions: [],
@@ -24582,11 +25360,10 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const receipt = await client.deleteVpnSession("sess_789", { canonicalAuth });
+  const receipt = await client.deleteVpnSession(requestedSessionId, { canonicalAuth });
   assert.deepEqual(receipt, {
-    sessionId: "sess_789",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "high-security",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24603,9 +25380,9 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    earnedFeeNanos: 0,
-    refundedFeeNanos: 1000000,
+    leaseFee: "1000000.25",
+    earnedFee: "0",
+    refundedFee: "1000000.25",
     leaseIdHex: quoteId,
     settleLeaseInstruction: null,
     txInstructions: [],
@@ -24614,21 +25391,22 @@ test("deleteVpnSession normalizes canonical receipts", async () => {
 
 test("submitVpnReceipt posts metering evidence and exposes settlement instructions", async () => {
   const canonicalAuth = {
-    accountId: SAMPLE_ACCOUNT_ID,
+    accountId: CANONICAL_AUTH_ALIAS,
     privateKey: Buffer.alloc(32, 4),
   };
   const quoteId = "12".repeat(32);
+  const sessionId = "56".repeat(32);
   const paymentTxHash = "34".repeat(32);
   const settleInstruction = {
     wire_id: "SettleVpnLease",
-    payload_hex: "0xCAFE",
+    payload_hex: "cafe",
   };
   const fetchImpl = async (url, init = {}) => {
     assert.equal(url, `${BASE_URL}/v1/vpn/receipts`);
     assert.equal(init.method, "POST");
     assert.equal(init.headers.Accept, "application/json");
     assert.equal(init.headers["Content-Type"], "application/json");
-    assert.equal(init.headers["X-Iroha-Account"], SAMPLE_ACCOUNT_ID);
+    assert.equal(init.headers["X-Iroha-Account"], CANONICAL_AUTH_ALIAS);
     assert.ok(typeof init.headers["X-Iroha-Signature"] === "string");
     assert.deepEqual(JSON.parse(init.body), {
       relay_receipt_hex: "abcd",
@@ -24638,7 +25416,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     return createResponse({
       status: 201,
       jsonData: {
-        session_id: "sess_settled",
+        session_id: sessionId,
         account_id: SAMPLE_ACCOUNT_ID,
         exit_class: "standard",
         relay_endpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24655,9 +25433,9 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
         fee_asset_id: "xor#universal.universal",
         escrow_account_id: "vpn_escrow",
         operator_account_id: SAMPLE_ACCOUNT_ID,
-        lease_fee_nanos: "1000000",
-        earned_fee_nanos: 500000,
-        refunded_fee_nanos: 500000,
+        lease_fee: "1000000.25",
+        earned_fee: "500000.125",
+        refunded_fee: "500000.125",
         lease_id_hex: quoteId,
         settle_lease_instruction: settleInstruction,
         tx_instructions: [settleInstruction],
@@ -24665,7 +25443,6 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
       headers: { "content-type": "application/json" },
     });
   };
-  markFetchSupportsRawUtf8Headers(fetchImpl);
   const client = new ToriiClient(BASE_URL, { fetchImpl });
 
   const receipt = await client.submitVpnReceipt(
@@ -24678,7 +25455,7 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
   );
 
   assert.deepEqual(receipt, {
-    sessionId: "sess_settled",
+    sessionId,
     accountId: SAMPLE_ACCOUNT_ID,
     exitClass: "standard",
     relayEndpoint: "/dns/torii.exit.example/udp/9443/quic",
@@ -24695,130 +25472,13 @@ test("submitVpnReceipt posts metering evidence and exposes settlement instructio
     feeAssetId: "xor#universal.universal",
     escrowAccountId: "vpn_escrow",
     operatorAccountId: SAMPLE_ACCOUNT_ID,
-    leaseFeeNanos: 1000000,
-    earnedFeeNanos: 500000,
-    refundedFeeNanos: 500000,
+    leaseFee: "1000000.25",
+    earnedFee: "500000.125",
+    refundedFee: "500000.125",
     leaseIdHex: quoteId,
     settleLeaseInstruction: { wireId: "SettleVpnLease", payloadHex: "cafe" },
     txInstructions: [{ wireId: "SettleVpnLease", payloadHex: "cafe" }],
   });
-});
-
-test("registerSnsName posts payload and normalizes response", async () => {
-  const nameHash = "cd".repeat(32);
-  const highestCommitment = "ab".repeat(32);
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    assert.equal(url, `${BASE_URL}/v1/sns/names`);
-    assert.equal(init.method, "POST");
-    const parsed = JSON.parse(init.body);
-    assert.equal(parsed.selector.suffix_id, 1);
-    assert.equal(parsed.selector.label, "makoto");
-    assert.equal(parsed.owner, SAMPLE_ACCOUNT_ID);
-    assert.equal(parsed.payment.asset_id, FIXTURE_ASSET_ID_A);
-    return createResponse({
-      status: 201,
-      jsonData: {
-        name_record: {
-          selector: { version: 1, suffix_id: 1, label: "makoto" },
-          name_hash: nameHash,
-          owner: SAMPLE_ACCOUNT_ID,
-          controllers: [
-            { controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } },
-          ],
-          status: { status: "Frozen", detail: { reason: "review", until_ms: 42 } },
-          pricing_class: 2,
-          registered_at_ms: 10,
-          expires_at_ms: 20,
-          grace_expires_at_ms: 30,
-          redemption_expires_at_ms: 40,
-          metadata: { note: "hi" },
-          auction: {
-            kind: "VickreyCommitReveal",
-            opened_at_ms: 1,
-            closes_at_ms: 2,
-            floor_price: { asset_id: FIXTURE_ASSET_ID_A, amount: "120" },
-            highest_commitment: highestCommitment,
-            settlement_tx: { tx: "abc" },
-          },
-        },
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const response = await client.registerSnsName({
-    selector: { suffix_id: 1, label: "makoto" },
-    owner: SAMPLE_ACCOUNT_ID,
-    term_years: 1,
-    controllers: [{ controller_type: "Account", account_address: "soraowner", payload: { note: "primary" } }],
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-    metadata: { note: "hi" },
-  });
-  assert.equal(captured.init.headers["Content-Type"], "application/json");
-  assert.equal(response.nameRecord.nameHash, nameHash);
-  assert.equal(response.nameRecord.status.status, "Frozen");
-  assert.equal(response.nameRecord.status.reason, "review");
-  assert.equal(response.nameRecord.auction?.highestCommitment, highestCommitment);
-});
-
-test("SNS mutation helpers reject unsupported option fields", async () => {
-  const fetchImpl = async () => {
-    throw new Error("fetch should not run for invalid options");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const sampleRegisterPayload = {
-    selector: { suffix_id: 1, label: "makoto" },
-    owner: SAMPLE_ACCOUNT_ID,
-    term_years: 1,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_ID }],
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-  };
-  const sampleRenewPayload = {
-    term_years: 1,
-    payment: {
-      asset_id: FIXTURE_ASSET_ID_A,
-      gross_amount: 120,
-      settlement_tx: { tx: "abc" },
-      payer: SAMPLE_ACCOUNT_ID,
-      signature: "sig",
-    },
-  };
-  const sampleTransferPayload = {
-    new_owner: SAMPLE_ACCOUNT_ID,
-    governance: {
-      proposal_id: "proposal-1",
-      council_vote_hash: "aa".repeat(32),
-      dao_vote_hash: "bb".repeat(32),
-      steward_ack: "ack",
-      guardian_clearance: "guardian-ok",
-    },
-  };
-  await assert.rejects(
-    () => client.registerSnsName(sampleRegisterPayload, { extra: true }),
-    /registerSnsName options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () => client.renewSnsRegistration("makoto.sora", sampleRenewPayload, { note: "nope" }),
-    /renewSnsRegistration options contains unsupported fields: note/,
-  );
-  await assert.rejects(
-    () => client.transferSnsRegistration("makoto.sora", sampleTransferPayload, { retry: false }),
-    /transferSnsRegistration options contains unsupported fields: retry/,
-  );
 });
 
 test("getSnsPolicy fetches and normalizes suffix policy", async () => {
@@ -24882,6 +25542,23 @@ test("SNS read helpers reject unsupported option fields", async () => {
   );
 });
 
+test("retired SNS mutation helpers are absent", () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("fetch should not run");
+    },
+  });
+  for (const method of [
+    "registerSnsName",
+    "renewSnsRegistration",
+    "transferSnsRegistration",
+    "freezeSnsRegistration",
+    "unfreezeSnsRegistration",
+  ]) {
+    assert.equal(client[method], undefined, `${method} must not remain on the public client`);
+  }
+});
+
 test("SNS domain route helpers reject padded selectors before dispatch", async () => {
   let fetchCalled = false;
   const client = new ToriiClient(BASE_URL, {
@@ -24892,10 +25569,6 @@ test("SNS domain route helpers reject padded selectors before dispatch", async (
   });
   const cases = [
     ["getSnsRegistration", () => client.getSnsRegistration(" alice.sora")],
-    ["renewSnsRegistration", () => client.renewSnsRegistration("alice.sora ", {})],
-    ["transferSnsRegistration", () => client.transferSnsRegistration(" alice.sora ", {})],
-    ["freezeSnsRegistration", () => client.freezeSnsRegistration("alice.sora ", {})],
-    ["unfreezeSnsRegistration", () => client.unfreezeSnsRegistration(" alice.sora", {})],
   ];
 
   for (const [label, action] of cases) {
@@ -24906,168 +25579,6 @@ test("SNS domain route helpers reject padded selectors before dispatch", async (
     );
   }
   assert.equal(fetchCalled, false);
-});
-
-test("registerSnsName rejects invalid controller types", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.registerSnsName({
-        selector: { suffix_id: 1, label: "bad" },
-        owner: SAMPLE_ACCOUNT_ID,
-        payment: {
-          asset_id: FIXTURE_ASSET_ID_A,
-          gross_amount: 1,
-          settlement_tx: {},
-          payer: SAMPLE_ACCOUNT_ID,
-          signature: {},
-        },
-        controllers: [{ controller_type: "Unknown" }],
-      }),
-    /controller_type must be one of/,
-  );
-});
-
-test("freezeSnsRegistration posts normalized payload and parses record", async () => {
-  const controller = new AbortController();
-  let captured;
-  const nameHash = "ab".repeat(32);
-  const responseBody = {
-    selector: { version: 1, suffix_id: 2, label: " alice " },
-    name_hash: `0x${nameHash}`,
-    owner: SAMPLE_ACCOUNT_FORMS.i105,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
-    status: { status: "Frozen", reason: "timeout", until_ms: 7000 },
-    pricing_class: 2,
-    registered_at_ms: 10,
-    expires_at_ms: 20,
-    grace_expires_at_ms: 30,
-    redemption_expires_at_ms: 40,
-    metadata: { note: "test" },
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: responseBody,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const result = await client.freezeSnsRegistration(
-    "alice.sora",
-    { reason: "  abuse report ", until_ms: 5000, guardian_ticket: { token: "grant" } },
-    { signal: controller.signal },
-  );
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
-  assert.equal(captured.init.method, "POST");
-  assert.deepEqual(JSON.parse(String(captured.init.body)), {
-    reason: "abuse report",
-    until_ms: 5000,
-    guardian_ticket: { token: "grant" },
-  });
-  assert.ok(captured.init.signal instanceof AbortSignal);
-  assert.equal(result.selector.label, "alice");
-  assert.equal(result.selector.suffix_id, 2);
-  assert.equal(result.nameHash, nameHash);
-  assert.equal(result.owner, SAMPLE_ACCOUNT_ID);
-  assert.deepEqual(result.status, { status: "Frozen", reason: "timeout", untilMs: 7000 });
-  assert.equal(result.pricingClass, 2);
-  assert.equal(result.registeredAtMs, 10);
-  assert.equal(result.controllers.length, 1);
-  assert.equal(result.controllers[0]?.controller_type, "Account");
-});
-
-test("unfreezeSnsRegistration posts governance hook payload", async () => {
-  let captured;
-  const responseBody = {
-    selector: { version: 1, suffix_id: 2, label: "alice" },
-    name_hash: "ff".repeat(32),
-    owner: SAMPLE_ACCOUNT_FORMS.i105,
-    controllers: [{ controller_type: "Account", account_address: SAMPLE_ACCOUNT_FORMS.i105 }],
-    status: "Active",
-    pricing_class: 3,
-    registered_at_ms: 100,
-    expires_at_ms: 200,
-    grace_expires_at_ms: 300,
-    redemption_expires_at_ms: 400,
-  };
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async (url, init) => {
-      captured = { url, init };
-      return createResponse({
-        status: 200,
-        jsonData: responseBody,
-        headers: { "content-type": "application/json" },
-      });
-    },
-  });
-  const result = await client.unfreezeSnsRegistration("alice.sora", {
-    proposal_id: " prop-123 ",
-    council_vote_hash: " council-hash ",
-    dao_vote_hash: " dao-hash ",
-    steward_ack: " ack ",
-    guardian_clearance: " clearance ",
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/sns/names/domain/alice/freeze`);
-  assert.equal(captured.init.method, "DELETE");
-  assert.deepEqual(JSON.parse(String(captured.init.body)), {
-    proposal_id: "prop-123",
-    council_vote_hash: "council-hash",
-    dao_vote_hash: "dao-hash",
-    steward_ack: "ack",
-    guardian_clearance: "clearance",
-  });
-  assert.equal(result.selector.label, "alice");
-  assert.equal(result.owner, SAMPLE_ACCOUNT_ID);
-  assert.deepEqual(result.status, { status: "Active" });
-  assert.equal(result.pricingClass, 3);
-});
-
-test("freeze/unfreeze SNS governance helpers enforce validation", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("fetch should not run for validation failures");
-    },
-  });
-  await assert.rejects(
-    () =>
-      client.freezeSnsRegistration("alice.sora", {
-        reason: "r",
-        until_ms: 1,
-      }),
-    /freezeSnsRegistration\.guardian_ticket must be provided/,
-  );
-  await assert.rejects(
-    () =>
-      client.freezeSnsRegistration(
-        "alice.sora",
-        { reason: "ok", until_ms: 1, guardian_ticket: {} },
-        // @ts-expect-error runtime validation
-        { extra: true },
-      ),
-    /freezeSnsRegistration options contains unsupported fields: extra/,
-  );
-  await assert.rejects(
-    () =>
-      client.unfreezeSnsRegistration(
-        "alice.sora",
-        {
-          proposal_id: "p",
-          council_vote_hash: "c",
-          dao_vote_hash: "d",
-          steward_ack: "s",
-        },
-        // @ts-expect-error runtime validation
-        { retry: false },
-      ),
-    /unfreezeSnsRegistration options contains unsupported fields: retry/,
-  );
 });
 
 test("listTelemetryPeersInfo normalizes peer telemetry metadata", async () => {
@@ -25482,7 +25993,7 @@ test("http errors surface reject header codes", async () => {
         status: 200,
         jsonData: {
           abi_version: 1,
-          data_model_version: 1,
+          data_model_version: 3,
           crypto: {
             sm: {
               enabled: false,
@@ -25550,7 +26061,7 @@ function requireSorafsNative(t) {
 function validNodeCapabilitiesPayload() {
   return {
     abi_version: 1,
-    data_model_version: 1,
+    data_model_version: 3,
     crypto: {
       sm: {
         enabled: false,
@@ -25640,10 +26151,6 @@ function createStreamedJsonResponse({ status, jsonData, headers = {} }) {
   });
 }
 
-function markFetchSupportsRawUtf8Headers(fetchImpl) {
-  fetchImpl.__irohaSupportsRawUtf8Headers = true;
-  return fetchImpl;
-}
 
 test("ToriiClient._normalizeUnsignedInteger enforces integer inputs", () => {
   assert.equal(ToriiClient._normalizeUnsignedInteger("42", "value"), 42);

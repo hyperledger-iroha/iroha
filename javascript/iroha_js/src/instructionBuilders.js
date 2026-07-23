@@ -32,6 +32,7 @@ import {
 
 const MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 const MAX_SAFE_INTEGER_BIGINT = BigInt(MAX_SAFE_INTEGER);
+const U128_MAX_BIGINT = (1n << 128n) - 1n;
 const UINT32_MAX = 0xffff_ffff;
 const DEFAULT_PRIVACY_MAX_PROOF_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PRIVACY_MAX_PUBLIC_INPUT_BYTES = 1024 * 1024;
@@ -303,6 +304,19 @@ function asNumericQuantity(value, name) {
       name,
     );
   }
+}
+
+function asPositiveProofScalarQuantity(value, name) {
+  const canonical = asNumericQuantity(value, name);
+  const quantity = NumericV1.decodeQuantityJson(canonical);
+  if (quantity.scale !== 0 || quantity.mantissa <= 0n || quantity.mantissa > U128_MAX_BIGINT) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must be a positive scale-0 quantity within the u128 proof-scalar range`,
+      name,
+    );
+  }
+  return canonical;
 }
 
 function asU128JsonNumber(value, name) {
@@ -9111,7 +9125,6 @@ function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
     ["from", "from"],
     ["to", "to"],
     ["asset", "asset"],
-    ["amount", "amount"],
   ];
   for (const [field, transferField] of scalarFields) {
     if (publicInputs[field] !== payload[field]) {
@@ -9121,6 +9134,13 @@ function ensureZkAceAuthorizationMatchesTransfer(publicInputs, payload, name) {
         `${name}.publicInputs.${field}`,
       );
     }
+  }
+  if (BigInt(publicInputs.amount) !== NumericV1.decodeQuantityJson(payload.amount).mantissa) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${name}.publicInputs.amount must match zkAceAuthorizedTransfer.amount`,
+      `${name}.publicInputs.amount`,
+    );
   }
   if (
     publicInputs.verifier_key_id.backend !== payload.proof.vk_ref.backend ||
@@ -11445,6 +11465,155 @@ function normalizeMultisigProposeInstructionInput(value, context) {
   return assertPlainObject(value, context);
 }
 
+function rejectRetiredFeeRequestFields(source, context) {
+  for (const field of [
+    "gasAssetId",
+    "gas_asset_id",
+    "feeSponsor",
+    "fee_sponsor",
+    "gasLimit",
+    "gas_limit",
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(source, field)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.${field} is retired; use feePayment`,
+        `${context}.${field}`,
+      );
+    }
+  }
+}
+
+function normalizeFeePaymentRequest(value, context, { requireGasLimit = false } = {}) {
+  const intent = assertPlainObject(value, context);
+  assertAllowedFields(intent, new Set(["payer", "value"]), context);
+  const payer = assertExactNonBlankString(intent.payer, `${context}.payer`);
+  if (payer !== "authority" && payer !== "sponsor") {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.payer must be authority or sponsor`,
+      `${context}.payer`,
+    );
+  }
+  const rawValue = assertPlainObject(intent.value, `${context}.value`);
+  const allowedValueFields = new Set(["charge_limits", "gas_limit"]);
+  if (payer === "sponsor") {
+    allowedValueFields.add("program_id");
+    allowedValueFields.add("program_revision");
+  }
+  assertAllowedFields(rawValue, allowedValueFields, `${context}.value`);
+  if (!Array.isArray(rawValue.charge_limits)) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.charge_limits must be an array`,
+      `${context}.value.charge_limits`,
+    );
+  }
+  let previousKind = -1;
+  const chargeLimits = Array.from(rawValue.charge_limits, (entry, index) => {
+    if (!Object.prototype.hasOwnProperty.call(rawValue.charge_limits, index)) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.value.charge_limits must not contain holes`,
+        `${context}.value.charge_limits[${index}]`,
+      );
+    }
+    const itemContext = `${context}.value.charge_limits[${index}]`;
+    const item = assertPlainObject(entry, itemContext);
+    assertAllowedFields(
+      item,
+      new Set(["kind", "asset_definition_id", "max_amount"]),
+      itemContext,
+    );
+    const taggedKind = assertPlainObject(item.kind, `${itemContext}.kind`);
+    assertAllowedFields(
+      taggedKind,
+      new Set(["kind", "value"]),
+      `${itemContext}.kind`,
+    );
+    const kind = assertExactNonBlankString(
+      taggedKind.kind,
+      `${itemContext}.kind.kind`,
+    );
+    const kindIndex = kind === "nexus" ? 0 : kind === "pipeline_gas" ? 1 : -1;
+    if (kindIndex < 0 || taggedKind.value !== null) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${itemContext}.kind must be the canonical nexus or pipeline_gas tagged unit`,
+        `${itemContext}.kind`,
+      );
+    }
+    if (kindIndex <= previousKind) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.value.charge_limits must be unique and ordered nexus before pipeline_gas`,
+        `${context}.value.charge_limits`,
+      );
+    }
+    previousKind = kindIndex;
+    const maxAmount = asNumericQuantity(item.max_amount, `${itemContext}.max_amount`);
+    if (NumericV1.decodeQuantityJson(maxAmount).mantissa <= 0n) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${itemContext}.max_amount must be greater than zero`,
+        `${itemContext}.max_amount`,
+      );
+    }
+    return {
+      kind: { kind, value: null },
+      asset_definition_id: normalizeAssetId(
+        item.asset_definition_id,
+        `${itemContext}.asset_definition_id`,
+      ),
+      max_amount: maxAmount,
+    };
+  });
+  const gasLimit =
+    rawValue.gas_limit === undefined || rawValue.gas_limit === null
+      ? null
+      : asPositiveInteger(rawValue.gas_limit, `${context}.value.gas_limit`);
+  if (requireGasLimit && gasLimit === null) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.value.gas_limit is required for contract execution`,
+      `${context}.value.gas_limit`,
+    );
+  }
+  const normalizedValue = { charge_limits: chargeLimits, gas_limit: gasLimit };
+  if (payer === "sponsor") {
+    const programId = assertPlainObject(
+      rawValue.program_id,
+      `${context}.value.program_id`,
+    );
+    assertAllowedFields(
+      programId,
+      new Set(["sponsor", "name"]),
+      `${context}.value.program_id`,
+    );
+    const sponsor = normalizeAccountId(
+      programId.sponsor,
+      `${context}.value.program_id.sponsor`,
+    );
+    const name = assertExactNonBlankString(
+      programId.name,
+      `${context}.value.program_id.name`,
+    );
+    if (name.normalize("NFC") !== name || /[\s@#$\/]/u.test(name)) {
+      fail(
+        ValidationErrorCode.INVALID_STRING,
+        `${context}.value.program_id.name must be a canonical Iroha Name`,
+        `${context}.value.program_id.name`,
+      );
+    }
+    normalizedValue.program_id = { sponsor, name };
+    normalizedValue.program_revision = asPositiveInteger(
+      rawValue.program_revision,
+      `${context}.value.program_revision`,
+    );
+  }
+  return { payer, value: normalizedValue };
+}
+
 /**
  * Build a normalized payload for `ToriiClient.proposeMultisig(...)`.
  * @param {object} options
@@ -11453,6 +11622,7 @@ function normalizeMultisigProposeInstructionInput(value, context) {
 export function buildMultisigProposeRequest(options) {
   const source = assertPlainObject(options, "multisigPropose");
   rejectValidationFeeSnakeCaseInputs(source, "multisigPropose");
+  rejectRetiredFeeRequestFields(source, "multisigPropose");
   const instructions = source.instructions;
   if (!Array.isArray(instructions) || instructions.length === 0) {
     fail(
@@ -11474,13 +11644,10 @@ export function buildMultisigProposeRequest(options) {
       ),
     ),
   };
-  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "multisigPropose.feeSponsor",
-    );
-  }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigPropose.feePayment",
+  );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(publicKeyHex, "multisigPropose.publicKeyHex");
@@ -11578,6 +11745,7 @@ export function buildMultisigProposeRequest(options) {
  */
 export function buildMultisigContractCallProposeRequest(options) {
   const source = assertPlainObject(options, "multisigContractCallPropose");
+  rejectRetiredFeeRequestFields(source, "multisigContractCallPropose");
   const selector = normalizeMultisigAccountSelectorInput(
     source,
     "multisigContractCallPropose",
@@ -11614,24 +11782,11 @@ export function buildMultisigContractCallProposeRequest(options) {
           },
   };
 
-  const gasAssetId = source.gasAssetId ?? source.gas_asset_id;
-  if (gasAssetId !== undefined && gasAssetId !== null) {
-    payload.gas_asset_id = normalizeAssetId(
-      gasAssetId,
-      "multisigContractCallPropose.gasAssetId",
-    );
-  }
-  const feeSponsor = source.feeSponsor ?? source.fee_sponsor;
-  if (feeSponsor !== undefined && feeSponsor !== null) {
-    payload.fee_sponsor = normalizeAccountIdOrAliasLiteral(
-      feeSponsor,
-      "multisigContractCallPropose.feeSponsor",
-    );
-  }
-  const gasLimit = source.gasLimit ?? source.gas_limit;
-  if (gasLimit !== undefined && gasLimit !== null) {
-    payload.gas_limit = asPositiveInteger(gasLimit, "multisigContractCallPropose.gasLimit");
-  }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigContractCallPropose.feePayment",
+    { requireGasLimit: true },
+  );
   const publicKeyHex = source.publicKeyHex ?? source.public_key_hex;
   if (publicKeyHex !== undefined && publicKeyHex !== null) {
     payload.public_key_hex = normalizeOptionalHexString(
@@ -11698,6 +11853,7 @@ function normalizeContractTargetSelectorInput(source, context) {
  */
 export function buildMultisigContractCallApproveRequest(options) {
   const source = assertPlainObject(options, "multisigContractCallApprove");
+  rejectRetiredFeeRequestFields(source, "multisigContractCallApprove");
   const selector = normalizeMultisigAccountSelectorInput(
     source,
     "multisigContractCallApprove",
@@ -11758,6 +11914,10 @@ export function buildMultisigContractCallApproveRequest(options) {
   if (privateKey !== null) {
     payload.private_key = privateKey;
   }
+  payload.fee_payment = normalizeFeePaymentRequest(
+    source.feePayment ?? source.fee_payment,
+    "multisigContractCallApprove.feePayment",
+  );
   return payload;
 }
 
@@ -12179,6 +12339,226 @@ export function buildRegisterSmartContractBytesInstruction(options) {
         "registerSmartContractBytes.codeHash",
       ),
       code,
+    },
+  };
+}
+
+const SMART_CONTRACT_CODE_CHUNK_BYTES = 65_536;
+const U64_MAX_VALUE = 0xffff_ffff_ffff_ffffn;
+
+function normalizeSmartContractU64(value, name) {
+  let normalized;
+  if (typeof value === "bigint") {
+    normalized = value;
+  } else if (typeof value === "number") {
+    if (!Number.isSafeInteger(value)) {
+      fail(
+        ValidationErrorCode.INVALID_NUMERIC,
+        `${name} must be a safe unsigned integer, bigint, or canonical decimal string`,
+        name,
+      );
+    }
+    normalized = BigInt(value);
+  } else if (typeof value === "string" && /^(?:0|[1-9]\d*)$/u.test(value)) {
+    normalized = BigInt(value);
+  } else {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `${name} must be an unsigned integer, bigint, or canonical decimal string`,
+      name,
+    );
+  }
+  if (normalized < 0n || normalized > U64_MAX_VALUE) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must fit in an unsigned 64-bit integer`,
+      name,
+    );
+  }
+  return normalized.toString();
+}
+
+function normalizeSmartContractExactString(value, name) {
+  const literal = assertString(value, name);
+  if (literal.length === 0 || literal.trim() !== literal || /[\u0000-\u001F\u007F]/u.test(literal)) {
+    fail(
+      ValidationErrorCode.INVALID_STRING,
+      `${name} must be a non-empty exact string without control characters`,
+      name,
+    );
+  }
+  return literal;
+}
+
+function normalizeSmartContractChunk(value, name) {
+  let buffer;
+  if (typeof value === "string") {
+    const canonical = normalizeBase64(value, name);
+    buffer = Buffer.from(canonical, "base64");
+  } else {
+    buffer = toBinaryBuffer(value, name);
+  }
+  if (buffer.length === 0 || buffer.length > SMART_CONTRACT_CODE_CHUNK_BYTES) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      `${name} must contain 1..=${SMART_CONTRACT_CODE_CHUNK_BYTES} bytes`,
+      name,
+    );
+  }
+  return buffer.toString("base64");
+}
+
+/**
+ * Build one bounded `UploadSmartContractCodeChunk` instruction.
+ * @param {{codeHash: string|Buffer, totalSize: number|bigint|string, chunkIndex: number, chunkCount: number, chunk: ArrayBufferView|ArrayBuffer|Buffer|string}} options
+ */
+export function buildUploadSmartContractCodeChunkInstruction(options) {
+  const source = assertPlainObject(options, "uploadSmartContractCodeChunk");
+  const totalSize = normalizeSmartContractU64(
+    source.totalSize ?? source.total_size,
+    "uploadSmartContractCodeChunk.totalSize",
+  );
+  const chunkIndex = normalizeU32(
+    source.chunkIndex ?? source.chunk_index,
+    "uploadSmartContractCodeChunk.chunkIndex",
+  );
+  const chunkCount = normalizePositiveU32(
+    source.chunkCount ?? source.chunk_count,
+    "uploadSmartContractCodeChunk.chunkCount",
+  );
+  if (chunkIndex >= chunkCount) {
+    fail(
+      ValidationErrorCode.VALUE_OUT_OF_RANGE,
+      "uploadSmartContractCodeChunk.chunkIndex must be less than chunkCount",
+      "uploadSmartContractCodeChunk.chunkIndex",
+    );
+  }
+  const chunk = normalizeSmartContractChunk(
+    source.chunk,
+    "uploadSmartContractCodeChunk.chunk",
+  );
+  const totalSizeBigInt = BigInt(totalSize);
+  const expectedChunkCount =
+    (totalSizeBigInt + BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES) - 1n) /
+    BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
+  if (totalSizeBigInt === 0n || expectedChunkCount !== BigInt(chunkCount)) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      "uploadSmartContractCodeChunk.chunkCount must equal ceil(totalSize / 65536)",
+      "uploadSmartContractCodeChunk.chunkCount",
+    );
+  }
+  const chunkBytes = Buffer.from(chunk, "base64").length;
+  const expectedChunkBytes =
+    chunkIndex + 1 === chunkCount
+      ? Number(totalSizeBigInt - BigInt(chunkIndex) * BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES))
+      : SMART_CONTRACT_CODE_CHUNK_BYTES;
+  if (chunkBytes !== expectedChunkBytes) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      `uploadSmartContractCodeChunk.chunk must contain exactly ${expectedChunkBytes} bytes for this descriptor`,
+      "uploadSmartContractCodeChunk.chunk",
+    );
+  }
+  return {
+    UploadSmartContractCodeChunk: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "uploadSmartContractCodeChunk.codeHash",
+      ),
+      total_size: totalSize,
+      chunk_index: chunkIndex,
+      chunk_count: chunkCount,
+      chunk,
+    },
+  };
+}
+
+/** Build a `FinalizeSmartContractCodeUpload` instruction. */
+export function buildFinalizeSmartContractCodeUploadInstruction(options) {
+  const source = assertPlainObject(options, "finalizeSmartContractCodeUpload");
+  const totalSize = normalizeSmartContractU64(
+    source.totalSize ?? source.total_size,
+    "finalizeSmartContractCodeUpload.totalSize",
+  );
+  const chunkCount = normalizePositiveU32(
+    source.chunkCount ?? source.chunk_count,
+    "finalizeSmartContractCodeUpload.chunkCount",
+  );
+  const expectedChunkCount =
+    (BigInt(totalSize) + BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES) - 1n) /
+    BigInt(SMART_CONTRACT_CODE_CHUNK_BYTES);
+  if (BigInt(totalSize) === 0n || expectedChunkCount !== BigInt(chunkCount)) {
+    fail(
+      ValidationErrorCode.INVALID_NUMERIC,
+      "finalizeSmartContractCodeUpload.chunkCount must equal ceil(totalSize / 65536)",
+      "finalizeSmartContractCodeUpload.chunkCount",
+    );
+  }
+  return {
+    FinalizeSmartContractCodeUpload: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "finalizeSmartContractCodeUpload.codeHash",
+      ),
+      total_size: totalSize,
+      chunk_count: chunkCount,
+    },
+  };
+}
+
+/** Build an owner-scoped `CancelSmartContractCodeUpload` instruction. */
+export function buildCancelSmartContractCodeUploadInstruction(options) {
+  const source = assertPlainObject(options, "cancelSmartContractCodeUpload");
+  return {
+    CancelSmartContractCodeUpload: {
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "cancelSmartContractCodeUpload.codeHash",
+      ),
+    },
+  };
+}
+
+/** Build the nonce- and alias-CAS guarded `CommitContractDeployment` instruction. */
+export function buildCommitContractDeploymentInstruction(options) {
+  const source = assertPlainObject(options, "commitContractDeployment");
+  const leaseExpiry = source.leaseExpiryMs ?? source.lease_expiry_ms;
+  const previousAddress =
+    source.expectedPreviousContractAddress ??
+    source.expected_previous_contract_address;
+  return {
+    CommitContractDeployment: {
+      expected_deploy_nonce: normalizeSmartContractU64(
+        source.expectedDeployNonce ?? source.expected_deploy_nonce,
+        "commitContractDeployment.expectedDeployNonce",
+      ),
+      contract_address: normalizeSmartContractExactString(
+        source.contractAddress ?? source.contract_address,
+        "commitContractDeployment.contractAddress",
+      ),
+      code_hash: normalizeHash(
+        source.codeHash ?? source.code_hash,
+        "commitContractDeployment.codeHash",
+      ),
+      contract_alias: normalizeSmartContractExactString(
+        source.contractAlias ?? source.contract_alias,
+        "commitContractDeployment.contractAlias",
+      ),
+      lease_expiry_ms:
+        leaseExpiry === undefined || leaseExpiry === null
+          ? null
+          : normalizeSmartContractU64(
+              leaseExpiry,
+              "commitContractDeployment.leaseExpiryMs",
+            ),
+      expected_previous_contract_address:
+        previousAddress === undefined || previousAddress === null
+          ? null
+          : normalizeSmartContractExactString(
+              previousAddress,
+              "commitContractDeployment.expectedPreviousContractAddress",
+            ),
     },
   };
 }
@@ -17805,7 +18185,7 @@ export function buildZkAceAuthorizedTransferInstruction(options) {
       source.assetDefinitionId ?? source.asset_definition_id ?? source.asset,
       "zkAceAuthorizedTransfer.asset",
     ),
-    amount: asPositiveU128JsonNumber(source.amount, "zkAceAuthorizedTransfer.amount"),
+    amount: asPositiveProofScalarQuantity(source.amount, "zkAceAuthorizedTransfer.amount"),
     identity_commitment: normalizeNonZeroFixedBytes(
       source.identityCommitment ?? source.identity_commitment,
       "zkAceAuthorizedTransfer.identityCommitment",
@@ -17935,7 +18315,7 @@ export function buildShieldInstruction(options) {
       "shield.asset",
     ),
     from: normalizeAccountId(source.fromAccountId ?? source.from, "shield.from"),
-    amount: asU128JsonNumber(source.amount, "shield.amount"),
+    amount: asNumericQuantity(source.amount, "shield.amount"),
     note_commitment: normalizeFixedBytes(source.noteCommitment ?? source.note_commitment, "shield.noteCommitment", 32),
     enc_payload: normalizeConfidentialEncryptedPayload(
       source.encPayload ?? source.enc_payload ?? source.encryptedPayload,
@@ -18084,7 +18464,10 @@ export function buildUnshieldInstruction(options) {
       "unshield.asset",
     ),
     to: normalizeAccountId(source.toAccountId ?? source.to ?? source.destinationAccountId, "unshield.to"),
-    public_amount: asU128JsonNumber(source.publicAmount ?? source.public_amount, "unshield.publicAmount"),
+    public_amount: asNumericQuantity(
+      source.publicAmount ?? source.public_amount,
+      "unshield.publicAmount",
+    ),
     inputs,
     outputs,
     proof: normalizeProofAttachment(source.proof, "unshield.proof"),

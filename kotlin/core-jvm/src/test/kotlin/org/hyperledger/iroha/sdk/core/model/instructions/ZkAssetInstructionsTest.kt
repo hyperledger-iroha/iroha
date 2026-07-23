@@ -1,13 +1,14 @@
 package org.hyperledger.iroha.sdk.core.model.instructions
 
-import java.math.BigInteger
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import org.hyperledger.iroha.sdk.address.AccountAddress
-import org.hyperledger.iroha.sdk.core.model.JsonValue
+import org.hyperledger.iroha.sdk.core.model.FeeChargeKind
+import org.hyperledger.iroha.sdk.core.model.FeeChargeLimit
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.crypto.NativeSignedTransaction
 import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
 import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
@@ -180,14 +181,14 @@ class ZkAssetInstructionsTest {
         val instruction = ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount(BigInteger("340282366920938463463374607431768211455"))
+            .setAmount("340282366920938463463374607431768211456.25")
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build()
 
         commitment[0] = 0
         assertEquals("Shield", instruction.arguments["action"])
-        assertEquals("340282366920938463463374607431768211455", instruction.amount)
+        assertEquals("340282366920938463463374607431768211456.25", instruction.amount)
         assertEquals(0x7a, instruction.noteCommitment[0].toInt())
         val exposed = instruction.noteCommitment
         exposed[0] = 0
@@ -199,9 +200,7 @@ class ZkAssetInstructionsTest {
         assertFailsWith<IllegalArgumentException> {
             ShieldInstruction.builder().setAmount("-1")
         }
-        assertFailsWith<IllegalArgumentException> {
-            ShieldInstruction.builder().setAmount("340282366920938463463374607431768211456")
-        }
+        assertFailsWith<IllegalArgumentException> { ShieldInstruction.builder().setAmount("1.0") }
         assertFailsWith<IllegalArgumentException> {
             ShieldInstruction.builder().setNoteCommitment(ByteArray(32))
         }
@@ -215,7 +214,7 @@ class ZkAssetInstructionsTest {
         val instruction = UnshieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setTo("bob")
-            .setPublicAmount("0")
+            .setPublicAmount("0.25")
             .addInput(input)
             .addOutput(output)
             .setProof(sampleProof())
@@ -226,7 +225,13 @@ class ZkAssetInstructionsTest {
         output[0] = 0
         root[0] = 0
         assertEquals("Unshield", instruction.arguments["action"])
-        assertEquals("0", instruction.publicAmount)
+        assertEquals("0.25", instruction.publicAmount)
+        assertFailsWith<IllegalArgumentException> {
+            UnshieldInstruction.builder().setPublicAmount("00.25")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            UnshieldInstruction.builder().setPublicAmount("-0.25")
+        }
         assertEquals(1, instruction.inputs.size)
         assertEquals(1, instruction.outputs.size)
         assertEquals(0x20, instruction.inputs[0][0].toInt())
@@ -304,6 +309,7 @@ class ZkAssetInstructionsTest {
                 null,
                 shield,
                 byteArrayOf(1),
+                noFeePayment(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -315,6 +321,7 @@ class ZkAssetInstructionsTest {
                 null,
                 unshield,
                 byteArrayOf(1),
+                noFeePayment(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -326,6 +333,7 @@ class ZkAssetInstructionsTest {
                 0L,
                 register,
                 byteArrayOf(1),
+                noFeePayment(),
             )
         }
         assertFailsWith<IllegalArgumentException> {
@@ -337,84 +345,29 @@ class ZkAssetInstructionsTest {
                 null,
                 shield,
                 ByteArray(0),
+                noFeePayment(),
             )
         }
     }
 
     @Test
-    fun nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch() {
-        val shield = ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("1")
-            .setNoteCommitment(fill(1, 32))
-            .setEncryptedPayload(samplePayload())
-            .build()
-        val unshield = UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("1")
-            .addInput(fill(2, 32))
-            .setProof(sampleProof())
-            .build()
-        val register = RegisterZkAssetInstruction.builder()
-            .setAsset("rose#wonderland")
-            .build()
-
-        val badGasPairs = listOf(
-            "xor#universal" to null,
-            "xor#universal" to 1L,
-            "not-base58" to 1L,
-            null to 1L,
-            "" to 1L,
-            "   " to 1L,
-            " xor#universal" to 1L,
-            "xor#universal " to 1L,
-            "xor\u0000universal" to 1L,
-            "xor#universal" to 0L,
-            "xor#universal" to -1L,
-        )
-
-        for ((gasAssetId, gasLimit) in badGasPairs) {
-            assertFailsWith<IllegalArgumentException>("shield gas pair $gasAssetId/$gasLimit") {
-                NativeSignerBridge.encodeShieldSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    "chain",
-                    "alice",
-                    0,
-                    null,
-                    shield,
-                    byteArrayOf(1),
-                    gasAssetId,
-                    gasLimit,
-                )
-            }
-            assertFailsWith<IllegalArgumentException>("unshield gas pair $gasAssetId/$gasLimit") {
-                NativeSignerBridge.encodeUnshieldSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    "chain",
-                    "alice",
-                    0,
-                    null,
-                    unshield,
-                    byteArrayOf(1),
-                    gasAssetId,
-                    gasLimit,
-                )
-            }
-            assertFailsWith<IllegalArgumentException>("register gas pair $gasAssetId/$gasLimit") {
-                NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-                    SigningAlgorithm.ED25519,
-                    "chain",
-                    "alice",
-                    0,
-                    null,
-                    register,
-                    byteArrayOf(1),
-                    gasAssetId,
-                    gasLimit,
-                )
-            }
+    fun nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch() {
+        assertFailsWith<IllegalArgumentException> {
+            FeePaymentIntent.authority(emptyList(), 0)
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, "xor#universal", "1")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "0")
+        }
+        assertFailsWith<IllegalArgumentException> {
+            FeePaymentIntent.authority(
+                listOf(
+                    FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "1"),
+                    FeeChargeLimit(FeeChargeKind.NEXUS, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "1"),
+                ),
+            )
         }
     }
 
@@ -440,8 +393,8 @@ class ZkAssetInstructionsTest {
     }
 
     @Test
-    fun nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable() {
-        assertEquals(8, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
+    fun nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable() {
+        assertEquals(21, NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION)
         if (!NativeSignerBridge.isNativeAvailable()) return
 
         val (privateKey, publicKey) = NativeSignerBridge.keypairFromSeed(
@@ -451,6 +404,10 @@ class ZkAssetInstructionsTest {
         val authority = AccountAddress.fromAccount(publicKey, "ed25519").toI105Default()
         val gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
         val gasLimit = 1_000L
+        val feePayment = FeePaymentIntent.authority(
+            listOf(FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, gasAssetId, gasLimit.toString())),
+            gasLimit,
+        )
 
         val register = RegisterZkAssetInstruction.builder()
             .setAsset(gasAssetId)
@@ -458,7 +415,7 @@ class ZkAssetInstructionsTest {
             .setAllowShield(true)
             .setAllowUnshield(true)
             .build()
-        assertNativeGasMetadata(
+        assertNativeFeePayment(
             NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
@@ -467,11 +424,9 @@ class ZkAssetInstructionsTest {
                 ttlMs = null,
                 instruction = register,
                 privateKey = privateKey,
-                gasAssetId = gasAssetId,
-                gasLimit = gasLimit,
+                feePayment = feePayment,
             ),
-            gasAssetId,
-            gasLimit,
+            feePayment,
         )
 
         val shield = ShieldInstruction.builder()
@@ -481,7 +436,7 @@ class ZkAssetInstructionsTest {
             .setNoteCommitment(fill(3, 32))
             .setEncryptedPayload(samplePayload())
             .build()
-        assertNativeGasMetadata(
+        assertNativeFeePayment(
             NativeSignerBridge.encodeShieldSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
@@ -490,11 +445,9 @@ class ZkAssetInstructionsTest {
                 ttlMs = null,
                 instruction = shield,
                 privateKey = privateKey,
-                gasAssetId = gasAssetId,
-                gasLimit = gasLimit,
+                feePayment = feePayment,
             ),
-            gasAssetId,
-            gasLimit,
+            feePayment,
         )
 
         val unshield = UnshieldInstruction.builder()
@@ -504,7 +457,7 @@ class ZkAssetInstructionsTest {
             .addInput(fill(4, 32))
             .setProof(sampleProof())
             .build()
-        assertNativeGasMetadata(
+        assertNativeFeePayment(
             NativeSignerBridge.encodeUnshieldSignedTransaction(
                 algorithm = SigningAlgorithm.ED25519,
                 chainId = "00000042",
@@ -513,11 +466,9 @@ class ZkAssetInstructionsTest {
                 ttlMs = null,
                 instruction = unshield,
                 privateKey = privateKey,
-                gasAssetId = gasAssetId,
-                gasLimit = gasLimit,
+                feePayment = feePayment,
             ),
-            gasAssetId,
-            gasLimit,
+            feePayment,
         )
     }
 
@@ -618,16 +569,18 @@ class ZkAssetInstructionsTest {
             .build()
             .arguments
 
-    private fun assertNativeGasMetadata(
+    private fun assertNativeFeePayment(
         native: NativeSignedTransaction,
-        gasAssetId: String,
-        gasLimit: Long,
+        expected: FeePaymentIntent,
     ) {
         val signed = SignedTransactionEncoder.decodeVersioned(native.versionedSignedTransaction)
         val payload = NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload())
-        assertEquals(JsonValue.string(gasAssetId), payload.metadata["gas_asset_id"])
-        assertEquals(JsonValue.number(gasLimit), payload.metadata["gas_limit"])
+        assertEquals(expected, payload.feePayment)
+        assertFalse(payload.metadata.containsKey("gas_asset_id"))
+        assertFalse(payload.metadata.containsKey("gas_limit"))
     }
+
+    private fun noFeePayment(): FeePaymentIntent = FeePaymentIntent.authority(emptyList())
 
     private fun samplePayload(): ConfidentialEncryptedPayload =
         ConfidentialEncryptedPayload(

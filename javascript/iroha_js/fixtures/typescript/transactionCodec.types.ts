@@ -10,9 +10,11 @@ import {
 } from "@iroha/iroha-js/nexus-app";
 import {
   browserTransactionCodec,
+  buildBrowserExecutableBatchPayload,
   buildBrowserTransferPayload,
   validateBrowserTransferSignable,
   type BrowserTransactionSignable,
+  type BrowserExecutableBatchInput,
   type BrowserTransferInput,
   type ValidatedBrowserTransactionSignable,
 } from "@iroha/iroha-js/transaction-codec";
@@ -26,10 +28,28 @@ const input: BrowserTransferInput = {
   sourceAssetHoldingId: "asset#sora-test-authority",
   quantity: "1",
   destinationAccountId: "sora-test-destination",
+  feePayment: { payer: "authority", chargeLimits: [] },
   metadata: { decimalAsString: "1.25", integer: 1 },
 };
 
 const stronglyTypedPayload: Uint8Array = buildBrowserTransferPayload(input);
+const batchInput: BrowserExecutableBatchInput = {
+  chainId: "compile-time-chain",
+  authority: "sora-test-authority",
+  entries: [
+    { kind: "instruction", instruction: { Log: { level: "INFO", message: "before" } } },
+    {
+      kind: "contractCall",
+      contractAddress: "sorac1example",
+      expectedCodeHash: new Uint8Array(32),
+      entrypoint: "run",
+      arguments: new Uint8Array([1, 2, 3]),
+    },
+  ],
+  feePayment: { payer: "authority", chargeLimits: [], gasLimit: 1_000 },
+};
+const stronglyTypedBatchPayload: Uint8Array =
+  buildBrowserExecutableBatchPayload(batchInput);
 const codecPayload: NexusBytes | NexusTransactionPayloadResult =
   codec.buildTransferPayload(input as unknown as Record<string, unknown>);
 declare const signable: BrowserTransactionSignable;
@@ -57,6 +77,7 @@ const invalidNoWaitOptions: NexusFinalizeOptions = {
 };
 
 void stronglyTypedPayload;
+void stronglyTypedBatchPayload;
 void codecPayload;
 void validated;
 void finalizeOptions;

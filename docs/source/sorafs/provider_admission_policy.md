@@ -65,8 +65,10 @@ Run each command via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- prov
 
 - `proposal`
   - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
-    `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
+    `--stake-pool-id=<hex32>`, `--stake-amount=<canonical XOR quantity>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, and at least one `--endpoint=<kind:host>`.
+    The stake amount is an exact canonical decimal XOR quantity (for example
+    `5` or `0.000000001`), not an integer micro-XOR projection.
   - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
     `--endpoint-attestation-expires-at=<secs>`, a certificate via
     `--endpoint-attestation-leaf=<path>` (plus optional `--endpoint-attestation-intermediate=<path>`

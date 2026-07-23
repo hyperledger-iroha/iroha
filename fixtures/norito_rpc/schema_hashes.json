@@ -1,17 +1,7 @@
 {
   "version": 1,
-  "generated_at": "2026-03-07T02:01:03.852996Z",
+  "generated_at": "2026-07-19T21:06:43.273492Z",
   "entries": [
-    {
-      "type_name": "iroha_data_model::sns::FreezeNameRequestV1",
-      "alias": "FreezeNameRequestV1",
-      "schema_hash": "0xed3b6088f6b7a7b079c0cbb0c2f2d5bb"
-    },
-    {
-      "type_name": "iroha_data_model::sns::GovernanceHookV1",
-      "alias": "GovernanceHookV1",
-      "schema_hash": "0xdbdd33378042c5998bab1c607d700c8e"
-    },
     {
       "type_name": "iroha_data_model::sns::NameControllerV1",
       "alias": "NameControllerV1",
@@ -33,31 +23,6 @@
       "schema_hash": "0x3829c0ac3a3ff22c91ee78ddc1ae2586"
     },
     {
-      "type_name": "iroha_data_model::sns::PaymentProofV1",
-      "alias": "PaymentProofV1",
-      "schema_hash": "0x68f44e552735f863ee0187c677cc540c"
-    },
-    {
-      "type_name": "iroha_data_model::sns::RegisterNameRequestV1",
-      "alias": "RegisterNameRequestV1",
-      "schema_hash": "0x38c9eb620abff3e394861ad27d036c49"
-    },
-    {
-      "type_name": "iroha_data_model::sns::RegisterNameResponseV1",
-      "alias": "RegisterNameResponseV1",
-      "schema_hash": "0x00f0914ff4b772a71e790722a73271f4"
-    },
-    {
-      "type_name": "iroha_data_model::sns::RenewNameRequestV1",
-      "alias": "RenewNameRequestV1",
-      "schema_hash": "0x0bced9570ead5ac240f336fb7f7ee515"
-    },
-    {
-      "type_name": "iroha_data_model::sns::ReservedAssignmentRequestV1",
-      "alias": "ReservedAssignmentRequestV1",
-      "schema_hash": "0xe2c8e81407078fee1b58bf11d775f4d9"
-    },
-    {
       "type_name": "iroha_data_model::transaction::signed::model::SignedTransaction",
       "alias": "SignedTransaction",
       "schema_hash": "0x7ab5ff9c572efb316deac478f19209c5"
@@ -71,16 +36,6 @@
       "type_name": "iroha_data_model::transaction::signed::model::TransactionPayload",
       "alias": "TransactionPayload",
       "schema_hash": "0x6bb8ee3fc1560f7ab7a11c3ec37b1d36"
-    },
-    {
-      "type_name": "iroha_data_model::sns::TransferNameRequestV1",
-      "alias": "TransferNameRequestV1",
-      "schema_hash": "0x6ecf80f23cd75020f472ca658e0b80d4"
-    },
-    {
-      "type_name": "iroha_data_model::sns::UpdateControllersRequestV1",
-      "alias": "UpdateControllersRequestV1",
-      "schema_hash": "0xa164ec815765e3bbc22b15aeed3dac1e"
     }
   ]
 }

@@ -3,6 +3,8 @@
 use norito::derive::{JsonDeserialize, JsonSerialize, NoritoDeserialize, NoritoSerialize};
 use thiserror::Error;
 
+use crate::deal::XorQuantity;
+
 /// Schema version for [`SorafsReconciliationReportV1`].
 pub const SORAFS_RECONCILIATION_REPORT_VERSION_V1: u8 = 1;
 
@@ -53,9 +55,9 @@ pub struct AppealFinanceReconciliationSummaryV1 {
     /// Number of appeal cases represented by included rollups.
     pub case_count: u64,
     /// Total treasury-bound XOR represented by included rollups.
-    pub total_treasury_xor: String,
+    pub total_treasury_xor: XorQuantity,
     /// Total forfeited reward XOR represented by included rollups.
-    pub total_rewards_forfeited_treasury_xor: String,
+    pub total_rewards_forfeited_treasury_xor: XorQuantity,
 }
 
 impl SorafsReconciliationReportV1 {
@@ -80,16 +82,6 @@ impl AppealFinanceReconciliationSummaryV1 {
     fn validate(&self) -> Result<(), ReconciliationValidationError> {
         if self.rollup_count > 0 && self.rollup_snapshot_hash == [0u8; 32] {
             return Err(ReconciliationValidationError::InvalidAppealFinanceSnapshotHash);
-        }
-        if self.total_treasury_xor.trim().is_empty() {
-            return Err(ReconciliationValidationError::InvalidAppealFinanceAmount {
-                field: "total_treasury_xor",
-            });
-        }
-        if self.total_rewards_forfeited_treasury_xor.trim().is_empty() {
-            return Err(ReconciliationValidationError::InvalidAppealFinanceAmount {
-                field: "total_rewards_forfeited_treasury_xor",
-            });
         }
         Ok(())
     }
@@ -140,15 +132,15 @@ mod tests {
                 rollup_count: 1,
                 source_report_count: 2,
                 case_count: 2,
-                total_treasury_xor: "130".to_string(),
-                total_rewards_forfeited_treasury_xor: "25".to_string(),
+                total_treasury_xor: "130".parse().expect("canonical XOR quantity"),
+                total_rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR quantity"),
             }),
         };
         report.validate().expect("report should validate");
     }
 
     #[test]
-    fn reconciliation_report_rejects_empty_appeal_finance_amount() {
+    fn reconciliation_report_rejects_missing_appeal_finance_snapshot_hash() {
         let report = SorafsReconciliationReportV1 {
             version: SORAFS_RECONCILIATION_REPORT_VERSION_V1,
             provider_id: [0x11; 32],
@@ -162,20 +154,18 @@ mod tests {
             gc_freed_bytes_total: 5,
             divergence_count: 0,
             appeal_finance: Some(AppealFinanceReconciliationSummaryV1 {
-                rollup_snapshot_hash: [0x04; 32],
+                rollup_snapshot_hash: [0; 32],
                 rollup_count: 1,
                 source_report_count: 2,
                 case_count: 2,
-                total_treasury_xor: String::new(),
-                total_rewards_forfeited_treasury_xor: "25".to_string(),
+                total_treasury_xor: XorQuantity::zero(),
+                total_rewards_forfeited_treasury_xor: "25".parse().expect("canonical XOR quantity"),
             }),
         };
 
         assert_eq!(
             report.validate(),
-            Err(ReconciliationValidationError::InvalidAppealFinanceAmount {
-                field: "total_treasury_xor",
-            })
+            Err(ReconciliationValidationError::InvalidAppealFinanceSnapshotHash)
         );
     }
 }

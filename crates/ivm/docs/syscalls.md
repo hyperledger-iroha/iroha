@@ -171,8 +171,34 @@ Lifecycle / Utility
   - Reads a public input by name from the on-chain registry `Parameters.custom["ivm_public_inputs"]`.
   - Registry entries are JSON objects: `{ "name": "<Name>", "type_id": <u16>, "tlv_hex": "<hex>" }` with optional `gas_base`/`gas_per_byte` (`tlv_hex` is the full TLV envelope; `0x` prefix allowed).
   - Missing names return `PermissionDenied`; malformed name TLVs or ABI-disallowed types raise syscall errors. Invalid registry entries are skipped during host hydration.
-- 0xFD GET_PRIVATE_INPUT — Args: `r10=index:u64` → Return: `r10=value` — Gas: G_get_priv
+- 0xF8 PRIVATE_NUMERIC_VALCOM — Args: `r10=private typed numeric TLV`, `r11=private typed numeric TLV` → Return: `r10=public int TLV containing the complete compressed Pedersen point` — Gas: G_private_numeric_valcom
+  - Each complete typed numeric TLV is projected with its nominal kind and ABI
+    domains. The resulting 256-bit digest is reduced modulo the BLS12-381
+    scalar order by exactly two unconditional constant-time
+    conditional-subtract rounds; the path contains no secret-dependent
+    division, loop, branch, or `u64` truncation.
+  - The independent BLS12-381 G1 blinding generator is the ABI-bound compressed
+    point `892a15529e5d0a920b4765f578519d79a193903553c1e6676a3cc9b8c89fc1970cba9e5f648bdfd7440dd7d9efb62e26`.
+    Runtime decodes this fixed subgroup point; a release test requires it to
+    equal `hash_to_curve("KOTODAMA_PRIVATE_NUMERIC_VALCOM_H_V1", DST, [])`.
+- 0xFD GET_PRIVATE_INPUT — Args: `r10=index:u64`, `r11=kind (int=0, decimal=1, quantity=2)` → Return: `r10=opaque private typed numeric TLV` — Gas: G_get_priv
+  - Available only to local/prover/test hosts. Ordinary production consensus
+    dispatch rejects every seiyaku selector with a reachable
+    `GET_PRIVATE_INPUT`, including helper-hidden calls.
+  - Consensus `CoreHost` also returns `PermissionDenied` from quote preparation
+    and direct execution, independently of selector resolution. It never
+    forwards this syscall to the local/prover `DefaultHost` transport.
+  - Raw witness bytes must never enter signed transactions, `IvmProved`
+    payloads, overlays, public argument records, or deterministic validator
+    replay. The gate can be removed only when the proof statement binds the
+    seiyaku address and code hash, selector, public arguments, authority and
+    chain, state root and exact read/write sets, outputs and events, gas
+    schedule and ceiling, and circuit and verifier-key versions.
 - 0xFE COMMIT_OUTPUT — Args: none → Return: `u64=0` — Gas: G_commit
+
+The retired `0xFB USE_NULLIFIER` number is not in ABI V1. Deployable bytecode
+that contains it is rejected as `UnknownSyscall`; its invocation-local `u64`
+set was neither full-width nor durable across transactions.
 
 For the SM4 calls, the host appends the authentication tag to the ciphertext output; callers supply the same layout when invoking the corresponding `OPEN` syscall. `SM4_GCM_*` always uses a 16-byte tag and 12-byte nonce. `SM4_CCM_*` accepts nonce lengths between 7 and 13 bytes and tag sizes {4,6,8,10,12,14,16}; pass the desired tag length in `r14` (use `0` to select 16). Passing `0` in `r12` denotes an empty AAD. Gas charges a fixed SM4 base plus AAD bytes and plaintext/ciphertext bytes inspected, including validation-failure paths after pointer decoding.
 
@@ -461,7 +487,6 @@ Soracloud runtime host surface
 
 ZK Helpers
 - 0xF9 GET_ACCOUNT_BALANCE — Args: `r10=&AccountId, r11=&AssetDefinitionId` → `ptr (&Quantity)` — Gas: G_get_bal
-- 0xFB USE_NULLIFIER — Args: `r10=nullifier:u64` → `u64=0` — Gas: G_use_null
 - 0xFC VERIFY_SIGNATURE — Args: `r10=&Blob(message)`, `r11=&Blob(signature)`, `r12=&Blob(pubkey)`, `r13=scheme:u8` → `r10=0/1` — Gas: G_verify_sig + bytes
 
 Hardware / Proofs
@@ -679,11 +704,11 @@ node enforces that policy unconditionally.
 | 0xF5 | GROW_HEAP | r10=bytes:u64 | u64=new_limit | asset:gas/G_grow_heap@ivm.core/v2 per page |
 | 0xF6 | VERIFY_PROOF | r10=&NoritoBytes(OpenVerifyEnvelope) | r10=0/1, r11=status:u64 | asset:gas/G_verify_proof@ivm.core/v2 + bytes |
 | 0xF7 | GET_MERKLE_PATH | r10=addr:u64, r11=out:u64, r12=root_out?:u64 | u64=len | asset:gas/G_mpath@ivm.core/v2 + len |
+| 0xF8 | PRIVATE_NUMERIC_VALCOM | r10=private:&Int|&Decimal|&Quantity(value), r11=private:&Int|&Decimal|&Quantity(blind) | r10=public:&Int(full compressed Pedersen point) | asset:gas/G_private_numeric_valcom@ivm.core/v2 |
 | 0xF9 | GET_ACCOUNT_BALANCE | r10=&AccountId, r11=&AssetDefinitionId | ptr (&Quantity) | asset:gas/G_get_bal@ivm.core/v2 |
 | 0xFA | GET_MERKLE_COMPACT | r10=addr, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
-| 0xFB | USE_NULLIFIER | r10=nullifier:u64 | u64=0 | asset:gas/G_use_null@ivm.core/v2 |
 | 0xFC | VERIFY_SIGNATURE | r10=&Blob(message), r11=&Blob(signature), r12=&Blob(pubkey), r13=scheme:u8 | r10=0/1 | asset:gas/G_verify_sig@ivm.core/v2 + bytes |
-| 0xFD | GET_PRIVATE_INPUT | r10=index:u64 | r10=value | asset:gas/G_get_priv@ivm.core/v2 |
+| 0xFD | GET_PRIVATE_INPUT | r10=index:u64, r11=PrivateInputKindV1 | r10=private:&Int|&Decimal|&Quantity | asset:gas/G_get_priv@ivm.core/v2 |
 | 0xFE | COMMIT_OUTPUT | - | u64=0 | asset:gas/G_commit@ivm.core/v2 |
 | 0xFF | GET_REGISTER_MERKLE_COMPACT | r10=reg, r11=out, r12=depth_cap?, r13=root_out? | u64=depth | asset:gas/G_mpath@ivm.core/v2 + depth |
 | 0x10000 | QUERY_EXECUTE_NORITO | r10=&NoritoBytes(QueryRequest) | r10=ptr (&NoritoBytes(QueryResponse)) | asset:gas/G_scq@ivm.core/v2 |

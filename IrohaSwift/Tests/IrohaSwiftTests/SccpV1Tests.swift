@@ -134,32 +134,41 @@ final class SccpV1Tests: XCTestCase {
             payload: Data([1])
         ).base64EncodedString()
         let signature = try privateKey.signature(for: Data(repeating: 7, count: 32)).base64EncodedString()
-        let transactionPayload = Data([1, 2, 3]).base64EncodedString()
+        let transactionPayload = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7
+        ).base64EncodedString()
         let request = try ToriiBridgeProofSubmitRequest(
             authority: authority,
             destinationProofB64: artifact,
             signatureB64: signature,
             transactionPayloadB64: transactionPayload,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
         XCTAssertEqual(Set(json.keys), [
-            "authority", "signature_b64", "transaction_payload_b64",
+            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
             "destination_proof_b64", "creation_time_ms",
         ])
+        XCTAssertEqual(
+            (json["fee_payment"] as? [String: Any])?["payer"] as? String,
+            "authority"
+        )
         XCTAssertEqual(json["transaction_payload_b64"] as? String, transactionPayload)
         let messageRequest = try ToriiBridgeMessageSubmitRequest(
             authority: authority,
             nativeProofB64: nativeArtifact,
             signatureB64: signature,
             transactionPayloadB64: transactionPayload,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         let messageJSON = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(messageRequest)) as? [String: Any]
         )
         XCTAssertEqual(Set(messageJSON.keys), [
-            "authority", "signature_b64", "transaction_payload_b64",
+            "authority", "fee_payment", "signature_b64", "transaction_payload_b64",
             "native_proof_b64", "creation_time_ms",
         ])
         for retired in ["public_key_hex", "message_bundle_b64", "network_id_hex", "proof_bytes_hex", "allow_unready"] {
@@ -167,32 +176,39 @@ final class SccpV1Tests: XCTestCase {
         }
         let preparation = try ToriiBridgeProofSubmitRequest(
             authority: authority,
-            destinationProofB64: artifact
+            destinationProofB64: artifact,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         )
         let preparationJSON = try XCTUnwrap(
             JSONSerialization.jsonObject(with: JSONEncoder().encode(preparation)) as? [String: Any]
         )
         XCTAssertNil(preparationJSON["signature_b64"])
         XCTAssertNil(preparationJSON["transaction_payload_b64"])
-        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(authority: authority, destinationProofB64: "AQ=="))
-        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(authority: authority, destinationProofB64: artifact, signatureB64: "AQ=="))
+        XCTAssertNotNil(preparationJSON["fee_payment"])
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(authority: authority, destinationProofB64: "AQ==",
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),))
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(authority: authority, destinationProofB64: artifact, signatureB64: "AQ==",
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
             authority: authority,
             destinationProofB64: artifact,
             signatureB64: signature,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
             authority: authority,
             destinationProofB64: artifact,
             transactionPayloadB64: transactionPayload,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
             authority: authority,
             destinationProofB64: artifact,
             signatureB64: signature,
-            transactionPayloadB64: transactionPayload
+            transactionPayloadB64: transactionPayload,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         let genericSignature = Data(repeating: 1, count: 65).base64EncodedString()
         XCTAssertNoThrow(try SccpSubmitValidation.optionalSignature(genericSignature))
@@ -201,16 +217,132 @@ final class SccpV1Tests: XCTestCase {
             destinationProofB64: artifact,
             signatureB64: Data(repeating: 0, count: 64).base64EncodedString(),
             transactionPayloadB64: transactionPayload,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
             authority: authority,
             destinationProofB64: artifact,
             signatureB64: Data(repeating: 1, count: 16 * 1024 + 1).base64EncodedString(),
             transactionPayloadB64: transactionPayload,
-            creationTimeMs: 7
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
-        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: nativeArtifact, creationTimeMs: 0))
+        XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(authority: authority, nativeProofB64: nativeArtifact, creationTimeMs: 0,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),))
+    }
+
+    func testSubmitPreservesTypedFeePaymentIntents() throws {
+        let authority = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x51, count: 32))
+            .toI105(networkPrefix: SccpV1.tairaI105DiscriminantV1)
+        let sponsor = try AccountAddress
+            .fromAccount(publicKey: Data(repeating: 0x52, count: 32))
+            .toI105(networkPrefix: AccountId.defaultNetworkPrefix)
+        var assetDefinitionBytes = Data(repeating: 0x53, count: 16)
+        assetDefinitionBytes[6] = (assetDefinitionBytes[6] & 0x0f) | 0x40
+        assetDefinitionBytes[8] = (assetDefinitionBytes[8] & 0x3f) | 0x80
+        let assetDefinitionId = try XCTUnwrap(
+            AssetDefinitionAddress.encode(uuidBytes: assetDefinitionBytes)
+        )
+        let limits = [
+            try FeeChargeLimit(
+                kind: .nexus,
+                assetDefinitionId: assetDefinitionId,
+                maxAmount: "3.25"
+            ),
+            try FeeChargeLimit(
+                kind: .pipelineGas,
+                assetDefinitionId: assetDefinitionId,
+                maxAmount: "9"
+            ),
+        ]
+        let programId = try FeeSponsorProgramId(sponsor: sponsor, name: "sccp_bridge")
+        let requestedIntents: [FeePaymentIntent] = [
+            .authority(chargeLimits: [], gasLimit: 500_000),
+            .sponsor(
+                programId: programId,
+                programRevision: 7,
+                chargeLimits: [],
+                gasLimit: 750_000
+            ),
+        ]
+        let quotedIntents: [FeePaymentIntent] = [
+            .authority(chargeLimits: limits, gasLimit: 500_000),
+            .sponsor(
+                programId: programId,
+                programRevision: 7,
+                chargeLimits: limits,
+                gasLimit: 750_000
+            ),
+        ]
+        let artifact = noritoEncode(
+            typeName: SccpSubmitValidation.destinationArtifactTypeName,
+            payload: Data([1])
+        ).base64EncodedString()
+        let signature = Data(repeating: 1, count: 64).base64EncodedString()
+
+        for (requestedIntent, quotedIntent) in zip(requestedIntents, quotedIntents) {
+            let transactionPayload = try canonicalSccpTransactionPayload(
+                authority: authority,
+                creationTimeMs: 7,
+                feePayment: quotedIntent
+            )
+            let request = try ToriiBridgeProofSubmitRequest(
+                authority: authority,
+                destinationProofB64: artifact,
+                signatureB64: signature,
+                transactionPayloadB64: transactionPayload.base64EncodedString(),
+                creationTimeMs: 7,
+                feePayment: requestedIntent,
+            )
+            XCTAssertEqual(request.feePayment, requestedIntent)
+            XCTAssertEqual(
+                request.transactionPayloadB64,
+                transactionPayload.base64EncodedString(),
+                "SCCP validation must preserve the quoted, signature-bound transaction bytes"
+            )
+        }
+
+        let sponsoredPayload = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            feePayment: quotedIntents[1]
+        )
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: artifact,
+            signatureB64: signature,
+            transactionPayloadB64: sponsoredPayload.base64EncodedString(),
+            creationTimeMs: 7,
+            feePayment: requestedIntents[0]
+        ))
+        let authorityPayload = try canonicalSccpTransactionPayload(
+            authority: authority,
+            creationTimeMs: 7,
+            feePayment: quotedIntents[0]
+        )
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: artifact,
+            signatureB64: signature,
+            transactionPayloadB64: authorityPayload.base64EncodedString(),
+            creationTimeMs: 7,
+            feePayment: .authority(chargeLimits: [], gasLimit: 500_001)
+        ))
+        XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
+            authority: authority,
+            destinationProofB64: artifact,
+            signatureB64: signature,
+            transactionPayloadB64: sponsoredPayload.base64EncodedString(),
+            creationTimeMs: 7,
+            feePayment: .sponsor(
+                programId: programId,
+                programRevision: 8,
+                chargeLimits: [],
+                gasLimit: 750_000
+            )
+        ))
     }
 
     func testSubmitAuthorityRequiresExactTairaDiscriminant() throws {
@@ -228,11 +360,13 @@ final class SccpV1Tests: XCTestCase {
         XCTAssertTrue(authority.hasPrefix("test"))
         XCTAssertNoThrow(try ToriiBridgeProofSubmitRequest(
             authority: authority,
-            destinationProofB64: artifact
+            destinationProofB64: artifact,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
-            nativeProofB64: nativeArtifact
+            nativeProofB64: nativeArtifact,
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
 
         var checksumMutation = authority
@@ -249,11 +383,13 @@ final class SccpV1Tests: XCTestCase {
         for (label, invalidAuthority) in invalidAuthorities {
             XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
                 authority: invalidAuthority,
-                destinationProofB64: artifact
+                destinationProofB64: artifact,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             ), label)
             XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
                 authority: invalidAuthority,
-                nativeProofB64: nativeArtifact
+                nativeProofB64: nativeArtifact,
+                feePayment: .authority(chargeLimits: [], gasLimit: nil),
             ), label)
         }
     }
@@ -272,19 +408,23 @@ final class SccpV1Tests: XCTestCase {
         )
         XCTAssertNoThrow(try ToriiBridgeProofSubmitRequest(
             authority: authority,
-            destinationProofB64: destination.base64EncodedString()
+            destinationProofB64: destination.base64EncodedString(),
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertNoThrow(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
-            nativeProofB64: native.base64EncodedString()
+            nativeProofB64: native.base64EncodedString(),
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
             authority: authority,
-            destinationProofB64: native.base64EncodedString()
+            destinationProofB64: native.base64EncodedString(),
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
             authority: authority,
-            nativeProofB64: destination.base64EncodedString()
+            nativeProofB64: destination.base64EncodedString(),
+            feePayment: .authority(chargeLimits: [], gasLimit: nil),
         ))
         for frame in [destination, native] {
             var padded = Data(frame.prefix(NoritoHeader.encodedLength))
@@ -293,12 +433,14 @@ final class SccpV1Tests: XCTestCase {
             if frame == destination {
                 XCTAssertThrowsError(try ToriiBridgeProofSubmitRequest(
                     authority: authority,
-                    destinationProofB64: padded.base64EncodedString()
+                    destinationProofB64: padded.base64EncodedString(),
+                    feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 ))
             } else {
                 XCTAssertThrowsError(try ToriiBridgeMessageSubmitRequest(
                     authority: authority,
-                    nativeProofB64: padded.base64EncodedString()
+                    nativeProofB64: padded.base64EncodedString(),
+                    feePayment: .authority(chargeLimits: [], gasLimit: nil),
                 ))
             }
         }
@@ -1678,5 +1820,33 @@ final class SccpV1Tests: XCTestCase {
             "transaction_payload_b64": transactionPayload as Any? ?? NSNull(),
             "signing_message_b64": signingMessage as Any? ?? NSNull(),
         ])
+    }
+
+    private func canonicalSccpTransactionPayload(
+        authority: String,
+        creationTimeMs: UInt64,
+        feePayment: FeePaymentIntent = .authority(chargeLimits: [], gasLimit: nil)
+    ) throws -> Data {
+        var chain = CompactNoritoWriter()
+        chain.writeField(CompactNorito.encodeString("sccp-test"))
+        let address = try AccountAddress.parseEncoded(
+            authority,
+            expectedPrefix: SccpV1.tairaI105DiscriminantV1
+        )
+        var creation = CompactNoritoWriter()
+        creation.writeUInt64LE(creationTimeMs)
+        var emptyMetadata = CompactNoritoWriter()
+        emptyMetadata.writeLength(0)
+
+        var payload = CompactNoritoWriter()
+        payload.writeField(chain.data)
+        payload.writeField(try address.compactNoritoAccountControllerPayload())
+        payload.writeField(creation.data)
+        payload.writeField(Data([1]))
+        payload.writeField(Data([0]))
+        payload.writeField(Data([0]))
+        payload.writeField(try feePayment.compactNorito())
+        payload.writeField(emptyMetadata.data)
+        return payload.data
     }
 }

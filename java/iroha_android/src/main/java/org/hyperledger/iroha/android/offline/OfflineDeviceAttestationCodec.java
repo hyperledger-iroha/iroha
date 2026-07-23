@@ -93,7 +93,7 @@ final class OfflineDeviceAttestationCodec {
           value.assetDefinitionId(),
           value.androidPackageName(),
           value.androidSigningCertificateSha256(),
-          value.publicKey(),
+          value.publicKey().sec1Bytes(),
           value.recentBlockHeight(),
           value.recentBlockHash(),
           value.expiresAtMs());
@@ -128,7 +128,7 @@ final class OfflineDeviceAttestationCodec {
             assetDefinitionId,
             androidPackageName,
             androidSigningCertificateSha256,
-            publicKey,
+            KagemushaP256Codec.requireUncompressedPublicKey(publicKey),
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs);
@@ -160,7 +160,7 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, value.iosEnvironment()));
       field(encoder, child -> optionString(child, value.androidPackageName()));
       field(encoder, child -> optionBytes(child, value.androidSigningCertificateSha256()));
-      field(encoder, child -> bytes(child, value.publicKey()));
+      field(encoder, child -> p256PublicKey(child, value.publicKey().sec1Bytes()));
       field(encoder, child -> string(child, value.assertionScheme()));
       field(encoder, child -> string(child, value.assertionKeyAlgorithm()));
       field(encoder, child -> bytes(child, value.assertionPublicKey()));
@@ -191,7 +191,8 @@ final class OfflineDeviceAttestationCodec {
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionString),
           readField(decoder, OfflineDeviceAttestationCodec::readOptionBytes),
-          readField(decoder, OfflineDeviceAttestationCodec::readBytes),
+          new KagemushaDevicePublicKeyV2(
+              readField(decoder, OfflineDeviceAttestationCodec::readP256PublicKey)),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
           readField(decoder, OfflineDeviceAttestationCodec::readString),
           readField(decoder, OfflineDeviceAttestationCodec::readBytes),
@@ -237,7 +238,9 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, value.registration.iosEnvironment()));
       field(encoder, child -> optionString(child, value.registration.androidPackageName()));
       field(encoder, child -> optionBytes(child, value.registration.androidSigningCertificateSha256()));
-      field(encoder, child -> bytes(child, value.registration.publicKey()));
+      field(
+          encoder,
+          child -> p256PublicKey(child, value.registration.publicKey().sec1Bytes()));
       field(encoder, child -> string(child, value.registration.assertionScheme()));
       field(encoder, child -> string(child, value.registration.assertionKeyAlgorithm()));
       field(encoder, child -> optionU32(child, value.registration.assertionUsageCountLimit()));
@@ -267,7 +270,7 @@ final class OfflineDeviceAttestationCodec {
       field(encoder, child -> optionString(child, null));
       field(encoder, child -> optionString(child, value.androidPackageName));
       field(encoder, child -> optionBytes(child, value.androidSigningCertificateSha256));
-      field(encoder, child -> bytes(child, value.publicKey));
+      field(encoder, child -> p256PublicKey(child, value.publicKey));
       field(encoder, child -> string(child, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_SCHEME));
       field(encoder, child -> string(child, DeviceAttestationRegistration.ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM));
       field(encoder, child -> optionU32(child, 1));
@@ -329,9 +332,7 @@ final class OfflineDeviceAttestationCodec {
       if (this.androidSigningCertificateSha256.length != 32) {
         throw new IllegalArgumentException("android_signing_certificate_sha256 must be 32 bytes");
       }
-      if (this.publicKey.length != 32) {
-        throw new IllegalArgumentException("public_key must be 32 bytes");
-      }
+      KagemushaP256Codec.requireUncompressedPublicKey(this.publicKey);
       if (recentBlockHeight <= 0 || expiresAtMs <= 0) {
         throw new IllegalArgumentException("challenge lifetime fields must be positive");
       }
@@ -391,6 +392,19 @@ final class OfflineDeviceAttestationCodec {
 
   private static byte[] readBytes(final NoritoDecoder decoder) {
     return decoder.readBytes(checkedLength(decoder.readUInt(64), "byte vector"));
+  }
+
+  private static void p256PublicKey(final NoritoEncoder encoder, final byte[] value) {
+    final byte[] key = KagemushaP256Codec.requireUncompressedPublicKey(value);
+    encoder.writeBytes(key);
+  }
+
+  private static byte[] readP256PublicKey(final NoritoDecoder decoder) {
+    if (decoder.remaining() != KagemushaP256Codec.PUBLIC_KEY_BYTES) {
+      throw new IllegalArgumentException("P-256 public key must contain exactly 65 bytes");
+    }
+    return KagemushaP256Codec.requireUncompressedPublicKey(
+        decoder.readBytes(KagemushaP256Codec.PUBLIC_KEY_BYTES));
   }
 
   private static void optionString(final NoritoEncoder encoder, final String value) {

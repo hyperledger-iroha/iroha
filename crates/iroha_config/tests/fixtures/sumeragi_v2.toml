@@ -1,5 +1,10 @@
 extends = ["minimal_with_trusted_peers.toml"]
 
+[network]
+# The explicit small Sumeragi queues below reserve one exact three-class
+# fanout for this authenticated-source geometry.
+max_total_connections = 32
+
 [kura]
 block_sync_roster_retention = 8192
 
@@ -13,7 +18,10 @@ proposal_queue_scan_multiplier = 3
 
 [sumeragi.queues]
 commands = 512
+authenticated_non_validator_sources = 2
 bodies = 96
+body_bytes = 71303168
+body_source_bytes = 17825792
 chunks = 768
 ready_bodies = 48
 

@@ -16,6 +16,16 @@ includeBuild("../norito_java") {
     }
 }
 
+// Reuse the default pure JVM transport state machines from Java instead of
+// maintaining a second cryptographic IPN1/NFC implementation.
+includeBuild("../../kotlin") {
+    name = "iroha_kotlin_sdk"
+    dependencySubstitution {
+        substitute(module("org.hyperledger.iroha.sdk:core-jvm")).using(project(":core-jvm"))
+        substitute(module("org.hyperledger.iroha.sdk:client-android")).using(project(":client-android"))
+    }
+}
+
 include("jvm")
 project(":jvm").projectDir = file("jvm")
 

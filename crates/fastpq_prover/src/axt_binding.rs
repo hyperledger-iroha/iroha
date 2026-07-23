@@ -12,6 +12,7 @@ use sha2::Digest;
 
 use crate::{
     Error, OperationKind, PublicInputs, Result, StateTransition, TransitionBatch,
+    gadgets::transfer::decode_transcripts,
     proof::{Proof, verify},
 };
 
@@ -404,7 +405,7 @@ fn verify_batch_matches_binding(batch: &TransitionBatch, binding: &AxtFastpqBind
     }
     let seal = axt_batch_seal(batch, &canonical)?;
     require_metadata_eq(batch, AXT_FASTPQ_BATCH_SEAL_METADATA_KEY, &seal)?;
-    require_transfer_claim_witnesses(batch, canonical.claim_type.as_str())?;
+    require_transfer_claim_witnesses(batch, &context, canonical.claim_type.as_str())?;
     Ok(())
 }
 
@@ -445,7 +446,11 @@ fn require_concrete_execution_batch(
     )
 }
 
-fn require_transfer_claim_witnesses(batch: &TransitionBatch, claim_type: &str) -> Result<()> {
+fn require_transfer_claim_witnesses(
+    batch: &TransitionBatch,
+    context: &BindingContext<'_>,
+    claim_type: &str,
+) -> Result<()> {
     if matches!(claim_type, "tx_predicate" | "value_conservation") {
         let has_transfer = batch
             .transitions
@@ -456,7 +461,23 @@ fn require_transfer_claim_witnesses(batch: &TransitionBatch, claim_type: &str) -
                 details: "transfer AXT claim must carry transfer transitions".into(),
             });
         }
-        required_metadata(batch, TRANSFER_TRANSCRIPTS_METADATA_KEY)?;
+        let transcripts =
+            decode_transcripts(&batch.metadata)?.ok_or_else(|| Error::MissingMetadata {
+                key: TRANSFER_TRANSCRIPTS_METADATA_KEY.to_owned(),
+            })?;
+        if transcripts.is_empty() {
+            return Err(Error::InvalidAxtBinding {
+                details: "transfer AXT claim must carry at least one transfer transcript".into(),
+            });
+        }
+        if transcripts.iter().any(|transcript| {
+            transcript.batch_hash.as_ref() != context.source_tx_commitment.as_slice()
+        }) {
+            return Err(Error::InvalidAxtBinding {
+                details: "transfer transcript batch_hash does not match source_tx_commitment"
+                    .into(),
+            });
+        }
     }
     Ok(())
 }
@@ -747,6 +768,9 @@ mod tests {
         let asset_definition = AssetDefinitionId::new(domain.clone(), "rose".parse().unwrap());
         let from_account = deterministic_account("transfer_sender", &domain);
         let to_account = deterministic_account("transfer_receiver", &domain);
+        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
+            .expect("entry hash");
+        let transcript_batch_hash = Hash::prehashed(entry_hash);
 
         let mut batch = TransitionBatch::new(
             DEFAULT_PARAMETER,
@@ -779,6 +803,7 @@ mod tests {
             TRANSFER_AMOUNT,
             SENDER_START,
             RECEIVER_START,
+            transcript_batch_hash,
         )];
         let (old_root, new_root) =
             crate::gadgets::transfer::attach_transfer_smt_witnesses(&mut transcripts)
@@ -789,8 +814,6 @@ mod tests {
             TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
             to_bytes(&transcripts).expect("encode transfer transcripts"),
         );
-        let entry_hash = decode_hex_digest(&binding.source_tx_commitment, "source_tx_commitment")
-            .expect("entry hash");
         batch
             .metadata
             .insert(ENTRY_HASH_METADATA_KEY.into(), entry_hash.to_vec());
@@ -830,6 +853,7 @@ mod tests {
         amount: u64,
         from_balance_before: u64,
         to_balance_before: u64,
+        batch_hash: Hash,
     ) -> TransferTranscript {
         let delta = TransferDeltaTranscript {
             from_account: from_account.clone(),
@@ -843,7 +867,6 @@ mod tests {
             from_smt_witness: TransferSmtWitness::default(),
             to_smt_witness: TransferSmtWitness::default(),
         };
-        let batch_hash = Hash::new(b"axt-transfer-claim-batch");
         let digest = crate::gadgets::transfer::compute_poseidon_digest(&delta, &batch_hash);
         TransferTranscript {
             batch_hash,
@@ -1418,6 +1441,40 @@ mod tests {
             assert!(verified.statement_digest.iter().any(|byte| *byte != 0));
             assert!(verified.proof_digest.as_ref().iter().any(|byte| *byte != 0));
         }
+    }
+
+    #[test]
+    fn verify_axt_envelope_rejects_transfer_transcript_from_an_unrelated_transaction() {
+        let mut binding = sample_binding();
+        binding.claim_type = "value_conservation".to_owned();
+        let mut batch = real_transfer_claim_batch(&binding);
+        let mut transcripts = decode_transcripts(&batch.metadata)
+            .expect("decode transcript metadata")
+            .expect("transfer transcripts");
+        let unrelated_hash = Hash::prehashed([0xAA; Hash::LENGTH]);
+        let unrelated_digest = crate::gadgets::transfer::compute_poseidon_digest(
+            &transcripts[0].deltas[0],
+            &unrelated_hash,
+        );
+        transcripts[0].batch_hash = unrelated_hash;
+        transcripts[0].poseidon_preimage_digest = Some(unrelated_digest);
+        batch.metadata.insert(
+            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
+            to_bytes(&transcripts).expect("encode unrelated transfer transcripts"),
+        );
+        bind_axt_batch(&mut batch, &binding).expect("reseal unrelated transfer batch");
+        let proof = Prover::canonical(DEFAULT_PARAMETER)
+            .expect("prover")
+            .prove(&batch)
+            .expect("proof for internally consistent unrelated transcript");
+        let payload = encode_axt_fastpq_payload(&batch, proof).expect("payload");
+        let envelope = envelope_with_payload(binding, payload);
+
+        let err = verify_axt_proof_envelope(&envelope)
+            .expect_err("unrelated transaction transcript must fail");
+        assert!(
+            matches!(err, Error::InvalidAxtBinding { details } if details.contains("batch_hash") && details.contains("source_tx_commitment"))
+        );
     }
 
     #[test]

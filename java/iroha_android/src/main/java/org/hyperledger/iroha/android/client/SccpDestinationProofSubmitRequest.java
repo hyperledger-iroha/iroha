@@ -4,10 +4,13 @@ import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Objects;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 
 /** Exact request payload for {@code POST /v1/bridge/proofs/submit}. */
 public final class SccpDestinationProofSubmitRequest {
   private final String authority;
+  private final FeePaymentIntent feePayment;
   private final String signatureB64;
   private final String transactionPayloadB64;
   private final String destinationProofB64;
@@ -16,14 +19,16 @@ public final class SccpDestinationProofSubmitRequest {
   public SccpDestinationProofSubmitRequest(
       final String authority,
       final String destinationProofB64,
+      final FeePaymentIntent feePayment,
       final String signatureB64,
       final String transactionPayloadB64,
       final Long creationTimeMs) {
     this.authority = SccpSubmitEncoding.requireCanonicalAuthority(authority, "authority");
+    this.feePayment = Objects.requireNonNull(feePayment, "feePayment");
     this.signatureB64 = SccpSubmitEncoding.normalizeOptionalSignature(signatureB64);
     this.transactionPayloadB64 =
         SccpSubmitEncoding.normalizeOptionalTransactionPayload(
-            transactionPayloadB64, creationTimeMs, this.authority);
+            transactionPayloadB64, creationTimeMs, this.authority, this.feePayment);
     SccpSubmitEncoding.validateCanonicalNoritoBase64(
         destinationProofB64,
         "destinationProofB64",
@@ -36,8 +41,10 @@ public final class SccpDestinationProofSubmitRequest {
   }
 
   public SccpDestinationProofSubmitRequest(
-      final String authority, final String destinationProofB64) {
-    this(authority, destinationProofB64, null, null, null);
+      final String authority,
+      final String destinationProofB64,
+      final FeePaymentIntent feePayment) {
+    this(authority, destinationProofB64, feePayment, null, null, null);
   }
 
   public String authority() {
@@ -46,6 +53,10 @@ public final class SccpDestinationProofSubmitRequest {
 
   public String destinationProofB64() {
     return destinationProofB64;
+  }
+
+  public FeePaymentIntent feePayment() {
+    return feePayment;
   }
 
   public String signatureB64() {
@@ -64,6 +75,7 @@ public final class SccpDestinationProofSubmitRequest {
   public Map<String, Object> toJsonMap() {
     final Map<String, Object> json = new LinkedHashMap<>();
     json.put("authority", authority);
+    json.put("fee_payment", feePayment.toJsonMap());
     json.put("destination_proof_b64", destinationProofB64);
     if (signatureB64 != null) json.put("signature_b64", signatureB64);
     if (transactionPayloadB64 != null) {

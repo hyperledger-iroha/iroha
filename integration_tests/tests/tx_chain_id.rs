@@ -37,12 +37,15 @@ fn send_tx_with_different_chain_id() {
         AssetId::new(asset_definition_id.clone(), sender_id.clone()),
     );
     test_client
-        .submit_all_blocking::<InstructionBox>([
-            create_sender_account.into(),
-            create_receiver_account.into(),
-            register_asset_definition.into(),
-            register_asset.into(),
-        ])
+        .submit_all_blocking::<InstructionBox>(
+            [
+                create_sender_account.into(),
+                create_receiver_account.into(),
+                register_asset_definition.into(),
+                register_asset.into(),
+            ],
+            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .unwrap();
     let chain_id_0 = network.chain_id();
     let chain_id_1 = ChainId::from("1");
@@ -59,12 +62,20 @@ fn send_tx_with_different_chain_id() {
         to_transfer,
         receiver_id.clone(),
     );
-    let asset_transfer_tx_0 = TransactionBuilder::new(chain_id_0, sender_id.clone())
-        .with_instructions([transfer_instruction.clone()])
-        .sign(sender_keypair.private_key());
-    let asset_transfer_tx_1 = TransactionBuilder::new(chain_id_1, sender_id.clone())
-        .with_instructions([transfer_instruction])
-        .sign(sender_keypair.private_key());
+    let asset_transfer_tx_0 = TransactionBuilder::new(
+        chain_id_0,
+        sender_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer_instruction.clone()])
+    .sign(sender_keypair.private_key());
+    let asset_transfer_tx_1 = TransactionBuilder::new(
+        chain_id_1,
+        sender_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer_instruction])
+    .sign(sender_keypair.private_key());
     test_client
         .submit_transaction_blocking(&asset_transfer_tx_0)
         .unwrap();

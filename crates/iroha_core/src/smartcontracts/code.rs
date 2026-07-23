@@ -21,7 +21,6 @@ use iroha_data_model::{
     smart_contract::{ContractAddress, ContractAlias},
 };
 use mv::storage::StorageReadOnly;
-use norito::codec::{DecodeAll, Encode as NoritoEncode};
 use thiserror::Error;
 
 use crate::{
@@ -229,18 +228,18 @@ impl PendingContractLifecycle {
     }
 
     fn encode(self) -> Vec<u8> {
-        ContractLifecycleRecordV1 {
+        norito::to_bytes(&ContractLifecycleRecordV1 {
             domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
             pending: self,
-        }
-        .encode()
+        })
+        .expect("contract lifecycle record must encode to canonical Norito")
     }
 
     fn decode(encoded: &[u8]) -> Result<Self, &'static str> {
-        let mut cursor = encoded;
-        let record = ContractLifecycleRecordV1::decode_all(&mut cursor)
+        let record: ContractLifecycleRecordV1 = norito::decode_from_bytes(encoded)
             .map_err(|_| "lifecycle record is not canonical Norito")?;
-        let canonical = record.encode();
+        let canonical =
+            norito::to_bytes(&record).map_err(|_| "lifecycle record is not canonical Norito")?;
         if canonical.as_slice() != encoded {
             return Err("lifecycle record is not canonical Norito");
         }
@@ -1439,11 +1438,25 @@ seiyaku LifecycleAba {
                 if message.contains("invalid lifecycle state")
         ));
 
-        let mut trailing = PendingContractLifecycle::Hajimari {
+        let pending = PendingContractLifecycle::Hajimari {
             transition_id: Hash::new(b"noncanonical-lifecycle-transition"),
             code_hash: Hash::new(b"noncanonical-lifecycle-record"),
-        }
-        .encode();
+        };
+        let bare = norito::codec::Encode::encode(&ContractLifecycleRecordV1 {
+            domain: CONTRACT_LIFECYCLE_RECORD_MAGIC,
+            pending,
+        });
+        transaction
+            .world
+            .smart_contract_state
+            .insert(contract_lifecycle_state_key(&contract_address), bare);
+        assert!(matches!(
+            pending_contract_lifecycle(&transaction.world, &contract_address),
+            Err(ValidationFail::InternalError(message))
+                if message.contains("not canonical Norito")
+        ));
+
+        let mut trailing = pending.encode();
         trailing.push(0);
         transaction
             .world

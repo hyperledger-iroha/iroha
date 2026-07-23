@@ -1,6 +1,6 @@
 //! Types representing executable parts of a transaction.
 
-use std::{fmt, iter::IntoIterator, ops::Deref, sync::LazyLock, vec::Vec};
+use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
@@ -12,7 +12,9 @@ use norito::{NoritoDeserialize, core as ncore};
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
-use crate::{isi::InstructionBox, metadata::Metadata, name::Name, smart_contract::ContractAddress};
+use crate::{
+    isi::InstructionBox, smart_contract::ContractAddress, transaction::signed::FeePaymentIntent,
+};
 
 #[model]
 mod model {
@@ -21,7 +23,7 @@ mod model {
 
     use super::*;
 
-    /// Either ISI or IVM smart contract bytecode
+    /// An executable transaction or trigger payload.
     #[derive(
         derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
     )]
@@ -45,6 +47,23 @@ mod model {
         /// Nodes verify the proof and may deterministically replay the IVM execution as an
         /// additional safety check depending on pipeline policy.
         IvmProved(IvmProved),
+        /// Ordered, atomic mix of native instructions and deployed-contract calls.
+        ///
+        /// Raw IVM bytecode and nested batches are intentionally excluded from
+        /// [`ExecutableBatchItem`], keeping the mixed form explicit and bounded.
+        Batch(ConstVec<ExecutableBatchItem>),
+    }
+
+    /// One ordered item in [`Executable::Batch`].
+    #[derive(
+        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+    pub enum ExecutableBatchItem {
+        /// Execute one native Iroha Special Instruction.
+        Instruction(InstructionBox),
+        /// Invoke one deployed contract instance by reference.
+        ContractCall(ContractInvocation),
     }
 
     /// Wrapper for IVM bytecode used by [`Executable::Ivm`].
@@ -80,7 +99,7 @@ mod model {
     }
 
     /// Bounded canonical bytes for one schema-bound Kotodama argument record.
-    #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+    #[derive(derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[norito(transparent, reuse_archived)]
     #[repr(transparent)]
     pub struct ContractArgumentRecord(pub(super) Vec<u8>);
@@ -114,6 +133,12 @@ mod model {
         /// JSON is converted by Torii/CLI/SDK tooling before the invocation is
         /// signed; validators and the VM never interpret JSON as argument transport.
         pub arguments: Option<ContractArgumentRecord>,
+    }
+}
+
+impl<'a> norito::core::DecodeFromSlice<'a> for ExecutableBatchItem {
+    fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
+        norito::core::decode_field_canonical::<Self>(bytes)
     }
 }
 
@@ -190,6 +215,20 @@ impl TryFrom<Vec<u8>> for ContractArgumentRecord {
 
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         Self::try_new(bytes)
+    }
+}
+
+impl ncore::NoritoSerialize for ContractArgumentRecord {
+    fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), ncore::Error> {
+        ncore::NoritoSerialize::serialize(&self.0, writer)
+    }
+
+    fn encoded_len_hint(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_hint(&self.0)
+    }
+
+    fn encoded_len_exact(&self) -> Option<usize> {
+        ncore::NoritoSerialize::encoded_len_exact(&self.0)
     }
 }
 
@@ -374,74 +413,56 @@ impl From<ContractInvocation> for Executable {
     }
 }
 
-static TRANSACTION_GAS_LIMIT_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| "gas_limit".parse().expect("static gas_limit key"));
+impl From<InstructionBox> for ExecutableBatchItem {
+    fn from(source: InstructionBox) -> Self {
+        Self::Instruction(source)
+    }
+}
 
-/// Errors raised while decoding transaction `gas_limit` metadata.
-#[derive(Debug, Clone, PartialEq, Eq)]
+impl From<ContractInvocation> for ExecutableBatchItem {
+    fn from(source: ContractInvocation) -> Self {
+        Self::ContractCall(source)
+    }
+}
+
+/// Errors raised while requiring a signature-bound transaction gas limit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransactionGasLimitError {
-    /// The metadata key is missing.
+    /// The signed fee intent does not declare an executable gas limit.
     Missing,
-    /// The metadata value is present but cannot be decoded as `u64`.
-    Invalid(String),
-    /// The metadata value is present but zero.
-    Zero,
 }
 
 impl fmt::Display for TransactionGasLimitError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Missing => f.write_str("missing gas_limit in transaction metadata"),
-            Self::Invalid(err) => write!(f, "invalid gas_limit metadata: {err}"),
-            Self::Zero => f.write_str("gas_limit must be positive"),
+            Self::Missing => f.write_str("missing gas limit in fee payment intent"),
         }
     }
 }
 
 impl std::error::Error for TransactionGasLimitError {}
 
-/// Returns the canonical transaction metadata key used for `gas_limit`.
-pub fn transaction_gas_limit_metadata_key() -> &'static Name {
-    &TRANSACTION_GAS_LIMIT_METADATA_KEY
-}
-
-/// Parse the optional transaction `gas_limit` metadata entry.
-///
-/// Returns `Ok(None)` when the metadata key is absent.
-///
-/// # Errors
-///
-/// Returns [`TransactionGasLimitError::Invalid`] when the metadata value cannot be decoded as
-/// `u64`, and [`TransactionGasLimitError::Zero`] when the decoded value is zero.
-pub fn parse_transaction_gas_limit(
-    metadata: &Metadata,
-) -> Result<Option<u64>, TransactionGasLimitError> {
-    let Some(raw) = metadata.get(transaction_gas_limit_metadata_key()) else {
-        return Ok(None);
-    };
-    let value = raw
-        .clone()
-        .try_into_any_norito::<u64>()
-        .map_err(|err| TransactionGasLimitError::Invalid(err.to_string()))?;
-    if value == 0 {
-        return Err(TransactionGasLimitError::Zero);
+/// Return the optional nonzero executable gas limit bound by the signed fee intent.
+#[must_use]
+pub const fn parse_transaction_gas_limit(fee_payment: &FeePaymentIntent) -> Option<u64> {
+    match fee_payment.gas_limit() {
+        Some(limit) => Some(limit.get()),
+        None => None,
     }
-    Ok(Some(value))
 }
 
-/// Parse the required transaction `gas_limit` metadata entry.
+/// Return the executable gas limit bound by the signed fee intent.
 ///
 /// # Errors
 ///
-/// Returns [`TransactionGasLimitError::Missing`] when the metadata key is absent, plus the same
-/// decode and positivity errors returned by [`parse_transaction_gas_limit`].
-pub fn require_transaction_gas_limit(metadata: &Metadata) -> Result<u64, TransactionGasLimitError> {
-    parse_transaction_gas_limit(metadata)?.ok_or(TransactionGasLimitError::Missing)
-}
-
-/// Insert or replace the transaction `gas_limit` metadata entry.
-pub fn insert_transaction_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
-    metadata.insert(transaction_gas_limit_metadata_key().clone(), gas_limit);
+/// Returns [`TransactionGasLimitError::Missing`] when the signed intent omits the limit.
+pub const fn require_transaction_gas_limit(
+    fee_payment: &FeePaymentIntent,
+) -> Result<u64, TransactionGasLimitError> {
+    match parse_transaction_gas_limit(fee_payment) {
+        Some(limit) => Ok(limit),
+        None => Err(TransactionGasLimitError::Missing),
+    }
 }
 
 impl AsRef<[u8]> for IvmBytecode {
@@ -464,9 +485,88 @@ impl IvmBytecode {
 }
 
 impl Executable {
-    /// Returns `true` if the executable kind requires transaction `gas_limit` metadata.
+    /// Returns `true` if the executable kind requires a signature-bound gas limit.
     pub fn requires_transaction_gas_limit(&self) -> bool {
-        !matches!(self, Self::Instructions(_))
+        match self {
+            Self::Instructions(_) => false,
+            Self::Batch(items) => items
+                .iter()
+                .any(|item| matches!(item, ExecutableBatchItem::ContractCall(_))),
+            Self::ContractCall(_) | Self::Ivm(_) | Self::IvmProved(_) => true,
+        }
+    }
+
+    /// Return the ordered mixed-batch items, if this is a batch executable.
+    #[must_use]
+    pub fn batch_items(&self) -> Option<&ConstVec<ExecutableBatchItem>> {
+        match self {
+            Self::Batch(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Iterate native instructions explicitly supplied by the transaction author.
+    ///
+    /// This includes the legacy instruction executable and instruction items in
+    /// a mixed batch. Contract calls, raw IVM bytecode, and proved-VM overlays
+    /// are excluded because their native effects are not direct batch items.
+    pub fn explicit_instructions(&self) -> impl Iterator<Item = &InstructionBox> {
+        let instructions = match self {
+            Self::Instructions(instructions) => Some(instructions.as_ref()),
+            _ => None,
+        };
+        let batch = match self {
+            Self::Batch(items) => Some(items.as_ref()),
+            _ => None,
+        };
+
+        instructions
+            .into_iter()
+            .flatten()
+            .chain(batch.into_iter().flatten().filter_map(|item| match item {
+                ExecutableBatchItem::Instruction(instruction) => Some(instruction),
+                ExecutableBatchItem::ContractCall(_) => None,
+            }))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for ExecutableBatchItem {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        parser.skip_ws();
+        parser.consume_char(b'{')?;
+        parser.skip_ws();
+        let key = parser.parse_key()?;
+        let item = match key.as_str() {
+            "Instruction" => Self::Instruction(InstructionBox::json_deserialize(parser)?),
+            "ContractCall" => Self::ContractCall(ContractInvocation::json_deserialize(parser)?),
+            other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+        };
+        parser.skip_ws();
+        parser.consume_char(b'}')?;
+        Ok(item)
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for ExecutableBatchItem {
+    fn write_json(&self, out: &mut String) {
+        out.push('{');
+        match self {
+            Self::Instruction(instruction) => {
+                norito::json::write_json_string("Instruction", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(instruction, out);
+            }
+            Self::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(invocation, out);
+            }
+        }
+        out.push('}');
     }
 }
 
@@ -576,12 +676,19 @@ impl norito::json::JsonDeserialize for IvmProved {
 }
 
 impl Executable {
-    /// Number of instructions if this executable is an ISI batch; `0` for IVM bytecode.
+    /// Number of explicit native instructions carried by this executable.
+    ///
+    /// Contract calls and raw IVM bytecode contribute zero; proved overlays and
+    /// native items inside a mixed batch are counted.
     pub fn instruction_count(&self) -> u64 {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
             Executable::ContractCall(_) | Executable::Ivm(_) => 0,
             Executable::IvmProved(proved) => proved.overlay.len() as u64,
+            Executable::Batch(items) => items
+                .iter()
+                .filter(|item| matches!(item, ExecutableBatchItem::Instruction(_)))
+                .count() as u64,
         }
     }
 
@@ -589,7 +696,7 @@ impl Executable {
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
-            Executable::ContractCall(_) | Executable::Instructions(_) => 0,
+            Executable::ContractCall(_) | Executable::Instructions(_) | Executable::Batch(_) => 0,
             Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
     }
@@ -615,6 +722,9 @@ impl norito::json::JsonDeserialize for Executable {
             "ContractCall" => {
                 Executable::ContractCall(ContractInvocation::json_deserialize(parser)?)
             }
+            "Batch" => Executable::Batch(iroha_primitives::const_vec::ConstVec::<
+                ExecutableBatchItem,
+            >::json_deserialize(parser)?),
             "Ivm" => Executable::Ivm(IvmBytecode::json_deserialize(parser)?),
             "IvmProved" => {
                 parser.skip_ws();
@@ -724,6 +834,11 @@ impl norito::json::FastJsonWrite for Executable {
                 norito::json::JsonSerialize::json_serialize(&proved.gas_policy_commitment, out);
                 out.push('}');
             }
+            Executable::Batch(items) => {
+                norito::json::write_json_string("Batch", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(items, out);
+            }
         }
         out.push('}');
     }
@@ -786,6 +901,68 @@ mod tests {
             })
             .requires_transaction_gas_limit()
         );
+
+        let instruction_only_batch = Executable::Batch(
+            vec![ExecutableBatchItem::Instruction(
+                crate::isi::Log::new(crate::Level::INFO, "batched log".into()).into(),
+            )]
+            .into(),
+        );
+        assert!(!instruction_only_batch.requires_transaction_gas_limit());
+
+        let mixed_batch = Executable::Batch(
+            vec![ExecutableBatchItem::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                expected_code_hash: iroha_crypto::Hash::new(b"batch-contract-code"),
+                entrypoint: "run".to_owned(),
+                arguments: None,
+            })]
+            .into(),
+        );
+        assert!(mixed_batch.requires_transaction_gas_limit());
+    }
+
+    #[test]
+    fn executable_batch_preserves_wire_tags_and_order() {
+        let first: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "first".into()).into();
+        let last: InstructionBox = crate::isi::Log::new(crate::Level::INFO, "last".into()).into();
+        let invocation = ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            expected_code_hash: iroha_crypto::Hash::new(b"ordered-batch-contract"),
+            entrypoint: "run".to_owned(),
+            arguments: None,
+        };
+        let batch = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(first),
+                ExecutableBatchItem::ContractCall(invocation),
+                ExecutableBatchItem::Instruction(last),
+            ]
+            .into(),
+        );
+
+        let encoded = batch.encode();
+        assert_eq!(&encoded[..4], &4_u32.to_le_bytes());
+        let mut input = encoded.as_slice();
+        let decoded = Executable::decode(&mut input).expect("decode mixed executable batch");
+        assert_eq!(decoded, batch);
+        assert!(input.is_empty());
+        assert_eq!(decoded.instruction_count(), 2);
+
+        let Executable::Batch(items) = decoded else {
+            panic!("expected mixed executable batch");
+        };
+        assert!(matches!(items[0], ExecutableBatchItem::Instruction(_)));
+        assert!(matches!(items[1], ExecutableBatchItem::ContractCall(_)));
+        assert!(matches!(items[2], ExecutableBatchItem::Instruction(_)));
+        assert_eq!(&items[0].encode()[..4], &0_u32.to_le_bytes());
+        assert_eq!(&items[1].encode()[..4], &1_u32.to_le_bytes());
+        assert_eq!(&items[2].encode()[..4], &0_u32.to_le_bytes());
+        assert_eq!(batch.explicit_instructions().count(), 2);
     }
 
     #[test]
@@ -806,15 +983,29 @@ mod tests {
     }
 
     #[test]
+    fn contract_argument_record_accepts_and_roundtrips_the_exact_wire_cap() {
+        let record =
+            ContractArgumentRecord::try_new(vec![0xA5; MAX_CONTRACT_ARGUMENT_RECORD_BYTES])
+                .expect("the signed argument-record cap is inclusive");
+        assert_eq!(record.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
+
+        let encoded = norito::to_bytes(&record).expect("encode exact-cap argument record");
+        let decoded = norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
+            .expect("decode exact-cap argument record");
+        assert_eq!(decoded, record);
+        assert_eq!(decoded.as_bytes().len(), MAX_CONTRACT_ARGUMENT_RECORD_BYTES);
+    }
+
+    #[test]
     fn contract_argument_record_uses_the_bounded_vec_wire_layout() {
         let record =
             ContractArgumentRecord::try_new(vec![1, 2, 3, 4]).expect("bounded argument record");
-        let encoded = norito::to_bytes(&record).expect("encode argument record");
+        let encoded = record.encode();
         assert_eq!(&encoded[..8], &4_u64.to_le_bytes());
         assert_eq!(&encoded[8..], &[1, 2, 3, 4]);
+        let mut input = encoded.as_slice();
         assert_eq!(
-            norito::decode_from_bytes::<ContractArgumentRecord>(&encoded)
-                .expect("decode bounded argument record"),
+            ContractArgumentRecord::decode(&mut input).expect("decode bounded argument record"),
             record
         );
     }
@@ -861,33 +1052,31 @@ mod tests {
     }
 
     #[test]
-    fn transaction_gas_limit_roundtrip_helpers_work() {
-        let mut metadata = Metadata::default();
-        assert_eq!(
-            parse_transaction_gas_limit(&metadata).expect("missing gas_limit should be allowed"),
-            None
+    fn transaction_gas_limit_reads_signed_fee_intent() {
+        let without_limit = FeePaymentIntent::authority(Vec::new(), None);
+        assert_eq!(parse_transaction_gas_limit(&without_limit), None);
+        let with_limit = FeePaymentIntent::authority(
+            Vec::new(),
+            Some(std::num::NonZeroU64::new(42).expect("nonzero gas limit")),
         );
-        insert_transaction_gas_limit(&mut metadata, 42);
+        assert_eq!(parse_transaction_gas_limit(&with_limit), Some(42));
         assert_eq!(
-            parse_transaction_gas_limit(&metadata).expect("gas_limit should parse"),
-            Some(42)
-        );
-        assert_eq!(
-            require_transaction_gas_limit(&metadata).expect("gas_limit should be required"),
+            require_transaction_gas_limit(&with_limit).expect("gas_limit should be required"),
             42
         );
     }
 
     #[test]
-    fn transaction_gas_limit_reports_invalid_and_zero_values() {
-        let mut metadata = Metadata::default();
-        metadata.insert(transaction_gas_limit_metadata_key().clone(), "oops");
-        let err = parse_transaction_gas_limit(&metadata).expect_err("invalid gas_limit must fail");
-        assert!(matches!(err, TransactionGasLimitError::Invalid(_)));
-
-        insert_transaction_gas_limit(&mut metadata, 0);
-        let err = require_transaction_gas_limit(&metadata).expect_err("zero gas_limit must fail");
-        assert_eq!(err, TransactionGasLimitError::Zero);
+    fn transaction_gas_limit_requires_explicit_signed_value() {
+        let intent = FeePaymentIntent::authority(Vec::new(), None);
+        assert_eq!(
+            require_transaction_gas_limit(&intent),
+            Err(TransactionGasLimitError::Missing)
+        );
+        assert_eq!(
+            TransactionGasLimitError::Missing.to_string(),
+            "missing gas limit in fee payment intent"
+        );
     }
 
     #[test]
@@ -942,7 +1131,7 @@ mod tests {
 
     #[cfg(feature = "json")]
     #[test]
-    fn executable_json_roundtrip_for_instructions_and_ivm() {
+    fn executable_json_roundtrip_for_all_variants() {
         let instruction: InstructionBox =
             crate::isi::Log::new(crate::Level::INFO, "json executable".into()).into();
         let executable = Executable::from_iter([instruction]);
@@ -992,5 +1181,29 @@ mod tests {
         let json = norito::json::to_json(&proved_executable).expect("serialize proved");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize proved");
         assert_eq!(proved_executable, deserialized);
+
+        let batch_executable = Executable::Batch(
+            vec![
+                ExecutableBatchItem::Instruction(
+                    crate::isi::Log::new(crate::Level::INFO, "before".into()).into(),
+                ),
+                ExecutableBatchItem::ContractCall(ContractInvocation {
+                    contract_address:
+                        "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                            .parse()
+                            .expect("contract address"),
+                    expected_code_hash: iroha_crypto::Hash::new(b"json-batch-contract"),
+                    entrypoint: "run".to_owned(),
+                    arguments: None,
+                }),
+            ]
+            .into(),
+        );
+        let json = norito::json::to_json(&batch_executable).expect("serialize batch");
+        assert!(json.contains("\"Batch\""));
+        assert!(json.contains("\"Instruction\""));
+        assert!(json.contains("\"ContractCall\""));
+        let deserialized: Executable = norito::json::from_str(&json).expect("deserialize batch");
+        assert_eq!(batch_executable, deserialized);
     }
 }

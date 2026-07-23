@@ -1,8 +1,10 @@
 //! Replays TLC-generated and adversarial schedules against the production reducer.
 //!
-//! TLC's JSON is normalized by `scripts/normalize_sumeragi_v2_tlc_trace.py`.
-//! The checked-in witness preserves every concrete model action while this
-//! harness maps those actions onto the reducer's serialized event/effect API.
+//! TLC's tool-mode trace is normalized by
+//! `scripts/normalize_sumeragi_v2_tlc_trace.py`. The checked-in witness
+//! preserves every selected Core-enabled model action
+//! while this harness maps those actions onto the reducer's serialized
+//! event/effect API.
 //! The mapping is deliberately strict: malformed traces, invalid leaders,
 //! certificates without delivered quorum votes, and out-of-order durability
 //! boundaries are rejected before replay.
@@ -242,6 +244,7 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
     let mut observe_begun = BTreeSet::new();
     let mut lock_begun = BTreeSet::new();
     let mut lock_persisted = BTreeSet::new();
+    let mut active_locks = [None; 4];
     let mut decisions_begun = BTreeSet::new();
 
     for step in steps.iter().copied().skip(1) {
@@ -455,9 +458,20 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                     Phase::Prepare => prepare_persisted.contains(&(node, view, subject)),
                     Phase::Commit => lock_persisted.contains(&(node, view, subject)),
                 };
-                if !authorized || !vote_signed.insert((node, view, phase, subject)) {
+                let receiver_admits = match phase {
+                    Phase::Prepare => views[node] == view,
+                    Phase::Commit => active_locks[node] == Some((view, subject)),
+                };
+                if !authorized
+                    || !receiver_admits
+                    || !vote_signed.insert((node, view, phase, subject))
+                {
                     return Err(error("vote signature lacks a durable unique intent"));
                 }
+                delivered_votes
+                    .entry((node, view, phase, subject))
+                    .or_default()
+                    .insert(node);
             }
             ModelAction::DeliverVote => {
                 let node = required(step.node, step, "node")?;
@@ -468,10 +482,16 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                 if !vote_signed.contains(&(peer, view, phase, subject)) {
                     return Err(error("vote delivery has no durable signed source"));
                 }
-                delivered_votes
-                    .entry((node, view, phase, subject))
-                    .or_default()
-                    .insert(peer);
+                let receiver_admits = match phase {
+                    Phase::Prepare => views[node] == view,
+                    Phase::Commit => active_locks[node] == Some((view, subject)),
+                };
+                if receiver_admits {
+                    delivered_votes
+                        .entry((node, view, phase, subject))
+                        .or_default()
+                        .insert(peer);
+                }
             }
             ModelAction::FormPrepareQc | ModelAction::FormCommitQc => {
                 let node = required(step.node, step, "node")?;
@@ -484,6 +504,7 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                     Phase::Commit
                 };
                 if phase != expected
+                    || (phase == Phase::Commit && active_locks[node] != Some((view, subject)))
                     || delivered_votes
                         .get(&(node, view, phase, subject))
                         .map_or(0, BTreeSet::len)
@@ -547,14 +568,21 @@ fn validate_model_trace(steps: &[ModelStep]) -> Result<(), String> {
                 }
             }
             ModelAction::PersistLockCommit => {
-                let key = (
-                    required(step.node, step, "node")?,
-                    required(step.view, step, "view")?,
-                    required(step.subject, step, "subject")?,
-                );
+                let node = required(step.node, step, "node")?;
+                let view = required(step.view, step, "view")?;
+                let subject = required(step.subject, step, "subject")?;
+                let key = (node, view, subject);
                 if !lock_begun.contains(&key) || !lock_persisted.insert(key) {
                     return Err(error("Commit persistence lacks one lock action"));
                 }
+                active_locks[node] = Some((view, subject));
+                delivered_votes.retain(|(recipient, vote_view, phase, vote_subject), _| {
+                    *recipient != node
+                        || *vote_view == views[node]
+                        || (*phase == Phase::Commit
+                            && *vote_view == view
+                            && *vote_subject == subject)
+                });
             }
             ModelAction::PersistDecision => {
                 let key = (
@@ -689,12 +717,14 @@ impl ProductionReplay {
                         });
                     }
                 }
-                Effect::EnterView { tag, certificate } => {
+                Effect::EnterView {
+                    tag, certificate, ..
+                } => {
                     assert_eq!(tag, self.nodes[from].reducer.current_tag());
                     assert_eq!(tag.view(), certificate.round().view() + 1);
                 }
-                Effect::ReportEquivocation { offender, kind, .. } => {
-                    self.reports.push((offender, kind));
+                Effect::ReportEquivocation { evidence } => {
+                    self.reports.push((evidence.offender(), evidence.kind()));
                 }
                 Effect::ReportInvalidCertifiedBody { .. } => {
                     panic!("the valid TLC witness must not certify an invalid body")
@@ -1242,8 +1272,31 @@ fn assert_every_witness_wal_prefix_recovers(replay: &ProductionReplay, subject: 
 
 #[test]
 fn tlc_liveness_witness_replays_against_the_production_reducer() {
-    let steps = parse_trace(TRACE).expect("checked-in TLC trace is valid");
-    assert_eq!(steps.len(), 101);
+    let steps = parse_trace(TRACE).expect("checked-in source-aligned trace is valid");
+    assert_eq!(steps.len(), 95);
+    let mut source_locks = [None; 4];
+    for step in &steps {
+        match step.action {
+            ModelAction::PersistLockCommit => {
+                source_locks[step.node.unwrap()] =
+                    Some((step.view.unwrap(), step.subject.unwrap()));
+            }
+            ModelAction::DeliverVote => {
+                assert_ne!(
+                    step.node, step.peer,
+                    "local signature reconstruction makes self delivery redundant"
+                );
+                if step.phase == Some(Phase::Commit) {
+                    assert_eq!(
+                        source_locks[step.node.unwrap()],
+                        Some((step.view.unwrap(), step.subject.unwrap())),
+                        "checked-in Commit delivery must have the receiver's exact durable lock"
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
     let mut counts = BTreeMap::new();
     for step in &steps {
         *counts.entry(step.action).or_insert(0_usize) += 1;
@@ -1272,6 +1325,11 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
             "missing {required_action:?}"
         );
     }
+    let decided = steps
+        .last()
+        .filter(|step| step.action == ModelAction::PersistDecision)
+        .and_then(|step| step.node)
+        .expect("validated witness ends with one persisted decision");
 
     let mut replay = ProductionReplay::new();
     assert_eq!(replay.context.leader(0), model_validator(3));
@@ -1280,7 +1338,6 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
         replay.replay_step(step);
     }
 
-    let decided = 2;
     let subject = ModelSubject::A.production();
     assert_eq!(
         replay.nodes[decided]
@@ -1320,6 +1377,110 @@ fn tlc_liveness_witness_replays_against_the_production_reducer() {
 }
 
 #[test]
+fn identical_commit_envelope_stutters_before_lock_and_is_admitted_after_persistence() {
+    let recipient = 0;
+    let signer = 1;
+    let mut replay = ProductionReplay::new();
+    let context = replay.context.clone();
+    let round = Round::new(context.height(), 0);
+    let subject = ModelSubject::A.production();
+    let commit = SignedVote::new(
+        Vote::new(
+            context.id(),
+            round,
+            Phase::Commit,
+            subject,
+            model_validator(signer),
+        ),
+        OpaqueSignature::new(vec![0x31, 0x41]),
+    );
+    let envelope = ConsensusMessageV2::Vote(commit.clone());
+
+    assert_eq!(
+        replay.dispatch(
+            recipient,
+            network_event(&envelope, replay.nodes[recipient].reducer.current_tag(),),
+        ),
+        StepDisposition::Ignored(IgnoreReason::IrrelevantView)
+    );
+    assert!(
+        replay.nodes[recipient]
+            .reducer
+            .durable_state()
+            .locked()
+            .is_none()
+    );
+
+    let prepare = iroha_sumeragi_core::QuorumCertificate::new(
+        CertificateRef::new(context.id(), round, Phase::Prepare, subject),
+        signatures(&[0, 1, 2]),
+    );
+    assert_eq!(
+        replay.dispatch(
+            recipient,
+            Event::QuorumCertificateReceived {
+                tag: replay.nodes[recipient].reducer.current_tag(),
+                certificate: prepare,
+            },
+        ),
+        StepDisposition::Applied
+    );
+    replay.acknowledge_persist(recipient, |record| {
+        matches!(record, WalRecord::ObservePrepare(qc) if qc.round() == round && qc.subject() == subject)
+    });
+    replay.complete_fetch(recipient, subject);
+    replay.complete_store(recipient, subject);
+    replay.complete_validation(recipient, subject, true);
+    replay.acknowledge_persist(recipient, |record| {
+        matches!(record, WalRecord::LockAndCommit { prepare, .. } if prepare.round() == round && prepare.subject() == subject)
+    });
+
+    let locked = replay.nodes[recipient]
+        .reducer
+        .durable_state()
+        .locked()
+        .expect("LockAndCommit acknowledgement installs the exact durable lock");
+    assert_eq!(locked.round(), round);
+    assert_eq!(locked.subject(), subject);
+    replay.complete_signature(recipient, |message| {
+        matches!(message, SignableMessage::Vote(vote) if vote.round() == round && vote.phase() == Phase::Commit && vote.subject() == subject)
+    });
+    assert_eq!(
+        replay.dispatch(
+            recipient,
+            network_event(&envelope, replay.nodes[recipient].reducer.current_tag(),),
+        ),
+        StepDisposition::Applied
+    );
+    let additional_signer = 2;
+    let vote = ConsensusMessageV2::Vote(SignedVote::new(
+        Vote::new(
+            context.id(),
+            round,
+            Phase::Commit,
+            subject,
+            model_validator(additional_signer),
+        ),
+        OpaqueSignature::new(vec![0x31, u8::try_from(additional_signer).unwrap()]),
+    ));
+    assert_eq!(
+        replay.dispatch(
+            recipient,
+            network_event(&vote, replay.nodes[recipient].reducer.current_tag(),),
+        ),
+        StepDisposition::Applied
+    );
+    assert!(replay.has_persist(recipient, |record| {
+        matches!(record, WalRecord::Decision(qc) if qc.round() == round && qc.subject() == subject)
+    }));
+    assert_eq!(
+        envelope,
+        ConsensusMessageV2::Vote(commit),
+        "both deliveries use the identical authenticated Commit envelope"
+    );
+}
+
+#[test]
 fn malformed_and_unsafe_normalized_traces_fail_closed() {
     let unknown = TRACE.replacen("SetGST", "InventSafety", 1);
     assert!(
@@ -1335,7 +1496,7 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .contains("non-contiguous")
     );
 
-    let wrong_leader = TRACE.replacen("36\tBeginLocalProposal\t0", "36\tBeginLocalProposal\t1", 1);
+    let wrong_leader = TRACE.replacen("40\tBeginLocalProposal\t0", "40\tBeginLocalProposal\t1", 1);
     assert!(
         parse_trace(&wrong_leader)
             .unwrap_err()
@@ -1346,8 +1507,8 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
     // duplicate signer. The syntactic trace remains well formed but the model
     // validator refuses to manufacture a QC from two distinct validators.
     let under_quorum = TRACE.replacen(
-        "68\tDeliverVote\t0\t1\t1\tPrepare\tA",
-        "68\tDeliverVote\t0\t2\t1\tPrepare\tA",
+        "71\tDeliverVote\t0\t2\t1\tPrepare\tA",
+        "71\tDeliverVote\t0\t1\t1\tPrepare\tA",
         1,
     );
     assert!(
@@ -1356,9 +1517,51 @@ fn malformed_and_unsafe_normalized_traces_fail_closed() {
             .contains("distinct-validator phase quorum")
     );
 
+    // Complete node zero's durable Commit signature, then deliver it to node
+    // two before node two's LockAndCommit acknowledgement. The authenticated
+    // packet is a safe receiver-side stutter and must not be counted toward
+    // the later CommitQC.
+    let unlocked_commit = TRACE
+        .replacen(
+            "76\tBeginLockCommit\t2\t-\t1\tPrepare\tA\n\
+         77\tBeginLockCommit\t0\t-\t1\tPrepare\tA\n\
+         78\tPersistLockCommit\t2\t-\t1\tPrepare\tA\n\
+         79\tCompleteVoteSignature\t2\t-\t1\tCommit\tA\n\
+         80\tPersistLockCommit\t0\t-\t1\tPrepare\tA\n\
+         81\tCompleteVoteSignature\t0\t-\t1\tCommit\tA\n\
+         82\tDeliverQC\t1\t-\t1\tPrepare\tA\n\
+         83\tDeliverVote\t0\t2\t1\tCommit\tA\n\
+         84\tDeliverVote\t2\t0\t1\tCommit\tA",
+            "76\tBeginLockCommit\t2\t-\t1\tPrepare\tA\n\
+         77\tBeginLockCommit\t0\t-\t1\tPrepare\tA\n\
+         78\tPersistLockCommit\t0\t-\t1\tPrepare\tA\n\
+         79\tCompleteVoteSignature\t0\t-\t1\tCommit\tA\n\
+         80\tDeliverVote\t2\t0\t1\tCommit\tA\n\
+         81\tPersistLockCommit\t2\t-\t1\tPrepare\tA\n\
+         82\tDeliverQC\t1\t-\t1\tPrepare\tA\n\
+         83\tCompleteVoteSignature\t2\t-\t1\tCommit\tA\n\
+         84\tDeliverVote\t0\t2\t1\tCommit\tA",
+            1,
+        )
+        .replacen(
+            "92\tFormCommitQC\t1\t-\t1\tCommit\tA",
+            "92\tFormCommitQC\t2\t-\t1\tCommit\tA",
+            1,
+        )
+        .replacen(
+            "95\tPersistDecision\t1\t-\t1\tCommit\tA",
+            "95\tPersistDecision\t2\t-\t1\tCommit\tA",
+            1,
+        );
+    assert!(
+        parse_trace(&unlocked_commit)
+            .unwrap_err()
+            .contains("distinct-validator phase quorum")
+    );
+
     let missing_column = TRACE.replacen(
-        "2\tBeginTimeout\t0\t-\t0\t-\t-",
-        "2\tBeginTimeout\t0\t-\t0\t-",
+        "2\tBeginTimeout\t1\t-\t0\t-\t-",
+        "2\tBeginTimeout\t1\t-\t0\t-",
         1,
     );
     assert!(
@@ -1485,11 +1688,9 @@ fn unsafe_certificate_and_vote_equivocation_do_not_decide() {
         .expect("conflicting authenticated vote is reported");
     assert!(matches!(
         equivocation.effects(),
-        [Effect::ReportEquivocation {
-            offender,
-            kind: EquivocationKind::Vote,
-            ..
-        }] if *offender == model_validator(1)
+        [Effect::ReportEquivocation { evidence }]
+            if evidence.offender() == model_validator(1)
+                && evidence.kind() == EquivocationKind::Vote
     ));
     let duplicate = reducer
         .step(Event::VoteReceived {
@@ -1647,10 +1848,8 @@ fn timeout_equivocation_with_different_full_high_qcs_is_reported() {
         .expect("conflicting timeout vote is reported");
     assert!(matches!(
         outcome.effects(),
-        [Effect::ReportEquivocation {
-            offender,
-            kind: EquivocationKind::Timeout,
-            ..
-        }] if *offender == signer
+        [Effect::ReportEquivocation { evidence }]
+            if evidence.offender() == signer
+                && evidence.kind() == EquivocationKind::Timeout
     ));
 }

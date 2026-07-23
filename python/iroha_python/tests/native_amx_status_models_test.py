@@ -119,26 +119,26 @@ def _leg(lane_id: int, dataspace_id: int, entrypoint_hash: str) -> dict[str, Any
         "lane_incarnation": lane_incarnation,
         "dataspace_id": dataspace_id,
         "tx_count": 2,
-        "total_local_micro": "0",
-        "total_xor_due_micro": "0",
-        "total_xor_after_haircut_micro": "0",
-        "total_xor_variance_micro": "0",
+        "total_local_amount": "0",
+        "total_xor_due": "0",
+        "total_xor_after_haircut": "0",
+        "total_xor_variance": "0",
         "swap_metadata": None,
         "receipts": [
             {
                 "source_id": "AB" * 32,
-                "local_amount_micro": "0",
-                "xor_due_micro": "0",
-                "xor_after_haircut_micro": "0",
-                "xor_variance_micro": "0",
+                "local_amount": "0",
+                "xor_due": "0",
+                "xor_after_haircut": "0",
+                "xor_variance": "0",
                 "timestamp_ms": 40,
             },
             {
                 "source_id": "CD" * 32,
-                "local_amount_micro": "0",
-                "xor_due_micro": "0",
-                "xor_after_haircut_micro": "0",
-                "xor_variance_micro": "0",
+                "local_amount": "0",
+                "xor_due": "0",
+                "xor_after_haircut": "0",
+                "xor_variance": "0",
                 "timestamp_ms": 40,
             },
         ],
@@ -186,10 +186,10 @@ def _commitment() -> dict[str, Any]:
         "lane_incarnation": _hash(0x89),
         "dataspace_id": 11,
         "tx_count": 2,
-        "total_local_micro": huge_total,
-        "total_xor_due_micro": "100000000000000000000000000000000000001",
-        "total_xor_after_haircut_micro": "99999999999999999999999999999999999999",
-        "total_xor_variance_micro": "2",
+        "total_local_amount": huge_total,
+        "total_xor_due": "100000000000000000000000000000000000001",
+        "total_xor_after_haircut": "99999999999999999999999999999999999999",
+        "total_xor_variance": "2",
         "swap_metadata": None,
         "receipts": [],
         "nexus_fee_receipts": [
@@ -280,7 +280,7 @@ def test_lane_commitment_preserves_exact_native_amx_and_fee_evidence() -> None:
     payload = _commitment()
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
 
-    assert parsed.total_local_micro == (1 << 127) + 123
+    assert parsed.total_local_amount == str((1 << 127) + 123)
     assert parsed.lane_incarnation == payload["lane_incarnation"]
     assert parsed.nexus_fee_receipts[0].fee_amount == "12345678901234567890.012300"
     assert parsed.nexus_fee_receipts[0].schedule.tx_bytes_len == 1 << 63
@@ -421,7 +421,7 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
         leg["participant_settlement"]["lane_id"] = 99
 
     def nonzero_participant_effect(leg: dict[str, Any]) -> None:
-        leg["participant_settlement"]["total_local_micro"] = "1"
+        leg["participant_settlement"]["total_local_amount"] = "1"
 
     def mismatch_settlement_source(leg: dict[str, Any]) -> None:
         leg["participant_settlement"]["receipts"][0]["source_id"] = "EF" * 32
@@ -483,7 +483,10 @@ def test_native_amx_parser_rejects_participant_finality_tampering() -> None:
 
 def test_lane_commitment_accepts_canonical_maximum_total_and_tagged_swap_enums() -> None:
     payload = _commitment()
-    payload["total_local_micro"] = str((1 << 128) - 1)
+    maximum = str((1 << 511) - 1)
+    scale_28_maximum = f"{maximum[:126]}.{maximum[126:]}"
+    assert len(scale_28_maximum) == 155
+    payload["total_local_amount"] = scale_28_maximum
     payload["swap_metadata"] = {
         "epsilon_bps": 25,
         "twap_window_seconds": 300,
@@ -494,18 +497,114 @@ def test_lane_commitment_accepts_canonical_maximum_total_and_tagged_swap_enums()
 
     parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
 
-    assert parsed.total_local_micro == (1 << 128) - 1
+    assert parsed.total_local_amount == scale_28_maximum
     assert parsed.swap_metadata is not None
     assert parsed.swap_metadata.liquidity_profile == "Tier2"
     assert parsed.swap_metadata.volatility_class == "Elevated"
 
 
-@pytest.mark.parametrize("invalid", [(1 << 128) - 1, "01", str(1 << 128)])
-def test_lane_commitment_rejects_noncanonical_u128_wire_values(invalid: Any) -> None:
+@pytest.mark.parametrize(
+    "invalid",
+    [
+        (1 << 128) - 1,
+        True,
+        "01",
+        "1.0",
+        "1.",
+        "-1",
+        "1e3",
+        "not-a-quantity",
+        "0.00000000000000000000000000001",
+        str(1 << 511),
+        "1" * 156,
+    ],
+)
+def test_lane_commitment_rejects_noncanonical_quantity_wire_values(
+    invalid: Any,
+) -> None:
     payload = _commitment()
-    payload["total_local_micro"] = invalid
+    payload["total_local_amount"] = invalid
 
-    with pytest.raises((TypeError, ValueError), match="canonical|128-bit range"):
+    with pytest.raises(
+        (TypeError, ValueError), match="quantity|canonical|length|512-bit"
+    ):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+def test_lane_settlement_quantities_preserve_canonical_fractional_values() -> None:
+    payload = _commitment()
+    payload["total_local_amount"] = "1.25"
+    payload["total_xor_due"] = "0.5"
+    payload["total_xor_after_haircut"] = "0.4"
+    payload["total_xor_variance"] = "0.1"
+    payload["receipts"] = [
+        {
+            "source_id": "AB" * 32,
+            "local_amount": "1.25",
+            "xor_due": "0.5",
+            "xor_after_haircut": "0.4",
+            "xor_variance": "0.1",
+            "timestamp_ms": 1,
+        }
+    ]
+
+    parsed = SumeragiLaneSettlementCommitment.from_payload(payload)
+    assert parsed.total_local_amount == "1.25"
+    assert parsed.receipts[0].xor_variance == "0.1"
+
+
+@pytest.mark.parametrize(
+    "value", [1, "1.0", "0.00000000000000000000000000001", str(1 << 511)]
+)
+def test_lane_settlement_rejects_lossy_or_noncanonical_quantities(value: Any) -> None:
+    payload = _commitment()
+    payload["total_local_amount"] = value
+
+    with pytest.raises((TypeError, ValueError)):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "total_local_micro",
+        "total_xor_due_micro",
+        "total_xor_after_haircut_micro",
+        "total_xor_variance_micro",
+    ],
+)
+def test_lane_settlement_rejects_retired_total_fields(retired_field: str) -> None:
+    payload = _commitment()
+    payload[retired_field] = "0"
+
+    with pytest.raises(ValueError, match=f"unknown field `{retired_field}`"):
+        SumeragiLaneSettlementCommitment.from_payload(payload)
+
+
+@pytest.mark.parametrize(
+    "retired_field",
+    [
+        "local_amount_micro",
+        "xor_due_micro",
+        "xor_after_haircut_micro",
+        "xor_variance_micro",
+    ],
+)
+def test_lane_settlement_rejects_retired_receipt_fields(retired_field: str) -> None:
+    payload = _commitment()
+    payload["receipts"] = [
+        {
+            "source_id": "AB" * 32,
+            "local_amount": "0",
+            "xor_due": "0",
+            "xor_after_haircut": "0",
+            "xor_variance": "0",
+            "timestamp_ms": 1,
+            retired_field: "0",
+        }
+    ]
+
+    with pytest.raises(ValueError, match=f"unknown field `{retired_field}`"):
         SumeragiLaneSettlementCommitment.from_payload(payload)
 
 

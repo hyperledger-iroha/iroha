@@ -38,7 +38,7 @@ use iroha_data_model::{
     oracle::FeedId,
     soranet::incentives::{RelayBondLedgerEntryV1, RelayEpochMetricsV1, RelayRewardInstructionV1},
 };
-use iroha_primitives::numeric::{Numeric, Quantity};
+use iroha_primitives::numeric::{Numeric, Quantity, XorQuantity};
 use norito::{
     decode_from_bytes,
     derive::NoritoSerialize,
@@ -71,23 +71,26 @@ fn xor_asset_id() -> AssetDefinitionId {
     )
 }
 
-fn micro_xor_from_value(value: &Value) -> u64 {
-    value
-        .as_u64()
-        .or_else(|| value.as_str().and_then(|raw| raw.parse::<u64>().ok()))
-        .expect("micro XOR numeric value")
+fn xor_quantity_from_value(value: &Value) -> XorQuantity {
+    let raw = value.as_str().expect("XOR quantity must be a JSON string");
+    let quantity = raw.parse::<XorQuantity>().expect("canonical XOR quantity");
+    assert_eq!(
+        quantity.to_string(),
+        raw,
+        "XOR quantity must use its canonical exact decimal spelling"
+    );
+    quantity
 }
 
-fn assert_numeric_micro(amount: &Numeric, expected_micro: u128) {
+fn assert_numeric_xor(amount: &Numeric, expected: &str) {
+    let expected = expected
+        .parse::<XorQuantity>()
+        .expect("expected canonical XOR quantity")
+        .into_quantity()
+        .into_numeric();
     assert_eq!(
-        amount.scale(),
-        6,
-        "numeric scale mismatch for amount {amount}"
-    );
-    assert_eq!(
-        amount.try_mantissa_u128().unwrap(),
-        expected_micro,
-        "numeric mantissa mismatch for amount {amount}"
+        amount, &expected,
+        "numeric XOR amount mismatch for amount {amount}"
     );
 }
 
@@ -505,56 +508,6 @@ fn command() -> TestCommand {
     cmd
 }
 
-fn write_contract_app_manifest(dir: &torii_mock_support::TempDir) -> PathBuf {
-    let contracts_dir = dir.path().join("contracts");
-    let artifacts_dir = dir.path().join("artifacts");
-    fs::create_dir_all(&contracts_dir).expect("create contracts dir");
-    fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
-
-    let contract_path = contracts_dir.join("greeter.ko");
-    fs::write(
-        &contract_path,
-        r#"
-            seiyaku Greeter {
-                hajimari(int value) {}
-                view fn status() -> int { return 7; }
-            }
-        "#,
-    )
-    .expect("write greeter contract");
-
-    let manifest_path = dir.path().join("iroha.app.toml");
-    fs::write(
-        &manifest_path,
-        r#"
-            bundle_name = "demo"
-            default_dataspace = "universal"
-
-            [[contracts]]
-            name = "demo.greeter"
-            alias = "greeter"
-            source = "contracts/greeter.ko"
-            artifact = "artifacts/greeter.to"
-
-            [[hajimari]]
-            id = "seed"
-            contract = "demo.greeter"
-            entrypoint = "hajimari"
-            gas_limit = 1000
-            payload = { value = "7" }
-
-            [[assertions]]
-            id = "status"
-            contract = "demo.greeter"
-            entrypoint = "status"
-            gas_limit = 1000
-            expected_result = "7"
-        "#,
-    )
-    .expect("write contract app manifest");
-    manifest_path
-}
-
 #[test]
 fn soracles_aggregate_output_emits_instruction_payload() {
     use torii_mock_support::{TempDir, write_client_config};
@@ -749,8 +702,10 @@ fn sorafs_reserve_quote_outputs_breakdown() {
         .and_then(Value::as_object)
         .expect("quote object");
     let rent_raw = quote.get("monthly_rent").expect("monthly_rent present");
-    let rent_micro = micro_xor_from_value(rent_raw);
-    assert_eq!(rent_micro, 120_000_000);
+    assert_eq!(
+        xor_quantity_from_value(rent_raw),
+        "120".parse::<XorQuantity>().expect("canonical quantity")
+    );
 }
 
 #[test]
@@ -817,15 +772,26 @@ fn sorafs_reserve_ledger_emits_instructions() {
     let plan: Value =
         norito::json::from_str(stdout.trim()).expect("reserve ledger output should be JSON");
     let rent_due = plan
-        .get("rent_due_micro_xor")
-        .map(micro_xor_from_value)
+        .get("rent_due")
+        .map(xor_quantity_from_value)
         .expect("rent due present");
-    assert_eq!(rent_due, 120_000_000);
+    assert_eq!(
+        rent_due,
+        "120".parse::<XorQuantity>().expect("canonical quantity")
+    );
     let reserve_shortfall = plan
-        .get("reserve_shortfall_micro_xor")
-        .map(micro_xor_from_value)
+        .get("reserve_shortfall")
+        .map(xor_quantity_from_value)
         .expect("reserve shortfall present");
-    assert_eq!(reserve_shortfall, 240_000_000);
+    assert_eq!(
+        reserve_shortfall,
+        "240".parse::<XorQuantity>().expect("canonical quantity")
+    );
+    assert!(
+        plan.get("rent_due_micro_xor").is_none()
+            && plan.get("reserve_shortfall_micro_xor").is_none(),
+        "retired implicit-unit aliases must not be emitted"
+    );
     let instructions_value = plan
         .get("instructions")
         .and_then(Value::as_array)
@@ -842,7 +808,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(rent_destination, &treasury_account);
-    assert_numeric_micro(rent_amount_numeric, 120_000_000);
+    assert_numeric_xor(rent_amount_numeric, "120");
 
     let (reserve_source, reserve_amount_numeric, reserve_destination) =
         transfer_parts(&instructions[1]);
@@ -851,7 +817,7 @@ fn sorafs_reserve_ledger_emits_instructions() {
         &AssetId::new(xor_asset_id(), provider_account.clone())
     );
     assert_eq!(reserve_destination, &reserve_account);
-    assert_numeric_micro(reserve_amount_numeric, 240_000_000);
+    assert_numeric_xor(reserve_amount_numeric, "240");
 }
 
 #[test]
@@ -910,17 +876,22 @@ fn sorafs_reserve_lifecycle_projects_credit_draw() {
     );
     assert_eq!(
         lifecycle
-            .get("credit_draw_micro_xor")
-            .map(micro_xor_from_value)
+            .get("credit_draw")
+            .map(xor_quantity_from_value)
             .expect("credit draw present"),
-        120_000_000
+        "120".parse::<XorQuantity>().expect("canonical quantity")
     );
     assert_eq!(
         lifecycle
-            .get("credit_shortfall_micro_xor")
-            .map(micro_xor_from_value)
+            .get("credit_shortfall")
+            .map(xor_quantity_from_value)
             .expect("credit shortfall present"),
-        0
+        XorQuantity::zero()
+    );
+    assert!(
+        lifecycle.get("credit_draw_micro_xor").is_none()
+            && lifecycle.get("credit_shortfall_micro_xor").is_none(),
+        "retired implicit-unit aliases must not be emitted"
     );
     assert_eq!(
         lifecycle.get("disable_adverts").and_then(Value::as_bool),
@@ -1473,230 +1444,29 @@ fn gov_protected_namespaces_flow_against_mock() {
 }
 
 #[test]
-fn contract_app_plan_against_mock_uses_dry_run_bundle_route() {
-    use torii_mock_support::{SpawnError, TempDir, ToriiMockProcess, write_client_config};
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_plan_against_mock_uses_dry_run_bundle_route: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    let temp_dir = TempDir::new("contract_app_plan").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "plan",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app plan");
-    assert!(
-        output.status.success(),
-        "expected contract app plan to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: Value = norito::json::from_slice(&output.stdout).expect("parse plan JSON");
-    assert_eq!(
-        value.get("bundle_name").and_then(Value::as_str),
-        Some("demo")
-    );
-    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(true));
-    assert_eq!(
-        value
-            .get("completed_stages")
-            .and_then(Value::as_array)
-            .and_then(|stages| stages.first())
-            .and_then(Value::as_str),
-        Some("plan")
-    );
-    assert_eq!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("status"))
-            .and_then(Value::as_str),
-        Some("planned")
-    );
-}
-
-#[test]
-fn contract_app_resume_against_mock_uses_live_bundle_route() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_resume_against_mock_uses_live_bundle_route: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    configure_contracts(
-        mock.base_url(),
-        &norito::json!({
-            "bundle_response": {
-                "bundle_digest": "resume-bundle-digest",
-                "completed_stages": ["plan", "deploy", "hajimari_calls", "assertions"],
-            }
-        }),
-    )
-    .expect("configure contracts");
-
-    let temp_dir = TempDir::new("contract_app_resume").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "resume",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app resume");
-    assert!(
-        output.status.success(),
-        "expected contract app resume to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    let value: Value = norito::json::from_slice(&output.stdout).expect("parse resume JSON");
-    assert_eq!(
-        value.get("bundle_name").and_then(Value::as_str),
-        Some("demo")
-    );
-    assert_eq!(value.get("dry_run").and_then(Value::as_bool), Some(false));
-    assert_eq!(
-        value.get("bundle_digest").and_then(Value::as_str),
-        Some("resume-bundle-digest")
-    );
-    assert_eq!(
-        value
-            .get("completed_stages")
-            .and_then(Value::as_array)
-            .map(Vec::len),
-        Some(4)
-    );
-    assert_eq!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("status"))
-            .and_then(Value::as_str),
-        Some("deployed")
-    );
-    assert!(
-        value
-            .get("contracts")
-            .and_then(Value::as_array)
-            .and_then(|contracts| contracts.first())
-            .and_then(|contract| contract.get("tx_hash_hex"))
-            .and_then(Value::as_str)
-            .is_some(),
-        "resume response should include deploy tx hash"
-    );
-}
-
-#[test]
-fn contract_app_plan_reports_protected_namespace_bundle_rejection() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_contracts, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!(
-                "skipping contract_app_plan_reports_protected_namespace_bundle_rejection: mock server unavailable"
-            );
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    configure_contracts(
-        mock.base_url(),
-        &norito::json!({
-            "bundle_error": {
-                "status": 400,
-                "body": {
-                    "error": "protected namespace `apps` requires governance metadata"
-                }
-            }
-        }),
-    )
-    .expect("configure contracts");
-
-    let temp_dir = TempDir::new("contract_app_plan_protected").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    let manifest_path = write_contract_app_manifest(&temp_dir);
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "contract",
-            "app",
-            "plan",
-            "--manifest",
-            manifest_path.to_str().expect("utf8 path"),
-            "--authority",
-            alice_account_literal(),
-            "--private-key",
-            ALICE_PRIVATE_KEY,
-        ])
-        .output()
-        .expect("invoke iroha contract app plan");
-    assert!(
-        !output.status.success(),
-        "expected contract app plan to fail for protected namespace rejection"
-    );
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(
-        stderr.contains("Failed to deploy contract bundle"),
-        "stderr should report bundle deploy failure, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("protected namespace `apps` requires governance metadata"),
-        "stderr should preserve protected namespace error body, got: {stderr}"
-    );
+fn retired_server_contract_deployment_commands_are_absent() {
+    for args in [
+        vec!["contract", "deploy"],
+        vec!["contract", "app", "plan"],
+        vec!["contract", "app", "deploy"],
+        vec!["contract", "app", "resume"],
+        vec!["contract", "dev", "deploy"],
+        vec!["contract", "dev", "resume"],
+    ] {
+        let output = command()
+            .args(&args)
+            .output()
+            .expect("invoke retired contract deployment command");
+        assert!(
+            !output.status.success(),
+            "retired contract deployment command remained available: {args:?}"
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("unrecognized subcommand"),
+            "retired command failed for an unexpected reason: {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }
 
 #[test]
@@ -2169,7 +1939,7 @@ fn gov_vote_plain_against_mock() {
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
-        amount: 500,
+        amount: 500_u64.into(),
         duration_blocks: 128,
         direction: 0,
     });
@@ -2286,7 +2056,7 @@ fn gov_vote_plain_emits_summary_and_json() {
     let instruction = InstructionBox::from(CastPlainBallot {
         referendum_id: "ref-plain".to_owned(),
         owner: owner.clone(),
-        amount: 500,
+        amount: 500_u64.into(),
         duration_blocks: 128,
         direction: 0,
     });
@@ -3846,12 +3616,12 @@ fn iroha_da_submit_records_pdp_commitment_receipt() {
 fn da_rent_quote_outputs_summary_and_json() {
     const GIB: u64 = 12;
     const MONTHS: u32 = 3;
-    const BASE_MICRO: u64 = 9_000_000;
-    const RESERVE_MICRO: u64 = 1_800_000;
-    const PROVIDER_MICRO: u64 = 7_200_000;
-    const PDP_MICRO: u64 = 450_000;
-    const POTR_MICRO: u64 = 225_000;
-    const EGRESS_CREDIT_MICRO: u64 = 1_500;
+    const BASE: &str = "9";
+    const RESERVE: &str = "1.8";
+    const PROVIDER: &str = "7.2";
+    const PDP: &str = "0.45";
+    const POTR: &str = "0.225";
+    const EGRESS_CREDIT: &str = "0.0015";
 
     let summary_output = command()
         .args([
@@ -3926,40 +3696,41 @@ fn da_rent_quote_outputs_summary_and_json() {
         .get("quote")
         .and_then(Value::as_object)
         .expect("quote object");
-    let read_micro = |map: &Map, key: &str| -> u64 {
+    let read_quantity = |map: &Map, key: &str| -> XorQuantity {
         let entry = map
             .get(key)
             .unwrap_or_else(|| panic!("missing `{key}` field"));
-        micro_xor_from_value(entry)
+        xor_quantity_from_value(entry)
     };
-    assert_eq!(read_micro(quote, "base_rent"), BASE_MICRO);
-    assert_eq!(read_micro(quote, "protocol_reserve"), RESERVE_MICRO);
-    assert_eq!(read_micro(quote, "provider_reward"), PROVIDER_MICRO);
-    assert_eq!(read_micro(quote, "pdp_bonus"), PDP_MICRO);
-    assert_eq!(read_micro(quote, "potr_bonus"), POTR_MICRO);
+    let expected = |raw: &str| raw.parse::<XorQuantity>().expect("canonical quantity");
+    assert_eq!(read_quantity(quote, "base_rent"), expected(BASE));
+    assert_eq!(read_quantity(quote, "protocol_reserve"), expected(RESERVE));
+    assert_eq!(read_quantity(quote, "provider_reward"), expected(PROVIDER));
+    assert_eq!(read_quantity(quote, "pdp_bonus"), expected(PDP));
+    assert_eq!(read_quantity(quote, "potr_bonus"), expected(POTR));
     assert_eq!(
-        read_micro(quote, "egress_credit_per_gib"),
-        EGRESS_CREDIT_MICRO
+        read_quantity(quote, "egress_credit_per_gib"),
+        expected(EGRESS_CREDIT)
     );
 
     let projection = value
         .get("ledger_projection")
         .and_then(Value::as_object)
         .expect("ledger projection object");
-    assert_eq!(read_micro(projection, "rent_due"), BASE_MICRO);
+    assert_eq!(read_quantity(projection, "rent_due"), expected(BASE));
     assert_eq!(
-        read_micro(projection, "protocol_reserve_due"),
-        RESERVE_MICRO
+        read_quantity(projection, "protocol_reserve_due"),
+        expected(RESERVE)
     );
     assert_eq!(
-        read_micro(projection, "provider_reward_due"),
-        PROVIDER_MICRO
+        read_quantity(projection, "provider_reward_due"),
+        expected(PROVIDER)
     );
-    assert_eq!(read_micro(projection, "pdp_bonus_pool"), PDP_MICRO);
-    assert_eq!(read_micro(projection, "potr_bonus_pool"), POTR_MICRO);
+    assert_eq!(read_quantity(projection, "pdp_bonus_pool"), expected(PDP));
+    assert_eq!(read_quantity(projection, "potr_bonus_pool"), expected(POTR));
     assert_eq!(
-        read_micro(projection, "egress_credit_per_gib"),
-        EGRESS_CREDIT_MICRO
+        read_quantity(projection, "egress_credit_per_gib"),
+        expected(EGRESS_CREDIT)
     );
 }
 
@@ -3969,11 +3740,11 @@ fn da_rent_ledger_emits_transfer_plan() {
 
     const GIB: u64 = 12;
     const MONTHS: u32 = 3;
-    const BASE_MICRO: u64 = 9_000_000;
-    const RESERVE_MICRO: u64 = 1_800_000;
-    const PROVIDER_MICRO: u64 = 7_200_000;
-    const PDP_MICRO: u64 = 450_000;
-    const POTR_MICRO: u64 = 225_000;
+    const BASE: &str = "9";
+    const RESERVE: &str = "1.8";
+    const PROVIDER: &str = "7.2";
+    const PDP: &str = "0.45";
+    const POTR: &str = "0.225";
 
     let temp_dir = TempDir::new("da_rent_ledger_plan").expect("temp dir");
     let quote_path = temp_dir.path().join("rent_quote.json");
@@ -4055,39 +3826,51 @@ fn da_rent_ledger_emits_transfer_plan() {
     );
     assert_eq!(
         value
-            .get("rent_due_micro_xor")
-            .map(micro_xor_from_value)
-            .expect("rent_due_micro_xor field"),
-        BASE_MICRO
+            .get("rent_due")
+            .map(xor_quantity_from_value)
+            .expect("rent_due field"),
+        BASE.parse::<XorQuantity>().expect("canonical quantity")
     );
     assert_eq!(
         value
-            .get("protocol_reserve_due_micro_xor")
-            .map(micro_xor_from_value)
-            .expect("protocol_reserve_due_micro_xor field"),
-        RESERVE_MICRO
+            .get("protocol_reserve_due")
+            .map(xor_quantity_from_value)
+            .expect("protocol_reserve_due field"),
+        RESERVE.parse::<XorQuantity>().expect("canonical quantity")
     );
     assert_eq!(
         value
-            .get("provider_reward_due_micro_xor")
-            .map(micro_xor_from_value)
-            .expect("provider_reward_due_micro_xor field"),
-        PROVIDER_MICRO
+            .get("provider_reward_due")
+            .map(xor_quantity_from_value)
+            .expect("provider_reward_due field"),
+        PROVIDER.parse::<XorQuantity>().expect("canonical quantity")
     );
     assert_eq!(
         value
-            .get("pdp_bonus_pool_micro_xor")
-            .map(micro_xor_from_value)
-            .expect("pdp_bonus_pool_micro_xor field"),
-        PDP_MICRO
+            .get("pdp_bonus_pool")
+            .map(xor_quantity_from_value)
+            .expect("pdp_bonus_pool field"),
+        PDP.parse::<XorQuantity>().expect("canonical quantity")
     );
     assert_eq!(
         value
-            .get("potr_bonus_pool_micro_xor")
-            .map(micro_xor_from_value)
-            .expect("potr_bonus_pool_micro_xor field"),
-        POTR_MICRO
+            .get("potr_bonus_pool")
+            .map(xor_quantity_from_value)
+            .expect("potr_bonus_pool field"),
+        POTR.parse::<XorQuantity>().expect("canonical quantity")
     );
+    for retired in [
+        "rent_due_micro_xor",
+        "protocol_reserve_due_micro_xor",
+        "provider_reward_due_micro_xor",
+        "pdp_bonus_pool_micro_xor",
+        "potr_bonus_pool_micro_xor",
+    ] {
+        assert!(
+            value.get(retired).is_none(),
+            "retired implicit-unit alias `{retired}` must not be emitted"
+        );
+    }
 
     let instructions_value = value
         .get("instructions")
@@ -4109,27 +3892,27 @@ fn da_rent_ledger_emits_transfer_plan() {
     let (rent_source, rent_amount, rent_destination) = transfer_parts(&instructions[0]);
     assert_eq!(rent_source, &payer_asset);
     assert_eq!(rent_destination, &treasury_account);
-    assert_numeric_micro(rent_amount, u128::from(BASE_MICRO));
+    assert_numeric_xor(rent_amount, BASE);
 
     let (reserve_source, reserve_amount, reserve_destination) = transfer_parts(&instructions[1]);
     assert_eq!(reserve_source, &treasury_asset);
     assert_eq!(reserve_destination, &protocol_account);
-    assert_numeric_micro(reserve_amount, u128::from(RESERVE_MICRO));
+    assert_numeric_xor(reserve_amount, RESERVE);
 
     let (provider_source, provider_amount, provider_destination) = transfer_parts(&instructions[2]);
     assert_eq!(provider_source, &treasury_asset);
     assert_eq!(provider_destination, &provider_account);
-    assert_numeric_micro(provider_amount, u128::from(PROVIDER_MICRO));
+    assert_numeric_xor(provider_amount, PROVIDER);
 
     let (pdp_source, pdp_amount, pdp_destination) = transfer_parts(&instructions[3]);
     assert_eq!(pdp_source, &treasury_asset);
     assert_eq!(pdp_destination, &pdp_account);
-    assert_numeric_micro(pdp_amount, u128::from(PDP_MICRO));
+    assert_numeric_xor(pdp_amount, PDP);
 
     let (potr_source, potr_amount, potr_destination) = transfer_parts(&instructions[4]);
     assert_eq!(potr_source, &treasury_asset);
     assert_eq!(potr_destination, &potr_account);
-    assert_numeric_micro(potr_amount, u128::from(POTR_MICRO));
+    assert_numeric_xor(potr_amount, POTR);
 }
 
 #[test]
@@ -4785,7 +4568,7 @@ fn tx_status_command_against_torii_mock() {
                 {
                     "kind": "Committed",
                     "block_height": 42,
-                    "scope": "global",
+                    "scope": "local",
                     "resolved_from": "state"
                 }
             ]
@@ -4796,7 +4579,7 @@ fn tx_status_command_against_torii_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["tx", "status", "--hash", hash])
+        .args(["tx", "status", "--hash", hash, "--scope", "local"])
         .output()
         .expect("failed to run iroha tx status");
     assert!(
@@ -4808,7 +4591,7 @@ fn tx_status_command_against_torii_mock() {
     assert_eq!(payload["hash"].as_str(), Some(hash));
     assert_eq!(payload["status"]["kind"].as_str(), Some("Committed"));
     assert_eq!(payload["status"]["block_height"].as_u64(), Some(42));
-    assert_eq!(payload["scope"].as_str(), Some("global"));
+    assert_eq!(payload["scope"].as_str(), Some("local"));
     assert_eq!(payload["resolved_from"].as_str(), Some("state"));
 
     let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
@@ -6003,10 +5786,6 @@ private_key = \"{private_key}\"\n",
 
     pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
         post_mock_config(base_url, "__mock__/accounts/config", config)
-    }
-
-    pub fn configure_contracts(base_url: &str, config: &json::Value) -> io::Result<()> {
-        post_mock_config(base_url, "__mock__/contracts/config", config)
     }
 
     fn workspace_root() -> PathBuf {

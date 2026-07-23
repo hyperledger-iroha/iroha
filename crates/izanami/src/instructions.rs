@@ -62,7 +62,7 @@ use iroha_executor_data_model::permission::{
     account::{CanModifyAccountMetadata, CanRegisterAccount},
     asset::{CanMintAssetWithDefinition, CanModifyAssetMetadataWithDefinition},
     asset_definition::CanModifyAssetDefinitionMetadata,
-    domain::{CanModifyDomainMetadata, CanRegisterDomain},
+    domain::CanModifyDomainMetadata,
     nexus::CanPublishSpaceDirectoryManifest,
     nft::CanRegisterNft,
     role::CanManageRoles,
@@ -262,10 +262,9 @@ pub struct PreparedChaos {
 pub fn npos_post_topology_instructions(
     peer_count: usize,
     bootstrap_public_lanes: &[LaneId],
-    min_self_bond: u64,
+    min_self_bond: &Quantity,
 ) -> Result<Vec<InstructionBox>> {
     let effective_peers = peer_count.max(1);
-    let stake_amount: Quantity = min_self_bond.into();
     let mut instructions = Vec::new();
     for index in 0..effective_peers {
         let key_pair = peer_keypair(index)?;
@@ -276,7 +275,7 @@ pub fn npos_post_topology_instructions(
                 validator: validator_id.clone(),
                 peer_id: PeerId::from(validator_id.signatory().clone()),
                 stake_account: validator_id.clone(),
-                initial_stake: stake_amount.clone(),
+                initial_stake: min_self_bond.clone(),
                 metadata: Metadata::default(),
             }));
             instructions.push(InstructionBox::from(ActivatePublicLaneValidator {
@@ -447,11 +446,15 @@ pub fn prepare_state(
                     .parse()
                     .expect("default nexus fee asset id should parse")
             });
-        let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
+        let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
-        let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
-        let total_bootstrap_stake: Quantity = total_bootstrap_stake_value.into();
-        npos_bootstrap_stake = Some(stake_amount_value);
+        let total_bootstrap_stake = stake_amount
+            .try_mul_decimal(&bootstrap_lane_count.into())
+            .expect("bootstrap validator stake must remain representable");
+        npos_bootstrap_stake = Some(
+            u64::try_from(stake_amount)
+                .expect("Izanami workload accounting requires an integer-valued validator bond"),
+        );
 
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             nexus_domain.clone(),
@@ -569,10 +572,6 @@ pub fn prepare_state(
             )));
         }
     }
-    genesis_tx.push(InstructionBox::from(Grant::account_permission(
-        CanRegisterDomain,
-        treasury.id.clone(),
-    )));
     genesis_tx.push(InstructionBox::from(Grant::account_permission(
         CanModifyDomainMetadata {
             domain: base_domain.clone(),
@@ -3272,10 +3271,10 @@ mod tests {
 
     #[test]
     fn npos_post_topology_instructions_use_requested_min_self_bond() {
-        let min_self_bond = 2_048_u64;
+        let min_self_bond = Quantity::from(2_048_u64);
         let bootstrap_public_lanes = [LaneId::new(0), LaneId::new(1)];
         let instructions =
-            npos_post_topology_instructions(4, &bootstrap_public_lanes, min_self_bond)
+            npos_post_topology_instructions(4, &bootstrap_public_lanes, &min_self_bond)
                 .expect("post topology instructions");
 
         let mut register_count = 0usize;
@@ -3289,10 +3288,8 @@ mod tests {
             {
                 register_count = register_count.saturating_add(1);
                 registered_pairs.insert((register.lane_id, register.validator.clone()));
-                let stake = u64::try_from(register.initial_stake.clone())
-                    .expect("stake should remain integer-valued");
                 assert_eq!(
-                    stake, min_self_bond,
+                    register.initial_stake, min_self_bond,
                     "post-topology validator registrations must use configured min self-bond"
                 );
             }
@@ -3379,7 +3376,8 @@ mod tests {
             for validator_id in &validator_ids {
                 assert_eq!(
                     state.available_public_lane_stake_share(*lane_id, validator_id, validator_id),
-                    SumeragiNposParameters::default().min_self_bond(),
+                    u64::try_from(SumeragiNposParameters::default().min_self_bond().clone())
+                        .expect("default self-bond must fit Izanami workload accounting"),
                     "bootstrap lane {} should seed validator {} with min self-bond",
                     lane_id,
                     validator_id
@@ -3395,11 +3393,13 @@ mod tests {
             prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
                 .expect("state prepared");
         let setup = state.nexus_staking.as_ref().expect("staking setup");
-        let expected_stake = SumeragiNposParameters::default()
-            .min_self_bond()
-            .saturating_mul(
-                u64::try_from(profile.bootstrap_public_lanes.len()).unwrap_or(u64::MAX),
-            );
+        let expected_stake =
+            u64::try_from(SumeragiNposParameters::default().min_self_bond().clone())
+                .expect("default self-bond must fit Izanami workload accounting")
+                .checked_mul(
+                    u64::try_from(profile.bootstrap_public_lanes.len()).unwrap_or(u64::MAX),
+                )
+                .expect("bootstrap stake total must fit Izanami workload accounting");
         let minted_stake_accounts: HashMap<AccountId, u64> = genesis
             .iter()
             .flatten()

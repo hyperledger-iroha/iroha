@@ -40,9 +40,13 @@ pub(crate) fn type_contains_secret(ty: &Type) -> bool {
     }
 }
 
-/// Return whether this is the V1 private-input representation.
-pub(crate) fn is_secret_int(ty: &Type) -> bool {
-    matches!(ty, Type::Secret(inner) if matches!(inner.as_ref(), Type::Int))
+/// Return whether this is one of the exact V1 private-input representations.
+pub(crate) fn is_secret_numeric(ty: &Type) -> bool {
+    matches!(
+        ty,
+        Type::Secret(inner)
+            if matches!(inner.as_ref(), Type::Int | Type::Decimal | Type::Quantity)
+    )
 }
 
 /// Reject a secret-dependent branch, assertion, or loop condition.
@@ -97,7 +101,7 @@ pub(crate) fn reject_secret_state_value(expr: &TypedExpr) -> Result<(), Semantic
 /// The accepted declassifiers deliberately require all scalar operands to be
 /// secret.  Besides matching the VM's equal-tag rule, this prevents an
 /// accidentally public salt or blinding factor from making a commitment easy
-/// to brute force.  Calls with entirely public operands remain unaffected.
+/// to brute force. The V1 source commitment surface is Secret-only.
 pub(crate) fn validate_builtin_call(
     builtin: Builtin,
     args: &[TypedExpr],
@@ -111,25 +115,32 @@ pub(crate) fn validate_builtin_call(
     }
 
     match builtin {
-        Builtin::Poseidon2 | Builtin::Poseidon6 | Builtin::Pubkgen | Builtin::Valcom => {
-            if args.iter().all(|arg| is_secret_int(&arg.ty)) {
+        Builtin::Valcom => {
+            if args.iter().all(|arg| is_secret_numeric(&arg.ty)) {
                 return Ok(());
             }
             Err(error(
                 "E_SECRET_MIXED_COMMITMENT",
                 format!(
                     "`{}` cannot mix public and secret operands; use secret blinding/domain inputs or commit public data separately",
-                    builtin.name()
+                    builtin.source_name()
                 ),
             ))
         }
+        Builtin::Poseidon2 | Builtin::Poseidon6 | Builtin::Pubkgen => Err(error(
+            "E_SECRET_FULL_WIDTH_CRYPTO_REQUIRED",
+            format!(
+                "`{}` has only a scalar-register implementation and cannot consume Secret<T>; use `crypto::valcom` until a full-width proof representation is available",
+                builtin.source_name()
+            ),
+        )),
         Builtin::DebugPrint | Builtin::DebugLog | Builtin::Info => Err(error(
             "E_SECRET_LOG",
-            format!("Secret<T> cannot be passed to `{}`", builtin.name()),
+            format!("Secret<T> cannot be passed to `{}`", builtin.source_name()),
         )),
         Builtin::Assert | Builtin::Require => Err(error(
             "E_SECRET_CONTROL_FLOW",
-            format!("Secret<T> cannot influence `{}`", builtin.name()),
+            format!("Secret<T> cannot influence `{}`", builtin.source_name()),
         )),
         Builtin::AssertEq => Err(error(
             "E_SECRET_ARITHMETIC",
@@ -153,12 +164,8 @@ pub(crate) fn validate_builtin_call(
             "E_SECRET_STATE_SINK",
             format!(
                 "Secret<T> cannot be passed to state operation `{}`",
-                builtin.name()
+                builtin.source_name()
             ),
-        )),
-        Builtin::UseNullifier => Err(error(
-            "E_SECRET_NULLIFIER_DISCLOSURE",
-            "`crypto::use_nullifier` publishes its argument; hash or commit the secret first and publish the resulting public value",
         )),
         Builtin::GetPrivateInput => Err(error(
             "E_SECRET_PRIVATE_INPUT_INDEX",
@@ -183,8 +190,8 @@ pub(crate) fn validate_builtin_call(
                 Err(error(
                     "E_SECRET_UNAPPROVED_OPERATION",
                     format!(
-                        "`{}` is not approved to consume Secret<T>; use crypto::poseidon2, crypto::poseidon6, crypto::pubkgen, or crypto::valcom",
-                        other.name()
+                        "`{}` is not approved to consume Secret<T>; use crypto::valcom",
+                        other.source_name()
                     ),
                 ))
             }
@@ -257,7 +264,7 @@ fn validate_function(
         return Err(error(
             "E_SECRET_PUBLIC_PARAMETER",
             format!(
-                "externally callable `{}` cannot accept secret parameter `{}`; obtain private inputs with `get_private_input`",
+                "externally callable `{}` cannot accept secret parameter `{}`; obtain private inputs with `crypto::private_input`",
                 function.name, param.name
             ),
         ));
@@ -752,8 +759,8 @@ mod tests {
             r#"
                 seiyaku Privacy {
                     fn branch() -> int {
-                        let left = crypto::private_input(0);
-                        let right = crypto::private_input(1);
+                        let Secret<int> left = crypto::private_input(0);
+                        let Secret<int> right = crypto::private_input(1);
                         if (left == right) { return 1; }
                         return 0;
                     }
@@ -768,7 +775,10 @@ mod tests {
         let log_error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    fn leak() { debug::info(crypto::private_input(0)); }
+                    fn leak() {
+                        let Secret<int> value = crypto::private_input(0);
+                        debug::info(value);
+                    }
                 }
             "#,
         );
@@ -777,11 +787,14 @@ mod tests {
         let host_error = analyze_error(
             r#"
                 seiyaku Privacy {
-                    fn leak() { crypto::use_nullifier(crypto::private_input(0)); }
+                    fn leak() {
+                        let Secret<int> path = crypto::private_input(0);
+                        state::set(path: path, value: 1);
+                    }
                 }
             "#,
         );
-        assert_eq!(host_error.code, "E_SECRET_NULLIFIER_DISCLOSURE");
+        assert_eq!(host_error.code, "E_SECRET_STATE_SINK");
     }
 
     #[test]
@@ -790,7 +803,10 @@ mod tests {
             r#"
                 seiyaku Privacy {
                     state StateMap<int, int> values;
-                    fn leak() -> int { return values[crypto::private_input(0)]; }
+                    fn leak() -> int {
+                        let Secret<int> key = crypto::private_input(0);
+                        return values[key];
+                    }
                 }
             "#,
         );
@@ -800,7 +816,10 @@ mod tests {
             r#"
                 seiyaku Privacy {
                     state StateMap<int, int> values;
-                    fn leak() { values[0] = crypto::private_input(0); }
+                    fn leak() {
+                        let Secret<int> value = crypto::private_input(0);
+                        values[0] = value;
+                    }
                 }
             "#,
         );
@@ -813,8 +832,9 @@ mod tests {
             r#"
                 seiyaku Privacy {
                     fn weak_commitment() -> int {
-                        return crypto::poseidon2(
-                            left: crypto::private_input(0),
+                        let Secret<int> value = crypto::private_input(0);
+                        return crypto::valcom(
+                            left: value,
                             right: 7,
                         );
                     }
@@ -831,7 +851,6 @@ mod tests {
             "poseidon6(a: 1, b: 2, c: 3, d: 4, e: 5, f: 6)",
             "pubkgen(1)",
             "valcom(left: 1, right: 2)",
-            "use_nullifier(1)",
         ] {
             let source = format!("seiyaku Privacy {{ fn rejected() {{ let _value = {call}; }} }}");
             let error = analyze_error(&source);

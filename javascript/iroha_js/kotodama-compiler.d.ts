@@ -1,6 +1,7 @@
 export type KotodamaCompilerDiagnosticPhase =
   | "lex"
   | "parse"
+  | "resolve"
   | "semantic"
   | "lowering"
   | "artifact";

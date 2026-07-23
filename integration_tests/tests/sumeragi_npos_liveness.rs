@@ -52,7 +52,7 @@ fn npos_network_produces_blocks() -> Result<()> {
 
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_sync_timeout(NPOS_LIVENESS_SYNC_TIMEOUT)
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
@@ -476,8 +476,11 @@ async fn submit_seed_log(network: &Network, probe: &Client, message: String) -> 
         let client = probe.clone();
         let message = message.clone();
         move || {
-            client
-                .build_transaction_from_items([Log::new(Level::INFO, message)], Metadata::default())
+            client.build_transaction_from_items(
+                [Log::new(Level::INFO, message)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            )
         }
     })
     .await
@@ -684,7 +687,7 @@ async fn npos_pacemaker_resumes_after_downtime() -> Result<()> {
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_sync_timeout(PACEMAKER_RESTART_SYNC_TIMEOUT)
-        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond())
+        .with_npos_genesis_bootstrap(SumeragiNposParameters::default().min_self_bond().clone())
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(nonzero!(1_u64)),
         )))

@@ -2,7 +2,7 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::items_after_statements)]
 
-use std::{borrow::Cow, collections::BTreeSet};
+use std::{borrow::Cow, collections::BTreeSet, num::NonZeroU64};
 
 use iroha_config::parameters::actual::RuntimeUpgradeProvenanceMode;
 use iroha_core::smartcontracts::Execute; // bring trait for `.execute()` on ISIs
@@ -41,11 +41,8 @@ fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
     out
 }
 
-fn metadata_with_gas_limit(limit: u64) -> iroha_data_model::metadata::Metadata {
-    let mut md = iroha_data_model::metadata::Metadata::default();
-    let key: iroha_data_model::name::Name = "gas_limit".parse().expect("gas_limit key");
-    md.insert(key, Json::new(limit));
-    md
+fn fee_payment_with_gas_limit(limit: u64) -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(limit))
 }
 
 fn new_account_in_domain(account_id: &AccountId) -> Account {
@@ -498,11 +495,13 @@ fn activation_allows_v1_in_same_block() {
         .expect("activate upgrade at scheduled height");
     stx2.apply();
 
-    let tx =
-        iroha_data_model::transaction::TransactionBuilder::new(chain.clone(), account_id.clone())
-            .with_metadata(metadata_with_gas_limit(TEST_GAS_LIMIT))
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_current)))
-            .sign(kp.private_key());
+    let tx = iroha_data_model::transaction::TransactionBuilder::new(
+        chain.clone(),
+        account_id.clone(),
+        fee_payment_with_gas_limit(TEST_GAS_LIMIT),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog_current)))
+    .sign(kp.private_key());
     let mut ivm_cache = IvmCache::new();
     let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(tx));
     let (_hash, result) = block2.validate_transaction(accepted, &mut ivm_cache);

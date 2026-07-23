@@ -558,6 +558,10 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
                 "content-type validation must precede body collection for path={path}"
             );
+            assert!(
+                response.headers().get("x-iroha-reject-code").is_none(),
+                "offline 415 is a transport-media rejection, not an exact application rejection: path={path}"
+            );
             let body = response
                 .into_body()
                 .collect()
@@ -630,6 +634,13 @@ async fn offline_router_exposes_only_the_final_first_release_contract() {
             above_configured_limit.status(),
             StatusCode::PAYLOAD_TOO_LARGE,
             "path={path}"
+        );
+        assert!(
+            above_configured_limit
+                .headers()
+                .get("x-iroha-reject-code")
+                .is_none(),
+            "offline 413 is a body-extractor rejection, not an exact application rejection: path={path}"
         );
         let body = above_configured_limit
             .into_body()

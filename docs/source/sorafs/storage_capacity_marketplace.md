@@ -41,7 +41,7 @@ rollout checks required before hosted production settlement.
 
 #### Schema Definitions (Implemented)
 
-- `CapacityDeclarationV1` captures signed capacity commitments per provider, including canonical chunker handles, capability references, optional lane caps, pricing hints, validity windows, and metadata. Validation ensures non-zero stake, canonical handles, deduplicated aliases, per-lane caps within the declared total, and monotonic GiB accounting.【crates/sorafs_manifest/src/capacity.rs:28】
+- `CapacityDeclarationV1` captures signed capacity commitments per provider, including canonical chunker handles, capability references, optional lane caps, pricing hints, validity windows, and metadata. The declaration JSON spec encodes `stake.stake_amount` as an exact canonical decimal XOR string, never as a JSON number or micro-XOR integer. Validation ensures non-zero stake, canonical handles, deduplicated aliases, per-lane caps within the declared total, and monotonic GiB accounting.【crates/sorafs_manifest/src/capacity.rs:28】
 - `ReplicationOrderV1` binds manifests to governance-issued assignments with redundancy targets, SLA thresholds, and per-assignment guarantees; validators enforce canonical chunker handles, bounded sorted provider assignments, bounded canonical lane/metadata fields, positive SLA targets within the order window, and deadline constraints before Torii or the registry ingest the order.【crates/sorafs_manifest/src/capacity.rs:301】
 - The ledger keeps the deadline inclusive for completion. Governance can submit
   `ExpireReplicationOrder` only at an epoch strictly later than the deadline;

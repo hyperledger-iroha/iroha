@@ -18,5 +18,19 @@
     "state": "validated",
     "details": null
   },
-  "last_committed_height": 9
+  "last_committed_height": 9,
+  "height_context": {
+    "epoch": 1,
+    "epoch_end_height": 100,
+    "mode": {
+      "mode": "permissioned",
+      "details": null
+    },
+    "epoch_seed": "A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5A5",
+    "validator_count": 4,
+    "quorum": {
+      "min_signers": 3,
+      "total_power": 4
+    }
+  }
 }

@@ -87,8 +87,12 @@ fn make_tx(
     kp: &KeyPair,
     with_pop: bool,
 ) -> SignedTransaction {
-    let mut builder = TransactionBuilder::new(chain.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "msg".to_string())]);
+    let mut builder = TransactionBuilder::new(
+        chain.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "msg".to_string())]);
     if with_pop {
         let pop = iroha_crypto::bls_normal_pop_prove(kp.private_key()).expect("pop");
         let mut meta = Metadata::default();

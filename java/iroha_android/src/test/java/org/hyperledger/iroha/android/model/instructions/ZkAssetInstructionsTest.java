@@ -1,13 +1,14 @@
 package org.hyperledger.iroha.android.model.instructions;
 
-import java.math.BigInteger;
 import java.util.Arrays;
 import java.util.Collections;
 import org.hyperledger.iroha.android.address.AccountAddress;
 import org.hyperledger.iroha.android.crypto.NativeSignedTransaction;
 import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
 import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
-import org.hyperledger.iroha.android.model.JsonValue;
+import org.hyperledger.iroha.android.model.FeeChargeKind;
+import org.hyperledger.iroha.android.model.FeeChargeLimit;
+import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
 import org.hyperledger.iroha.android.norito.NoritoJavaCodecAdapter;
 import org.hyperledger.iroha.android.norito.SignedTransactionEncoder;
@@ -24,9 +25,9 @@ public final class ZkAssetInstructionsTest {
     unshieldInstructionValidatesInputsOutputsAndProof();
     registerZkAssetInstructionValidatesModeAndVerifierIds();
     nativeSignerZkMethodsRejectBadInputsBeforeNativeDispatch();
-    nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch();
+    nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch();
     nativeSignedTransactionCopiesInputsAndOutputs();
-    nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable();
+    nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable();
     System.out.println("[IrohaAndroid] ZkAssetInstructionsTest passed.");
   }
 
@@ -141,13 +142,13 @@ public final class ZkAssetInstructionsTest {
         ShieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setFrom("alice")
-            .setAmount(new BigInteger("340282366920938463463374607431768211455"))
+            .setAmount("340282366920938463463374607431768211456.25")
             .setNoteCommitment(commitment)
             .setEncryptedPayload(samplePayload())
             .build();
     commitment[0] = 0;
     assert "Shield".equals(instruction.toArguments().get("action"));
-    assert "340282366920938463463374607431768211455".equals(instruction.amount());
+    assert "340282366920938463463374607431768211456.25".equals(instruction.amount());
     assert instruction.noteCommitment()[0] == 0x7a;
     final byte[] exposed = instruction.noteCommitment();
     exposed[0] = 0;
@@ -155,7 +156,7 @@ public final class ZkAssetInstructionsTest {
 
     expectThrows(() -> ShieldInstruction.builder().setAmount("01"));
     expectThrows(() -> ShieldInstruction.builder().setAmount("-1"));
-    expectThrows(() -> ShieldInstruction.builder().setAmount("340282366920938463463374607431768211456"));
+    expectThrows(() -> ShieldInstruction.builder().setAmount("1.0"));
     expectThrows(() -> ShieldInstruction.builder().setNoteCommitment(new byte[32]));
   }
 
@@ -167,7 +168,7 @@ public final class ZkAssetInstructionsTest {
         UnshieldInstruction.builder()
             .setAsset("rose#wonderland")
             .setTo("bob")
-            .setPublicAmount("0")
+            .setPublicAmount("0.25")
             .addInput(input)
             .addOutput(output)
             .setProof(sampleProof())
@@ -177,7 +178,9 @@ public final class ZkAssetInstructionsTest {
     output[0] = 0;
     root[0] = 0;
     assert "Unshield".equals(instruction.toArguments().get("action"));
-    assert "0".equals(instruction.publicAmount());
+    assert "0.25".equals(instruction.publicAmount());
+    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("00.25"));
+    expectThrows(() -> UnshieldInstruction.builder().setPublicAmount("-0.25"));
     assert instruction.inputs().size() == 1;
     assert instruction.outputs().size() == 1;
     assert instruction.inputs().get(0)[0] == 0x20;
@@ -235,93 +238,35 @@ public final class ZkAssetInstructionsTest {
 
     expectThrows(
         () -> NativeSignerBridge.encodeShieldSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", -1, null, shield, new byte[] {1}));
+            SigningAlgorithm.ED25519, "chain", "alice", -1, null, shield, new byte[] {1}, noFeePayment()));
     expectThrows(
         () -> NativeSignerBridge.encodeUnshieldSignedTransaction(
-            SigningAlgorithm.ED25519, " chain ", "alice", 0, null, unshield, new byte[] {1}));
+            SigningAlgorithm.ED25519, " chain ", "alice", 0, null, unshield, new byte[] {1}, noFeePayment()));
     expectThrows(
         () -> NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", 0, 0L, register, new byte[] {1}));
+            SigningAlgorithm.ED25519, "chain", "alice", 0, 0L, register, new byte[] {1}, noFeePayment()));
     expectThrows(
         () -> NativeSignerBridge.encodeShieldSignedTransaction(
-            SigningAlgorithm.ED25519, "chain", "alice", 0, null, shield, new byte[0]));
+            SigningAlgorithm.ED25519, "chain", "alice", 0, null, shield, new byte[0], noFeePayment()));
   }
 
-  private static void nativeSignerZkMethodsRejectGasMetadataPairingBeforeNativeDispatch() {
-    final ShieldInstruction shield =
-        ShieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setFrom("alice")
-            .setAmount("1")
-            .setNoteCommitment(fill(1, 32))
-            .setEncryptedPayload(samplePayload())
-            .build();
-    final UnshieldInstruction unshield =
-        UnshieldInstruction.builder()
-            .setAsset("rose#wonderland")
-            .setTo("bob")
-            .setPublicAmount("1")
-            .addInput(fill(2, 32))
-            .setProof(sampleProof())
-            .build();
-    final RegisterZkAssetInstruction register =
-        RegisterZkAssetInstruction.builder().setAsset("rose#wonderland").build();
-
-    final String[] gasAssetIds =
-        new String[] {
-          "xor#universal",
-          "xor#universal",
-          "not-base58",
-          null,
-          "",
-          "   ",
-          " xor#universal",
-          "xor#universal ",
-          "xor\0universal",
-          "xor#universal",
-          "xor#universal"
-        };
-    final Long[] gasLimits = new Long[] {null, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 1L, 0L, -1L};
-    for (int i = 0; i < gasAssetIds.length; i++) {
-      final String gasAssetId = gasAssetIds[i];
-      final Long gasLimit = gasLimits[i];
-      expectThrows(
-          () ->
-              NativeSignerBridge.encodeShieldSignedTransaction(
-                  SigningAlgorithm.ED25519,
-                  "chain",
-                  "alice",
-                  0,
-                  null,
-                  shield,
-                  new byte[] {1},
-                  gasAssetId,
-                  gasLimit));
-      expectThrows(
-          () ->
-              NativeSignerBridge.encodeUnshieldSignedTransaction(
-                  SigningAlgorithm.ED25519,
-                  "chain",
-                  "alice",
-                  0,
-                  null,
-                  unshield,
-                  new byte[] {1},
-                  gasAssetId,
-                  gasLimit));
-      expectThrows(
-          () ->
-              NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
-                  SigningAlgorithm.ED25519,
-                  "chain",
-                  "alice",
-                  0,
-                  null,
-                  register,
-                  new byte[] {1},
-                  gasAssetId,
-                  gasLimit));
-    }
+  private static void nativeSignerFeePaymentRejectsInvalidBoundsBeforeNativeDispatch() {
+    expectThrows(() -> FeePaymentIntent.authority(Collections.emptyList(), 0L));
+    expectThrows(() -> new FeeChargeLimit(FeeChargeKind.PIPELINE_GAS, "xor#universal", "1"));
+    expectThrows(
+        () ->
+            new FeeChargeLimit(
+                FeeChargeKind.PIPELINE_GAS, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "0"));
+    expectThrows(
+        () ->
+            FeePaymentIntent.authority(
+                Arrays.asList(
+                    new FeeChargeLimit(
+                        FeeChargeKind.PIPELINE_GAS,
+                        "7EAD8EFYUx1aVKZPUU1fyKvr8dF1",
+                        "1"),
+                    new FeeChargeLimit(
+                        FeeChargeKind.NEXUS, "7EAD8EFYUx1aVKZPUU1fyKvr8dF1", "1"))));
   }
 
   private static void nativeSignedTransactionCopiesInputsAndOutputs() {
@@ -340,9 +285,9 @@ public final class ZkAssetInstructionsTest {
     expectThrows(() -> new NativeSignedTransaction(new byte[] {1}, fill(1, 31)));
   }
 
-  private static void nativeSignerZkMethodsIncludeGasMetadataWhenBridgeAvailable()
+  private static void nativeSignerZkMethodsBindFeePaymentWhenBridgeAvailable()
       throws Exception {
-    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 8;
+    assert NativeSignerBridge.REQUIRED_BRIDGE_ABI_VERSION == 21;
     if (!NativeSignerBridge.isNativeAvailable()) {
       return;
     }
@@ -358,6 +303,12 @@ public final class ZkAssetInstructionsTest {
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     final String gasAssetId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
     final long gasLimit = 1_000L;
+    final FeePaymentIntent feePayment =
+        FeePaymentIntent.authority(
+            Collections.singletonList(
+                new FeeChargeLimit(
+                    FeeChargeKind.PIPELINE_GAS, gasAssetId, Long.toString(gasLimit))),
+            gasLimit);
     final RegisterZkAssetInstruction register =
         RegisterZkAssetInstruction.builder()
             .setAsset(gasAssetId)
@@ -366,7 +317,7 @@ public final class ZkAssetInstructionsTest {
             .setAllowUnshield(true)
             .build();
 
-    assertNativeGasMetadata(
+    assertNativeFeePayment(
         NativeSignerBridge.encodeRegisterZkAssetSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
@@ -375,10 +326,8 @@ public final class ZkAssetInstructionsTest {
             null,
             register,
             keypair.privateKey(),
-            gasAssetId,
-            gasLimit),
-        gasAssetId,
-        gasLimit);
+            feePayment),
+        feePayment);
 
     final ShieldInstruction shield =
         ShieldInstruction.builder()
@@ -388,7 +337,7 @@ public final class ZkAssetInstructionsTest {
             .setNoteCommitment(fill(3, 32))
             .setEncryptedPayload(samplePayload())
             .build();
-    assertNativeGasMetadata(
+    assertNativeFeePayment(
         NativeSignerBridge.encodeShieldSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
@@ -397,10 +346,8 @@ public final class ZkAssetInstructionsTest {
             null,
             shield,
             keypair.privateKey(),
-            gasAssetId,
-            gasLimit),
-        gasAssetId,
-        gasLimit);
+            feePayment),
+        feePayment);
 
     final UnshieldInstruction unshield =
         UnshieldInstruction.builder()
@@ -410,7 +357,7 @@ public final class ZkAssetInstructionsTest {
             .addInput(fill(4, 32))
             .setProof(sampleProof())
             .build();
-    assertNativeGasMetadata(
+    assertNativeFeePayment(
         NativeSignerBridge.encodeUnshieldSignedTransaction(
             SigningAlgorithm.ED25519,
             "00000042",
@@ -419,24 +366,25 @@ public final class ZkAssetInstructionsTest {
             null,
             unshield,
             keypair.privateKey(),
-            gasAssetId,
-            gasLimit),
-        gasAssetId,
-        gasLimit);
+            feePayment),
+        feePayment);
   }
 
-  private static void assertNativeGasMetadata(
-      final NativeSignedTransaction nativeTx, final String gasAssetId, final long gasLimit)
+  private static void assertNativeFeePayment(
+      final NativeSignedTransaction nativeTx, final FeePaymentIntent expected)
       throws Exception {
     final SignedTransaction signed =
         SignedTransactionEncoder.decodeVersioned(nativeTx.versionedSignedTransaction());
     final TransactionPayload payload =
         new NoritoJavaCodecAdapter().decodeTransaction(signed.encodedPayload());
 
-    assert JsonValue.string(gasAssetId).equals(payload.metadata().get("gas_asset_id"))
-        : "gas_asset_id metadata mismatch";
-    assert JsonValue.number(gasLimit).equals(payload.metadata().get("gas_limit"))
-        : "gas_limit metadata mismatch";
+    assert expected.equals(payload.feePayment()) : "fee payment mismatch";
+    assert !payload.metadata().containsKey("gas_asset_id") : "legacy gas_asset_id must be absent";
+    assert !payload.metadata().containsKey("gas_limit") : "legacy gas_limit must be absent";
+  }
+
+  private static FeePaymentIntent noFeePayment() {
+    return FeePaymentIntent.authority(Collections.emptyList());
   }
 
   private static ConfidentialEncryptedPayload samplePayload() {

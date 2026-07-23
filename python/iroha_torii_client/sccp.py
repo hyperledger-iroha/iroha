@@ -2042,6 +2042,14 @@ def _authority(value: Any, label: str) -> str:
     return authority
 
 
+def _fee_payment(value: Any, label: str) -> Dict[str, Any]:
+    # Import lazily because the public client owns the shared typed fee-intent
+    # normalizer and imports this SCCP module for its route codecs.
+    from .client import ToriiClient
+
+    return ToriiClient._normalize_fee_payment_intent(value, context=label)
+
+
 def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
     """Build the sole supported destination-proof submission body."""
 
@@ -2050,6 +2058,7 @@ def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
         frozenset(
             {
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "destination_proof_b64",
@@ -2057,7 +2066,7 @@ def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
             }
         ),
         "bridge proof submit",
-        frozenset({"authority", "destination_proof_b64"}),
+        frozenset({"authority", "fee_payment", "destination_proof_b64"}),
     )
     destination_proof = _canonical_base64(
         record["destination_proof_b64"],
@@ -2077,6 +2086,9 @@ def normalize_bridge_proof_submit_payload(value: Any) -> Dict[str, Any]:
     )
     result: Dict[str, Any] = {
         "authority": _authority(record["authority"], "bridge proof submit.authority"),
+        "fee_payment": _fee_payment(
+            record["fee_payment"], "bridge proof submit.fee_payment"
+        ),
         **_detached_signing_state(record, "bridge proof submit", creation_time),
         "destination_proof_b64": record["destination_proof_b64"],
     }
@@ -2093,6 +2105,7 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
         frozenset(
             {
                 "authority",
+                "fee_payment",
                 "signature_b64",
                 "transaction_payload_b64",
                 "native_proof_b64",
@@ -2100,7 +2113,7 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
             }
         ),
         "bridge message submit",
-        frozenset({"authority", "native_proof_b64"}),
+        frozenset({"authority", "fee_payment", "native_proof_b64"}),
     )
     native_proof = _canonical_base64(
         record["native_proof_b64"], "bridge message submit.native_proof_b64"
@@ -2118,6 +2131,9 @@ def normalize_bridge_message_submit_payload(value: Any) -> Dict[str, Any]:
     )
     result: Dict[str, Any] = {
         "authority": _authority(record["authority"], "bridge message submit.authority"),
+        "fee_payment": _fee_payment(
+            record["fee_payment"], "bridge message submit.fee_payment"
+        ),
         **_detached_signing_state(record, "bridge message submit", creation_time),
         "native_proof_b64": record["native_proof_b64"],
     }

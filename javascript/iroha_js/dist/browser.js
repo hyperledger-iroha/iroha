@@ -27,29 +27,75 @@ export {
 } from "./ivmArtifact.js";
 
 export {
+  IVM_ARTIFACT_ADMISSION_MAX_INPUT_BYTES,
+  instantiateIvmArtifactAdmissionWasm,
+  verifyIvmContractArtifactAdmission,
+} from "./ivmArtifactAdmissionWasm.js";
+
+export {
   BrowserTransactionCodecError,
   browserSignedTransactionHashHex,
   browserTransactionCodec,
   browserTransactionPayloadHashHex,
+  buildBrowserExecutableBatchPayload,
+  buildBrowserInstructionTransactionPayload,
   buildBrowserTransferPayload,
+  finalizeBrowserExecutableBatchTransaction,
+  finalizeBrowserInstructionTransaction,
   finalizeBrowserSignedTransaction,
+  validateBrowserExecutableBatchSignable,
+  validateBrowserInstructionTransactionSignable,
   validateBrowserTransferSignable,
 } from "./transactionCodec.js";
 
 export {
+  SMART_CONTRACT_CODE_CHUNK_BYTES,
+  deploySmartContractBrowser,
+  deriveContractAddress,
+  prepareBrowserContractArtifact,
+} from "./smartContractDeployment.js";
+
+export {
+  buildCancelSmartContractCodeUploadInstruction,
+  buildCommitContractDeploymentInstruction,
+  buildFinalizeSmartContractCodeUploadInstruction,
+  buildRegisterSmartContractCodeInstruction,
+  buildUploadSmartContractCodeChunkInstruction,
+} from "./instructionBuilders.js";
+
+export {
+  noritoDecodeBlockProofs,
   noritoDecodeInstruction,
   noritoEncodeInstruction,
   noritoEncodeMultisigContractCallApproveRequest,
   noritoEncodeMultisigContractCallProposeRequest,
   noritoEncodeMultisigProposeRequest,
+  verifyBlockMerkleProof,
+  verifyBlockProofs,
 } from "./norito.js";
 
 export {
   ToriiBrowserClient,
   ToriiBrowserHttpError,
+  ToriiBrowserStreamGapError,
   ToriiBrowserClient as ToriiClient,
   ToriiBrowserHttpError as ToriiHttpError,
 } from "./toriiBrowserClient.js";
+
+export {
+  KAGEMUSHA_MANIFEST_VERSION,
+  KAGEMUSHA_MAX_HOPS,
+  KAGEMUSHA_REDEEM_REQUEST_MAX_BYTES,
+  KAGEMUSHA_REQUIRED_BRIDGE_ABI_VERSION,
+  KAGEMUSHA_TOP_UP_REQUEST_MAX_BYTES,
+  normalizeKagemushaAssetSelector,
+  normalizeKagemushaOperationId,
+  normalizeKagemushaOperationReference,
+  normalizeKagemushaOperationStatus,
+  normalizeKagemushaRedeemRequestV4,
+  normalizeKagemushaReadinessV4,
+  normalizeKagemushaTopUpRequestV4,
+} from "./kagemushaOffline.js";
 
 export {
   assetReferencesMatch,

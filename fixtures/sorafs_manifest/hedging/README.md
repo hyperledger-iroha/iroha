@@ -63,9 +63,10 @@ Full validation requires each generated `.to` file to match its JSON
 `norito_bytes_hex` field, requires each JSON sidecar to carry the expected
 kind-specific top-level and nested fields, checks V1 versioning, duplicate
 nested ids, account-id hex binding, and statement timestamp ordering, and
-requires even-length lowercase hex payload mirrors, positive prices,
-timestamps, canonical unsigned `u128` billing amount/quantity strings, and
-bounded basis-point fields before the pinned `sorafs-validate hedging` command
+requires even-length lowercase hex payload mirrors, positive prices and
+timestamps, canonical signed-512 exact-decimal amount strings (scale at most 28,
+or nine for XOR), canonical unsigned `u128` metered-quantity strings, and bounded
+basis-point fields before the pinned `sorafs-validate hedging` command
 produces the manifest's expected accepted or rejected outcome. It also rejects
 extra generated `.to` or `.json` files under this directory that are not pinned
 by `fixture_manifest.json`.

@@ -12,11 +12,11 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
-    account::AccountId,
+    asset::AssetDefinitionId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
     consensus::Qc,
     da::commitment::DaCommitmentBundle,
-    nexus::{AxtFastpqBinding, DataSpaceId, LaneId},
+    nexus::{AxtFastpqBinding, DataSpaceId, FeeSponsorProgramId, LaneId},
     peer::PeerId,
     prelude::Metadata,
 };
@@ -24,8 +24,15 @@ use iroha_primitives::numeric::Quantity;
 
 /// Prefix for contract-visible verified relay state keys.
 pub const VERIFIED_LANE_RELAY_STATE_KEY_PREFIX: &str = "pkdeploy_verified_lane_relay";
-/// Prefix for contract-visible verified Nexus fee-budget cache keys.
-pub const VERIFIED_NEXUS_FEE_BUDGET_STATE_KEY_PREFIX: &str = "pkdeploy_verified_nexus_fee_budget";
+/// Prefix for contract-visible verified fee sponsor vault-allocation keys.
+pub const VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX: &str =
+    "pkdeploy_verified_fee_sponsor_vault_allocation";
+/// Prefix for cumulative spend recorded against a verified sponsor-vault allocation.
+pub const VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX: &str =
+    "pkdeploy_fee_sponsor_vault_allocation_usage";
+/// Prefix for cumulative merge-settled spend against a verified allocation.
+pub const VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX: &str =
+    "pkdeploy_fee_sponsor_vault_allocation_settled_usage";
 /// FASTPQ business effect expected for verified lane-relay block commitments.
 pub const LANE_RELAY_FASTPQ_EFFECT_TYPE: &str = "lane_relay_block";
 
@@ -159,19 +166,31 @@ pub struct VerifiedLaneRelayRecord {
     pub fastpq_binding: AxtFastpqBinding,
 }
 
-/// Verified Nexus XOR fee-budget cache record persisted by the relay protocol.
+/// Proof-backed cross-lane spend allocation for one sponsor-program vault asset.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
-pub struct VerifiedNexusFeeBudgetRecord {
-    /// Sponsor or payer account whose public Nexus XOR balance was verified.
-    pub sponsor_account_id: AccountId,
-    /// Fee asset selector used for the verified balance, fixed operationally to public XOR.
-    pub fee_asset_id: String,
-    /// Latest verified public Nexus balance for `fee_asset_id`.
-    pub verified_balance: Quantity,
+pub struct VerifiedFeeSponsorVaultAllocation {
+    /// Exact sponsor program authorized to consume the allocation.
+    pub program_id: FeeSponsorProgramId,
+    /// Immutable program revision bound by the source proof.
+    pub program_revision: u64,
+    /// Canonical fee asset allocated by the source vault.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Maximum amount authorized by this spend lease.
+    pub verified_allocation: Quantity,
+    /// Source dataspace that owns the authoritative program vault.
+    pub source_dataspace_id: DataSpaceId,
+    /// Monotonic source consensus height bound by the proof.
+    pub source_height: u64,
+    /// Source state root that commits the vault allocation and counters.
+    pub source_state_root: Hash,
+    /// Consensus height after which the allocation cannot admit new charges.
+    pub expires_at_height: u64,
+    /// Globally unique proof-bound spend lease identifier.
+    pub lease_id: Hash,
     /// Deterministic hash of the proof payload used during registration.
     pub proof_payload_hash: Hash,
     /// `FastPQ` statement digest verified during registration.
@@ -265,20 +284,77 @@ pub fn lane_relay_fastpq_claim_digest(
     Ok(Hash::new(bytes))
 }
 
-/// Compute the canonical claim digest for a verified Nexus sponsor fee-budget proof.
+/// Canonical source-ledger claim authorized by a sponsor-vault spend lease.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct FeeSponsorVaultAllocationClaim {
+    /// Exact sponsor program authorized to spend the allocation.
+    pub program_id: FeeSponsorProgramId,
+    /// Immutable program revision bound by the source proof.
+    pub program_revision: u64,
+    /// Canonical fee asset allocated by the source vault.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Maximum amount authorized by this spend lease.
+    pub verified_allocation: Quantity,
+    /// Dataspace containing the authoritative source vault.
+    pub source_dataspace_id: DataSpaceId,
+    /// Monotonic source consensus height bound by the proof.
+    pub source_height: u64,
+    /// Source state root committing the vault and budget state.
+    pub source_state_root: Hash,
+    /// Consensus height after which the spend lease expires.
+    pub expires_at_height: u64,
+    /// Globally unique proof-bound spend lease identifier.
+    pub lease_id: Hash,
+}
+
+#[derive(Clone, Debug, Encode)]
+struct FeeSponsorVaultSourceStateCommitment {
+    version: u8,
+    program_id: FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: AssetDefinitionId,
+    vault_balance: Quantity,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
+}
+
+/// Commit the exact source-vault snapshot from which a relay allocation was derived.
+///
+/// Registration recomputes this commitment from authoritative world state. This
+/// prevents a valid proof over a self-declared amount from allocating more than
+/// the isolated program vault actually contains.
 #[must_use]
-pub fn nexus_fee_budget_claim_digest(
-    sponsor: &AccountId,
-    fee_asset_id: &str,
-    verified_balance: &Quantity,
+pub fn fee_sponsor_vault_source_state_root(
+    program_id: &FeeSponsorProgramId,
+    program_revision: u64,
+    asset_definition_id: &AssetDefinitionId,
+    vault_balance: &Quantity,
+    source_dataspace_id: DataSpaceId,
+    source_height: u64,
 ) -> Hash {
-    Hash::new(
-        format!(
-            "nexus_fee_budget:v1:{sponsor}:{}:{verified_balance}",
-            fee_asset_id.trim()
-        )
-        .as_bytes(),
-    )
+    let commitment = FeeSponsorVaultSourceStateCommitment {
+        version: 1,
+        program_id: program_id.clone(),
+        program_revision,
+        asset_definition_id: asset_definition_id.clone(),
+        vault_balance: vault_balance.clone(),
+        source_dataspace_id,
+        source_height,
+    };
+    Hash::new(commitment.encode())
+}
+
+/// Compute the canonical claim digest for a verified sponsor-vault allocation proof.
+#[must_use]
+pub fn fee_sponsor_vault_allocation_claim_digest(
+    allocation: &FeeSponsorVaultAllocationClaim,
+) -> Hash {
+    Hash::new(allocation.encode())
 }
 
 /// Operator evidence bundle captured when ingesting a lane relay envelope fails.
@@ -701,10 +777,10 @@ impl LaneRelayEnvelope {
 
     fn verify_settlement_integrity(&self) -> Result<(), LaneRelayError> {
         let settlement = &self.settlement_commitment;
-        let mut total_local_micro = 0u128;
-        let mut total_xor_due_micro = 0u128;
-        let mut total_xor_after_haircut_micro = 0u128;
-        let mut total_xor_variance_micro = 0u128;
+        let mut total_local_amount = Quantity::zero();
+        let mut total_xor_due = Quantity::zero();
+        let mut total_xor_after_haircut = Quantity::zero();
+        let mut total_xor_variance = Quantity::zero();
         let mut settlement_sources = std::collections::BTreeSet::new();
         let mut all_sources = std::collections::BTreeSet::new();
         for receipt in &settlement.receipts {
@@ -712,24 +788,24 @@ impl LaneRelayEnvelope {
                 return Err(LaneRelayError::DuplicateSettlementSource);
             }
             all_sources.insert(receipt.source_id);
-            total_local_micro = total_local_micro
-                .checked_add(receipt.local_amount_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_due_micro = total_xor_due_micro
-                .checked_add(receipt.xor_due_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_after_haircut_micro = total_xor_after_haircut_micro
-                .checked_add(receipt.xor_after_haircut_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
-            total_xor_variance_micro = total_xor_variance_micro
-                .checked_add(receipt.xor_variance_micro)
-                .ok_or(LaneRelayError::SettlementTotalsMismatch)?;
+            total_local_amount = total_local_amount
+                .try_add(&receipt.local_amount)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_due = total_xor_due
+                .try_add(&receipt.xor_due)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_after_haircut = total_xor_after_haircut
+                .try_add(&receipt.xor_after_haircut)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
+            total_xor_variance = total_xor_variance
+                .try_add(&receipt.xor_variance)
+                .map_err(|_| LaneRelayError::SettlementTotalsMismatch)?;
         }
         if !settlement.receipts.is_empty()
-            && (total_local_micro != settlement.total_local_micro
-                || total_xor_due_micro != settlement.total_xor_due_micro
-                || total_xor_after_haircut_micro != settlement.total_xor_after_haircut_micro
-                || total_xor_variance_micro != settlement.total_xor_variance_micro)
+            && (total_local_amount != settlement.total_local_amount
+                || total_xor_due != settlement.total_xor_due
+                || total_xor_after_haircut != settlement.total_xor_after_haircut
+                || total_xor_variance != settlement.total_xor_variance)
         {
             return Err(LaneRelayError::SettlementTotalsMismatch);
         }
@@ -796,17 +872,23 @@ impl VerifiedLaneRelayRecord {
     }
 }
 
-impl VerifiedNexusFeeBudgetRecord {
-    /// Construct a verified fee-budget cache record from canonical verified inputs.
+impl VerifiedFeeSponsorVaultAllocation {
+    /// Construct a verified vault allocation from canonical verified inputs.
     #[must_use]
     #[expect(
         clippy::too_many_arguments,
         reason = "the constructor mirrors the canonical verified record fields"
     )]
     pub fn new(
-        sponsor_account_id: AccountId,
-        fee_asset_id: String,
-        verified_balance: Quantity,
+        program_id: FeeSponsorProgramId,
+        program_revision: u64,
+        asset_definition_id: AssetDefinitionId,
+        verified_allocation: Quantity,
+        source_dataspace_id: DataSpaceId,
+        source_height: u64,
+        source_state_root: Hash,
+        expires_at_height: u64,
+        lease_id: Hash,
         proof_payload_hash: Hash,
         fastpq_statement_digest: [u8; 32],
         fastpq_proof_digest: Hash,
@@ -815,9 +897,15 @@ impl VerifiedNexusFeeBudgetRecord {
         fastpq_binding: AxtFastpqBinding,
     ) -> Self {
         Self {
-            sponsor_account_id,
-            fee_asset_id,
-            verified_balance,
+            program_id,
+            program_revision,
+            asset_definition_id,
+            verified_allocation,
+            source_dataspace_id,
+            source_height,
+            source_state_root,
+            expires_at_height,
+            lease_id,
             proof_payload_hash,
             fastpq_statement_digest,
             fastpq_proof_digest,
@@ -827,14 +915,36 @@ impl VerifiedNexusFeeBudgetRecord {
         }
     }
 
-    /// Return the canonical contract-state key for this sponsor/asset budget cache.
+    /// Return the canonical contract-state key for this exact spend lease.
     #[must_use]
-    pub fn state_key_for(sponsor_account_id: &AccountId, fee_asset_id: &str) -> String {
-        let material = format!("{sponsor_account_id}|{}", fee_asset_id.trim());
+    pub fn state_key_for(
+        program_id: &FeeSponsorProgramId,
+        asset_definition_id: &AssetDefinitionId,
+        lease_id: &Hash,
+    ) -> String {
+        let material = format!("{program_id}|{asset_definition_id}|{lease_id}");
         let suffix = Hash::new(material.as_bytes());
         format!(
-            "{VERIFIED_NEXUS_FEE_BUDGET_STATE_KEY_PREFIX}_{}",
+            "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX}_{}",
             hex::encode(suffix.as_ref())
+        )
+    }
+
+    /// Return the canonical state key for cumulative spend against one proof-bound lease.
+    #[must_use]
+    pub fn usage_state_key_for(lease_id: &Hash) -> String {
+        format!(
+            "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX}_{}",
+            hex::encode(lease_id.as_ref())
+        )
+    }
+
+    /// Return the canonical state key for cumulative merge-settled spend on one lease.
+    #[must_use]
+    pub fn settled_usage_state_key_for(lease_id: &Hash) -> String {
+        format!(
+            "{VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX}_{}",
+            hex::encode(lease_id.as_ref())
         )
     }
 }
@@ -1198,6 +1308,7 @@ mod tests {
             },
         },
         consensus::{CertPhase, QcAggregate},
+        nexus::FeeDebitSource,
     };
 
     fn sample_commitment(height: u64, lane_id: u32, dataspace_id: u64) -> LaneBlockCommitment {
@@ -1207,17 +1318,17 @@ mod tests {
             lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
             dataspace_id: DataSpaceId::new(dataspace_id),
             tx_count: 1,
-            total_local_micro: 10,
-            total_xor_due_micro: 5,
-            total_xor_after_haircut_micro: 4,
-            total_xor_variance_micro: 1,
+            total_local_amount: "0.00001".parse().expect("valid settlement quantity"),
+            total_xor_due: "0.000005".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0.000001".parse().expect("valid settlement quantity"),
             swap_metadata: None,
             receipts: vec![crate::block::consensus::LaneSettlementReceipt {
                 source_id: [0xA5; 32],
-                local_amount_micro: 10,
-                xor_due_micro: 5,
-                xor_after_haircut_micro: 4,
-                xor_variance_micro: 1,
+                local_amount: "0.00001".parse().expect("valid settlement quantity"),
+                xor_due: "0.000005".parse().expect("valid settlement quantity"),
+                xor_after_haircut: "0.000004".parse().expect("valid settlement quantity"),
+                xor_variance: "0.000001".parse().expect("valid settlement quantity"),
                 timestamp_ms: 1_700_000_000_000,
             }],
             nexus_fee_receipts: Vec::new(),
@@ -1303,10 +1414,15 @@ mod tests {
     #[test]
     fn verify_rejects_settlement_total_mismatch_when_receipts_are_present() {
         let mut envelope = build_envelope(6, None);
-        envelope.settlement_commitment.total_local_micro = envelope
+        let one_micro = "0.000001"
+            .parse::<Quantity>()
+            .expect("valid one-micro settlement quantity");
+        let mismatched_total = envelope
             .settlement_commitment
-            .total_local_micro
-            .saturating_add(1);
+            .total_local_amount
+            .checked_add(&one_micro)
+            .expect("bounded settlement mismatch fixture");
+        envelope.settlement_commitment.total_local_amount = mismatched_total;
 
         let err = envelope
             .verify()
@@ -1321,10 +1437,14 @@ mod tests {
             .settlement_commitment
             .nexus_fee_receipts
             .push(NexusFeeReceipt {
-                version: 1,
+                version: NexusFeeReceipt::VERSION,
                 source_id: [0xB6; 32],
-                payer_account_id: checked_account_id(),
-                fee_asset_id: "xor#universal".to_owned(),
+                debit_source: FeeDebitSource::Account(checked_account_id()),
+                fee_asset_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                    .parse()
+                    .expect("canonical asset definition id"),
+                program_revision: None,
+                lease_id: None,
                 fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
@@ -1343,7 +1463,7 @@ mod tests {
             .settlement_commitment
             .native_amx_receipts
             .push(NativeAmxReceipt {
-                version: 1,
+                version: NexusFeeReceipt::VERSION,
                 source_id: [0xC7; 32],
                 chain_id_hash: Hash::new(b"receipt-union-chain"),
                 plan_digest: Hash::new(b"receipt-union-plan"),
@@ -1618,8 +1738,12 @@ mod tests {
             .push(NexusFeeReceipt {
                 version: 1,
                 source_id: [0x11; 32],
-                payer_account_id: checked_account_id(),
-                fee_asset_id: "xor#universal".to_owned(),
+                debit_source: FeeDebitSource::Account(checked_account_id()),
+                fee_asset_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                    .parse()
+                    .expect("canonical asset definition id"),
+                program_revision: None,
+                lease_id: None,
                 fee_amount: Quantity::from(1_u32),
                 schedule: NexusFeeScheduleInputs {
                     tx_bytes_len: 1,
@@ -1706,31 +1830,106 @@ mod tests {
     }
 
     #[test]
-    fn nexus_fee_budget_claim_digest_binds_sponsor_asset_and_balance() {
-        let sponsor = checked_account_id();
-        let original =
-            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Quantity::from(10_u32));
+    fn fee_sponsor_vault_claim_digest_binds_program_asset_amount_and_lease() {
+        let claim = FeeSponsorVaultAllocationClaim {
+            program_id: FeeSponsorProgramId::new(
+                checked_account_id(),
+                "retail".parse().expect("program name"),
+            ),
+            program_revision: 3,
+            asset_definition_id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id"),
+            verified_allocation: Quantity::from(10_u32),
+            source_dataspace_id: DataSpaceId::new(2),
+            source_height: 40,
+            source_state_root: Hash::new(b"source-state"),
+            expires_at_height: 100,
+            lease_id: Hash::new(b"lease-a"),
+        };
+        let original = fee_sponsor_vault_allocation_claim_digest(&claim);
+
+        let mut changed = claim.clone();
+        changed.verified_allocation = Quantity::from(11_u32);
+        assert_ne!(
+            original,
+            fee_sponsor_vault_allocation_claim_digest(&changed)
+        );
+        changed = claim.clone();
+        changed.lease_id = Hash::new(b"lease-b");
+        assert_ne!(
+            original,
+            fee_sponsor_vault_allocation_claim_digest(&changed)
+        );
+        changed = claim;
+        changed.program_revision = 4;
+        assert_ne!(
+            original,
+            fee_sponsor_vault_allocation_claim_digest(&changed)
+        );
+    }
+
+    #[test]
+    fn fee_sponsor_vault_source_root_binds_authoritative_snapshot() {
+        let program_id = FeeSponsorProgramId::new(
+            checked_account_id(),
+            "retail".parse().expect("program name"),
+        );
+        let asset_definition_id = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+            .parse()
+            .expect("canonical asset definition id");
+        let original = fee_sponsor_vault_source_state_root(
+            &program_id,
+            3,
+            &asset_definition_id,
+            &Quantity::from(10_u32),
+            DataSpaceId::new(2),
+            40,
+        );
 
         assert_ne!(
             original,
-            nexus_fee_budget_claim_digest(&sponsor, "xor#universal", &Quantity::from(11_u32))
-        );
-        assert_ne!(
-            original,
-            nexus_fee_budget_claim_digest(
-                &sponsor,
-                "xor#universal.universal",
-                &Quantity::from(10_u32)
+            fee_sponsor_vault_source_state_root(
+                &program_id,
+                3,
+                &asset_definition_id,
+                &Quantity::from(11_u32),
+                DataSpaceId::new(2),
+                40,
             )
         );
         assert_ne!(
             original,
-            nexus_fee_budget_claim_digest(
-                &checked_account_id(),
-                "xor#universal",
+            fee_sponsor_vault_source_state_root(
+                &program_id,
+                3,
+                &asset_definition_id,
                 &Quantity::from(10_u32),
+                DataSpaceId::new(3),
+                40,
             )
         );
+    }
+
+    #[test]
+    fn fee_sponsor_vault_allocation_usage_keys_are_lease_bound_and_disjoint() {
+        let first = Hash::new(b"fee-sponsor-lease-a");
+        let second = Hash::new(b"fee-sponsor-lease-b");
+        let executed = VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&first);
+        let settled = VerifiedFeeSponsorVaultAllocation::settled_usage_state_key_for(&first);
+
+        assert!(executed.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_USAGE_STATE_KEY_PREFIX));
+        assert!(
+            settled
+                .starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_SETTLED_USAGE_STATE_KEY_PREFIX)
+        );
+        assert_ne!(executed, settled);
+        assert_ne!(
+            executed,
+            VerifiedFeeSponsorVaultAllocation::usage_state_key_for(&second)
+        );
+        assert!(!executed.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX));
+        assert!(!settled.starts_with(VERIFIED_FEE_SPONSOR_VAULT_ALLOCATION_STATE_KEY_PREFIX));
     }
 
     #[test]

@@ -4,6 +4,7 @@
 //! against on-chain verifying keys.
 
 use iroha_crypto::Hash;
+use iroha_primitives::numeric::Quantity;
 
 use super::*;
 use crate::{
@@ -270,7 +271,7 @@ isi! {
         /// Account to debit.
         pub from: AccountId,
         /// Public amount to debit.
-        pub amount: u128,
+        pub amount: Quantity,
         /// Output note commitment (opaque 32 bytes under the asset's note scheme).
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub note_commitment: [u8; 32],
@@ -285,14 +286,14 @@ impl Shield {
     pub fn new(
         asset: AssetDefinitionId,
         from: AccountId,
-        amount: u128,
+        amount: impl Into<Quantity>,
         note_commitment: [u8; 32],
         enc_payload: impl Into<ConfidentialEncryptedPayload>,
     ) -> Self {
         Self {
             asset,
             from,
-            amount,
+            amount: amount.into(),
             note_commitment,
             enc_payload: enc_payload.into(),
         }
@@ -453,7 +454,7 @@ isi! {
         /// Transparent asset definition.
         pub asset: AssetDefinitionId,
         /// Transparent amount.
-        pub amount: u128,
+        pub amount: Quantity,
         /// Identity commitment being authorized.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub identity_commitment: [u8; 32],
@@ -485,7 +486,7 @@ impl SubmitZkAceAuthorizedTransfer {
         from: AccountId,
         to: AccountId,
         asset: AssetDefinitionId,
-        amount: u128,
+        amount: impl Into<Quantity>,
         identity_commitment: [u8; 32],
         tx_digest: [u8; 32],
         chain_id: ChainId,
@@ -499,7 +500,7 @@ impl SubmitZkAceAuthorizedTransfer {
             from,
             to,
             asset,
-            amount,
+            amount: amount.into(),
             identity_commitment,
             tx_digest,
             chain_id,
@@ -614,7 +615,7 @@ isi! {
         /// Recipient account to credit.
         pub to: AccountId,
         /// Public amount to credit.
-        pub public_amount: u128,
+        pub public_amount: Quantity,
         /// Spent nullifiers.
         #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes::vec"))]
         pub inputs: Vec<[u8; 32]>,
@@ -636,7 +637,7 @@ impl Unshield {
     pub fn new(
         asset: AssetDefinitionId,
         to: AccountId,
-        public_amount: u128,
+        public_amount: impl Into<Quantity>,
         inputs: Vec<[u8; 32]>,
         proof: crate::proof::ProofAttachment,
         root_hint: Option<[u8; 32]>,
@@ -656,7 +657,7 @@ impl Unshield {
     pub fn new_with_outputs(
         asset: AssetDefinitionId,
         to: AccountId,
-        public_amount: u128,
+        public_amount: impl Into<Quantity>,
         inputs: Vec<[u8; 32]>,
         outputs: Vec<[u8; 32]>,
         proof: crate::proof::ProofAttachment,
@@ -665,7 +666,7 @@ impl Unshield {
         Self {
             asset,
             to,
-            public_amount,
+            public_amount: public_amount.into(),
             inputs,
             outputs,
             proof,
@@ -858,7 +859,7 @@ impl_zk_decode_from_slice!(CancelConfidentialPolicyTransition {
 impl_zk_decode_from_slice!(Shield {
     asset: AssetDefinitionId,
     from: AccountId,
-    amount: u128,
+    amount: Quantity,
     note_commitment: [u8; 32],
     enc_payload: ConfidentialEncryptedPayload,
 });
@@ -883,7 +884,7 @@ impl_zk_decode_from_slice!(SubmitZkAceAuthorizedTransfer {
     from: AccountId,
     to: AccountId,
     asset: AssetDefinitionId,
-    amount: u128,
+    amount: Quantity,
     identity_commitment: [u8; 32],
     tx_digest: [u8; 32],
     chain_id: ChainId,
@@ -897,7 +898,7 @@ impl_zk_decode_from_slice!(SubmitZkAceAuthorizedTransfer {
 impl_zk_decode_from_slice!(Unshield {
     asset: AssetDefinitionId,
     to: AccountId,
-    public_amount: u128,
+    public_amount: Quantity,
     inputs: Vec<[u8; 32]>,
     outputs: Vec<[u8; 32]>,
     proof: crate::proof::ProofAttachment,
@@ -1083,7 +1084,7 @@ mod tests {
         assert_slice_roundtrip(Shield::new(
             asset.clone(),
             account(1),
-            1_000,
+            Quantity::from(1_000_u32),
             [0x11; 32],
             encrypted_payload(),
         ));
@@ -1105,7 +1106,7 @@ mod tests {
             account(3),
             account(4),
             asset.clone(),
-            75,
+            Quantity::from(75_u32),
             [0xB1; 32],
             [0xB2; 32],
             "boi-test-chain".parse().expect("chain id"),
@@ -1118,7 +1119,7 @@ mod tests {
         assert_slice_roundtrip(Unshield::new_with_outputs(
             asset,
             account(2),
-            500,
+            Quantity::from(500_u32),
             vec![[0x15; 32]],
             vec![[0x16; 32]],
             proof.clone(),
@@ -1198,7 +1199,7 @@ mod tests {
             account(5),
             account(6),
             asset,
-            125,
+            Quantity::from(125_u32),
             [0xD1; 32],
             [0xD2; 32],
             "boi-test-chain".parse().expect("chain id"),
@@ -1208,6 +1209,38 @@ mod tests {
             [0xD4; 32],
             proof_attachment(),
         ));
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn public_zk_quantities_use_strict_canonical_json_strings() {
+        let amount: Quantity = "18446744073709551616"
+            .parse()
+            .expect("quantity above u64 remains in the V1 numeric domain");
+        let shield = Shield::new(
+            asset_definition_id(),
+            account(1),
+            amount,
+            [0x71; 32],
+            encrypted_payload(),
+        );
+        let canonical = norito::json::to_json(&shield).expect("serialize shield");
+        assert!(canonical.contains("\"amount\":\"18446744073709551616\""));
+        let decoded: Shield = norito::json::from_json(&canonical).expect("canonical quantity");
+        assert_eq!(decoded.amount().to_string(), "18446744073709551616");
+
+        for (label, replacement) in [
+            ("JSON number", "18446744073709551616"),
+            ("noncanonical string", "\"018446744073709551616\""),
+            ("negative string", "\"-18446744073709551616\""),
+        ] {
+            let malformed = canonical.replace("\"18446744073709551616\"", replacement);
+            assert_ne!(malformed, canonical, "test fixture must replace amount");
+            assert!(
+                norito::json::from_json::<Shield>(&malformed).is_err(),
+                "{label} must not cross a public Quantity JSON boundary"
+            );
+        }
     }
 
     #[test]
@@ -1317,7 +1350,7 @@ mod tests {
                 account(5),
                 account(6),
                 asset,
-                125,
+                Quantity::from(125_u32),
                 [0x61; 32],
                 [0x62; 32],
                 "boi-test-chain".parse().expect("chain id"),

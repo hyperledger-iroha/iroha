@@ -40,16 +40,24 @@ fn overlay_instruction_cap_rejects_and_rest_apply() {
     state.set_pipeline(cfg);
 
     // tx_a: two instructions → should be rejected by instruction cap
-    let tx_a = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([
-            Log::new(Level::INFO, "a1".to_string()),
-            Log::new(Level::INFO, "a2".to_string()),
-        ])
-        .sign(kp.private_key());
+    let tx_a = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([
+        Log::new(Level::INFO, "a1".to_string()),
+        Log::new(Level::INFO, "a2".to_string()),
+    ])
+    .sign(kp.private_key());
     // tx_b: one instruction → should be approved
-    let tx_b = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "b1".to_string())])
-        .sign(kp.private_key());
+    let tx_b = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "b1".to_string())])
+    .sign(kp.private_key());
 
     let a = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_a));
     let b = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_b));
@@ -108,13 +116,21 @@ fn overlay_bytes_cap_rejects_and_rest_apply() {
     cfg.overlay_max_bytes = small_bytes;
     state.set_pipeline(cfg);
 
-    let tx_big = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([big_instr])
-        .sign(kp.private_key());
+    let tx_big = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([big_instr])
+    .sign(kp.private_key());
     // tx_small: a small Log within byte cap
-    let tx_small = TransactionBuilder::new(chain_id, authority_id.clone())
-        .with_instructions([small_instr])
-        .sign(kp.private_key());
+    let tx_small = TransactionBuilder::new(
+        chain_id,
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([small_instr])
+    .sign(kp.private_key());
 
     let big = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_big));
     let small = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_small));
@@ -188,20 +204,28 @@ fn expired_transaction_is_rejected_during_stateless_prepass() {
     }
 
     // tx_expired: creation time far in the past with short TTL → should be rejected
-    let tx_expired = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "expired".to_string())])
-        .with_metadata({
-            let mut md = iroha_data_model::metadata::Metadata::default();
-            let exp_key = iroha_data_model::name::Name::from_str("expires_at_height").unwrap();
-            md.insert(exp_key, iroha_primitives::json::Json::new(0u64));
-            md
-        })
-        .sign(kp.private_key());
+    let tx_expired = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "expired".to_string())])
+    .with_metadata({
+        let mut md = iroha_data_model::metadata::Metadata::default();
+        let exp_key = iroha_data_model::name::Name::from_str("expires_at_height").unwrap();
+        md.insert(exp_key, iroha_primitives::json::Json::new(0u64));
+        md
+    })
+    .sign(kp.private_key());
 
     // tx_ok: current creation time without TTL → should be approved
-    let tx_ok = TransactionBuilder::new(chain_id.clone(), authority_id.clone())
-        .with_instructions([Log::new(Level::INFO, "ok".to_string())])
-        .sign(kp.private_key());
+    let tx_ok = TransactionBuilder::new(
+        chain_id.clone(),
+        authority_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "ok".to_string())])
+    .sign(kp.private_key());
 
     let expired = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_expired));
     let ok = iroha_core::tx::AcceptedTransaction::new_unchecked(Cow::Owned(tx_ok));

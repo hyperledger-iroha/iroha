@@ -3,26 +3,29 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
+    sync::Arc,
 };
 
 use color_eyre::{Report, eyre::eyre};
 use iroha_config::base::toml::WriteExt;
 use iroha_config::parameters::actual::{
-    Crypto as ActualCrypto, Nexus as ActualNexus, Zk as ActualZk,
+    Crypto as ActualCrypto, Nexus as ActualNexus, Pipeline as ActualPipeline, Zk as ActualZk,
 };
 use iroha_core::{
     block::ValidBlock,
+    governance::manifest::LaneManifestRegistry,
     kura::Kura,
     query::store::LiveQueryStore,
     state::{State, World},
     sumeragi::network_topology::Topology as CoreTopology,
     telemetry::StateTelemetry,
 };
-use iroha_crypto::{KeyPair, SignatureOf};
+use iroha_crypto::{Hash, KeyPair, SignatureOf};
 use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
     asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
+    block::consensus_v2::ConsensusMode as WireConsensusMode,
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
@@ -35,18 +38,21 @@ use iroha_data_model::{
     parameter::{
         Parameter,
         custom::CustomParameter,
-        system::{confidential_metadata, consensus_metadata},
+        system::{
+            ConsensusHandshakeMetadata, SumeragiConsensusMode, confidential_metadata,
+            consensus_metadata,
+        },
     },
     peer::PeerId,
     permission::Permission,
     prelude::{HashOf, Transfer},
-    transaction::signed::TransactionResultInner,
+    transaction::{Executable, signed::TransactionResultInner},
     trigger::{DataTriggerSequence, TimeTriggerEntrypoint},
 };
 use iroha_executor_data_model::permission::{
     account::CanRegisterAccount,
     asset::{CanMintAssetWithDefinition, CanTransferAssetWithDefinition},
-    domain::{CanRegisterDomain, CanUnregisterDomain},
+    domain::CanUnregisterDomain,
     executor::CanUpgradeExecutor,
     governance::CanManageParliament,
     parameter::CanSetParameters,
@@ -192,6 +198,7 @@ pub fn genesis_with_keypair_and_post_topology(
         None,
         None,
         None,
+        None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
@@ -208,10 +215,10 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
     _nexus_config: Option<ActualNexus>,
     zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
-    init_instruction_registry();
-    build_minimal_genesis_with_post_topology(
+    genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
         extra_transactions,
         post_topology_transactions,
         topology,
@@ -220,9 +227,47 @@ pub(crate) fn genesis_with_keypair_and_post_topology_with_policies(
         chain_id,
         genesis_crypto,
         da_proof_policies,
+        None,
         _nexus_config,
         zk_config,
         consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+    )
+    .0
+}
+
+pub(crate) fn genesis_with_keypair_and_post_topology_with_policies_and_staged_hash(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+    chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
+    da_proof_policies: Option<DaProofPolicyBundle>,
+    pipeline_config: Option<ActualPipeline>,
+    nexus_config: Option<ActualNexus>,
+    zk_config: Option<ActualZk>,
+    consensus_handshake_meta: Option<Parameter>,
+    consensus_mode_override: Option<SumeragiConsensusMode>,
+    confidential_policy_hash: Option<[u8; 32]>,
+) -> (GenesisBlock, Hash) {
+    init_instruction_registry();
+    build_minimal_genesis_with_post_topology_and_staged_hash(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id,
+        genesis_crypto,
+        da_proof_policies,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
         confidential_policy_hash,
     )
 }
@@ -244,6 +289,61 @@ fn strip_handshake_metadata_transactions(transactions: &mut [Vec<InstructionBox>
     }
 }
 
+fn decode_consensus_handshake_metadata(
+    parameter: &Parameter,
+) -> Result<ConsensusHandshakeMetadata, Report> {
+    let Parameter::Custom(custom) = parameter else {
+        return Err(eyre!(
+            "consensus handshake metadata must be encoded as a custom parameter"
+        ));
+    };
+    if custom.id() != &consensus_metadata::handshake_meta_id() {
+        return Err(eyre!(
+            "consensus handshake metadata has unexpected parameter id `{}`",
+            custom.id()
+        ));
+    }
+    let metadata: ConsensusHandshakeMetadata = norito::json::from_str(custom.payload().get())
+        .map_err(|error| eyre!("failed to decode consensus handshake metadata: {error}"))?;
+    metadata
+        .validate()
+        .map_err(|error| eyre!("invalid consensus handshake metadata: {error}"))?;
+    Ok(metadata)
+}
+
+fn signed_genesis_consensus_mode(block: &GenesisBlock) -> Result<WireConsensusMode, Report> {
+    let mut metadata_entries = Vec::new();
+    for transaction in block.0.external_transactions() {
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            return Err(eyre!(
+                "signed genesis consensus metadata must be carried by instruction batches"
+            ));
+        };
+        for set_parameter in instructions
+            .iter()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        {
+            if matches!(
+                set_parameter.inner(),
+                Parameter::Custom(custom)
+                    if custom.id() == &consensus_metadata::handshake_meta_id()
+            ) {
+                metadata_entries.push(decode_consensus_handshake_metadata(set_parameter.inner())?);
+            }
+        }
+    }
+    let [metadata] = metadata_entries.as_slice() else {
+        return Err(eyre!(
+            "signed genesis requires exactly one consensus handshake metadata entry, found {}",
+            metadata_entries.len()
+        ));
+    };
+    Ok(match metadata.mode {
+        SumeragiConsensusMode::Permissioned => WireConsensusMode::Permissioned,
+        SumeragiConsensusMode::Npos => WireConsensusMode::Npos,
+    })
+}
+
 fn build_minimal_genesis(
     extra_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
@@ -257,6 +357,7 @@ fn build_minimal_genesis(
         topology_entries,
         genesis_key_pair,
         chain_id(),
+        None,
         None,
         None,
         None,
@@ -278,8 +379,44 @@ fn build_minimal_genesis_with_post_topology(
     nexus_config: Option<ActualNexus>,
     zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> GenesisBlock {
+    build_minimal_genesis_with_post_topology_and_staged_hash(
+        extra_transactions,
+        post_topology_transactions,
+        topology,
+        topology_entries,
+        genesis_key_pair,
+        chain_id,
+        genesis_crypto,
+        da_proof_policies,
+        None,
+        nexus_config,
+        zk_config,
+        consensus_handshake_meta,
+        consensus_mode_override,
+        confidential_policy_hash,
+    )
+    .0
+}
+
+fn build_minimal_genesis_with_post_topology_and_staged_hash(
+    extra_transactions: Vec<Vec<InstructionBox>>,
+    post_topology_transactions: Vec<Vec<InstructionBox>>,
+    topology: UniqueVec<PeerId>,
+    topology_entries: Vec<GenesisTopologyEntry>,
+    genesis_key_pair: KeyPair,
+    chain_id: ChainId,
+    genesis_crypto: Option<ManifestCrypto>,
+    da_proof_policies: Option<DaProofPolicyBundle>,
+    pipeline_config: Option<ActualPipeline>,
+    nexus_config: Option<ActualNexus>,
+    zk_config: Option<ActualZk>,
+    consensus_handshake_meta: Option<Parameter>,
+    consensus_mode_override: Option<SumeragiConsensusMode>,
+    confidential_policy_hash: Option<[u8; 32]>,
+) -> (GenesisBlock, Hash) {
     let mut extra_transactions = extra_transactions;
     let mut post_topology_transactions = post_topology_transactions;
 
@@ -298,25 +435,22 @@ fn build_minimal_genesis_with_post_topology(
             da_proof_policies,
             nexus_config.clone(),
             zk_config.clone(),
-            consensus_handshake_meta.clone(),
+            consensus_handshake_meta,
+            consensus_mode_override,
             confidential_policy_hash,
         );
-    if let Some(consensus_handshake_meta) = consensus_handshake_meta {
-        append_consensus_handshake_meta_override(
-            &mut block,
-            &genesis_key_pair,
-            consensus_handshake_meta,
-        );
-    }
-    ensure_genesis_results(
-        &mut block,
+    let (signed_block, staged_hash) = preexecute_genesis_with_runtime_config(
+        &block,
         &genesis_account,
         &topology_vec,
         &genesis_key_pair,
+        pipeline_config.as_ref(),
         nexus_config.as_ref(),
         zk_config.as_ref(),
-    );
-    block
+    )
+    .expect("minimal genesis must pre-execute without synthetic results");
+    block.0 = signed_block;
+    (block, staged_hash)
 }
 
 #[allow(dead_code)]
@@ -338,6 +472,7 @@ fn build_minimal_genesis_unexecuted(
         None,
         None,
         None,
+        None,
         Some(iroha_core::state::default_genesis_confidential_policy_hash()),
     )
 }
@@ -354,6 +489,7 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     _nexus_config: Option<ActualNexus>,
     _zk_config: Option<ActualZk>,
     consensus_handshake_meta: Option<Parameter>,
+    consensus_mode_override: Option<SumeragiConsensusMode>,
     confidential_policy_hash: Option<[u8; 32]>,
 ) -> (GenesisBlock, AccountId, Vec<PeerId>, KeyPair) {
     fn try_default_executor_path() -> Option<PathBuf> {
@@ -390,11 +526,33 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     } else {
         GenesisBuilder::new_without_executor(chain.clone(), ivm_dir.clone())
     };
+    let consensus_handshake_metadata = consensus_handshake_meta
+        .as_ref()
+        .map(decode_consensus_handshake_metadata)
+        .transpose()
+        .expect("test-network consensus handshake metadata must be canonical");
+    if let (Some(metadata), Some(mode_override)) =
+        (consensus_handshake_metadata, consensus_mode_override)
+    {
+        assert_eq!(
+            metadata.mode, mode_override,
+            "consensus mode override must agree with signed handshake metadata"
+        );
+    }
+    let consensus_mode = consensus_handshake_metadata.map_or_else(
+        || consensus_mode_override.unwrap_or(SumeragiConsensusMode::Permissioned),
+        |metadata| metadata.mode,
+    );
+    if let Some(metadata) = consensus_handshake_metadata {
+        builder = builder
+            .with_block_cadence_ms(metadata.block_cadence_ms)
+            .with_sumeragi_v2_context_parameters(metadata.sumeragi_v2);
+    }
     if let Some(crypto) = genesis_crypto {
         builder = builder.with_crypto(crypto);
     }
-    if let Some(policies) = da_proof_policies {
-        builder = builder.with_da_proof_policies(policies);
+    if let Some(policies) = &da_proof_policies {
+        builder = builder.with_da_proof_policies(policies.clone());
     }
 
     let wonderland_name: Name = "wonderland".parse().expect("wonderland domain");
@@ -462,10 +620,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     );
 
     let grant_instructions = [
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterDomain,
-            alice_id.clone(),
-        )),
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: test_domain_id.clone(),
@@ -680,125 +834,15 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         Json::new(norito::json::Value::Object(confidential_root)),
     ));
     builder = builder.append_parameter(conf_param);
-    if let Some(handshake_meta) = consensus_handshake_meta {
-        builder =
-            builder.append_instruction(InstructionBox::from(SetParameter::new(handshake_meta)));
-    }
-
-    let block = builder
-        .build_and_sign_with_confidential_policy_hash(&genesis_key_pair, confidential_policy_hash)
+    let raw_genesis = builder.build_raw().with_consensus_mode(consensus_mode);
+    let block = raw_genesis
+        .build_and_sign_with_da_proof_policies_and_confidential_policy_hash(
+            &genesis_key_pair,
+            da_proof_policies,
+            confidential_policy_hash,
+        )
         .expect("build minimal genesis");
     (block, genesis_account, topology_vec, genesis_key_pair)
-}
-
-fn append_consensus_handshake_meta_override(
-    block: &mut GenesisBlock,
-    genesis_key_pair: &KeyPair,
-    consensus_handshake_meta: Parameter,
-) {
-    try_append_consensus_handshake_meta_override(block, genesis_key_pair, consensus_handshake_meta)
-        .expect("sign genesis consensus handshake metadata override");
-}
-
-fn try_append_consensus_handshake_meta_override(
-    block: &mut GenesisBlock,
-    genesis_key_pair: &KeyPair,
-    consensus_handshake_meta: Parameter,
-) -> Result<(), Report> {
-    let mut transactions = block.0.transactions_vec().clone();
-    let chain = transactions
-        .first()
-        .map(|tx| tx.chain().clone())
-        .unwrap_or_else(chain_id);
-    let authority = AccountId::new(genesis_key_pair.public_key().clone());
-    let mut tx_builder = iroha_data_model::transaction::TransactionBuilder::new(chain, authority)
-        .with_instructions([InstructionBox::from(SetParameter::new(
-            consensus_handshake_meta,
-        ))]);
-    let next_creation_time = transactions
-        .iter()
-        .map(iroha_data_model::transaction::SignedTransaction::creation_time)
-        .max()
-        .unwrap_or_default()
-        .saturating_add(std::time::Duration::from_millis(1));
-    tx_builder.set_creation_time(next_creation_time);
-    transactions.push(
-        tx_builder
-            .try_sign(genesis_key_pair.private_key())
-            .map_err(Report::new)?,
-    );
-
-    let external_merkle: iroha_crypto::MerkleTree<
-        iroha_data_model::transaction::TransactionEntrypoint,
-    > = transactions
-        .iter()
-        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-        .collect();
-    let mut header = block.0.header();
-    header.merkle_root = external_merkle.root();
-    header.result_merkle_root = None;
-    header.creation_time_ms = u64::try_from(
-        next_creation_time
-            .saturating_add(std::time::Duration::from_millis(1))
-            .as_millis(),
-    )
-    .expect("genesis block creation time must fit into u64 milliseconds");
-
-    let signer_index = block
-        .0
-        .signatures()
-        .next()
-        .map(iroha_data_model::block::BlockSignature::index)
-        .unwrap_or(0);
-    let placeholder_sig = iroha_data_model::block::BlockSignature::new(
-        signer_index,
-        SignatureOf::try_from_hash(genesis_key_pair.private_key(), header.hash())
-            .map_err(Report::new)?,
-    );
-    let da_commitments = block.0.da_commitments().cloned();
-    let da_proof_policies = block.0.da_proof_policies().cloned();
-    let da_pin_intents = block.0.da_pin_intents().cloned();
-
-    let mut working = iroha_data_model::block::SignedBlock::presigned(
-        placeholder_sig,
-        header,
-        transactions.clone(),
-    );
-    working.set_da_commitments(da_commitments.clone());
-    working.set_da_proof_policies(da_proof_policies.clone());
-    working.set_da_pin_intents(da_pin_intents.clone());
-    let hashes = transactions
-        .iter()
-        .map(iroha_data_model::transaction::SignedTransaction::hash_as_entrypoint)
-        .collect::<Vec<_>>();
-    let placeholder_results =
-        std::iter::repeat_with(|| TransactionResultInner::Ok(DataTriggerSequence::default()))
-            .take(hashes.len())
-            .collect::<Vec<_>>();
-    working
-        .set_transaction_results(Vec::new(), &hashes, placeholder_results.clone())
-        .expect("genesis placeholder hashes should match payload");
-    working.set_committed_fragment_count(0);
-
-    let signature = iroha_data_model::block::BlockSignature::new(
-        signer_index,
-        SignatureOf::try_from_hash(genesis_key_pair.private_key(), working.hash())
-            .map_err(Report::new)?,
-    );
-    let mut rebuilt = iroha_data_model::block::SignedBlock::presigned(
-        signature,
-        working.payload().header,
-        transactions,
-    );
-    rebuilt.set_da_commitments(da_commitments);
-    rebuilt.set_da_proof_policies(da_proof_policies);
-    rebuilt.set_da_pin_intents(da_pin_intents);
-    rebuilt
-        .set_transaction_results(Vec::new(), &hashes, placeholder_results)
-        .expect("genesis placeholder hashes should match payload");
-    rebuilt.set_committed_fragment_count(0);
-    block.0 = rebuilt;
-    Ok(())
 }
 
 fn format_hash_hex(hash: [u8; 32]) -> String {
@@ -812,11 +856,32 @@ fn format_hash_hex(hash: [u8; 32]) -> String {
     encoded
 }
 
+#[cfg(test)]
 pub(crate) fn ensure_genesis_results(
     block: &mut GenesisBlock,
     genesis_account: &AccountId,
     topology: &[PeerId],
     genesis_key_pair: &KeyPair,
+    nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
+) {
+    ensure_genesis_results_with_runtime_config(
+        block,
+        genesis_account,
+        topology,
+        genesis_key_pair,
+        None,
+        nexus_config,
+        zk_config,
+    );
+}
+
+pub(crate) fn ensure_genesis_results_with_runtime_config(
+    block: &mut GenesisBlock,
+    genesis_account: &AccountId,
+    topology: &[PeerId],
+    genesis_key_pair: &KeyPair,
+    pipeline_config: Option<&ActualPipeline>,
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
 ) {
@@ -835,15 +900,16 @@ pub(crate) fn ensure_genesis_results(
         return;
     }
 
-    match populate_genesis_results(
+    match preexecute_genesis_with_runtime_config(
         block,
         genesis_account,
         topology,
         genesis_key_pair,
+        pipeline_config,
         nexus_config,
         zk_config,
     ) {
-        Ok(new_block) => block.0 = new_block,
+        Ok((new_block, _)) => block.0 = new_block,
         Err(err) => {
             warn!(
                 ?err,
@@ -871,6 +937,7 @@ fn genesis_signature_is_canonical(
         .is_ok()
 }
 
+#[cfg(test)]
 fn populate_genesis_results(
     block: &GenesisBlock,
     genesis_account: &AccountId,
@@ -879,6 +946,48 @@ fn populate_genesis_results(
     nexus_config: Option<&ActualNexus>,
     zk_config: Option<&ActualZk>,
 ) -> Result<iroha_data_model::block::SignedBlock, Report> {
+    preexecute_genesis_with_runtime_config(
+        block,
+        genesis_account,
+        topology,
+        genesis_key_pair,
+        None,
+        nexus_config,
+        zk_config,
+    )
+    .map(|(block, _)| block)
+}
+
+pub(crate) fn staged_genesis_nexus_amx_context_hash(
+    block: &GenesisBlock,
+    genesis_account: &AccountId,
+    topology: &[PeerId],
+    genesis_key_pair: &KeyPair,
+    pipeline_config: Option<&ActualPipeline>,
+    nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
+) -> Result<Hash, Report> {
+    preexecute_genesis_with_runtime_config(
+        block,
+        genesis_account,
+        topology,
+        genesis_key_pair,
+        pipeline_config,
+        nexus_config,
+        zk_config,
+    )
+    .map(|(_, hash)| hash)
+}
+
+pub(crate) fn preexecute_genesis_with_runtime_config(
+    block: &GenesisBlock,
+    genesis_account: &AccountId,
+    topology: &[PeerId],
+    genesis_key_pair: &KeyPair,
+    pipeline_config: Option<&ActualPipeline>,
+    nexus_config: Option<&ActualNexus>,
+    zk_config: Option<&ActualZk>,
+) -> Result<(iroha_data_model::block::SignedBlock, Hash), Report> {
     if topology.is_empty() {
         return Err(eyre!("genesis topology is empty"));
     }
@@ -902,6 +1011,9 @@ fn populate_genesis_results(
         .unwrap_or(&default_nexus.dataspace_catalog);
     iroha_core::sns::seed_genesis_alias_bootstrap(&mut world, &block.0, dataspace_catalog);
     let mut state = State::with_telemetry(world, kura, query_handle, StateTelemetry::default());
+    if let Some(pipeline_config) = pipeline_config {
+        state.set_pipeline(pipeline_config.clone());
+    }
     if let Some(zk_config) = zk_config {
         state.set_zk(zk_config.clone()).map_err(Report::from)?;
     }
@@ -921,7 +1033,8 @@ fn populate_genesis_results(
 
     let mut voting_block = None;
     let time_source = TimeSource::new_system();
-    let validation = ValidBlock::validate_keep_voting_block(
+    let consensus_mode = signed_genesis_consensus_mode(block)?;
+    let validation = ValidBlock::validate_signed_genesis_keep_voting_block(
         block.0.clone(),
         &core_topology,
         &chain,
@@ -929,7 +1042,7 @@ fn populate_genesis_results(
         &time_source,
         &state,
         &mut voting_block,
-        false,
+        consensus_mode,
     )
     .unpack(|_| {});
     let (valid_block, state_block) = match validation {
@@ -965,9 +1078,13 @@ fn populate_genesis_results(
             return Err(report);
         }
     };
+    let staged_hash = iroha_core::sumeragi::staged_genesis_nexus_amx_context_hash(&state_block);
     drop(state_block);
     let signed_block: iroha_data_model::block::SignedBlock = valid_block.into();
-    Ok(rebuild_block_with_results(&signed_block, genesis_key_pair))
+    Ok((
+        rebuild_block_with_results(&signed_block, genesis_key_pair),
+        staged_hash,
+    ))
 }
 
 fn apply_preexec_nexus_overrides(
@@ -976,12 +1093,11 @@ fn apply_preexec_nexus_overrides(
     nexus_config: Option<&ActualNexus>,
     block_policies: Option<&DaProofPolicyBundle>,
 ) -> Result<(), Report> {
-    // Use a single-domain test account literal to avoid ambiguous subject->domain resolution.
-    let gas_account = ALICE_ID.to_string();
-
+    let has_authoritative_nexus = nexus_config.is_some();
     let mut nexus = nexus_config.cloned().unwrap_or_default();
     if let Some(policies) = block_policies
         && !policies.policies.is_empty()
+        && !has_authoritative_nexus
     {
         let mut lanes = Vec::with_capacity(policies.policies.len());
         let mut dataspace_ids = BTreeSet::new();
@@ -1037,12 +1153,33 @@ fn apply_preexec_nexus_overrides(
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
         nexus.dataspace_catalog = dataspace_catalog;
     }
-    nexus.staking.stake_escrow_account_id = gas_account.clone();
-    nexus.staking.slash_sink_account_id = gas_account;
+    if !has_authoritative_nexus {
+        // Legacy direct fixture calls have no resolved runtime config. Keep their
+        // account literals unambiguous, but never rewrite an authoritative Nexus
+        // snapshot because the signed v2 commitment must match peer startup.
+        let gas_account = ALICE_ID.to_string();
+        nexus.staking.stake_escrow_account_id = gas_account.clone();
+        nexus.staking.slash_sink_account_id = gas_account;
+    }
 
     state
         .set_nexus(nexus)
         .map_err(|err| Report::new(err).wrap_err("apply nexus config for genesis pre-execution"))?;
+    let nexus = state.nexus_snapshot();
+    let lane_manifests = if nexus.enabled {
+        let registry = LaneManifestRegistry::from_config(
+            &nexus.lane_catalog,
+            &nexus.governance,
+            &nexus.registry,
+        );
+        registry.validate_active_coverage().map_err(|error| {
+            eyre!("validate lane manifest registry for genesis pre-execution: {error}")
+        })?;
+        registry
+    } else {
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance)
+    };
+    state.install_lane_manifests(&Arc::new(lane_manifests));
     Ok(())
 }
 
@@ -1340,76 +1477,6 @@ mod tests {
     }
 
     #[test]
-    fn append_consensus_handshake_meta_override_checked_signing_verifies() {
-        init_instruction_registry();
-        let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-        let peer_id = PeerId::new(bls.public_key().clone());
-        let topology = [peer_id.clone()]
-            .into_iter()
-            .collect::<iroha_primitives::unique_vec::UniqueVec<_>>();
-        let entry = GenesisTopologyEntry::new(
-            PeerId::new(bls.public_key().clone()),
-            iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
-        );
-        let (mut block, genesis_account, topology_vec, genesis_key_pair) =
-            super::build_minimal_genesis_unexecuted(
-                Vec::new(),
-                topology,
-                vec![entry],
-                SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
-            );
-        let original_len = block.0.transactions_vec().len();
-        let consensus_handshake_meta = Parameter::Custom(CustomParameter::new(
-            consensus_metadata::handshake_meta_id(),
-            Json::new(Value::String("checked-signing".to_owned())),
-        ));
-
-        super::try_append_consensus_handshake_meta_override(
-            &mut block,
-            &genesis_key_pair,
-            consensus_handshake_meta,
-        )
-        .expect("checked genesis metadata override signing succeeds");
-
-        assert_eq!(block.0.transactions_vec().len(), original_len + 1);
-        assert_eq!(
-            block.0.committed_fragment_count(),
-            Some(0),
-            "synthetic append results should force genesis pre-execution before final use"
-        );
-        let appended_tx = block
-            .0
-            .transactions_vec()
-            .last()
-            .expect("override transaction is appended");
-        appended_tx
-            .verify_signature()
-            .expect("checked override transaction signature verifies");
-        assert!(super::genesis_signature_is_canonical(
-            &block.0,
-            &genesis_key_pair
-        ));
-
-        super::ensure_genesis_results(
-            &mut block,
-            &genesis_account,
-            &topology_vec,
-            &genesis_key_pair,
-            None,
-            None,
-        );
-
-        assert!(matches!(
-            block.0.committed_fragment_count(),
-            Some(count) if count > 0
-        ));
-        assert!(super::genesis_signature_is_canonical(
-            &block.0,
-            &genesis_key_pair
-        ));
-    }
-
-    #[test]
     fn placeholder_block_advertises_unknown_committed_fragment_count() {
         init_instruction_registry();
         let bls = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
@@ -1606,6 +1673,7 @@ mod tests {
                 None,
                 None,
                 None,
+                None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
             );
         let executed = super::populate_genesis_results(
@@ -1633,7 +1701,7 @@ mod tests {
                 Register,
                 staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
             },
-            prelude::Numeric,
+            prelude::Quantity,
         };
 
         init_instruction_registry();
@@ -1696,7 +1764,7 @@ mod tests {
                 validator_id.clone(),
                 peer_id.clone(),
                 validator_id.clone(),
-                Numeric::from(10_u32),
+                Quantity::from(10_u32),
                 Metadata::default(),
             )
             .into(),
@@ -1714,6 +1782,7 @@ mod tests {
                 None,
                 None,
                 Some(nexus.clone()),
+                None,
                 None,
                 None,
                 Some(iroha_core::state::default_genesis_confidential_policy_hash()),
@@ -1774,13 +1843,17 @@ mod tests {
                     Some(AccountAliasDomain::new(ivm_domain.name().clone())),
                     DataSpaceId::UNIVERSAL,
                 )));
-        let tx = TransactionBuilder::new(chain_id, genesis_account.clone())
-            .with_instructions([
-                InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
-                InstructionBox::from(Register::account(gas_account)),
-            ])
-            .try_sign(genesis_key_pair.private_key())
-            .expect("checked genesis test transaction signing succeeds");
+        let tx = TransactionBuilder::new(
+            chain_id,
+            genesis_account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::domain(Domain::new(ivm_domain))),
+            InstructionBox::from(Register::account(gas_account)),
+        ])
+        .try_sign(genesis_key_pair.private_key())
+        .expect("checked genesis test transaction signing succeeds");
         let block = GenesisBlock(SignedBlock::genesis(
             vec![tx],
             genesis_key_pair.private_key(),
@@ -1871,6 +1944,14 @@ mod tests {
             assert_eq!(actual.proof_scheme, expected.proof_scheme);
             assert_eq!(actual.alias, expected.alias);
         }
+        let manifests = state.lane_manifests.read();
+        for lane in nexus.lane_catalog.lanes() {
+            assert!(
+                manifests.status(lane.id).is_some(),
+                "pre-execution manifest registry must be derived from lane {}",
+                lane.id.as_u32()
+            );
+        }
     }
 
     #[test]
@@ -1944,6 +2025,7 @@ mod tests {
                 Executable::ContractCall(_) => {}
                 Executable::Ivm(_) => {}
                 Executable::IvmProved(_) => {}
+                Executable::Batch(_) => {}
             }
         }
         assert_eq!(
@@ -2018,6 +2100,7 @@ mod tests {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
             Some(expected.clone()),
+            None,
             None,
             None,
             None,
@@ -2225,6 +2308,7 @@ mod tests {
             vec![entry],
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
             super::chain_id(),
+            None,
             None,
             None,
             None,

@@ -59,7 +59,7 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         governance_tag: "da.test.taikai",
     };
 
-    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -110,7 +110,7 @@ async fn da_manifest_sampling_plan_matches_assignment_hash() -> Result<()> {
     };
     let override_policy = default_policy;
 
-    let stake_amount = SumeragiNposParameters::default().min_self_bond();
+    let stake_amount = SumeragiNposParameters::default().min_self_bond().clone();
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()

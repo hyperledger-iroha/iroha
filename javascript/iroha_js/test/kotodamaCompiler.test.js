@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import test from "node:test";
+import { runInNewContext } from "node:vm";
 
 import {
   KotodamaCompilerClient,
@@ -10,6 +11,7 @@ import {
   compileKotodamaProgram as compileKotodamaInBrowser,
 } from "../src/kotodamaCompiler/browser.js";
 import { compileKotodamaWithNativeBinding } from "../src/kotodamaCompiler/nativeBridge.js";
+import { normalizeCompilerResult } from "../src/kotodamaCompiler/normalize.js";
 import { blake2b256 } from "../src/blake2b.js";
 import {
   KOTODAMA_V1_DECLARATION_RESERVED,
@@ -376,6 +378,7 @@ const SERVICE_DIAGNOSTICS = [
     phase: "parse",
     message: "expected parameter name",
     primary_span: {
+      package_identity: null,
       source: "契約/送金.ko",
       start: { line: 2, column: 9 },
       end: { line: 2, column: 10 },
@@ -384,6 +387,7 @@ const SERVICE_DIAGNOSTICS = [
     labels: [
       {
         span: {
+          package_identity: null,
           source: "契約/送金.ko",
           start: { line: 2, column: 3 },
           end: { line: 2, column: 7 },
@@ -396,6 +400,7 @@ const SERVICE_DIAGNOSTICS = [
     help: "write Type name",
     fix: {
       span: {
+        package_identity: null,
         source: "契約/送金.ko",
         start: { line: 2, column: 9 },
         end: { line: 2, column: 9 },
@@ -407,9 +412,10 @@ const SERVICE_DIAGNOSTICS = [
   {
     code: "K2002",
     severity: "error",
-    phase: "semantic",
+    phase: "resolve",
     message: "unknown name `missing`",
     primary_span: {
+      package_identity: "std/example@1.0.0",
       source: "契約/送金.ko",
       start: { line: 4, column: 5 },
       end: { line: 4, column: 12 },
@@ -1185,6 +1191,57 @@ test("compiler result rejects sparse and extra-property artifact arrays before h
   }
 });
 
+test("compiler result accepts and snapshots genuine cross-realm Uint8Array bytes", () => {
+  const crossRealmBytes = runInNewContext(
+    `Uint8Array.from(${JSON.stringify([...SERVICE_ARTIFACT])})`,
+  );
+  const normalized = normalizeCompilerResult({
+    ...SERVICE_SUCCESS,
+    output: { ...SERVICE_OUTPUT, artifactBytes: crossRealmBytes },
+  });
+
+  assert.equal(normalized.ok, true);
+  assert.deepEqual([...normalized.output.artifactBytes], [...SERVICE_ARTIFACT]);
+  crossRealmBytes[0] ^= 0xff;
+  assert.equal(normalized.output.artifactBytes[0], SERVICE_ARTIFACT[0]);
+});
+
+test("compiler result rejects non-Uint8 byte views and detached Uint8Array bytes", () => {
+  for (const artifactBytes of [
+    new Int8Array([1, 2, 3]),
+    new Uint8ClampedArray([1, 2, 3]),
+    new Uint16Array([1, 2, 3]),
+    new DataView(new ArrayBuffer(3)),
+    {
+      [Symbol.toStringTag]: "Uint8Array",
+      buffer: new ArrayBuffer(3),
+      byteOffset: 0,
+      byteLength: 3,
+    },
+  ]) {
+    assert.throws(
+      () =>
+        normalizeCompilerResult({
+          ...SERVICE_SUCCESS,
+          output: { ...SERVICE_OUTPUT, artifactBytes },
+        }),
+      /artifactBytes/u,
+    );
+  }
+
+  const buffer = new ArrayBuffer(3);
+  const detached = new Uint8Array(buffer);
+  structuredClone(buffer, { transfer: [buffer] });
+  assert.throws(
+    () =>
+      normalizeCompilerResult({
+        ...SERVICE_SUCCESS,
+        output: { ...SERVICE_OUTPUT, artifactBytes: detached },
+      }),
+    /readable Uint8Array/u,
+  );
+});
+
 test("compiler adapters require checksummed canonical manifest hash literals", async () => {
   const compileManifestHash = (mutate) => {
     const response = structuredClone(SERVICE_SUCCESS);
@@ -1708,7 +1765,7 @@ test("compiler transport cleans listeners and terminates stalled hostile bodies"
   assert.equal(await captureRejection(abortedBody), bodyReason);
 });
 
-test("compiler failures preserve every canonical semantic diagnostic field", async () => {
+test("compiler failures preserve every canonical diagnostic field", async () => {
   const client = new KotodamaCompilerClient("https://compiler.example", {
     fetchImpl: async () => jsonResponse(SERVICE_FAILURE),
   });
@@ -1717,6 +1774,7 @@ test("compiler failures preserve every canonical semantic diagnostic field", asy
   assert.deepEqual(result, { ok: false, diagnostics: SERVICE_DIAGNOSTICS });
   assert.equal(result.diagnostics.length, 2);
   assert.deepEqual(result.diagnostics[0].primary_span, {
+    package_identity: null,
     source: "契約/送金.ko",
     start: { line: 2, column: 9 },
     end: { line: 2, column: 10 },
@@ -1726,6 +1784,27 @@ test("compiler failures preserve every canonical semantic diagnostic field", asy
   assert.deepEqual(result.diagnostics[0].notes, SERVICE_DIAGNOSTICS[0].notes);
   assert.equal(result.diagnostics[0].help, "write Type name");
   assert.deepEqual(result.diagnostics[0].fix, SERVICE_DIAGNOSTICS[0].fix);
+});
+
+test("compiler resolver envelopes accept resolve and reject noncanonical phase names", async () => {
+  const validClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => jsonResponse(SERVICE_FAILURE),
+  });
+  const valid = await validClient.compile("seiyaku Demo { view fn run() { missing(); } }");
+  const resolverDiagnostic = valid.diagnostics.find(({ code }) => code === "K2002");
+  assert.equal(resolverDiagnostic?.phase, "resolve");
+
+  const malformedFailure = structuredClone(SERVICE_FAILURE);
+  const malformedDiagnostics = JSON.parse(malformedFailure.diagnosticsJson);
+  malformedDiagnostics.find(({ code }) => code === "K2002").phase = "resolver";
+  malformedFailure.diagnosticsJson = JSON.stringify(malformedDiagnostics);
+  const malformedClient = new KotodamaCompilerClient("https://compiler.example", {
+    fetchImpl: async () => jsonResponse(malformedFailure),
+  });
+  await assert.rejects(
+    malformedClient.compile("seiyaku Demo { view fn run() { missing(); } }"),
+    /Kotodama diagnostic 1\.phase is invalid/,
+  );
 });
 
 test("compiler sidecars must match the deployable artifact hash", async () => {
@@ -1834,6 +1913,30 @@ test("malformed service JSON and malformed envelopes fail closed", async () => {
     invalidFields.compile("seiyaku Demo {}"),
     /one-based safe-integer line and column/,
   );
+
+  for (const mutate of [
+    (span) => delete span.package_identity,
+    (span) => {
+      span.package_identity = "";
+    },
+  ]) {
+    const malformedPackageIdentity = structuredClone(SERVICE_FAILURE);
+    const packageDiagnostics = JSON.parse(
+      malformedPackageIdentity.diagnosticsJson,
+    );
+    mutate(packageDiagnostics[0].primary_span);
+    malformedPackageIdentity.diagnosticsJson = JSON.stringify(
+      packageDiagnostics,
+    );
+    const invalidPackageIdentity = new KotodamaCompilerClient(
+      "https://compiler.example",
+      { fetchImpl: async () => jsonResponse(malformedPackageIdentity) },
+    );
+    await assert.rejects(
+      invalidPackageIdentity.compile("seiyaku Demo {}"),
+      /package_identity|invalid field set/u,
+    );
+  }
 });
 
 test("compiler response metadata, framing, and byte streams fail closed", async () => {

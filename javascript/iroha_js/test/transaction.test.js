@@ -9,8 +9,6 @@ import {
   encodeContractArgumentRecord,
   resignSignedTransaction,
   submitSignedTransaction,
-  buildRegisterSnsNameTransaction,
-  registerSnsNameViaConsensus,
   buildMintAndTransferTransaction,
   buildBurnAssetTransaction,
   buildBurnTriggerTransaction,
@@ -25,6 +23,10 @@ import { makeNativeTest } from "./helpers/native.js";
 
 const BASE_URL = "http://localhost:8080";
 const PRIVATE_KEY = Buffer.alloc(32, 0x11);
+const AUTHORITY_FEE_PAYMENT = Object.freeze({
+  payer: "authority",
+  chargeLimits: Object.freeze([]),
+});
 const NEW_ACCOUNT_PRIVATE_KEY = Buffer.alloc(32, 0x22);
 const AUTHORITY_ID_RAW = AccountAddress.fromAccount({
   publicKey: Buffer.from(ed25519.getPublicKey(PRIVATE_KEY)),
@@ -43,7 +45,7 @@ const ASSET_ID = CANONICAL_ASSET_ID_INPUT;
 const ASSET_ID_INPUT = CANONICAL_ASSET_ID_INPUT;
 const NODE_CAPABILITIES = {
   abi_version: 1,
-  data_model_version: 1,
+  data_model_version: 3,
   crypto: {
     sm: {
       enabled: false,
@@ -583,267 +585,6 @@ test("resignSignedTransaction delegates to native binding", () => {
     },
   );
 });
-
-baseTest("buildRegisterSnsNameTransaction yields RegisterSnsName instruction", () => {
-  const captures = [];
-  const request = {
-    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
-    owner: AUTHORITY_ID_INPUT,
-  };
-  const result = withNativeBinding(
-    {
-      buildTransaction: (_chain, authority, instructions, metadata, _created, ttl, _nonce, pk) => {
-        captures.push({
-          authority,
-          instructions: instructions.map((j) => JSON.parse(j)),
-          metadata: JSON.parse(metadata),
-          ttl,
-          privateKey: Buffer.from(pk),
-        });
-        return {
-          signed_transaction: Buffer.from([0x45]),
-          hash: Buffer.alloc(32, 0x46),
-        };
-      },
-    },
-    () =>
-      buildRegisterSnsNameTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        request,
-        metadata: { purpose: "sns-name-registration" },
-        ttlMs: 900_000,
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-
-  assert.equal(result.hash.toString("hex"), "46".repeat(32));
-  assert.equal(captures.length, 1);
-  assert.equal(captures[0].authority, AUTHORITY_ID);
-  assert.deepEqual(captures[0].instructions, [{ RegisterSnsName: request }]);
-  assert.deepEqual(captures[0].metadata, { purpose: "sns-name-registration" });
-  assert.equal(captures[0].ttl, 900_000);
-  assert.deepEqual(captures[0].privateKey, PRIVATE_KEY);
-});
-
-baseTest("buildRegisterSnsNameTransaction rejects malformed registration requests", () => {
-  for (const request of [null, undefined, [], "name.is"]) {
-    assert.throws(
-      () =>
-        buildRegisterSnsNameTransaction({
-          chainId: "test-chain",
-          authority: AUTHORITY_ID_INPUT,
-          request,
-          privateKey: PRIVATE_KEY,
-        }),
-      /request must be a non-null object/,
-    );
-  }
-});
-
-baseTest("buildRegisterSnsNameTransaction ignores caller-supplied instructions", () => {
-  const captures = [];
-  withNativeBinding(
-    {
-      buildTransaction: (_chain, _authority, instructions) => {
-        captures.push(instructions.map((j) => JSON.parse(j)));
-        return {
-          signed_transaction: Buffer.from([0x47]),
-          hash: Buffer.alloc(32, 0x48),
-        };
-      },
-    },
-    () =>
-      buildRegisterSnsNameTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        request: { selector: { label: "is" } },
-        instructions: [{ Transfer: { Asset: { object: "999999" } } }],
-        privateKey: PRIVATE_KEY,
-      }),
-  );
-
-  assert.deepEqual(captures, [[{ RegisterSnsName: { selector: { label: "is" } } }]]);
-});
-
-baseTest("registerSnsNameViaConsensus returns PendingTimeout status", async () => {
-  const request = {
-    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
-    owner: AUTHORITY_ID_INPUT,
-  };
-  const signedTransaction = Buffer.from([0x51, 0x52]);
-  const transactionHash = Buffer.alloc(32, 0x53);
-  const submittedHash = Buffer.alloc(32, 0x54);
-  const fetchImpl = async (url) => {
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    if (url.endsWith("/v1/pipeline/transactions")) {
-      return createResponse({
-        status: 202,
-        jsonData: { status: "Accepted" },
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 202,
-      jsonData: pipelineTransactionStatus(submittedHash, "Accepted"),
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await withNativeBinding(
-    {
-      buildTransaction: () => ({
-        signed_transaction: signedTransaction,
-        hash: transactionHash,
-      }),
-      hashSignedTransaction: () => submittedHash,
-    },
-    () =>
-      registerSnsNameViaConsensus({
-        client,
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        request,
-        privateKey: PRIVATE_KEY,
-        pollIntervalMs: 0,
-        timeoutMs: 1,
-        scope: "global",
-      }),
-  );
-
-  assert.equal(result.hash, transactionHash.toString("hex"));
-  assert.equal(result.submittedHash, submittedHash.toString("hex"));
-  assert.deepEqual(result.submission, { status: "Accepted" });
-  assert.equal(result.status.kind, "PendingTimeout");
-  assert.equal(result.status.lastStatus.content.status.kind, "Accepted");
-});
-
-baseTest("registerSnsNameViaConsensus returns submitted hash when wait is disabled", async () => {
-  const transactionHash = Buffer.alloc(32, 0x56);
-  const submittedHash = Buffer.alloc(32, 0x57);
-  const calls = [];
-  const fetchImpl = async (url, init) => {
-    calls.push({ url, init });
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    assert.ok(url.endsWith("/v1/pipeline/transactions"));
-    return createResponse({
-      status: 202,
-      jsonData: { status: "Accepted" },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-
-  const result = await withNativeBinding(
-    {
-      buildTransaction: () => ({
-        signed_transaction: Buffer.from([0x58]),
-        hash: transactionHash,
-      }),
-      hashSignedTransaction: () => submittedHash,
-    },
-    () =>
-      registerSnsNameViaConsensus({
-        client,
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        request: { selector: { label: "is" } },
-        privateKey: PRIVATE_KEY,
-        waitForCommit: false,
-      }),
-  );
-
-  assert.equal(result.hash, transactionHash.toString("hex"));
-  assert.equal(result.submittedHash, submittedHash.toString("hex"));
-  assert.deepEqual(result.submission, { status: "Accepted" });
-  assert.equal(result.status, null);
-  assert.equal(
-    calls.some((call) =>
-      String(call.url).includes("/v1/pipeline/transactions/status"),
-    ),
-    false,
-  );
-});
-
-baseTest("registerSnsNameViaConsensus validates client inputs and rethrows submit failures", async () => {
-  const request = {
-    selector: { version: 1, suffix_id: 6647857470246403404, label: "is" },
-    owner: AUTHORITY_ID_INPUT,
-  };
-
-  await assert.rejects(
-    () => registerSnsNameViaConsensus(null),
-    /input must be an object/,
-  );
-  await assert.rejects(
-    () => registerSnsNameViaConsensus({ request, privateKey: PRIVATE_KEY }),
-    /client or toriiUrl is required/,
-  );
-  await assert.rejects(
-    () =>
-      registerSnsNameViaConsensus({
-        client: { submitTransaction: async () => ({}) },
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        request,
-        privateKey: PRIVATE_KEY,
-      }),
-    /client must be an instance of ToriiClient/,
-  );
-
-  const fetchImpl = async (url) => {
-    if (url.endsWith("/v1/node/capabilities")) {
-      return createResponse({
-        status: 200,
-        jsonData: NODE_CAPABILITIES,
-        headers: { "content-type": "application/json" },
-      });
-    }
-    return createResponse({
-      status: 500,
-      jsonData: { error: "submit rejected" },
-      textBody: "submit rejected",
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await withNativeBinding(
-    {
-      buildTransaction: () => ({
-        signed_transaction: Buffer.from([0x61]),
-        hash: Buffer.alloc(32, 0x62),
-      }),
-      hashSignedTransaction: () => Buffer.alloc(32, 0x63),
-    },
-    async () => {
-      await assert.rejects(
-        () =>
-          registerSnsNameViaConsensus({
-            client,
-            chainId: "test-chain",
-            authority: AUTHORITY_ID_INPUT,
-            request,
-            privateKey: PRIVATE_KEY,
-            waitForCommit: false,
-          }),
-        /submit rejected|status 500|500/,
-      );
-    },
-  );
-});
-
 test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
   const captures = [];
   const result = withNativeBinding(
@@ -860,6 +601,7 @@ test("buildMintAndTransferTransaction yields multi-instruction payload", () => {
       buildMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "7" },
         transfer: {
           quantity: "3",
@@ -906,6 +648,7 @@ test("buildBurnAssetTransaction yields single burn instruction", () => {
       buildBurnAssetTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetId: ASSET_ID_INPUT,
         quantity: "4",
         privateKey: PRIVATE_KEY,
@@ -937,6 +680,7 @@ test("buildBurnTriggerTransaction yields single trigger burn instruction", () =>
       buildBurnTriggerTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         triggerId: "cleanup-trigger",
         repetitions: 1,
         privateKey: PRIVATE_KEY,
@@ -967,6 +711,7 @@ test("buildMintAndTransferTransaction supports transfer arrays", () => {
       buildMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "9" },
         transfers: [
           { quantity: "5", destinationAccountId: AUTHORITY_ID_INPUT },
@@ -1011,6 +756,7 @@ test("buildMintAndTransferTransaction rejects both transfer and transfers", () =
       buildMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "4" },
         transfer: { quantity: "2", destinationAccountId: AUTHORITY_ID_INPUT },
         transfers: [],
@@ -1026,6 +772,7 @@ test("buildMintAndTransferTransaction requires at least one transfer", () => {
       buildMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         mint: { assetId: ASSET_ID_INPUT, quantity: "4" },
         privateKey: PRIVATE_KEY,
       }),
@@ -1049,6 +796,7 @@ test("buildRegisterDomainAndMintTransaction expands registration and mint", () =
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora", metadata: { key: "value" } },
         mint: { assetId: ASSET_ID_INPUT, quantity: "10" },
         privateKey: PRIVATE_KEY,
@@ -1087,6 +835,7 @@ test("buildRegisterDomainAndMintTransaction supports mint arrays", () => {
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
         mints: [
           { assetId: ASSET_ID_INPUT, quantity: "3" },
@@ -1118,6 +867,7 @@ test("buildRegisterDomainAndMintTransaction rejects both mint and mints", () => 
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
         mint: { assetId: ASSET_ID_INPUT, quantity: "2" },
         mints: [],
@@ -1133,6 +883,7 @@ test("buildRegisterDomainAndMintTransaction enforces assetId in mints", () => {
       buildRegisterDomainAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         domain: { domainId: "garden_of_live_flowers.sora" },
         mints: [{ quantity: "2" }],
         privateKey: PRIVATE_KEY,
@@ -1157,6 +908,7 @@ test("buildRegisterAccountAndTransferTransaction expands registration and transf
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
           accountId: NEW_ACCOUNT_ID_INPUT,
           metadata: { nickname: "alice" },
@@ -1214,6 +966,7 @@ test("buildRegisterAccountAndTransferTransaction supports transfer arrays", () =
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
           accountId: NEW_ACCOUNT_ID_INPUT,
         },
@@ -1255,6 +1008,7 @@ test("buildRegisterAccountAndTransferTransaction rejects both transfer and trans
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
           accountId: NEW_ACCOUNT_ID_INPUT,
         },
@@ -1272,6 +1026,7 @@ test("buildRegisterAccountAndTransferTransaction enforces sourceAssetId in trans
       buildRegisterAccountAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         account: {
           accountId: NEW_ACCOUNT_ID_INPUT,
         },
@@ -1298,6 +1053,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction expands definition and mint
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: {
           assetDefinitionId: ASSET_DEFINITION_ID,
           metadata: { description: "Rose asset" },
@@ -1363,6 +1119,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction supports mint arrays", () =
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "4" },
@@ -1398,6 +1155,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects both mint and mints
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "1" },
         mints: [],
@@ -1413,6 +1171,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction enforces mint destination f
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [{ quantity: "1" }],
         privateKey: PRIVATE_KEY,
@@ -1427,6 +1186,7 @@ test("buildRegisterAssetDefinitionAndMintTransaction rejects mismatched assetId/
       buildRegisterAssetDefinitionAndMintTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           {
@@ -1458,6 +1218,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction expands definition,
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "5" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
@@ -1509,6 +1270,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction supports transfer a
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "6" },
@@ -1554,6 +1316,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both transf
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "3" },
         transfer: { destinationAccountId: AUTHORITY_ID_INPUT, quantity: "2" },
@@ -1570,6 +1333,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects both mint a
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mint: { accountId: NEW_ACCOUNT_ID_INPUT, quantity: "2" },
         mints: [],
@@ -1586,6 +1350,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction requires mint spec"
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
         privateKey: PRIVATE_KEY,
@@ -1600,6 +1365,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction validates mint dest
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [{ quantity: "1" }],
         transfers: [{ quantity: "1", destinationAccountId: AUTHORITY_ID_INPUT }],
@@ -1615,6 +1381,7 @@ test("buildRegisterAssetDefinitionMintAndTransferTransaction rejects mismatched 
       buildRegisterAssetDefinitionMintAndTransferTransaction({
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
+        feePayment: AUTHORITY_FEE_PAYMENT,
         assetDefinition: { assetDefinitionId: ASSET_DEFINITION_ID },
         mints: [
           {

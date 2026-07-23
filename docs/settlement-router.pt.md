@@ -53,7 +53,7 @@ determinísticos para cada lane.
 
 1. **Agregação de recibos**
    - Cada transação/perna AMX emite um `LaneSettlementReceipt` com valor local em micro,
-     XOR devido, tier de haircut, variância realizada (`xor_variance_micro`) e metadados
+     XOR devido, tier de haircut, variância realizada (`xor_variance`) e metadados
      do chamador (já definido em `docs/source/nexus_fee_model.md`).
    - O router agrupa recibos por `(lane, dataspace)` durante a execução do bloco.
 
@@ -84,7 +84,7 @@ determinísticos para cada lane.
        (por exemplo, `buffer::cbdc_treasury`).
      - `metadata.settlement.buffer_asset` – Definição de asset debitado para headroom
        (geralmente `xor#sora`).
-     - `metadata.settlement.buffer_capacity_micro` – Capacidade em micro‑XOR (string
+     - `metadata.settlement.buffer_capacity` – Capacidade em micro‑XOR (string
        decimal).
    - A telemetria expõe `iroha_settlement_buffer_xor` (headroom restante),
      `iroha_settlement_buffer_capacity_xor` e `iroha_settlement_buffer_state` (estado

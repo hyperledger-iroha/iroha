@@ -11,7 +11,7 @@ SFM-5 now has a local deterministic SoraFS hedging/billing payload foundation in
 schemas for normalized XOR/USD feed samples, reference-price decisions, billing
 line items, and billing statements. Pure helpers replay weighted fixed-point
 reference-price aggregation, stale/rejected-feed refusal, divergence degradation
-flags, micro-XOR to USD-micro conversion with deterministic ceiling, billing
+flags, exact XOR-to-USD multiplication, billing
 totals, and BLAKE3 digest ids for statements and line items.
 The first-release payload validators now also enforce bounded canonical text,
 at most 64 uniquely identified and uniquely sourced feeds, an exact 10,000 bps
@@ -334,8 +334,9 @@ Required before rollout:
   kind-specific top-level and nested JSON sidecar field set, checks V1
   versioning, duplicate nested ids, account-id hex binding, and statement
   timestamp ordering, enforces even-length lowercase hex payload mirrors,
-  positive prices, timestamps, canonical unsigned `u128` billing
-  amount/quantity strings, and bounded basis-point fields, and rejects extra
+  positive prices and timestamps, canonical signed-512 exact-decimal amount
+  strings (at most 28 fractional digits generally and nine for XOR), canonical
+  unsigned `u128` metered-quantity strings, and bounded basis-point fields, and rejects extra
   generated `.to` or `.json` files that are not pinned by the manifest. The
   generated positive and negative fixture byte suite is checked in under
   `fixtures/sorafs_manifest/hedging/`, and the rollout contract pins those

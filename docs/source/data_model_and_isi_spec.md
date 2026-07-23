@@ -181,9 +181,9 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 ---
 
 ## Transactions and Executables
-- `Executable`: either `Instructions(ConstVec<InstructionBox>)` or `Ivm(IvmBytecode)`; bytecode serializes as base64. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
+- `Executable`: `Instructions(ConstVec<InstructionBox>)`, `ContractCall(ContractInvocation)`, `Ivm(IvmBytecode)`, `IvmProved(IvmProved)`, or the flat ordered `Batch(ConstVec<ExecutableBatchItem>)`; bytecode serializes as base64. `DATA_MODEL_VERSION = 3` introduces the append-only `Batch` tag `4`; its item tags are `0` for a native `InstructionBox` and `1` for a deployed `ContractInvocation`. Existing executable tags `0..=3` retain their canonical bytes. Raw IVM bytecode and nested batches cannot be smuggled into the mixed form. Code: `crates/iroha_data_model/src/transaction/executable.rs`.
 - `TransactionBuilder`/`SignedTransaction`: constructs, signs, and packages an executable with metadata, `chain_id`, `authority`, `creation_time_ms`, optional `ttl_ms`, and `nonce`. Code: `crates/iroha_data_model/src/transaction/`.
-- At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs`.
+- Admission rejects an empty mixed batch. At runtime, `iroha_core` executes `InstructionBox` batches via `Execute for InstructionBox`, downcasting to the appropriate `*Box` or concrete instruction. A mixed batch is a global live-state scheduler barrier: each item observes all earlier item effects, and any failure discards every staged effect. Transaction batches containing a call share one signature-bound gas limit across explicit ISIs and calls, with one fee settlement for the transaction. Trigger actions support the same ordered atomic batch and share one deterministic trigger gas budget across all items in an invocation. Code: `crates/iroha_core/src/smartcontracts/isi/mod.rs` and `crates/iroha_core/src/executor.rs`.
 - Runtime executor validation budget (user-provided executor): base `executor.fuel` from parameters plus optional transaction metadata `additional_fuel` (`u64`), shared across instruction/trigger validations within the transaction.
 
 ---

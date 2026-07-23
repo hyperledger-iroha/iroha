@@ -1,52 +1,20 @@
+<!-- Auto-generated stub for Hebrew (he) translation. Replace this content with the full translation. -->
+
 ---
 lang: he
 direction: rtl
 source: docs/portal/docs/sns/local-to-global-toolkit.md
-status: complete
+status: needs-translation
 generator: docs/portal/scripts/sync-i18n.mjs
+source_hash: e5cc46a4943e57d8a93f1f78a790e0058ddba131560db69fdb6a6720ad1aef32
+source_last_modified: "2026-03-27T18:25:59.298Z"
+translation_last_reviewed: null
 ---
 
-# ערכת כלים לכתובות Local -> Global
+# בתהליך תרגום
 
-עמוד זה משקף את `docs/source/sns/local_to_global_toolkit.md` מה-mono-repo. הוא מרכז CLI helpers ו-runbooks הנדרשים לפריט הדרך **ADDR-5c**.
+<div dir="rtl">
+קובץ זה הוא תבנית לתרגום העברי של המסמך באנגלית. לאחר השלמת התרגום, עדכנו את שדה `status` במטא־נתונים שלמעלה.
 
-## סקירה
-
-- `scripts/address_local_toolkit.sh` עוטף את ה-CLI `iroha` כדי להפיק:
-  - `audit.json` -- פלט מובנה של `iroha tools address audit --format json`.
-  - `normalized.txt` -- i105 (מועדף) / i105 (אפשרות שנייה) literals לכל selector בתחום Local.
-- השתמשו בסקריפט יחד עם dashboard ingest לכתובות (`dashboards/grafana/address_ingest.json`)
-  וכללי Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) כדי להוכיח שה-cutover של Local-8 /
-  Local-12 בטוח. עקבו אחרי פאנלי collision של Local-8 ו-Local-12 וההתראות
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, ו-`AddressInvalidRatioSlo` לפני
-  קידום שינויי manifest.
-- עיינו ב-[Address Display Guidelines](address-display-guidelines.md) וב-
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) להקשר UX ותגובה לאירועים.
-
-## שימוש
-
-```bash
-scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format i105
-```
-
-אפשרויות:
-
-- `--format i105` ליציאת `sora...` במקום i105.
-- `domainless output (default)` להפקת literals ללא domain.
-- `--audit-only` לדילוג על שלב ההמרה.
-- `--allow-errors` להמשך סריקה גם כשיש שורות פגומות (כמו התנהגות CLI).
-
-הסקריפט כותב את נתיבי ה-artefacts בסוף הריצה. צרפו את שני הקבצים
-ל-change-management ticket יחד עם צילום Grafana שמוכיח אפס
-זיהויי Local-8 ואפס התנגשויות Local-12 במשך >=30 ימים.
-
-## אינטגרצית CI
-
-1. הריצו את הסקריפט ב-job ייעודי והעלו את הפלטים.
-2. חסמו merges כאשר `audit.json` מדווח על Local selectors (`domain.kind = local12`).
-   בערך ברירת המחדל `true` (החליפו ל-`false` רק ב-dev/test לאבחון רגרסיות) והוסיפו
-   `iroha tools address normalize` ל-CI כדי שניסיונות
-   רגרסיה ייכשלו לפני production.
-
-לפרטים נוספים, checklists של evidence ו-release-note snippet שניתן להשתמש בו בהכרזת cutover,
-ראו את מסמך המקור.
+לאחר השלמת התרגום החליפו טקסט זה במלל הסופי ועדכנו את ה־`status` ל־`complete`. ודאו גם ששדה `translation_last_reviewed` משקף את מועד הבדיקה האחרון מול המסמך האנגלי.
+</div>

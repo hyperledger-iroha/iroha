@@ -34,6 +34,7 @@ final class BridgeAvailabilityTests: XCTestCase {
                                       quantity: "1",
                                       destination: authority,
                                       description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
                                       ttlMs: nil)
         let signingKey = try SigningKey.ed25519(privateKey: privateKey)
 

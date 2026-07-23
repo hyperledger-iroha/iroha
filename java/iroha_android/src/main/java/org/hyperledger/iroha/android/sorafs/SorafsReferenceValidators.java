@@ -1,12 +1,13 @@
 package org.hyperledger.iroha.android.sorafs;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
 /** Thin JVM/JNI wrapper around the SoraFS reference validators in {@code connect_norito_bridge}. */
 public final class SorafsReferenceValidators {
   private static final String LIBRARY_NAME = "connect_norito_bridge";
-  public static final int REQUIRED_BRIDGE_ABI_VERSION = 16;
+  public static final int REQUIRED_BRIDGE_ABI_VERSION = 19;
   /** Canonical maximum byte length for a V1 orderbook owner account. */
   public static final int ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1 = 256;
   private static final boolean NATIVE_AVAILABLE = loadLibrary();
@@ -143,7 +144,7 @@ public final class SorafsReferenceValidators {
   public static byte[] buildSignedOrderbookOrderRequest(
       final SorafsOrderbookSide side,
       final SorafsOrderbookTier tier,
-      final String pricePerGibMicroXor,
+      final String pricePerGib,
       final long quantityGib,
       final byte[] ownerAccount,
       final long expiryUnix,
@@ -154,7 +155,7 @@ public final class SorafsReferenceValidators {
     return buildSignedOrderbookOrderRequest(
         side,
         tier,
-        pricePerGibMicroXor,
+        pricePerGib,
         quantityGib,
         quantityGib,
         ownerAccount,
@@ -168,7 +169,7 @@ public final class SorafsReferenceValidators {
   public static byte[] buildSignedOrderbookOrderRequest(
       final SorafsOrderbookSide side,
       final SorafsOrderbookTier tier,
-      final String pricePerGibMicroXor,
+      final String pricePerGib,
       final long quantityGib,
       final long remainingGib,
       final byte[] ownerAccount,
@@ -181,7 +182,7 @@ public final class SorafsReferenceValidators {
         deriveOrderbookOrderId(ownerAccount, nonce),
         side,
         tier,
-        pricePerGibMicroXor,
+        pricePerGib,
         quantityGib,
         remainingGib,
         ownerAccount,
@@ -196,7 +197,7 @@ public final class SorafsReferenceValidators {
       final byte[] orderId,
       final SorafsOrderbookSide side,
       final SorafsOrderbookTier tier,
-      final String pricePerGibMicroXor,
+      final String pricePerGib,
       final long quantityGib,
       final byte[] ownerAccount,
       final long expiryUnix,
@@ -208,7 +209,7 @@ public final class SorafsReferenceValidators {
         orderId,
         side,
         tier,
-        pricePerGibMicroXor,
+        pricePerGib,
         quantityGib,
         quantityGib,
         ownerAccount,
@@ -223,7 +224,7 @@ public final class SorafsReferenceValidators {
       final byte[] orderId,
       final SorafsOrderbookSide side,
       final SorafsOrderbookTier tier,
-      final String pricePerGibMicroXor,
+      final String pricePerGib,
       final long quantityGib,
       final long remainingGib,
       final byte[] ownerAccount,
@@ -236,7 +237,7 @@ public final class SorafsReferenceValidators {
     final SorafsOrderbookSide selectedSide = requireKind(side, "side");
     final SorafsOrderbookTier selectedTier = requireKind(tier, "tier");
     final byte[] priceBytes =
-        decimalBytes(pricePerGibMicroXor, "pricePerGibMicroXor", true);
+        xorQuantityBytes(pricePerGib, "pricePerGib", true);
     requirePositive(quantityGib, "quantityGib");
     requirePositive(remainingGib, "remainingGib");
     final byte[] ownerBytes = requireNonEmptyBytes(ownerAccount, "ownerAccount");
@@ -302,9 +303,9 @@ public final class SorafsReferenceValidators {
       final long rangeEnd,
       final byte[] chunkHash,
       final long bytesDelivered,
-      final String xorDebitedMicroXor,
-      final String providerCreditMicroXor,
-      final String feeAmountMicroXor,
+      final String xorDebited,
+      final String providerCredit,
+      final String feeAmount,
       final long issuedAtUnix,
       final byte[] privateKey) {
     final byte[] receiptIdBytes = requireFixed32(receiptId, "receiptId");
@@ -314,10 +315,10 @@ public final class SorafsReferenceValidators {
     requirePositive(rangeEnd, "rangeEnd");
     final byte[] chunkHashBytes = requireFixed32(chunkHash, "chunkHash");
     requirePositive(bytesDelivered, "bytesDelivered");
-    final byte[] debitBytes = decimalBytes(xorDebitedMicroXor, "xorDebitedMicroXor", true);
+    final byte[] debitBytes = xorQuantityBytes(xorDebited, "xorDebited", true);
     final byte[] creditBytes =
-        decimalBytes(providerCreditMicroXor, "providerCreditMicroXor", false);
-    final byte[] feeBytes = decimalBytes(feeAmountMicroXor, "feeAmountMicroXor", false);
+        xorQuantityBytes(providerCredit, "providerCredit", false);
+    final byte[] feeBytes = xorQuantityBytes(feeAmount, "feeAmount", false);
     requirePositive(issuedAtUnix, "issuedAtUnix");
     final byte[] key = requirePrivateKey(privateKey);
     try {
@@ -570,25 +571,31 @@ public final class SorafsReferenceValidators {
     return value;
   }
 
-  private static byte[] decimalBytes(
+  private static byte[] xorQuantityBytes(
       final String value, final String field, final boolean positive) {
     if (value == null) {
       throw new IllegalArgumentException(field + " must be provided");
     }
-    if (value.isEmpty()) {
-      throw new IllegalArgumentException(field + " must be an unsigned decimal integer");
+    if (value.length() > 155) {
+      throw new IllegalArgumentException(field + " exceeds the canonical XOR quantity text bound");
     }
-    boolean nonZero = false;
-    for (int index = 0; index < value.length(); index++) {
-      final char digit = value.charAt(index);
-      if (digit < '0' || digit > '9') {
-        throw new IllegalArgumentException(field + " must be an unsigned decimal integer");
-      }
-      if (digit != '0') {
-        nonZero = true;
-      }
+    if (!value.matches("(0|[1-9][0-9]*)(?:\\.([0-9]*[1-9]))?")) {
+      throw new IllegalArgumentException(
+          field + " must be a canonical non-negative XOR quantity");
     }
-    if (positive && !nonZero) {
+    final int decimalIndex = value.indexOf('.');
+    final String integer = decimalIndex < 0 ? value : value.substring(0, decimalIndex);
+    final String fractional = decimalIndex < 0 ? "" : value.substring(decimalIndex + 1);
+    if (fractional.length() > 9) {
+      throw new IllegalArgumentException(
+          field + " must have at most 9 fractional decimal places");
+    }
+    final BigInteger mantissa = new BigInteger(integer + fractional);
+    final BigInteger maximum = BigInteger.ONE.shiftLeft(511).subtract(BigInteger.ONE);
+    if (mantissa.compareTo(maximum) > 0) {
+      throw new IllegalArgumentException(field + " exceeds the 512-bit signed quantity domain");
+    }
+    if (positive && mantissa.signum() == 0) {
       throw new IllegalArgumentException(field + " must be greater than zero");
     }
     return value.getBytes(StandardCharsets.UTF_8);
@@ -661,7 +668,7 @@ public final class SorafsReferenceValidators {
       byte[] orderId,
       int side,
       int tier,
-      byte[] pricePerGibMicroXor,
+      byte[] pricePerGib,
       long quantityGib,
       long remainingGib,
       byte[] ownerAccount,
@@ -682,9 +689,9 @@ public final class SorafsReferenceValidators {
       long rangeEnd,
       byte[] chunkHash,
       long bytesDelivered,
-      byte[] xorDebitedMicroXor,
-      byte[] providerCreditMicroXor,
-      byte[] feeAmountMicroXor,
+      byte[] xorDebited,
+      byte[] providerCredit,
+      byte[] feeAmount,
       long issuedAtUnix,
       byte[] privateKey);
 

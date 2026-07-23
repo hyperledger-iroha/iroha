@@ -6,7 +6,10 @@ EXPECTED_VERUS_TOOLCHAIN_VERSION="1.95.0"
 EXPECTED_VSTD_VERSION="0.0.0-2026-05-31-0205"
 REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 PRODUCTION_CORE_DIR="$REPO_ROOT/crates/iroha_core/src/sumeragi/v2_core"
+EFFECTIVE_LOCK_VERUS="$REPO_ROOT/crates/iroha_sumeragi_core/src/effective_lock_verus_proofs.rs"
 VERUS_LOG="${REPO_ROOT}/target/formal/sumeragi_v2/verus.log"
+VERUS_EVIDENCE="${REPO_ROOT}/target/formal/sumeragi_v2/verus_evidence.json"
+VERUS_EVIDENCE_HELPER="${REPO_ROOT}/scripts/formal/sumeragi_v2_verus_evidence.py"
 
 sha256_file() {
   if command -v sha256sum >/dev/null 2>&1; then
@@ -78,7 +81,8 @@ bash "$REPO_ROOT/scripts/check_sumeragi_v2_package_layout.sh"
 
 if rg -n '\b(assume|admit)\s*\(|external_body|external_[[:alnum:]_]*specification|assume_specification' \
   "$PRODUCTION_CORE_DIR" \
-  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs"; then
+  "$REPO_ROOT/crates/iroha_sumeragi_core/src/verus_proofs.rs" \
+  "$EFFECTIVE_LOCK_VERUS"; then
   echo "unreviewed Verus trust escape hatch found in iroha_sumeragi_core" >&2
   exit 1
 fi
@@ -97,6 +101,11 @@ if ! rg -q 'pub proof fn timeout_intent_guard_is_derived_from_vote_and_frozen_co
   echo "TimeoutIntent primitive-guard proof is missing" >&2
   exit 1
 fi
+
+# Reject comment/string stuffing and semantic drift in the executable helper,
+# adapter call, TC-order regression, and Verus operator bodies before root-only
+# `--no-cheating` verification starts.
+python3 "$REPO_ROOT/scripts/formal/check_sumeragi_v2_proof_ledger.py" --check-production-causal-fifo
 
 # Keep the explicit Verus-to-TLA action-name table from silently drifting.
 # This is a spelling/existence guard, not a claim that two independently
@@ -124,85 +133,74 @@ done
 cd "$REPO_ROOT"
 mkdir -p "$(dirname -- "$VERUS_LOG")"
 
-# A clean target is intentional.  Pinned vstd uses reviewed trusted
+# A clean shared target is intentional. Pinned vstd uses reviewed trusted
 # specifications, so root-only forwarding is required: `--no-cheating` applies
-# to this crate while dependencies are still verified under their upstream
-# trust policy.  The source scan remains a defense against unsupported syntax
-# that a future Verus parser might otherwise stop classifying as cheating.
-verify_workspace="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus-workspace.XXXXXX")"
-cleanup_paths=("$verify_workspace")
+# to this crate while dependencies are verified under their upstream trust
+# policy. The reusable harness keeps generated lockfiles out of this workspace.
+cleanup_paths=()
+verus_log_tmp="${VERUS_LOG}.partial.$$"
+cleanup_paths+=("$verus_log_tmp")
 if [[ -z "${CARGO_TARGET_DIR:-}" ]]; then
   CARGO_TARGET_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sumeragi-v2-verus.XXXXXX")"
   cleanup_paths+=("$CARGO_TARGET_DIR")
   export CARGO_TARGET_DIR
 fi
 cleanup() {
-  rm -rf -- "${cleanup_paths[@]}"
+  if ((${#cleanup_paths[@]})); then
+    rm -rf -- "${cleanup_paths[@]}"
+  fi
 }
 trap cleanup EXIT
 
-# Keep verification-only vstd resolution and its generated lockfile out of the
-# production workspace. The temporary tree preserves the repository-relative
-# relationship between the formal harness and the authoritative package-local
-# reducer modules.
-mkdir -p \
-  "$verify_workspace/crates" \
-  "$verify_workspace/crates/iroha_core/src/sumeragi"
-cp -R \
-  "$REPO_ROOT/crates/iroha_sumeragi_core" \
-  "$verify_workspace/crates/iroha_sumeragi_core"
-cp -R \
-  "$PRODUCTION_CORE_DIR" \
-  "$verify_workspace/crates/iroha_core/src/sumeragi/v2_core"
-cat >"$verify_workspace/Cargo.toml" <<'EOF'
-[workspace]
-members = ["crates/iroha_sumeragi_core"]
-resolver = "2"
+bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --unit
+bash "$REPO_ROOT/scripts/formal/run_sumeragi_v2_harness.sh" --fast-network
 
-[workspace.package]
-edition = "2024"
-rust-version = "1.92"
-version = "2.0.0-rc.2.0"
-authors = ["Iroha 2 contributors"]
-description = "Pure Sumeragi v2 verification workspace"
-repository = "https://github.com/hyperledger-iroha/iroha"
-documentation = "https://docs.iroha.tech"
-homepage = "https://iroha.tech"
-license = "Apache-2.0"
-keywords = ["blockchain", "consensus"]
-categories = ["algorithms"]
-
-[workspace.lints.rust]
-unsafe_code = "deny"
-EOF
-
-cd "$verify_workspace"
-
-# Resolve the exact pinned optional vstd dependency only inside the disposable
-# workspace, freeze that resolution, and first run precisely the six
-# deterministic lossy/partition/crash simulations against the production
-# reducer. `--offline` on both test invocations prevents resolution drift after
-# the lock has been created.
-cargo generate-lockfile
-network_test_list="$(
-  cargo test --locked --offline -p iroha_sumeragi_core \
-    --test network_simulation -- --list
+verus_source_manifest_sha256="$(
+  python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
 )"
-network_test_count="$(
-  printf '%s\n' "$network_test_list" |
-    awk '/: test$/ { count += 1 } END { print count + 0 }'
-)"
-if [[ "$network_test_count" != "6" ]]; then
-  echo "expected six Sumeragi v2 network simulations, found $network_test_count" >&2
-  printf '%s\n' "$network_test_list" >&2
+if [[ ! "$verus_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "Sumeragi v2 Verus source manifest is not a SHA-256 digest" >&2
   exit 1
 fi
-cargo test --locked --offline -p iroha_sumeragi_core \
-  --test network_simulation -- --test-threads=1
+verus_evidence_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
+printf '%s\n' \
+  "Sumeragi v2 Verus evidence begin: nonce=${verus_evidence_nonce} source_manifest_sha256=${verus_source_manifest_sha256}" \
+  >"$verus_log_tmp"
 
-cargo verus verify -p iroha_sumeragi_core --features verus \
+set +e
+bash scripts/formal/run_sumeragi_v2_harness.sh \
+  cargo verus verify --locked --offline -p iroha_sumeragi_core --features verus \
   --fwd-verus-args-to roots -- \
   --rlimit 60 \
   --expand-errors \
   --no-cheating \
-  2>&1 | tee "$VERUS_LOG"
+  2>&1 | tee -a "$verus_log_tmp"
+verus_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+if ((verus_pipeline_status[0] != 0 || verus_pipeline_status[1] != 0)); then
+  echo "Sumeragi v2 Verus verification failed (verifier=${verus_pipeline_status[0]}, tee=${verus_pipeline_status[1]})" >&2
+  exit 1
+fi
+
+verus_source_manifest_after="$(
+  python3 scripts/compute_workspace_source_manifest.py --root "$REPO_ROOT"
+)"
+if [[ "$verus_source_manifest_after" != "$verus_source_manifest_sha256" ]]; then
+  echo "Sumeragi v2 source changed during Verus verification" >&2
+  exit 1
+fi
+printf '%s\n' \
+  "Sumeragi v2 Verus evidence passed: nonce=${verus_evidence_nonce} source_manifest_sha256=${verus_source_manifest_sha256}" \
+  >>"$verus_log_tmp"
+mv -- "$verus_log_tmp" "$VERUS_LOG"
+
+python3 "$VERUS_EVIDENCE_HELPER" write \
+  --root "$REPO_ROOT" \
+  --log "$VERUS_LOG" \
+  --output "$VERUS_EVIDENCE" \
+  --nonce "$verus_evidence_nonce" \
+  --verus "$(command -v verus)" \
+  --cargo-verus "$(command -v cargo-verus)"
+python3 "$VERUS_EVIDENCE_HELPER" validate \
+  --root "$REPO_ROOT" \
+  --evidence "$VERUS_EVIDENCE"

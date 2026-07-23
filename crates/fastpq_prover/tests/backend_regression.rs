@@ -17,6 +17,9 @@ use iroha_primitives::numeric::Quantity;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
 
+mod common;
+use common::fixture_update_requested;
+
 fn v1_captured_fixture_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     let mut transcripts = Vec::new();
@@ -132,6 +135,7 @@ fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTra
 
 #[test]
 fn v1_artifact_balanced_1k_matches_fixture() {
+    let update = fixture_update_requested();
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(1_000);
@@ -139,11 +143,15 @@ fn v1_artifact_balanced_1k_matches_fixture() {
     let expected = include_bytes!("fixtures/v1_balanced_1k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {
+        assert!(
+            update,
+            "v1_balanced_1k.bin is empty; regeneration requires FASTPQ_UPDATE_FIXTURES=1"
+        );
         println!("generating v1_balanced_1k.bin ({} bytes)", encoded.len());
         fs::write("tests/fixtures/v1_balanced_1k.bin", &encoded).expect("write fixture");
         panic!("wrote v1_balanced_1k.bin fixture; re-run tests");
     }
-    if std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
+    if update {
         fs::write("tests/fixtures/v1_balanced_1k.bin", &encoded).expect("write fixture");
         return;
     }
@@ -182,6 +190,7 @@ fn v1_artifact_balanced_cpu_gpu_parity() {
 
 #[test]
 fn v1_artifact_balanced_5k_matches_fixture() {
+    let update = fixture_update_requested();
     let prover = Prover::canonical_with_execution_mode("fastpq-lane-balanced", ExecutionMode::Cpu)
         .expect("prover");
     let batch = v1_captured_fixture_batch(5_000);
@@ -189,11 +198,15 @@ fn v1_artifact_balanced_5k_matches_fixture() {
     let expected = include_bytes!("fixtures/v1_balanced_5k.bin");
     let encoded = to_bytes(&proof).expect("encode proof");
     if expected.is_empty() {
+        assert!(
+            update,
+            "v1_balanced_5k.bin is empty; regeneration requires FASTPQ_UPDATE_FIXTURES=1"
+        );
         println!("generating v1_balanced_5k.bin ({} bytes)", encoded.len());
         fs::write("tests/fixtures/v1_balanced_5k.bin", &encoded).expect("write fixture");
         panic!("wrote v1_balanced_5k.bin fixture; re-run tests");
     }
-    if std::env::var("FASTPQ_UPDATE_FIXTURES").is_ok() {
+    if update {
         fs::write("tests/fixtures/v1_balanced_5k.bin", &encoded).expect("write fixture");
         return;
     }

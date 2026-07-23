@@ -398,9 +398,14 @@ fn minimal_config_snapshot() {
                     meter_family: "soranet.vpn.standard",
                     helper_ticket_secret: None,
                     fee_asset_id: "xor#universal.universal",
-                    escrow_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
-                    operator_account_id: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
-                    lease_fee_nanos: 1000000,
+                    escrow_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    operator_account_id: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
+                    lease_fee: Quantity(
+                        Numeric {
+                            mantissa: 1,
+                            scale: 3,
+                        },
+                    ),
                     settlement_grace: 60s,
                     route_pushes: [
                         "0.0.0.0/0",
@@ -421,6 +426,7 @@ fn minimal_config_snapshot() {
                 deferred_send_ttl: 1.5s,
                 deferred_send_max_per_peer: 256,
                 deferred_send_max_bytes_per_peer: 33554432,
+                deferred_send_max_bytes_total: 134217728,
                 peer_gossip_period: 1s,
                 peer_gossip_max_period: 30s,
                 trust_gossip: true,
@@ -510,14 +516,14 @@ fn minimal_config_snapshot() {
                 allow_cidrs: [],
                 deny_cidrs: [],
                 disconnect_on_post_overflow: true,
-                max_frame_bytes: 16777216,
+                max_frame_bytes: 17825820,
                 tcp_nodelay: true,
                 tcp_keepalive: Some(
                     60s,
                 ),
-                max_frame_bytes_consensus: 16777216,
-                max_frame_bytes_control: 131072,
-                max_frame_bytes_block_sync: 16777216,
+                max_frame_bytes_consensus: 17825792,
+                max_frame_bytes_control: 2097152,
+                max_frame_bytes_block_sync: 17825792,
                 max_frame_bytes_tx_gossip: 262144,
                 max_frame_bytes_peer_gossip: 65536,
                 max_frame_bytes_health: 32768,
@@ -837,15 +843,25 @@ fn minimal_config_snapshot() {
                     },
                     rent_policy: DaRentPolicyV1 {
                         version: 1,
-                        base_rate_per_gib_month: XorAmount {
-                            micro: 250000,
-                        },
+                        base_rate_per_gib_month: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 25,
+                                    scale: 2,
+                                },
+                            ),
+                        ),
                         protocol_reserve_bps: 2000,
                         pdp_bonus_bps: 500,
                         potr_bonus_bps: 250,
-                        egress_credit_per_gib: XorAmount {
-                            micro: 1500,
-                        },
+                        egress_credit_per_gib: XorQuantity(
+                            Quantity(
+                                Numeric {
+                                    mantissa: 15,
+                                    scale: 4,
+                                },
+                            ),
+                        ),
                     },
                     telemetry_cluster_label: None,
                 },
@@ -916,7 +932,12 @@ fn minimal_config_snapshot() {
                     },
                     orderbook: SorafsOrderbook {
                         min_order_gib: 1,
-                        price_tick_micro_xor: 1000,
+                        price_tick: Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 3,
+                            },
+                        ),
                     },
                     reputation_trust_policy_path: None,
                     pricing_trust_policy_path: None,
@@ -987,7 +1008,14 @@ fn minimal_config_snapshot() {
                     worker_concurrency: 4,
                     backoff_initial_secs: 5,
                     backoff_max_secs: 60,
-                    default_slash_penalty_nano: 1000000000,
+                    default_slash_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
+                    ),
                     auditor_rate_per_sec: Some(
                         4,
                     ),
@@ -1338,12 +1366,14 @@ fn minimal_config_snapshot() {
                     cache_max_age: 30s,
                     retry_after: 1s,
                 },
-                onboarding: None,
+                account_onboarding: None,
                 faucet: None,
                 kagemusha_commands: None,
                 ram_lfe: None,
                 tx_history: None,
                 recipient_lookup: ToriiRecipientLookup {
+                    policy_id: "cbuae_aed_sbp_pkr".parse().unwrap(),
+                    requests_per_minute: 30,
                     request_timeout: 4s,
                     routes: [],
                 },
@@ -1413,7 +1443,7 @@ fn minimal_config_snapshot() {
                     stop_grace: 10s,
                 },
                 submission: SoracloudRuntimeSubmission {
-                    gas_asset_id: None,
+                    fee_payer: SoracloudRuntimeFeePayer::Authority,
                 },
                 egress: SoracloudRuntimeEgress {
                     default_allow: false,
@@ -1487,7 +1517,10 @@ fn minimal_config_snapshot() {
                 },
                 queues: SumeragiQueues {
                     commands: 1024,
-                    bodies: 256,
+                    authenticated_non_validator_sources: 2,
+                    bodies: 518,
+                    body_bytes: 242221056,
+                    body_source_bytes: 34603008,
                     chunks: 2048,
                     ready_bodies: 128,
                 },
@@ -1571,19 +1604,19 @@ fn minimal_config_snapshot() {
                 staking: NexusStaking {
                     public_validator_mode: StakeElected,
                     restricted_validator_mode: AdminManaged,
-                    min_validator_stake: 1,
+                    min_validator_stake: 1_u64.into(),
                     max_validators: 32,
                     unbonding_delay: 0ns,
                     withdraw_grace: 0ns,
                     max_slash_bps: 10000,
-                    reward_dust_threshold: 0,
+                    reward_dust_threshold: 0_u64.into(),
                     stake_asset_id: "5tTiKE1CkjJoGHhmf5FxQoSg5hMt",
-                    stake_escrow_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-                    slash_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    stake_escrow_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+                    slash_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                 },
                 fees: NexusFees {
                     fee_asset_id: "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
-                    fee_sink_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    fee_sink_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     base_fee: Quantity(
                         Numeric {
                             mantissa: 0,
@@ -1608,23 +1641,7 @@ fn minimal_config_snapshot() {
                             scale: 5,
                         },
                     ),
-                    sponsorship_enabled: false,
-                    sponsor_max_fee: Quantity(
-                        Numeric {
-                            mantissa: 0,
-                            scale: 0,
-                        },
-                    ),
-                    sponsor_verified_balance_safety_floor: Quantity(
-                        Numeric {
-                            mantissa: 0,
-                            scale: 0,
-                        },
-                    ),
-                    canonical_sponsor_account_id: None,
-                    fee_receipts_activation_height: 18446744073709551615,
-                    external_settlement_enabled: false,
-                    burn_from_unix_timestamp_ms: 0,
+                    sponsor_vault_custody_account_id: sorauﾛ1NｱｻｸYSafﾇｷヰc5ﾇﾄVxﾏ9jLZヱﾋzsKqurﾊﾘ9ｸ3eｴAｶD54TDT,
                     settlement_mode: Direct,
                     successful_claim_fee_exempt_authorities: [],
                 },
@@ -1634,7 +1651,6 @@ fn minimal_config_snapshot() {
                     max_pending_relays: 1024,
                     retry_backoff: 5s,
                     max_retry_attempts: 10,
-                    budget_refresh_interval_blocks: 10,
                 },
                 hf_shared_leases: NexusHfSharedLeases {
                     drain_grace: 5s,
@@ -1758,8 +1774,7 @@ fn minimal_config_snapshot() {
                         },
                     ],
                 },
-                dataspace_fee_sponsors: {},
-                dataspace_fee_sponsor_policies: {},
+                dataspace_fee_sponsor_program_ids: {},
                 routing_policy: LaneRoutingPolicy {
                     default_lane: LaneId(
                         0,
@@ -1897,7 +1912,7 @@ fn minimal_config_snapshot() {
                 overlay_max_bytes: 0,
                 overlay_chunk_instructions: 256,
                 gas: Gas {
-                    tech_account_id: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
+                    tech_account_id: "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
                     accepted_assets: [],
                     units_per_gas: [],
                 },
@@ -2272,15 +2287,15 @@ fn minimal_config_snapshot() {
                     ],
                     projection: None,
                 },
-                citizenship_bond_amount: 150,
+                citizenship_bond_amount: 150_u64.into(),
                 citizenship_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
-                min_bond_amount: 150,
+                min_bond_amount: 150_u64.into(),
                 bond_escrow_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_receiver_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 slash_double_vote_bps: 2500,
                 slash_invalid_proof_bps: 5000,
                 slash_ineligible_proof_bps: 1500,
-                alias_teu_minimum: 0,
+                alias_teu_minimum: 0_u64.into(),
                 alias_frontier_telemetry: true,
                 debug_trace_pipeline: false,
                 jdg_signature_schemes: {
@@ -2386,7 +2401,7 @@ fn minimal_config_snapshot() {
                     ],
                     projection: None,
                 },
-                sorafs_pin_fee_treasury_account: sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB,
+                sorafs_pin_fee_treasury_account: sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV,
                 sorafs_pricing: PricingScheduleRecord {
                     version: 1,
                     currency_code: "xor",
@@ -2451,7 +2466,14 @@ fn minimal_config_snapshot() {
                     minimum_voters: 3,
                     dispute_window_secs: 86400,
                     appeal_window_secs: 604800,
-                    max_penalty_nano: 1000000000,
+                    max_penalty: XorQuantity(
+                        Quantity(
+                            Numeric {
+                                mantissa: 1,
+                                scale: 0,
+                            },
+                        ),
+                    ),
                 },
                 sorafs_telemetry: SorafsTelemetryPolicy {
                     require_submitter: false,
@@ -2472,7 +2494,7 @@ fn minimal_config_snapshot() {
                 min_turnout: 0,
                 parliament_committee_size: 21,
                 parliament_term_blocks: 43200,
-                parliament_min_stake: 1,
+                parliament_min_stake: 1_u64.into(),
                 parliament_eligibility_asset_id: AssetDefinitionId {
                     aid_bytes: [
                         131,
@@ -2603,7 +2625,8 @@ fn minimal_config_snapshot() {
                     prune_batch_size: 128,
                     escrow_required: false,
                     escrow_accounts: {},
-                    kagemusha_enabled: true,
+                    kagemusha_release_policy_path: None,
+                    kagemusha_artifact_dir: None,
                 },
                 router: Router {
                     twap_window: 60s,
@@ -2827,29 +2850,7 @@ fn nexus_rejects_zero_axt_slot_length() {
 }
 
 #[test]
-fn nexus_lane_relay_burn_activation_requires_canonical_sponsor() {
-    use iroha_config::parameters::user::{Nexus, NexusFees};
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        fees: NexusFees {
-            settlement_mode: "lane_relay_burn".to_owned(),
-            fee_receipts_activation_height: 42,
-            canonical_sponsor_account_id: None,
-            ..NexusFees::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let error = format!("{:?}", emitter.into_result().expect_err("invalid config"));
-    assert!(error.contains("canonical_sponsor_account_id"));
-}
-
-#[test]
-fn nexus_relay_worker_requires_lane_relay_burn_and_canonical_sponsor() {
+fn nexus_relay_worker_requires_lane_relay_burn() {
     use iroha_config::parameters::user::{Nexus, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
 
@@ -2869,7 +2870,7 @@ fn nexus_relay_worker_requires_lane_relay_burn_and_canonical_sponsor() {
 }
 
 #[test]
-fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
+fn nexus_relay_worker_parses_with_lane_relay_burn() {
     use iroha_config::parameters::actual::NexusFeeSettlementMode;
     use iroha_config::parameters::user::{Nexus, NexusFees, NexusRelayWorker};
     use iroha_config_base::util::Emitter;
@@ -2879,8 +2880,6 @@ fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
         enabled: true,
         fees: NexusFees {
             settlement_mode: "lane_relay_burn".to_owned(),
-            fee_receipts_activation_height: 42,
-            canonical_sponsor_account_id: Some("ed0120abcdef@wonderland".to_owned()),
             ..NexusFees::default()
         },
         relay_worker: NexusRelayWorker {
@@ -2900,8 +2899,8 @@ fn nexus_relay_worker_parses_with_activated_canonical_sponsor() {
         NexusFeeSettlementMode::LaneRelayBurn
     );
     assert_eq!(
-        parsed.fees.canonical_sponsor_account_id.as_deref(),
-        Some("ed0120abcdef@wonderland")
+        parsed.fees.sponsor_vault_custody_account_id,
+        defaults::nexus::fees::sponsor_vault_custody_account_id()
     );
 }
 
@@ -3423,8 +3422,7 @@ fn routing_policy_dataspace_resolution() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(1),
@@ -3477,8 +3475,7 @@ fn routing_policy_lane_dataspace_mismatch_rejected() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3527,8 +3524,7 @@ fn dataspace_fault_tolerance_zero_rejected() {
             ),
             description: None,
             fault_tolerance: Some(0),
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3553,8 +3549,7 @@ fn dataspace_manifest_hash_required_for_non_universal() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3580,8 +3575,7 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: None,
+            fee_sponsor_program_id: None,
         }],
         ..Nexus::default()
     };
@@ -3593,16 +3587,20 @@ fn dataspace_explicit_id_must_match_manifest_hash() {
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
+fn dataspace_fee_sponsor_program_id_parses() {
     use std::num::NonZeroU32;
 
     use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
+        DataSpaceDescriptor, LaneDescriptor, Nexus, RoutingPolicy,
     };
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
 
     let mut emitter = Emitter::<ParseError>::new();
+    let program_id = format!(
+        "{}/default",
+        defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+    );
     let nexus = Nexus {
         enabled: true,
         lane_count: NonZeroU32::new(1).expect("nonzero"),
@@ -3621,13 +3619,8 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some(program_id.clone()),
         }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
             default_dataspace: Some("alpha".into()),
@@ -3641,111 +3634,16 @@ fn dataspace_fee_sponsor_account_id_parses_when_sponsorship_enabled() {
         .expect("dataspace fee sponsor should parse");
     assert!(emitter.into_result().is_ok());
     assert_eq!(
-        parsed.dataspace_fee_sponsors.get(&DataSpaceId::new(1)),
-        Some(&"sponsor@alpha".to_owned())
+        parsed
+            .dataspace_fee_sponsor_program_ids
+            .get(&DataSpaceId::new(1))
+            .map(ToString::to_string),
+        Some(program_id)
     );
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_requires_policy() {
-    use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
-    };
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("primary".into()),
-            dataspace: Some("alpha".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: None,
-        }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
-        routing_policy: RoutingPolicy {
-            default_lane: Some(0),
-            default_dataspace: Some("alpha".into()),
-            ..RoutingPolicy::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter.into_result().expect_err("parse error expected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "fee_sponsor_policy");
-}
-
-#[test]
-fn dataspace_fee_sponsor_policy_requires_account_id() {
-    use std::num::NonZeroU32;
-
-    use iroha_config::parameters::user::{
-        DataSpaceDescriptor, LaneDescriptor, Nexus, NexusFees, RoutingPolicy,
-    };
-    use iroha_config_base::util::Emitter;
-
-    let mut emitter = Emitter::<ParseError>::new();
-    let nexus = Nexus {
-        enabled: true,
-        lane_count: NonZeroU32::new(1).expect("nonzero"),
-        lane_catalog: vec![LaneDescriptor {
-            index: Some(0),
-            alias: Some("primary".into()),
-            dataspace: Some("alpha".into()),
-            description: None,
-            ..LaneDescriptor::default()
-        }],
-        dataspace_catalog: vec![DataSpaceDescriptor {
-            alias: Some("alpha".into()),
-            id: Some(1),
-            manifest_hash: Some(
-                "0100000000000000000000000000000000000000000000000000000000000000".into(),
-            ),
-            description: None,
-            fault_tolerance: None,
-            fee_sponsor_account_id: None,
-            fee_sponsor_policy: Some("default".into()),
-        }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
-        routing_policy: RoutingPolicy {
-            default_lane: Some(0),
-            default_dataspace: Some("alpha".into()),
-            ..RoutingPolicy::default()
-        },
-        ..Nexus::default()
-    };
-
-    assert!(nexus.parse(&mut emitter).is_none());
-    let err = emitter.into_result().expect_err("parse error expected");
-    let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "fee_sponsor_account_id");
-}
-
-#[test]
-fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
+fn dataspace_fee_sponsor_program_id_rejects_malformed_literal() {
     use std::num::NonZeroU32;
 
     use iroha_config::parameters::user::{
@@ -3772,8 +3670,7 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
             ),
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@alpha".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some("missing-program-separator".into()),
         }],
         routing_policy: RoutingPolicy {
             default_lane: Some(0),
@@ -3786,12 +3683,12 @@ fn dataspace_fee_sponsor_account_id_requires_sponsorship_enabled() {
     assert!(nexus.parse(&mut emitter).is_none());
     let err = emitter.into_result().expect_err("parse error expected");
     let debug = strip_ansi_codes(&format!("{err:?}"));
-    assert_contains!(debug, "sponsorship_enabled");
+    assert_contains!(debug, "fee_sponsor_program_id");
 }
 
 #[test]
-fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
-    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus, NexusFees};
+fn dataspace_fee_sponsor_program_id_requires_nexus_enabled() {
+    use iroha_config::parameters::user::{DataSpaceDescriptor, Nexus};
     use iroha_config_base::util::Emitter;
     use iroha_data_model::nexus::DataSpaceId;
 
@@ -3804,13 +3701,11 @@ fn dataspace_fee_sponsor_account_id_requires_nexus_enabled() {
             manifest_hash: None,
             description: None,
             fault_tolerance: None,
-            fee_sponsor_account_id: Some("sponsor@universal".into()),
-            fee_sponsor_policy: Some("default".into()),
+            fee_sponsor_program_id: Some(format!(
+                "{}/default",
+                defaults::nexus::fees::SPONSOR_VAULT_CUSTODY_ACCOUNT_ID
+            )),
         }],
-        fees: NexusFees {
-            sponsorship_enabled: true,
-            ..NexusFees::default()
-        },
         ..Nexus::default()
     };
 
@@ -4341,6 +4236,32 @@ fn taira_config_enables_untrusted_cid_hosting() {
         "Taira profile should keep enough scan budget for cheap txs"
     );
 
+    let queues = doc
+        .get("sumeragi")
+        .and_then(TomlValue::as_table)
+        .and_then(|sumeragi| sumeragi.get("queues"))
+        .and_then(TomlValue::as_table)
+        .expect("sumeragi.queues should be configured");
+    assert_eq!(
+        queues
+            .get("authenticated_non_validator_sources")
+            .and_then(TomlValue::as_integer),
+        Some(2),
+        "Taira should reserve two independent authenticated non-validator ingress lanes"
+    );
+    assert_eq!(
+        queues.get("body_bytes").and_then(TomlValue::as_integer),
+        Some(231 * 1024 * 1024),
+        "Taira aggregate canonical wire-byte budget should isolate its seven ingress source lanes"
+    );
+    assert_eq!(
+        queues
+            .get("body_source_bytes")
+            .and_then(TomlValue::as_integer),
+        Some(33 * 1024 * 1024),
+        "Taira should retain one canonical outer-ingress wire-byte quota per source"
+    );
+
     let untrusted = doc
         .get("sorafs")
         .and_then(TomlValue::as_table)
@@ -4403,10 +4324,10 @@ fn taira_config_enables_untrusted_cid_hosting() {
         runtime
             .get("submission")
             .and_then(TomlValue::as_table)
-            .and_then(|submission| submission.get("gas_asset_id"))
+            .and_then(|submission| submission.get("fee_payer"))
             .and_then(TomlValue::as_str),
-        Some("xor#universal"),
-        "Soracloud production mode requires an explicit runtime submission gas asset"
+        Some("sponsor"),
+        "Taira Soracloud submissions should use the exact genesis sponsor program"
     );
 }
 
@@ -4524,12 +4445,28 @@ fn sumeragi_v2_explicit_schema_parses() {
     let cfg = load_config_from_fixtures("sumeragi_v2.toml")
         .expect("first-release v2 configuration should parse");
 
+    assert_eq!(
+        cfg.network.max_total_connections.map(|limit| limit.get()),
+        Some(32)
+    );
     assert_eq!(cfg.sumeragi.role, NodeRole::Observer);
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 333);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 8 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.block.proposal_queue_scan_multiplier.get(), 3);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 512);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
     assert_eq!(cfg.sumeragi.queues.bodies.get(), 96);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 68 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        17 * 1024 * 1024
+    );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 768);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 48);
     assert_eq!(cfg.sumeragi.keys.activation_lead_blocks, 2);
@@ -4554,6 +4491,18 @@ fn sumeragi_v2_rejects_queue_and_key_policy_errors() {
         (
             "bad.sumeragi_command_queue_too_small.toml",
             "sumeragi.queues.commands must be at least 8",
+        ),
+        (
+            "bad.sumeragi_body_source_bytes_too_small.toml",
+            "sumeragi.queues.body_source_bytes must isolate max-payload envelopes, 65536 bytes of fixed headroom per envelope, 33800 recommended payload-completion manifest bytes, 1048576 lane-progress bytes, 4194304 lane-completion bytes, and 65536 timeout-vote bytes (minimum 33784840, configured 16777216)",
+        ),
+        (
+            "bad.sumeragi_body_queue_too_small.toml",
+            "sumeragi.queues.bodies must reserve four positions for at least one validator, two per authenticated non-validator source, and two anonymous positions (minimum 10, configured 9)",
+        ),
+        (
+            "bad.sumeragi_body_bytes_too_small.toml",
+            "sumeragi.queues.body_bytes must reserve one validator, every configured authenticated non-validator source, and the anonymous source partition (minimum 138412032, configured 138412031)",
         ),
         (
             "bad.sumeragi_empty_hsm_provider.toml",
@@ -4710,6 +4659,33 @@ fn torii_transport_trusted_proxy_cidrs_default_to_empty() {
 }
 
 #[test]
+fn network_defaults_carry_maximal_sumeragi_v2_progress_frames() {
+    const MAX_CERTIFIED_BODY_RESPONSE_BYTES: usize = 16_811_581;
+
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES.get(),
+        17 * 1024 * 1024 + defaults::network::DEFAULT_AEAD_FRAME_OVERHEAD_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_BLOCK_SYNC,
+        defaults::network::MAX_PLAINTEXT_FRAME_BYTES
+    );
+    assert!(
+        defaults::network::MAX_FRAME_BYTES.get() > MAX_CERTIFIED_BODY_RESPONSE_BYTES,
+        "the encrypted frame cap must retain room for the P2P wrapper and AEAD overhead"
+    );
+    assert_eq!(
+        defaults::network::MAX_FRAME_BYTES_CONTROL.get(),
+        2 * 1024 * 1024,
+        "consensus-safety proposals and timeout certificates use the control topic"
+    );
+}
+
+#[test]
 fn sumeragi_v2_defaults_match_fresh_network_profile() {
     use defaults::sumeragi::npos;
     use iroha_config::parameters::{actual::Root as Actual, user::Root as User};
@@ -4725,7 +4701,27 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
         16 * 1024 * 1024,
     );
     assert_eq!(defaults::sumeragi::QUEUE_COMMAND_CAPACITY.get(), 1_024);
-    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 256);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get(),
+        2
+    );
+    assert_eq!(defaults::sumeragi::QUEUE_BODY_CAPACITY.get(), 518);
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_CAPACITY.get(),
+        4 * iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT
+            + 2 * defaults::sumeragi::QUEUE_AUTHENTICATED_NON_VALIDATOR_SOURCE_CAPACITY.get()
+            + 2
+    );
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_BYTES.get(),
+        231 * 1024 * 1024
+    );
+    assert_eq!(
+        defaults::sumeragi::QUEUE_BODY_SOURCE_BYTES.get(),
+        33 * 1024 * 1024
+    );
+    assert_eq!(defaults::sumeragi::BODY_ENVELOPE_HEADROOM_BYTES, 64 * 1024);
+    assert_eq!(defaults::sumeragi::TIMEOUT_VOTE_RESERVE_BYTES, 64 * 1024);
     assert_eq!(defaults::sumeragi::QUEUE_CHUNK_CAPACITY.get(), 2_048);
     assert_eq!(defaults::sumeragi::QUEUE_READY_BODY_CAPACITY.get(), 128);
     assert_eq!(npos::EPOCH_LENGTH_BLOCKS, 3_600);
@@ -4740,7 +4736,19 @@ fn sumeragi_v2_defaults_match_fresh_network_profile() {
     assert_eq!(cfg.sumeragi.block.max_transactions.get(), 512);
     assert_eq!(cfg.sumeragi.block.max_payload_bytes.get(), 16 * 1024 * 1024);
     assert_eq!(cfg.sumeragi.queues.commands.get(), 1_024);
-    assert_eq!(cfg.sumeragi.queues.bodies.get(), 256);
+    assert_eq!(
+        cfg.sumeragi
+            .queues
+            .authenticated_non_validator_sources
+            .get(),
+        2
+    );
+    assert_eq!(cfg.sumeragi.queues.bodies.get(), 518);
+    assert_eq!(cfg.sumeragi.queues.body_bytes.get(), 231 * 1024 * 1024);
+    assert_eq!(
+        cfg.sumeragi.queues.body_source_bytes.get(),
+        33 * 1024 * 1024
+    );
     assert_eq!(cfg.sumeragi.queues.chunks.get(), 2_048);
     assert_eq!(cfg.sumeragi.queues.ready_bodies.get(), 128);
     cfg.sumeragi

@@ -65,7 +65,10 @@ fn drive_network_to_total_height(
     let mut current_height = client.get_status()?.blocks;
     while current_height < target_height {
         let next_height = current_height.saturating_add(1);
-        client.submit_all([Log::new(Level::INFO, format!("{label} {next_height}"))])?;
+        client.submit_all(
+            [Log::new(Level::INFO, format!("{label} {next_height}"))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         runtime.block_on(async {
             network
                 .ensure_blocks_with(|height| height.total >= next_height)

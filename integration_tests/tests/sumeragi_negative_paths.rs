@@ -210,9 +210,10 @@ fn set_evidence_horizon(client: &Client, horizon: u64) -> Result<()> {
         evidence_horizon_blocks: horizon,
         ..SumeragiNposParameters::default()
     };
-    client.submit_blocking(SetParameter::new(Parameter::Custom(
-        params.into_custom_parameter(),
-    )))?;
+    client.submit_blocking(
+        SetParameter::new(Parameter::Custom(params.into_custom_parameter())),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     Ok(())
 }
 
@@ -304,7 +305,10 @@ fn advance_to_height(
     let status = client.get_status()?;
     for idx in status.blocks..target {
         let submit_client = submit_client_for_network(network, client);
-        submit_client.submit_blocking(Log::new(Level::INFO, format!("{label} tick {idx}")))?;
+        submit_client.submit_blocking(
+            Log::new(Level::INFO, format!("{label} tick {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     runtime.block_on(network.ensure_blocks_with(|height| height.total >= target))?;
     Ok(())

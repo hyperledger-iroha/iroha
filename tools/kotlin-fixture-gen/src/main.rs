@@ -23,7 +23,7 @@ use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::{DataSpaceId, UniversalAccountId};
 use iroha_data_model::offline::{
-    OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
+    KagemushaDevicePublicKeyV2, OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_KEY_ALGORITHM,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME,
     OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_PLATFORM, OfflineAndroidKeyMintChallenge,
     OfflineDeviceAttestationRegistration,
@@ -76,18 +76,19 @@ fn emit_offline_device_attestation() {
     );
     let account_id = parity_account_id();
     let assertion_public_key = hex::decode(P256_GENERATOR).expect("P-256 generator hex");
-    let signing_certificate_sha256 = sha256(b"abi19-unit-test-signing-certificate").to_vec();
-    let public_key = vec![0x44; 32];
-    let recent_block_hash = Hash::new(b"abi19-unit-test-block");
+    let signing_certificate_sha256 = sha256(b"abi20-unit-test-signing-certificate").to_vec();
+    let public_key = KagemushaDevicePublicKeyV2::from_sec1_bytes(&assertion_public_key)
+        .expect("canonical P-256 device authority");
+    let recent_block_hash = Hash::new(b"abi20-unit-test-block");
     let challenge = OfflineAndroidKeyMintChallenge {
         version: 1,
-        device_id: "abi19-android-unit-test-device".to_owned(),
+        device_id: "abi20-android-unit-test-device".to_owned(),
         account_id: account_id.clone(),
         asset_definition_id: None,
         ios_team_id: None,
         ios_bundle_id: None,
         ios_environment: None,
-        android_package_name: Some("org.hyperledger.iroha.abi19.fixture".to_owned()),
+        android_package_name: Some("org.hyperledger.iroha.abi20.fixture".to_owned()),
         android_signing_certificate_sha256: Some(signing_certificate_sha256.clone()),
         public_key: public_key.clone(),
         assertion_scheme: OFFLINE_DEVICE_ATTESTATION_ANDROID_KEYMINT_ASSERTION_SCHEME.to_owned(),
@@ -102,7 +103,7 @@ fn emit_offline_device_attestation() {
     let challenge_hash = challenge
         .canonical_challenge_hash()
         .expect("encode Android KeyMint challenge");
-    let attestation_report = b"abi19-unit-test-not-physical-attestation-evidence".to_vec();
+    let attestation_report = b"abi20-unit-test-not-physical-attestation-evidence".to_vec();
     let attestation_report_hash = Hash::new(&attestation_report);
     let mut evidence = b"offline-device-attestation-evidence-v1".to_vec();
     evidence.extend_from_slice(attestation_report_hash.as_ref());
@@ -135,6 +136,7 @@ fn emit_offline_device_attestation() {
         expires_at_ms: 2_000_000_000_000,
     };
     let registration_archive = norito::to_bytes(&registration).expect("encode registration");
+    let registration_id = Hash::new(&registration_archive);
     let instruction_archive =
         norito::to_bytes(&RegisterOfflineDeviceAttestation::new(registration))
             .expect("encode registration instruction");
@@ -143,6 +145,7 @@ fn emit_offline_device_attestation() {
     println!("{}", hex::encode(instruction_archive));
     println!("{}", hex::encode(challenge_hash.as_ref()));
     println!("{account_id}");
+    println!("{}", hex::encode(registration_id.as_ref()));
 }
 
 fn emit_hidden_ram_fhe_program() {

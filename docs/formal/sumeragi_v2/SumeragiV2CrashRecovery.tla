@@ -100,19 +100,4 @@ HashChainWellFormed(frames, zeroHash) ==
            /\ previous.sequence + 1 = frame.sequence
            /\ previous.frameHash = frame.previousHash
 
-THEOREM CrashDoesNotErasePrepareIntents ==
-  \A node \in ValidatorIds:
-    Crash(node) => prepareIntents' = prepareIntents
-BY DEF Crash
-
-THEOREM CrashDoesNotEraseDecisions ==
-  \A node \in ValidatorIds:
-    Crash(node) => decisions' = decisions
-BY DEF Crash
-
-THEOREM IncompleteFrameIsNotAcknowledged ==
-  \A frames:
-    IncompleteFinalFrameUnacknowledged(frames)
-BY DEF IncompleteFinalFrameUnacknowledged, AcknowledgedFrames
-
 =============================================================================

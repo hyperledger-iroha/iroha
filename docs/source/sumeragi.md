@@ -409,6 +409,8 @@ deferred_qc_ttl_ms = 2000                  # missing-payload/deferred-QC TTL bef
 [network]
 deferred_send_ttl_ms = 1500                # drop deferred outbound frames after this age
 deferred_send_max_per_peer = 256           # cap deferred outbound frames retained per peer
+deferred_send_max_bytes_per_peer = 33554432 # 32 MiB stream-wire cap for one peer
+deferred_send_max_bytes_total = 134217728   # 128 MiB true-total cap with safety reserve
 
 [sumeragi.gating]
 membership_mismatch_alert_threshold = 1   # consecutive mismatches before alert/fail-closed

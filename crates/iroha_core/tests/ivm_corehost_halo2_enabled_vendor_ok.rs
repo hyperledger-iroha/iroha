@@ -102,7 +102,7 @@ fn verify_then_vendor_submit_ballot_applies() {
     state.zk.halo2.enabled = true;
     state.zk.verify_timeout = Duration::ZERO;
     let mut gov_cfg = state.gov.clone();
-    gov_cfg.citizenship_bond_amount = 0;
+    gov_cfg.citizenship_bond_amount = 0_u64.into();
     state.set_gov(gov_cfg);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);

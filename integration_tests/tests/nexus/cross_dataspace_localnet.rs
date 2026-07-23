@@ -888,7 +888,10 @@ fn submit_wait_tick(
                 1,
             ));
     let message = format!("{context} tick {poll_count}");
-    if let Err(err) = tick_client.submit(Log::new(Level::INFO, message)) {
+    if let Err(err) = tick_client.submit(
+        Log::new(Level::INFO, message),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         *last_error = Some(format!(
             "tick submit error: {}",
             render_error_with_debug(&err)
@@ -2093,7 +2096,11 @@ async fn wait_for_route_probe_approval(
     expected_dataspace_id: DataSpaceId,
     context: &str,
 ) -> Result<DataspaceCommitmentObservation> {
-    let transaction = submitter.build_transaction([instruction], Metadata::default());
+    let transaction = submitter.build_transaction(
+        [instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    );
     let hash = transaction.hash();
     let started = Instant::now();
     let submit_height = submitter
@@ -4086,8 +4093,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 .get_sumeragi_status()
                 .map_err(|err| eyre!(err))?
                 .last_committed_height;
-            let successful_swap_tx = submitter
-                .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
+            let successful_swap_tx = submitter.build_transaction(
+                [InstructionBox::from(successful_swap)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
             let route_observation = rt.block_on(submit_transaction_with_route_observation(
                 &submitter,
@@ -4568,8 +4578,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing_impl() -> Result<()> {
                 ),
             );
             let (submitter, _) = current_nexus_clients();
-            let failing_swap_tx = submitter
-                .build_transaction([InstructionBox::from(failing_swap)], Metadata::default());
+            let failing_swap_tx = submitter.build_transaction(
+                [InstructionBox::from(failing_swap)],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            );
             let entry_hash = failing_swap_tx.hash_as_entrypoint();
             last_attempt_entry_hash = Some(entry_hash.clone());
             if let Err(err) = submit_transaction_across_clients(

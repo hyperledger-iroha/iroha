@@ -20,7 +20,10 @@ pub use self::{
         AccountRecoveryPolicy, AccountRecoveryPolicyError, AccountRecoveryRequest,
         AccountRecoveryStatus, RecoveryGuardian,
     },
-    rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
+    rekey::{
+        AccountAlias, AccountAliasDomain, AccountRekeyRecord, AccountRekeyRecordError,
+        AccountRekeyTransitionProvenance,
+    },
 };
 pub mod address;
 pub mod admission;
@@ -1337,8 +1340,9 @@ pub mod prelude {
         AccountAdmissionMode, AccountAdmissionPolicy, AccountAlias, AccountAliasDomain,
         AccountController, AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
         AccountRecoveryPolicyError, AccountRecoveryRequest, AccountRecoveryStatus,
-        AccountRekeyRecord, AccountValue, MultisigMember, MultisigPolicy, NewAccount,
-        OpaqueAccountId, ParsedAccountId, RecoveryGuardian,
+        AccountRekeyRecord, AccountRekeyRecordError, AccountRekeyTransitionProvenance,
+        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId, ParsedAccountId,
+        RecoveryGuardian,
     };
 }
 

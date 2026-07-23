@@ -20,8 +20,9 @@ use iroha_data_model::{
             VrfCommit, VrfReveal,
         },
         consensus_v2::{
-            HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION, SumeragiV2BodyState,
-            SumeragiV2Status, SumeragiV2StatusPhase,
+            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION as V2_PROTOCOL_VERSION,
+            SumeragiV2BodyState, SumeragiV2HeightContextStatus, SumeragiV2Status,
+            SumeragiV2StatusPhase,
         },
     },
     nexus::{DataSpaceId, LaneId},
@@ -236,8 +237,8 @@ fn rng_npos_genesis_params(rng: &mut DeterministicRng) -> NposGenesisParams {
         vrf_commit_window_blocks: rng.next_u64(),
         vrf_reveal_window_blocks: rng.next_u64(),
         max_validators: rng.next_u32(),
-        min_self_bond: rng.next_u64(),
-        min_nomination_bond: rng.next_u64(),
+        min_self_bond: rng.next_u64().into(),
+        min_nomination_bond: rng.next_u64().into(),
         max_nominator_concentration_pct: u8::try_from(rng.up_to(100))
             .expect("percentage bound fits into u8"),
         seat_band_pct: u8::try_from(rng.up_to(100)).expect("percentage bound fits into u8"),
@@ -582,6 +583,19 @@ fn rng_sumeragi_v2_status(rng: &mut DeterministicRng) -> SumeragiV2Status {
         pending_persistence_id: rng.next_bool().then(|| rng.next_u64()),
         last_committed_height: rng.next_u64(),
         last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: rng.next_u64(),
+            epoch_end_height: rng.next_u64(),
+            mode: ConsensusMode::Permissioned,
+            epoch_seed: rng_hash(rng).into(),
+            validator_count: 4,
+            quorum: DualQuorum {
+                min_signers: 3,
+                total_power: 4,
+            },
+        },
+        last_commit_qc: None,
+        liveness: Default::default(),
     }
 }
 
@@ -612,8 +626,8 @@ fn consensus_genesis_norito_roundtrip() {
         vrf_commit_window_blocks: 8,
         vrf_reveal_window_blocks: 5,
         max_validators: 20,
-        min_self_bond: 10,
-        min_nomination_bond: 2,
+        min_self_bond: 10_u64.into(),
+        min_nomination_bond: 2_u64.into(),
         max_nominator_concentration_pct: 35,
         seat_band_pct: 15,
         max_entity_correlation_pct: 25,
@@ -625,7 +639,7 @@ fn consensus_genesis_norito_roundtrip() {
     let with_npos = ConsensusGenesisParams {
         block_cadence_ms: NonZeroU64::new(750).unwrap(),
         block_max_transactions: NonZeroU64::new(512).unwrap(),
-        mode: ConsensusGenesisModeParams::Npos(npos),
+        mode: ConsensusGenesisModeParams::Npos(npos.clone()),
         protocol_version: u32::from(V2_PROTOCOL_VERSION),
         v2_context:
             iroha_data_model::block::consensus_v2::SumeragiV2GenesisContextParameters::recommended(),
@@ -1118,10 +1132,10 @@ fn process_lane_commitment_fixtures(fixtures_dir: &Path, mode: LaneCommitmentFix
 fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
     let receipt = LaneSettlementReceipt {
         source_id: [0xAB; 32],
-        local_amount_micro: 4_000_000,
-        xor_due_micro: 1_620_000,
-        xor_after_haircut_micro: 1_600_000,
-        xor_variance_micro: 20_000,
+        local_amount: "4".parse().expect("valid settlement quantity"),
+        xor_due: "1.62".parse().expect("valid settlement quantity"),
+        xor_after_haircut: "1.6".parse().expect("valid settlement quantity"),
+        xor_variance: "0.02".parse().expect("valid settlement quantity"),
         timestamp_ms: 1_726_296_400_000,
     };
 
@@ -1131,15 +1145,15 @@ fn sample_lane_commitment_fixture() -> LaneBlockCommitment {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(7),
         tx_count: 1,
-        total_local_micro: receipt.local_amount_micro,
-        total_xor_due_micro: receipt.xor_due_micro,
-        total_xor_after_haircut_micro: receipt.xor_after_haircut_micro,
-        total_xor_variance_micro: receipt.xor_variance_micro,
+        total_local_amount: receipt.local_amount.clone(),
+        total_xor_due: receipt.xor_due.clone(),
+        total_xor_after_haircut: receipt.xor_after_haircut.clone(),
+        total_xor_variance: receipt.xor_variance.clone(),
         swap_metadata: Some(iroha_data_model::block::consensus::LaneSwapMetadata {
             epsilon_bps: 25,
             twap_window_seconds: 60,
             liquidity_profile: iroha_data_model::block::consensus::LaneLiquidityProfile::Tier1,
-            twap_local_per_xor: "8123.445500".to_owned(),
+            twap_local_per_xor: "8123.4455".parse().expect("canonical TWAP"),
             volatility_class: iroha_data_model::block::consensus::LaneVolatilityClass::Stable,
         }),
         receipts: vec![receipt],
@@ -1155,10 +1169,10 @@ fn sample_lane_commitment_fixture_without_metadata() -> LaneBlockCommitment {
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id: DataSpaceId::new(9),
         tx_count: 0,
-        total_local_micro: 0,
-        total_xor_due_micro: 0,
-        total_xor_after_haircut_micro: 0,
-        total_xor_variance_micro: 0,
+        total_local_amount: "0".parse().expect("valid settlement quantity"),
+        total_xor_due: "0".parse().expect("valid settlement quantity"),
+        total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+        total_xor_variance: "0".parse().expect("valid settlement quantity"),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),

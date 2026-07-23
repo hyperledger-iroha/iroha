@@ -68,7 +68,7 @@ fn configure_state(def_id: &AssetDefinitionId, seat_cooldown_blocks: u64) -> Sta
 
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_asset_id = def_id.clone();
-    gov_cfg.citizenship_bond_amount = 10;
+    gov_cfg.citizenship_bond_amount = 10_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     gov_cfg.bond_escrow_account = BOB_ID.clone();
     gov_cfg.slash_receiver_account = BOB_ID.clone();
@@ -101,7 +101,7 @@ fn council_persist_enforces_service_discipline() {
 
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
@@ -155,7 +155,7 @@ fn council_persist_enforces_service_discipline() {
 
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
@@ -202,7 +202,7 @@ fn council_persist_requires_manage_permission_before_mutating_state() {
 
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 25,
+        amount: 25_u64.into(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("citizen bond succeeds");
@@ -284,7 +284,7 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
         let mut tx = block.transaction();
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 19,
+            amount: 19_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("underbonded citizen registration succeeds");
@@ -307,7 +307,7 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
             .get(&*ALICE_ID)
             .cloned()
             .expect("citizen record stored");
-        assert_eq!(record.amount, 19);
+        assert_eq!(record.amount, Quantity::from(19_u64));
         assert_eq!(record.seats_in_epoch, 0);
         assert!(tx.world.council().get(&1).is_none());
         err
@@ -324,13 +324,13 @@ fn council_persist_rejects_unregistered_and_underbonded_roster_entries() {
         let mut tx = block.transaction();
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("member bond succeeds");
         RegisterCitizen {
             owner: CARPENTER_ID.clone(),
-            amount: 10,
+            amount: 10_u64.into(),
         }
         .execute(&CARPENTER_ID, &mut tx)
         .expect("alternate citizen registration succeeds");
@@ -370,7 +370,7 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
         let mut tx = block.transaction();
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
@@ -410,7 +410,7 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
         let mut tx = block.transaction();
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
@@ -450,13 +450,13 @@ fn council_persist_rejects_duplicate_or_overlapping_roster_entries_without_seat_
         let mut tx = block.transaction();
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("member bond succeeds");
         RegisterCitizen {
             owner: CARPENTER_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&CARPENTER_ID, &mut tx)
         .expect("alternate bond succeeds");
@@ -502,7 +502,7 @@ fn citizen_registration_rejects_authority_mismatch_without_bond_transfer() {
 
     let err = RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
     }
     .execute(&BOB_ID, &mut tx)
     .expect_err("non-owner must not register citizen bond for another account");
@@ -543,14 +543,14 @@ fn citizen_bond_decrease_is_rejected_without_releasing_collateral() {
 
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 25,
+        amount: 25_u64.into(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("initial citizen bond succeeds");
 
     let err = RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 20,
+        amount: 20_u64.into(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect_err("bond reduction must fail");
@@ -565,7 +565,7 @@ fn citizen_bond_decrease_is_rejected_without_releasing_collateral() {
         .get(&*ALICE_ID)
         .cloned()
         .expect("citizen record stored");
-    assert_eq!(record.amount, 25);
+    assert_eq!(record.amount, Quantity::from(25_u64));
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(
@@ -596,7 +596,7 @@ fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
 
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 25,
+            amount: 25_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("citizen bond succeeds");
@@ -639,7 +639,7 @@ fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
 
         RegisterCitizen {
             owner: ALICE_ID.clone(),
-            amount: 10,
+            amount: 10_u64.into(),
         }
         .execute(&ALICE_ID, &mut tx)
         .expect("minimum citizen bond succeeds");
@@ -669,7 +669,7 @@ fn service_outcome_rejections_do_not_mutate_citizen_bond_or_counters() {
             .get(&*ALICE_ID)
             .cloned()
             .expect("citizen record stored");
-        assert_eq!(record.amount, 10);
+        assert_eq!(record.amount, Quantity::from(10_u64));
         assert_eq!(record.no_show_strikes, 0);
         let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
         assert_eq!(
@@ -692,7 +692,7 @@ fn citizen_service_outcome_slashes_after_free_decline() {
 
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_asset_id = def_id.clone();
-    gov_cfg.citizenship_bond_amount = 10;
+    gov_cfg.citizenship_bond_amount = 10_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     gov_cfg.bond_escrow_account = BOB_ID.clone();
     gov_cfg.slash_receiver_account = ALICE_ID.clone();
@@ -707,7 +707,7 @@ fn citizen_service_outcome_slashes_after_free_decline() {
 
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 100,
+        amount: 100_u64.into(),
     }
     .execute(&ALICE_ID, &mut tx)
     .expect("citizen bond succeeds");
@@ -736,7 +736,7 @@ fn citizen_service_outcome_slashes_after_free_decline() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.declines_used, 1);
-    assert_eq!(record.amount, 100);
+    assert_eq!(record.amount, Quantity::from(100_u64));
 
     RecordCitizenServiceOutcome {
         owner: ALICE_ID.clone(),
@@ -754,7 +754,11 @@ fn citizen_service_outcome_slashes_after_free_decline() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.declines_used, 2);
-    assert_eq!(record.amount, 95, "bond reduced by slashing");
+    assert_eq!(
+        record.amount,
+        Quantity::from(95_u64),
+        "bond reduced by slashing"
+    );
 
     let escrow_asset_id = AssetId::new(def_id.clone(), BOB_ID.clone());
     assert_eq!(

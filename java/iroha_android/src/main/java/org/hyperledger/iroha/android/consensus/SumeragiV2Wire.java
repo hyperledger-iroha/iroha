@@ -334,6 +334,7 @@ public final class SumeragiV2Wire {
   /** Prepare or Commit vote. */
   public static final class Vote extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
@@ -342,12 +343,14 @@ public final class SumeragiV2Wire {
 
     public Vote(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment,
         long signer,
         byte[] signature) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -364,6 +367,7 @@ public final class SumeragiV2Wire {
     public byte[] encode() {
       return struct(
           round.encode(),
+          proposalRound.encode(),
           phase.encode(),
           subject.encode(),
           executionCommitment.encode(),
@@ -376,6 +380,7 @@ public final class SumeragiV2Wire {
       Vote value =
           new Vote(
               reader.field("vote round", ConsensusRound::decode),
+              reader.field("vote proposal round", ConsensusRound::decode),
               reader.field("vote phase", GlobalPhase::decode),
               reader.field("vote subject", BlockSubject::decode),
               reader.field("vote execution commitment", ExecutionCommitment::decode),
@@ -389,16 +394,19 @@ public final class SumeragiV2Wire {
   /** Stable reference to a full quorum certificate. */
   public static final class QuorumCertificateRef extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
 
     public QuorumCertificateRef(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -406,7 +414,12 @@ public final class SumeragiV2Wire {
 
     @Override
     public byte[] encode() {
-      return struct(round.encode(), phase.encode(), subject.encode(), executionCommitment.encode());
+      return struct(
+          round.encode(),
+          proposalRound.encode(),
+          phase.encode(),
+          subject.encode(),
+          executionCommitment.encode());
     }
 
     static QuorumCertificateRef decode(byte[] bytes) {
@@ -414,6 +427,7 @@ public final class SumeragiV2Wire {
       QuorumCertificateRef value =
           new QuorumCertificateRef(
               reader.field("qc ref round", ConsensusRound::decode),
+              reader.field("qc ref proposal round", ConsensusRound::decode),
               reader.field("qc ref phase", GlobalPhase::decode),
               reader.field("qc ref subject", BlockSubject::decode),
               reader.field("qc ref execution commitment", ExecutionCommitment::decode));
@@ -425,6 +439,7 @@ public final class SumeragiV2Wire {
   /** Aggregate Prepare or Commit certificate. */
   public static final class QuorumCertificate extends WireValue {
     public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
     public final GlobalPhase phase;
     public final BlockSubject subject;
     public final ExecutionCommitment executionCommitment;
@@ -433,12 +448,14 @@ public final class SumeragiV2Wire {
 
     public QuorumCertificate(
         ConsensusRound round,
+        ConsensusRound proposalRound,
         GlobalPhase phase,
         BlockSubject subject,
         ExecutionCommitment executionCommitment,
         List<Long> signers,
         byte[] aggregateSignature) {
       this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
       this.phase = nonNull(phase, "phase");
       this.subject = nonNull(subject, "subject");
       this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
@@ -452,13 +469,15 @@ public final class SumeragiV2Wire {
     }
 
     public QuorumCertificateRef reference() {
-      return new QuorumCertificateRef(round, phase, subject, executionCommitment);
+      return new QuorumCertificateRef(
+          round, proposalRound, phase, subject, executionCommitment);
     }
 
     @Override
     public byte[] encode() {
       return struct(
           round.encode(),
+          proposalRound.encode(),
           phase.encode(),
           subject.encode(),
           executionCommitment.encode(),
@@ -471,6 +490,7 @@ public final class SumeragiV2Wire {
       QuorumCertificate value =
           new QuorumCertificate(
               reader.field("qc round", ConsensusRound::decode),
+              reader.field("qc proposal round", ConsensusRound::decode),
               reader.field("qc phase", GlobalPhase::decode),
               reader.field("qc subject", BlockSubject::decode),
               reader.field("qc execution commitment", ExecutionCommitment::decode),
@@ -1481,12 +1501,439 @@ public final class SumeragiV2Wire {
     }
   }
 
+  /** Partial dual-quorum state for one exact proposal round. */
+  public static final class VoteQuorumStatus extends WireValue {
+    public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
+    public final BlockSubject subject;
+    public final ExecutionCommitment executionCommitment;
+    public final long signerCount;
+    public final long signedPower;
+    public final long minSigners;
+    public final long totalPower;
+    public VoteQuorumStatus(ConsensusRound round, ConsensusRound proposalRound,
+        BlockSubject subject,
+        ExecutionCommitment executionCommitment, long signerCount, long signedPower,
+        long minSigners, long totalPower) {
+      requireU32(signerCount, "signerCount");
+      requireU32(minSigners, "minSigners");
+      this.round = nonNull(round, "round");
+      this.proposalRound = nonNull(proposalRound, "proposalRound");
+      this.subject = nonNull(subject, "subject");
+      this.executionCommitment = nonNull(executionCommitment, "executionCommitment");
+      this.signerCount = signerCount;
+      this.signedPower = signedPower;
+      this.minSigners = minSigners;
+      this.totalPower = totalPower;
+    }
+    @Override public byte[] encode() {
+      return struct(round.encode(), proposalRound.encode(), subject.encode(),
+          executionCommitment.encode(), u32(signerCount), u64(signedPower), u32(minSigners),
+          u64(totalPower));
+    }
+    static VoteQuorumStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      VoteQuorumStatus value = new VoteQuorumStatus(
+          reader.field("liveness vote round", ConsensusRound::decode),
+          reader.field("liveness vote proposal round", ConsensusRound::decode),
+          reader.field("liveness vote subject", BlockSubject::decode),
+          reader.field("liveness vote execution", ExecutionCommitment::decode),
+          reader.field("liveness vote signer count", SumeragiV2Wire::decodeU32),
+          reader.field("liveness vote signed power", SumeragiV2Wire::decodeU64),
+          reader.field("liveness vote min signers", SumeragiV2Wire::decodeU32),
+          reader.field("liveness vote total power", SumeragiV2Wire::decodeU64));
+      reader.finish("liveness vote quorum");
+      return value;
+    }
+  }
+
+  /** Partial timeout quorum state for one exact round. */
+  public static final class TimeoutQuorumStatus extends WireValue {
+    public final ConsensusRound round;
+    public final long signerCount;
+    public final long signedPower;
+    public final long minSigners;
+    public final long totalPower;
+    public final boolean certificateFormed;
+    public TimeoutQuorumStatus(ConsensusRound round, long signerCount, long signedPower,
+        long minSigners, long totalPower, boolean certificateFormed) {
+      requireU32(signerCount, "signerCount");
+      requireU32(minSigners, "minSigners");
+      this.round = nonNull(round, "round");
+      this.signerCount = signerCount;
+      this.signedPower = signedPower;
+      this.minSigners = minSigners;
+      this.totalPower = totalPower;
+      this.certificateFormed = certificateFormed;
+    }
+    @Override public byte[] encode() {
+      return struct(round.encode(), u32(signerCount), u64(signedPower), u32(minSigners),
+          u64(totalPower), bool(certificateFormed));
+    }
+    static TimeoutQuorumStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      TimeoutQuorumStatus value = new TimeoutQuorumStatus(
+          reader.field("liveness timeout round", ConsensusRound::decode),
+          reader.field("liveness timeout signer count", SumeragiV2Wire::decodeU32),
+          reader.field("liveness timeout signed power", SumeragiV2Wire::decodeU64),
+          reader.field("liveness timeout min signers", SumeragiV2Wire::decodeU32),
+          reader.field("liveness timeout total power", SumeragiV2Wire::decodeU64),
+          reader.field("liveness timeout formed", SumeragiV2Wire::decodeBool));
+      reader.finish("liveness timeout quorum");
+      return value;
+    }
+  }
+
+  /** Durable outbound protocol role retained for fair service. */
+  public enum OutboundIntentKind {
+    PROPOSAL(0), PREPARE_VOTE(1), COMMIT_VOTE(2), PREPARE_QC(3), COMMIT_QC(4),
+    TIMEOUT_VOTE(5), TIMEOUT_CERTIFICATE(6);
+    public final long discriminant;
+    OutboundIntentKind(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static OutboundIntentKind decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (OutboundIntentKind value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown outbound intent kind: " + tag);
+    }
+  }
+
+  /** Current delivery stage of a durable outbound intent. */
+  public enum OutboundIntentStage {
+    PENDING_PERSISTENCE(0), PENDING_SIGNATURE(1), QUEUED(2), SENT(3);
+    public final long discriminant;
+    OutboundIntentStage(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static OutboundIntentStage decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (OutboundIntentStage value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown outbound intent stage: " + tag);
+    }
+  }
+
+  /** Exact durable outbound intent visible to liveness diagnostics. */
+  public static final class OutboundIntentStatus extends WireValue {
+    public final OutboundIntentKind kind;
+    public final ConsensusRound round;
+    public final ConsensusRound proposalRound;
+    public final BlockSubject subject;
+    public final ExecutionCommitment executionCommitment;
+    public final OutboundIntentStage stage;
+    public OutboundIntentStatus(OutboundIntentKind kind, ConsensusRound round,
+        ConsensusRound proposalRound, BlockSubject subject,
+        ExecutionCommitment executionCommitment, OutboundIntentStage stage) {
+      this.kind = nonNull(kind, "kind");
+      this.round = nonNull(round, "round");
+      this.proposalRound = proposalRound;
+      this.subject = subject;
+      this.executionCommitment = executionCommitment;
+      this.stage = nonNull(stage, "stage");
+      boolean shapeIsValid;
+      switch (kind) {
+        case PROPOSAL:
+          shapeIsValid = proposalRound != null && subject != null && executionCommitment == null;
+          break;
+        case TIMEOUT_VOTE:
+        case TIMEOUT_CERTIFICATE:
+          shapeIsValid = proposalRound == null && subject == null && executionCommitment == null;
+          break;
+        default:
+          shapeIsValid = proposalRound != null && subject != null && executionCommitment != null;
+          break;
+      }
+      require(shapeIsValid, "Invalid outbound intent shape for " + kind);
+      if (proposalRound != null) {
+        require(proposalRound.contextId.equals(round.contextId)
+                && proposalRound.height == round.height,
+            "Outbound intent proposal round must share context and height");
+        require(proposalRound.view <= round.view,
+            "Outbound intent proposal round cannot be in a later view");
+        if (kind == OutboundIntentKind.PROPOSAL
+            || kind == OutboundIntentKind.PREPARE_VOTE
+            || kind == OutboundIntentKind.PREPARE_QC) {
+          require(proposalRound.equals(round),
+              "Prepare/proposal outbound intent origin must match its round");
+        }
+      }
+    }
+    @Override public byte[] encode() {
+      return struct(kind.encode(), round.encode(),
+          option(proposalRound == null ? null : proposalRound.encode()),
+          option(subject == null ? null : subject.encode()),
+          option(executionCommitment == null ? null : executionCommitment.encode()), stage.encode());
+    }
+    static OutboundIntentStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      OutboundIntentStatus value = new OutboundIntentStatus(
+          reader.field("liveness outbound kind", OutboundIntentKind::decode),
+          reader.field("liveness outbound round", ConsensusRound::decode),
+          reader.field("liveness outbound proposal round",
+              data -> decodeOption(data, ConsensusRound::decode)),
+          reader.field("liveness outbound subject", data -> decodeOption(data, BlockSubject::decode)),
+          reader.field("liveness outbound execution", data -> decodeOption(data, ExecutionCommitment::decode)),
+          reader.field("liveness outbound stage", OutboundIntentStage::decode));
+      reader.finish("liveness outbound intent");
+      return value;
+    }
+  }
+
+  /** State of one terminating local-work stage. */
+  public enum LocalWorkStage {
+    IDLE(0), QUEUED(1), RUNNING(2), COMPLETE(3);
+    public final long discriminant;
+    LocalWorkStage(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static LocalWorkStage decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (LocalWorkStage value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown local work stage: " + tag);
+    }
+  }
+
+  /** Local body, validation, application, and handoff pipeline. */
+  public static final class WorkStatus extends WireValue {
+    public final LocalWorkStage candidate;
+    public final LocalWorkStage bodyRecovery;
+    public final LocalWorkStage bodyStore;
+    public final LocalWorkStage validation;
+    public final LocalWorkStage application;
+    public final LocalWorkStage successorHeight;
+    public WorkStatus(LocalWorkStage candidate, LocalWorkStage bodyRecovery,
+        LocalWorkStage bodyStore, LocalWorkStage validation, LocalWorkStage application,
+        LocalWorkStage successorHeight) {
+      this.candidate = nonNull(candidate, "candidate");
+      this.bodyRecovery = nonNull(bodyRecovery, "bodyRecovery");
+      this.bodyStore = nonNull(bodyStore, "bodyStore");
+      this.validation = nonNull(validation, "validation");
+      this.application = nonNull(application, "application");
+      this.successorHeight = nonNull(successorHeight, "successorHeight");
+    }
+    @Override public byte[] encode() {
+      return struct(candidate.encode(), bodyRecovery.encode(), bodyStore.encode(),
+          validation.encode(), application.encode(), successorHeight.encode());
+    }
+    static WorkStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      WorkStatus value = new WorkStatus(
+          reader.field("liveness candidate work", LocalWorkStage::decode),
+          reader.field("liveness recovery work", LocalWorkStage::decode),
+          reader.field("liveness store work", LocalWorkStage::decode),
+          reader.field("liveness validation work", LocalWorkStage::decode),
+          reader.field("liveness application work", LocalWorkStage::decode),
+          reader.field("liveness successor work", LocalWorkStage::decode));
+      reader.finish("liveness work");
+      return value;
+    }
+  }
+
+  /** Identity of a bounded local progress queue. */
+  public enum QueueKind {
+    INGRESS(0), DEFERRED_NORMAL(1), DEFERRED_PROGRESS(2), DEFERRED_COMPLETION(3),
+    RUNTIME_NORMAL(4), RUNTIME_PROGRESS(5), RUNTIME_COMPLETION(6), EFFECT_COMPLETION(7),
+    NETWORK_INGRESS(8), EFFECT_DISPATCH(9);
+    public final long discriminant;
+    QueueKind(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static QueueKind decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (QueueKind value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown liveness queue kind: " + tag);
+    }
+  }
+
+  /** Occupancy and accumulated oldest-item service debt for one bounded queue. */
+  public static final class QueueStatus extends WireValue {
+    public final QueueKind queue;
+    public final long depth;
+    public final long capacity;
+    public final Long oldestAgeMs;
+    public final long serviceDebt;
+    public QueueStatus(QueueKind queue, long depth, long capacity, Long oldestAgeMs,
+        long serviceDebt) {
+      requireU32(depth, "depth");
+      requireU32(capacity, "capacity");
+      this.queue = nonNull(queue, "queue");
+      this.depth = depth;
+      this.capacity = capacity;
+      this.oldestAgeMs = oldestAgeMs;
+      this.serviceDebt = serviceDebt;
+    }
+    @Override public byte[] encode() {
+      return struct(queue.encode(), u32(depth), u32(capacity),
+          option(oldestAgeMs == null ? null : u64(oldestAgeMs)), u64(serviceDebt));
+    }
+    static QueueStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      QueueStatus value = new QueueStatus(
+          reader.field("liveness queue kind", QueueKind::decode),
+          reader.field("liveness queue depth", SumeragiV2Wire::decodeU32),
+          reader.field("liveness queue capacity", SumeragiV2Wire::decodeU32),
+          reader.field("liveness queue oldest age", data -> decodeOption(data, SumeragiV2Wire::decodeU64)),
+          reader.field("liveness queue service debt", SumeragiV2Wire::decodeU64));
+      reader.finish("liveness queue");
+      return value;
+    }
+  }
+
+  /** Diagnostic reducer transition; timeout churn does not reset height-level no-progress age. */
+  public enum ProgressTransition {
+    PROPOSAL_ADMITTED(0), BODY_AVAILABLE(1), BODY_STORED(2), BODY_VALIDATED(3),
+    PREPARE_VOTE_ADMITTED(4), COMMIT_VOTE_ADMITTED(5), TIMEOUT_VOTE_ADMITTED(6),
+    PREPARE_QUORUM(7), LOCK_INSTALLED(8), COMMIT_QUORUM(9),
+    TIMEOUT_CERTIFICATE_INSTALLED(10), DECISION_PERSISTED(11), APPLIED(12),
+    SUCCESSOR_HEIGHT_ACTIVATED(13), RECOVERY_REPLAYED(14);
+    public final long discriminant;
+    ProgressTransition(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static ProgressTransition decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (ProgressTransition value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown progress transition: " + tag);
+    }
+  }
+
+  /** Last tracked reducer transition and its local age. */
+  public static final class ProgressTransitionStatus extends WireValue {
+    public final long generation;
+    public final ConsensusRound round;
+    public final ProgressTransition transition;
+    public final long ageMs;
+    public ProgressTransitionStatus(long generation, ConsensusRound round,
+        ProgressTransition transition, long ageMs) {
+      this.generation = generation;
+      this.round = nonNull(round, "round");
+      this.transition = nonNull(transition, "transition");
+      this.ageMs = ageMs;
+    }
+    @Override public byte[] encode() {
+      return struct(u64(generation), round.encode(), transition.encode(), u64(ageMs));
+    }
+    static ProgressTransitionStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      ProgressTransitionStatus value = new ProgressTransitionStatus(
+          reader.field("liveness progress generation", SumeragiV2Wire::decodeU64),
+          reader.field("liveness progress round", ConsensusRound::decode),
+          reader.field("liveness progress transition", ProgressTransition::decode),
+          reader.field("liveness progress age", SumeragiV2Wire::decodeU64));
+      reader.finish("liveness progress");
+      return value;
+    }
+  }
+
+  /** Classified cause of an active no-progress interval. */
+  public enum LivenessBlocker {
+    MISSING_PROPOSAL(0), BODY_UNAVAILABLE(1), PREPARE_QUORUM_MISSING(2),
+    COMMIT_QUORUM_MISSING(3), TIMEOUT_CERTIFICATE_MISSING(4),
+    SCHEDULER_STARVATION(5), APPLICATION_PENDING(6), LOCAL_CONTROL_PENDING(7);
+    public final long discriminant;
+    LivenessBlocker(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static LivenessBlocker decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (LivenessBlocker value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown liveness blocker: " + tag);
+    }
+  }
+
+  /** Closed reducer reason for safely ignoring an input. */
+  public enum IgnoreReason {
+    WRONG_HEIGHT(0), WRONG_VIEW(1), STALE_GENERATION(2), BUSY(3), DUPLICATE(4),
+    NO_MATCHING_WORK(5), OBSERVER(6), VIEW_CLOSED(7), ALREADY_DECIDED(8),
+    RECOVERY_PENDING(9), IRRELEVANT_VIEW(10), UNSAFE_PROPOSAL(11);
+    public final long discriminant;
+    IgnoreReason(long discriminant) { this.discriminant = discriminant; }
+    byte[] encode() { return u32(discriminant); }
+    static IgnoreReason decode(byte[] bytes) {
+      long tag = decodeU32(bytes);
+      for (IgnoreReason value : values()) if (value.discriminant == tag) return value;
+      throw new IllegalArgumentException("Unknown liveness ignore reason: " + tag);
+    }
+  }
+
+  /** Per-height counter for one input-ignore reason. */
+  public static final class IgnoreCount extends WireValue {
+    public final IgnoreReason reason;
+    public final long count;
+    public IgnoreCount(IgnoreReason reason, long count) {
+      this.reason = nonNull(reason, "reason");
+      this.count = count;
+    }
+    @Override public byte[] encode() { return struct(reason.encode(), u64(count)); }
+    static IgnoreCount decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      IgnoreCount value = new IgnoreCount(
+          reader.field("liveness ignore reason", IgnoreReason::decode),
+          reader.field("liveness ignore count", SumeragiV2Wire::decodeU64));
+      reader.finish("liveness ignore count");
+      return value;
+    }
+  }
+
+  /** Authoritative progress diagnostics for the active height. */
+  public static final class LivenessStatus extends WireValue {
+    public final long generation;
+    public final List<VoteQuorumStatus> prepareQuorums;
+    public final List<VoteQuorumStatus> commitQuorums;
+    public final List<TimeoutQuorumStatus> timeoutQuorums;
+    public final List<OutboundIntentStatus> outboundIntents;
+    public final WorkStatus work;
+    public final List<QueueStatus> queues;
+    public final ProgressTransitionStatus lastProgress;
+    public final long noProgressAgeMs;
+    public final LivenessBlocker blocker;
+    public final List<IgnoreCount> ignoreCounts;
+    public LivenessStatus(long generation, List<VoteQuorumStatus> prepareQuorums,
+        List<VoteQuorumStatus> commitQuorums, List<TimeoutQuorumStatus> timeoutQuorums,
+        List<OutboundIntentStatus> outboundIntents, WorkStatus work, List<QueueStatus> queues,
+        ProgressTransitionStatus lastProgress, long noProgressAgeMs, LivenessBlocker blocker,
+        List<IgnoreCount> ignoreCounts) {
+      this.generation = generation;
+      this.prepareQuorums = immutable(prepareQuorums, "prepareQuorums");
+      this.commitQuorums = immutable(commitQuorums, "commitQuorums");
+      this.timeoutQuorums = immutable(timeoutQuorums, "timeoutQuorums");
+      this.outboundIntents = immutable(outboundIntents, "outboundIntents");
+      this.work = nonNull(work, "work");
+      this.queues = immutable(queues, "queues");
+      this.lastProgress = lastProgress;
+      this.noProgressAgeMs = noProgressAgeMs;
+      this.blocker = blocker;
+      this.ignoreCounts = immutable(ignoreCounts, "ignoreCounts");
+    }
+    @Override public byte[] encode() {
+      return struct(u64(generation), vector(prepareQuorums, VoteQuorumStatus::encode),
+          vector(commitQuorums, VoteQuorumStatus::encode),
+          vector(timeoutQuorums, TimeoutQuorumStatus::encode),
+          vector(outboundIntents, OutboundIntentStatus::encode), work.encode(),
+          vector(queues, QueueStatus::encode),
+          option(lastProgress == null ? null : lastProgress.encode()), u64(noProgressAgeMs),
+          option(blocker == null ? null : blocker.encode()), vector(ignoreCounts, IgnoreCount::encode));
+    }
+    static LivenessStatus decode(byte[] bytes) {
+      Reader reader = new Reader(bytes);
+      LivenessStatus value = new LivenessStatus(
+          reader.field("liveness generation", SumeragiV2Wire::decodeU64),
+          reader.field("liveness prepare", data -> decodeVector(data, VoteQuorumStatus::decode)),
+          reader.field("liveness commit", data -> decodeVector(data, VoteQuorumStatus::decode)),
+          reader.field("liveness timeout", data -> decodeVector(data, TimeoutQuorumStatus::decode)),
+          reader.field("liveness outbound", data -> decodeVector(data, OutboundIntentStatus::decode)),
+          reader.field("liveness work", WorkStatus::decode),
+          reader.field("liveness queues", data -> decodeVector(data, QueueStatus::decode)),
+          reader.field("liveness last progress", data -> decodeOption(data, ProgressTransitionStatus::decode)),
+          reader.field("liveness no progress age", SumeragiV2Wire::decodeU64),
+          reader.field("liveness blocker", data -> decodeOption(data, LivenessBlocker::decode)),
+          reader.field("liveness ignore counts", data -> decodeVector(data, IgnoreCount::decode)));
+      reader.finish("liveness status");
+      return value;
+    }
+  }
+
   /** Compact protocol-v2-only `/v1/sumeragi/status` payload. */
   public static final class SumeragiV2Status extends WireValue {
     public final int protocolVersion;
     public final Hash32 nodeFingerprint;
     public final Hash32 buildFingerprint;
     public final Hash32 configFingerprint;
+    public final boolean restartRequired;
     public final HeightContextId heightContextId;
     public final long height;
     public final long view;
@@ -1501,12 +1948,14 @@ public final class SumeragiV2Wire {
     public final BlockSubject lastCommittedSubject;
     public final HeightContextStatus heightContext;
     public final CommitQcStatus lastCommitQc;
+    public final LivenessStatus liveness;
 
     public SumeragiV2Status(
         int protocolVersion,
         Hash32 nodeFingerprint,
         Hash32 buildFingerprint,
         Hash32 configFingerprint,
+        boolean restartRequired,
         HeightContextId heightContextId,
         long height,
         long view,
@@ -1520,7 +1969,8 @@ public final class SumeragiV2Wire {
         long lastCommittedHeight,
         BlockSubject lastCommittedSubject,
         HeightContextStatus heightContext,
-        CommitQcStatus lastCommitQc) {
+        CommitQcStatus lastCommitQc,
+        LivenessStatus liveness) {
       require(protocolVersion == PROTOCOL_VERSION,
           "Unsupported Sumeragi status protocol version " + protocolVersion);
       requireU32(leader, "leader");
@@ -1528,6 +1978,7 @@ public final class SumeragiV2Wire {
       this.nodeFingerprint = nonNull(nodeFingerprint, "nodeFingerprint");
       this.buildFingerprint = nonNull(buildFingerprint, "buildFingerprint");
       this.configFingerprint = nonNull(configFingerprint, "configFingerprint");
+      this.restartRequired = restartRequired;
       this.heightContextId = nonNull(heightContextId, "heightContextId");
       this.height = height;
       this.view = view;
@@ -1542,6 +1993,7 @@ public final class SumeragiV2Wire {
       this.lastCommittedSubject = lastCommittedSubject;
       this.heightContext = nonNull(heightContext, "heightContext");
       this.lastCommitQc = lastCommitQc;
+      this.liveness = nonNull(liveness, "liveness");
     }
 
     @Override
@@ -1551,6 +2003,7 @@ public final class SumeragiV2Wire {
           nodeFingerprint.bytes(),
           buildFingerprint.bytes(),
           configFingerprint.bytes(),
+          bool(restartRequired),
           heightContextId.encode(),
           u64(height),
           u64(view),
@@ -1564,7 +2017,8 @@ public final class SumeragiV2Wire {
           u64(lastCommittedHeight),
           option(lastCommittedSubject == null ? null : lastCommittedSubject.encode()),
           heightContext.encode(),
-          option(lastCommitQc == null ? null : lastCommitQc.encode()));
+          option(lastCommitQc == null ? null : lastCommitQc.encode()),
+          liveness.encode());
     }
 
     /** Decode a canonical compact-length bare-Norito status payload. */
@@ -1576,6 +2030,7 @@ public final class SumeragiV2Wire {
               new Hash32(reader.field("status node", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status build", SumeragiV2Wire::decodeHash)),
               new Hash32(reader.field("status config", SumeragiV2Wire::decodeHash)),
+              reader.field("status restart required", SumeragiV2Wire::decodeBool),
               reader.field("status context", HeightContextId::decode),
               reader.field("status height", SumeragiV2Wire::decodeU64),
               reader.field("status view", SumeragiV2Wire::decodeU64),
@@ -1589,7 +2044,8 @@ public final class SumeragiV2Wire {
               reader.field("status committed height", SumeragiV2Wire::decodeU64),
               reader.field("status committed subject", data -> decodeOption(data, BlockSubject::decode)),
               reader.field("status height context", HeightContextStatus::decode),
-              reader.field("status last commit qc", data -> decodeOption(data, CommitQcStatus::decode)));
+              reader.field("status last commit qc", data -> decodeOption(data, CommitQcStatus::decode)),
+              reader.field("status liveness", LivenessStatus::decode));
       reader.finish("Sumeragi v2 status");
       require(Arrays.equals(bytes, value.encode()), "SumeragiV2Status is not canonical");
       return value;
@@ -1705,6 +2161,10 @@ public final class SumeragiV2Wire {
     return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
   }
 
+  private static byte[] bool(boolean value) {
+    return new byte[] {(byte) (value ? 1 : 0)};
+  }
+
   private static byte[] byteVector(byte[] value) {
     ByteArrayOutputStream out = new ByteArrayOutputStream();
     append(out, u64(value.length));
@@ -1772,6 +2232,12 @@ public final class SumeragiV2Wire {
     long value = reader.u64("u64");
     reader.finish("u64");
     return value;
+  }
+
+  private static boolean decodeBool(byte[] bytes) {
+    require(bytes.length == 1 && (bytes[0] == 0 || bytes[0] == 1),
+        "bool must contain one canonical boolean byte");
+    return bytes[0] == 1;
   }
 
   private static byte[] decodeHash(byte[] bytes) {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias
+from typing import TYPE_CHECKING, Any, Dict, Final, Iterable, Mapping, Optional, TypeAlias, Union
 
 from ._native import load_crypto_extension
 from .address import AccountAddress
@@ -58,6 +58,8 @@ ED25519_PUBLIC_KEY_LENGTH: Final[int] = 32
 ED25519_SIGNATURE_LENGTH: Final[int] = 64
 _ED25519_MULTIHASH_PREFIX: Final[str] = "ed0120"
 _DEFAULT_I105_DISCRIMINANT: Final[int] = 0x02F1
+_MAX_CONTRACT_ARGUMENT_RECORD_BYTES: Final[int] = 1024 * 1024
+ContractArguments: TypeAlias = Union[bytes, bytearray, memoryview]
 
 SM2_PRIVATE_KEY_LENGTH: Final[int] = 32
 SM2_PUBLIC_KEY_LENGTH: Final[int] = 65
@@ -113,6 +115,8 @@ __all__ = [
     "Ed25519KeyPair",
     "Sm2KeyPair",
     "Instruction",
+    "ContractCall",
+    "TransactionExecutableEntry",
     "SignedTransactionEnvelope",
     "TransactionBuilder",
     "ConfidentialKeyset",
@@ -187,6 +191,54 @@ __all__ = [
     "privacy_verify_proof_v1",
     "sm2_fixture_from_seed",
 ]
+
+
+@dataclass(frozen=True)
+class ContractCall:
+    """One deployed-contract invocation in an ordered transaction batch."""
+
+    contract_address: str
+    expected_code_hash_hex: str
+    entrypoint: str
+    arguments: Optional[ContractArguments] = None
+
+    def __post_init__(self) -> None:
+        for value, context in (
+            (self.contract_address, "contract_address"),
+            (self.expected_code_hash_hex, "expected_code_hash_hex"),
+            (self.entrypoint, "entrypoint"),
+        ):
+            if not isinstance(value, str):
+                raise TypeError(f"{context} must be a string")
+            if not value:
+                raise ValueError(f"{context} must be non-empty")
+            if value != value.strip():
+                raise ValueError(f"{context} must not contain surrounding whitespace")
+
+        if len(self.expected_code_hash_hex) != 64:
+            raise ValueError("expected_code_hash_hex must contain exactly 32 bytes")
+        try:
+            code_hash = bytes.fromhex(self.expected_code_hash_hex)
+        except ValueError as exc:
+            raise ValueError("expected_code_hash_hex must be valid hexadecimal") from exc
+        if len(code_hash) != 32:
+            raise ValueError("expected_code_hash_hex must contain exactly 32 bytes")
+        if code_hash[-1] & 1 != 1:
+            raise ValueError("expected_code_hash_hex must have its least significant bit set")
+
+        if self.arguments is None:
+            return
+        if not isinstance(self.arguments, (bytes, bytearray, memoryview)):
+            raise TypeError("arguments must be bytes-like when provided")
+        arguments = bytes(self.arguments)
+        if len(arguments) > _MAX_CONTRACT_ARGUMENT_RECORD_BYTES:
+            raise ValueError(
+                f"arguments exceed the {_MAX_CONTRACT_ARGUMENT_RECORD_BYTES}-byte limit"
+            )
+        object.__setattr__(self, "arguments", arguments)
+
+
+TransactionExecutableEntry: TypeAlias = Union["Instruction", ContractCall]
 
 if TYPE_CHECKING:
     Instruction: TypeAlias = Any
@@ -864,7 +916,9 @@ def build_signed_transaction(
     authority: str,
     private_key: bytes,
     *,
-    instructions: Iterable[Instruction] = (),
+    fee_payment: Mapping[str, Any],
+    instructions: Optional[Iterable[Instruction]] = None,
+    entries: Optional[Iterable[TransactionExecutableEntry]] = None,
     creation_time_ms: Optional[int] = None,
     ttl_ms: Optional[int] = None,
     nonce: Optional[int] = None,
@@ -882,8 +936,15 @@ def build_signed_transaction(
         literal: canonical I105 only).
     private_key:
         Ed25519 private key bytes aligned with `authority`.
+    fee_payment:
+        Required Norito JSON-compatible ``FeePaymentIntent`` mapping. The
+        payer, exact sponsor revision, charge assets and maxima, and gas bound
+        are included in the transaction signature.
     instructions:
-        Iterable of `Instruction` instances to append.
+        Iterable of `Instruction` instances to append using the legacy instruction executable.
+    entries:
+        Ordered executable-batch entries. Supplying this argument selects batch encoding even when
+        every entry is an instruction; it is mutually exclusive with ``instructions``.
     creation_time_ms:
         Optional creation timestamp in milliseconds since UNIX epoch.
     ttl_ms:
@@ -899,7 +960,10 @@ def build_signed_transaction(
         ``proof_bytes``, and ``verifying_key_name``.
     """
 
-    builder = TransactionBuilder(chain_id, authority)
+    if not isinstance(fee_payment, Mapping):
+        raise TypeError("fee_payment must be a FeePaymentIntent mapping")
+    fee_payment_json = json.dumps(dict(fee_payment), separators=(",", ":"))
+    builder = TransactionBuilder(chain_id, authority, fee_payment_json)
     if creation_time_ms is not None:
         builder.set_creation_time_ms(int(creation_time_ms))
     if ttl_ms is not None:
@@ -908,8 +972,28 @@ def build_signed_transaction(
         builder.set_nonce(int(nonce))
     if metadata is not None:
         builder.set_metadata(metadata)
-    for instruction in instructions:
-        builder.add_instruction(instruction)
+    if instructions is not None and entries is not None:
+        raise ValueError("instructions and entries are mutually exclusive")
+    if entries is not None:
+        builder.use_executable_batch()
+        for index, entry in enumerate(entries):
+            if isinstance(entry, ContractCall):
+                builder.add_contract_call(
+                    entry.contract_address,
+                    entry.expected_code_hash_hex,
+                    entry.entrypoint,
+                    entry.arguments,
+                )
+            else:
+                try:
+                    builder.add_instruction(entry)
+                except TypeError as exc:
+                    raise TypeError(
+                        f"entries[{index}] must be an Instruction or ContractCall"
+                    ) from exc
+    else:
+        for instruction in instructions or ():
+            builder.add_instruction(instruction)
     if lane_privacy_attachments is not None:
         for entry in lane_privacy_attachments:
             normalized = _normalize_lane_privacy_attachment(entry)

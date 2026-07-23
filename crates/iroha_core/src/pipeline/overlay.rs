@@ -62,7 +62,7 @@ use sha2::{Digest as _, Sha256};
 use crate::{
     executor::{
         ContractEntrypointAuthorizationSnapshot, ensure_asset_definition_registration_allowed,
-        extract_register_asset_definition, parse_gas_limit,
+        extract_register_asset_definition, transaction_gas_limit,
     },
     smartcontracts::{
         code,
@@ -744,15 +744,56 @@ pub(crate) fn apply_streaming_metadata<
 }
 
 fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError> {
-    let gas_limit = parse_gas_limit(tx.metadata()).map_err(|err| {
-        let message = match err {
-            ValidationFail::NotPermitted(msg) => msg,
-            other => other.to_string(),
-        };
-        OverlayBuildError::GasLimit(message)
-    })?;
-    gas_limit.ok_or_else(|| {
-        OverlayBuildError::GasLimit("missing gas_limit in transaction metadata".to_owned())
+    transaction_gas_limit(tx).ok_or_else(|| {
+        OverlayBuildError::GasLimit("missing gas limit in fee payment intent".to_owned())
+    })
+}
+
+pub(crate) fn sccp_ivm_proved_execution_binding<R>(
+    state_ro: &R,
+    tx: &SignedTransaction,
+    proved: &iroha_data_model::transaction::IvmProved,
+    gas_used: u64,
+) -> Result<crate::state::SccpIvmProvedExecutionBindingV1, OverlayBuildError>
+where
+    R: StateReadOnly,
+{
+    let gas_limit = require_tx_gas_limit(tx)?;
+    if gas_used > gas_limit {
+        return Err(OverlayBuildError::GasLimit(format!(
+            "proved IVM replay used {gas_used} gas above transaction limit {gas_limit}"
+        )));
+    }
+    let attachments = tx
+        .attachments()
+        .ok_or_else(|| OverlayBuildError::ZkProof("missing proof attachments".to_owned()))?;
+    let [attachment] = attachments.0.as_slice() else {
+        return Err(OverlayBuildError::ZkProof(
+            "Executable::IvmProved expects exactly one proof attachment".to_owned(),
+        ));
+    };
+    if attachment.backend != attachment.vk_ref.backend {
+        return Err(OverlayBuildError::ZkProof(
+            "proof attachment verifier-key backend mismatch".to_owned(),
+        ));
+    }
+    let vk_record = state_ro
+        .world()
+        .verifying_keys()
+        .get(&attachment.vk_ref)
+        .ok_or_else(|| {
+            OverlayBuildError::ZkProof(
+                "verified proof attachment key disappeared before SCCP execution binding"
+                    .to_owned(),
+            )
+        })?;
+    Ok(crate::state::SccpIvmProvedExecutionBindingV1 {
+        contract_artifact_sha256: Sha256::digest(proved.bytecode.as_ref()).into(),
+        vk_ref: attachment.vk_ref.clone(),
+        vk_version: vk_record.version,
+        vk_commitment: vk_record.commitment,
+        gas_limit,
+        gas_used,
     })
 }
 
@@ -760,11 +801,11 @@ fn require_tx_gas_limit(tx: &SignedTransaction) -> Result<u64, OverlayBuildError
 const TEST_GAS_LIMIT: u64 = 50_000_000;
 
 #[cfg(test)]
-fn insert_gas_limit(metadata: &mut iroha_data_model::metadata::Metadata) {
-    metadata.insert(
-        Name::from_str("gas_limit").expect("static gas_limit key"),
-        iroha_primitives::json::Json::new(TEST_GAS_LIMIT),
-    );
+fn test_fee_payment() -> iroha_data_model::transaction::FeePaymentIntent {
+    iroha_data_model::transaction::FeePaymentIntent::authority(
+        Vec::new(),
+        NonZeroU64::new(TEST_GAS_LIMIT),
+    )
 }
 
 #[cfg(test)]
@@ -784,46 +825,17 @@ fn compute_program_hashes(
     (code_hash, abi_hash)
 }
 
-const PREEXEC_OPCODE_DENYLIST: &[u8] = &[];
-
+/// Apply mutable node policy to an already admitted IVM artifact.
+///
+/// Opcode and syscall validity belongs to artifact preparation. ABI V1 does not
+/// feature-gate either surface, so this metadata-only check deliberately cannot
+/// rewalk the program body on warm dispatch.
 pub(crate) fn enforce_pre_execution_policy(
     ivm_max_cycles_upper_bound: NonZeroU64,
     meta: &ivm::ProgramMetadata,
-    code_offset: usize,
-    bytecode: &[u8],
 ) -> Result<(), OverlayBuildError> {
     crate::smartcontracts::ivm::validate_cycle_ceiling(meta, ivm_max_cycles_upper_bound)
         .map_err(OverlayBuildError::HeaderPolicy)?;
-
-    if code_offset > bytecode.len() {
-        return Err(OverlayBuildError::HeaderPolicy(
-            IvmAdmissionError::BytecodeDecodingFailed(
-                "IVM code offset exceeds bytecode length".into(),
-            ),
-        ));
-    }
-
-    for chunk in bytecode[code_offset..].chunks(4) {
-        if chunk.len() < 4 {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(
-                    "IVM bytecode body not 4-byte aligned".into(),
-                ),
-            ));
-        }
-        let mut buf = [0u8; 4];
-        buf.copy_from_slice(chunk);
-        let word = u32::from_le_bytes(buf);
-        let opcode = ivm::instruction::wide::opcode(word);
-        if PREEXEC_OPCODE_DENYLIST.contains(&opcode) {
-            return Err(OverlayBuildError::HeaderPolicy(
-                IvmAdmissionError::BytecodeDecodingFailed(format!(
-                    "opcode 0x{opcode:02x} denied by pre-execution policy"
-                )),
-            ));
-        }
-    }
-
     Ok(())
 }
 
@@ -905,7 +917,9 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
         let submitted_bytecode = match tx.instructions() {
             Executable::Ivm(bytecode) => Some(bytecode.as_ref()),
             Executable::IvmProved(proved) => Some(proved.bytecode.as_ref()),
-            Executable::Instructions(_) | Executable::ContractCall(_) => None,
+            Executable::Instructions(_) | Executable::ContractCall(_) | Executable::Batch(_) => {
+                None
+            }
         };
         if submitted_bytecode.is_some_and(|bytecode| bytecode != stored_bytecode) {
             return Err(OverlayBuildError::HeaderPolicy(
@@ -1201,6 +1215,7 @@ pub struct TxOverlay {
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
     durable_state_authorizations: BTreeMap<Name, Option<ContractEntrypointAuthorizationSnapshot>>,
     source: TxOverlaySource,
+    sccp_ivm_proved_execution_binding: Option<crate::state::SccpIvmProvedExecutionBindingV1>,
     byte_size: OnceLock<usize>,
 }
 
@@ -1219,6 +1234,9 @@ pub(crate) struct PreparedTxOverlay {
     pub(crate) force_live_rebuild: bool,
     /// Canonical argument plan retained across a selective live-state rebuild.
     pub(crate) prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
+    /// Immutable validated contract retained for access derivation without
+    /// another artifact hash, parse, decode, or byte copy.
+    pub(crate) prepared_contract: Option<ivm::PreparedContract>,
 }
 
 /// Conservative scheduler scope required by the reachable syscall surface.
@@ -1432,6 +1450,7 @@ impl PreparedTxOverlay {
             access_fence,
             force_live_rebuild,
             prepared_argument_record: None,
+            prepared_contract: None,
         }
     }
 
@@ -1440,6 +1459,11 @@ impl PreparedTxOverlay {
         prepared_argument_record: Option<ivm::PreparedArgumentRecord>,
     ) -> Self {
         self.prepared_argument_record = prepared_argument_record;
+        self
+    }
+
+    fn with_prepared_contract(mut self, contract: &ivm::PreparedContract) -> Self {
+        self.prepared_contract = Some(contract.clone());
         self
     }
 }
@@ -1457,6 +1481,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Instructions,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1486,6 +1511,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::IvmProved,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1502,6 +1528,7 @@ impl TxOverlay {
             durable_state_overlay: BTreeMap::new(),
             durable_state_authorizations: BTreeMap::new(),
             source: TxOverlaySource::Ivm,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1527,6 +1554,7 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::Ivm,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1553,6 +1581,7 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source: TxOverlaySource::ContractCall,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
     }
@@ -1588,8 +1617,18 @@ impl TxOverlay {
             durable_state_overlay,
             durable_state_authorizations,
             source,
+            sccp_ivm_proved_execution_binding: None,
             byte_size: OnceLock::new(),
         }
+    }
+
+    fn with_sccp_ivm_proved_execution_binding(
+        mut self,
+        binding: crate::state::SccpIvmProvedExecutionBindingV1,
+    ) -> Self {
+        debug_assert_eq!(self.source, TxOverlaySource::IvmProved);
+        self.sccp_ivm_proved_execution_binding = Some(binding);
+        self
     }
 
     fn from_ivm_proved_execution(
@@ -1806,8 +1845,9 @@ impl TxOverlay {
             }
             authorization.validate_instruction_sequence(authority, &self.instructions)?;
         }
-        let prior_sccp_recording_proof_verified = state_tx.sccp_recording_proof_verified;
-        state_tx.sccp_recording_proof_verified = self.source == TxOverlaySource::IvmProved;
+        let prior_sccp_ivm_proved_execution_binding =
+            state_tx.sccp_ivm_proved_execution_binding.clone();
+        state_tx.sccp_ivm_proved_execution_binding = self.sccp_ivm_proved_execution_binding.clone();
         let result = (|| -> Result<(), ValidationFail> {
             if self.source == TxOverlaySource::IvmProved {
                 crate::validation_fee::enforce_ivm_proved_completed_axt_admission(
@@ -1998,7 +2038,7 @@ impl TxOverlay {
             }
             Ok(())
         })();
-        state_tx.sccp_recording_proof_verified = prior_sccp_recording_proof_verified;
+        state_tx.sccp_ivm_proved_execution_binding = prior_sccp_ivm_proved_execution_binding;
         result
     }
 
@@ -2159,12 +2199,7 @@ where
         state_ro.world().parameters().smart_contract().fuel(),
     )
     .map_err(OverlayBuildError::HeaderPolicy)?;
-    enforce_pre_execution_policy(
-        state_ro.pipeline().ivm_max_cycles_upper_bound,
-        &meta,
-        summary.code_offset,
-        summary.program(),
-    )?;
+    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
     let tx_gas_limit = require_tx_gas_limit(tx)?;
     let amx_analysis = cached_generic_amx_analysis(ivm_cache, summary)?;
     let access_fence = VmAccessFence::from_program_analysis(&amx_analysis);
@@ -2267,6 +2302,9 @@ where
             prune_redundant_contract_ops(state_ro, &mut instrs);
             Ok(TxOverlay::from_instructions(instrs))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch must execute through the live scheduler barrier".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
                 .ok_or_else(|| {
@@ -2305,7 +2343,6 @@ where
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
 
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2313,12 +2350,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_bound_contract_manifest(manifest, &summary)?;
 
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
@@ -2475,7 +2507,6 @@ where
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
             // ABI gating is handled in validate_header_policy (v1-only release).
 
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !(state_ro.zk().halo2.enabled || state_ro.zk().stark.enabled) {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2483,12 +2514,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
 
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
@@ -2659,12 +2685,7 @@ where
                 ));
             }
 
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -2695,8 +2716,11 @@ where
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
 
             let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let execution_binding =
+                sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let _ = gas_limit; // still required for admission (fees), even when skipping VM.
             Ok(tx_overlay_from_ivm_proved_replay(state_ro, replay)
+                .with_sccp_ivm_proved_execution_binding(execution_binding)
                 .with_entrypoint_authorization(Some(entrypoint_authorization)))
         }
     }
@@ -2716,6 +2740,10 @@ pub fn build_overlay_for_transaction_with_accounts(
             let instrs: Vec<InstructionBox> = batch.iter().cloned().collect();
             Ok(TxOverlay::from_instructions(instrs))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch requires live state and cannot be flattened into an overlay"
+                .to_owned(),
+        )),
         Executable::ContractCall(_) => Err(OverlayBuildError::ContractCall(
             "Executable::ContractCall requires a full state view for overlay building".to_owned(),
         )),
@@ -2724,7 +2752,6 @@ pub fn build_overlay_for_transaction_with_accounts(
                 .map_err(|_| OverlayBuildError::IvmHeaderParse)?;
             let meta = parsed.metadata;
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = parsed.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk {
                 return Err(OverlayBuildError::HeaderPolicy(
@@ -2732,12 +2759,7 @@ pub fn build_overlay_for_transaction_with_accounts(
                 ));
             }
             let pipeline = default_pipeline_config();
-            enforce_pre_execution_policy(
-                pipeline.ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(pipeline.ivm_max_cycles_upper_bound, &meta)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             reject_raw_contract_without_state(bytecode.as_ref())?;
             crate::smartcontracts::ivm::validate_generic_execution_metadata(tx.metadata())
@@ -2825,6 +2847,9 @@ where
                 false,
             ))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch must execute through the live scheduler barrier".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             #[cfg(feature = "telemetry")]
             let program_prepare_start = Instant::now();
@@ -2863,19 +2888,13 @@ where
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, code_bytes.as_ref())?;
@@ -3025,7 +3044,8 @@ where
                 access_fence,
                 force_live_rebuild,
             )
-            .with_prepared_argument_record(contract_call_context.argument_record.clone()))
+            .with_prepared_argument_record(contract_call_context.argument_record.clone())
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::Ivm(bytecode) => {
             #[cfg(feature = "telemetry")]
@@ -3057,19 +3077,13 @@ where
             };
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let amx_analysis = cached_amx_analysis(ivm_cache, &summary, bytecode.as_ref())?;
@@ -3237,7 +3251,8 @@ where
                 contract_call_context
                     .as_ref()
                     .and_then(|context| context.argument_record.clone()),
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::IvmProved(proved) => {
             let summary = ivm_cache
@@ -3245,19 +3260,13 @@ where
                 .map_err(map_program_summary_error)?;
             let meta = summary.metadata.clone();
             validate_header_policy(&meta).map_err(OverlayBuildError::HeaderPolicy)?;
-            let code_offset = summary.code_offset;
             let wants_zk = meta.mode & ivm::ivm_mode::ZK != 0;
             if wants_zk && !zk_enabled {
                 return Err(OverlayBuildError::HeaderPolicy(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                code_offset,
-                proved.bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let selector = crate::executor::requested_contract_entrypoint(tx.metadata())
                 .map_err(|error| OverlayBuildError::ContractCall(error.to_string()))?
@@ -3289,14 +3298,18 @@ where
 
             enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;
             let replay = verify_ivm_proved_execution(state_ro, tx, proved, &summary)?;
+            let execution_binding =
+                sccp_ivm_proved_execution_binding(state_ro, tx, proved, replay.gas_used)?;
             let access_log = replay.access_log.clone();
             Ok(PreparedTxOverlay::new(
                 tx_overlay_from_ivm_proved_replay(state_ro, replay)
+                    .with_sccp_ivm_proved_execution_binding(execution_binding)
                     .with_entrypoint_authorization(Some(entrypoint_authorization)),
                 access_log,
                 access_fence,
                 force_live_rebuild,
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
     }
 }
@@ -3334,6 +3347,9 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 true,
             ))
         }
+        Executable::Batch(_) => Err(OverlayBuildError::ContractCall(
+            "Executable::Batch is not supported in quarantine overlay building".to_owned(),
+        )),
         Executable::ContractCall(call) => {
             let identity = code::fetch_bound_contract_identity(state_ro, &call.contract_address)
                 .ok_or_else(|| {
@@ -3375,12 +3391,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                code_bytes.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             validate_bound_contract_manifest(manifest, &summary)?;
             let mut eff = meta.max_cycles.min(upper_bound_cap.get());
@@ -3508,7 +3519,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 VmAccessFence::Global,
                 true,
             )
-            .with_prepared_argument_record(contract_call_context.argument_record.clone()))
+            .with_prepared_argument_record(contract_call_context.argument_record.clone())
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::Ivm(bytecode) => {
             let admitted = ivm_cache
@@ -3547,12 +3559,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                     IvmAdmissionError::UnsupportedFeatureBits(ivm::ivm_mode::ZK),
                 ));
             }
-            enforce_pre_execution_policy(
-                state_ro.pipeline().ivm_max_cycles_upper_bound,
-                &meta,
-                summary.code_offset,
-                bytecode.as_ref(),
-            )?;
+            enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
             validate_contract_binding(state_ro, tx, &summary)?;
             let tx_gas_limit = require_tx_gas_limit(tx)?;
             let mut eff = meta.max_cycles.min(upper_bound_cap.get());
@@ -3680,7 +3687,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
                 contract_call_context
                     .as_ref()
                     .and_then(|context| context.argument_record.clone()),
-            ))
+            )
+            .with_prepared_contract(summary.prepared_contract()))
         }
         Executable::IvmProved(_) => Err(OverlayBuildError::ZkProof(
             "Executable::IvmProved is not supported in quarantine overlay building".to_owned(),
@@ -3795,7 +3803,7 @@ mod tests_overlay_manifest {
                     iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
                         message,
                     ),
-                ) if message.contains("requires verified IVM proof")
+                ) if message.contains("structured verified IVM execution binding")
             ),
             "unexpected SCCP proof-authority error: {error:?}"
         );
@@ -3817,7 +3825,7 @@ mod tests_overlay_manifest {
             .apply(&mut state_tx, &authority)
             .expect_err("plain overlays must not record SCCP messages");
         assert_sccp_proof_gate(error);
-        assert!(!state_tx.sccp_recording_proof_verified);
+        assert!(state_tx.sccp_ivm_proved_execution_binding.is_none());
     }
 
     #[test]
@@ -3835,6 +3843,15 @@ mod tests_overlay_manifest {
         state_tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let mut proved = TxOverlay::from_instructions(vec![malformed_sccp_record_instruction()]);
         proved.source = TxOverlaySource::IvmProved;
+        proved.sccp_ivm_proved_execution_binding =
+            Some(crate::state::SccpIvmProvedExecutionBindingV1 {
+                contract_artifact_sha256: [0xb1; 32],
+                vk_ref: VerifyingKeyId::new("stark/fri/v1", "ivm-execution-v1"),
+                vk_version: 1,
+                vk_commitment: [0xb2; 32],
+                gas_limit: 50_000_000,
+                gas_used: 1,
+            });
 
         let proved_error = proved
             .apply(&mut state_tx, &authority)
@@ -3851,7 +3868,7 @@ mod tests_overlay_manifest {
             "proved overlay did not receive scoped SCCP proof authority: {proved_error:?}"
         );
         assert!(
-            !state_tx.sccp_recording_proof_verified,
+            state_tx.sccp_ivm_proved_execution_binding.is_none(),
             "failed proved overlay must restore SCCP proof authority"
         );
 
@@ -3880,9 +3897,13 @@ mod tests_overlay_manifest {
         }
 
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(ChainId::from("snapshot-test"), authority)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("snapshot-test"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log.read_keys.insert("counter".to_owned());
         access_log
@@ -3931,9 +3952,13 @@ mod tests_overlay_manifest {
     #[test]
     fn durable_state_read_snapshot_fails_closed_for_invalid_host_key() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(ChainId::from("snapshot-invalid"), authority)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("snapshot-invalid"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log
             .read_keys
@@ -3974,9 +3999,13 @@ mod tests_overlay_manifest {
     #[test]
     fn durable_state_read_snapshot_fails_closed_for_partial_concrete_paths() {
         let (authority, keypair) = iroha_test_samples::gen_account_in("wonderland");
-        let transaction = TransactionBuilder::new(ChainId::from("snapshot-partial"), authority)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
-            .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("snapshot-partial"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(Vec::new())))
+        .sign(keypair.private_key());
         let mut access_log = ivm::host::AccessLog::default();
         access_log
             .read_keys
@@ -4212,18 +4241,20 @@ mod tests_overlay_manifest {
             block.commit().expect("commit pending hajimari transition");
         }
 
-        let mut tx_metadata = Metadata::default();
-        insert_gas_limit(&mut tx_metadata);
-        let transaction =
-            TransactionBuilder::new(ChainId::from("hajimari-overlay"), authority.clone())
-                .with_metadata(tx_metadata)
-                .with_executable(Executable::ContractCall(ContractInvocation {
-                    contract_address: contract_address.clone(),
-                    expected_code_hash: code_hash,
-                    entrypoint: "hajimari".to_owned(),
-                    arguments: None,
-                }))
-                .sign(keypair.private_key());
+        let tx_metadata = Metadata::default();
+        let transaction = TransactionBuilder::new(
+            ChainId::from("hajimari-overlay"),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(tx_metadata)
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "hajimari".to_owned(),
+            arguments: None,
+        }))
+        .sign(keypair.private_key());
 
         let overlay = build_overlay_for_transaction(&transaction, &state.view())
             .expect("the exact pending hajimari call must prepare");
@@ -4312,6 +4343,31 @@ mod tests_overlay_manifest {
         minimal_contract_artifact_with_permission(abi_version, Some("CanInvoke"))
     }
 
+    #[test]
+    fn warm_pre_execution_policy_does_not_rewalk_opcodes() {
+        let artifact = minimal_contract_artifact_bytes(1, Some("CanInvoke"));
+        let code_hash = ivm::contract_code_hash(&artifact);
+        let mut cache = IvmCache::with_capacity(2);
+        cache
+            .summarize_program_with_hash(code_hash, &artifact)
+            .expect("cold artifact preparation");
+        let cold_stats = cache.stats();
+
+        // A trusted content-addressed hit needs no artifact bytes. The
+        // pre-execution gate consumes only authenticated prepared metadata, so
+        // it cannot add a second opcode walk to this warm dispatch.
+        let summary = cache
+            .summarize_program_with_hash(code_hash, &[])
+            .expect("warm summary lookup without artifact bytes");
+        enforce_pre_execution_policy(nonzero!(1_u64), &summary.metadata)
+            .expect("prepared metadata remains within the live cycle ceiling");
+
+        let warm_stats = cache.stats();
+        assert_eq!(warm_stats.metadata_hits, cold_stats.metadata_hits + 1);
+        assert_eq!(warm_stats.artifact_hashes, cold_stats.artifact_hashes);
+        assert_eq!(warm_stats.preparations, cold_stats.preparations);
+    }
+
     fn minimal_generic_program() -> Vec<u8> {
         let mut program = ivm::ProgramMetadata {
             max_cycles: 100,
@@ -4345,10 +4401,14 @@ mod tests_overlay_manifest {
         program: Vec<u8>,
         metadata: Metadata,
     ) -> SignedTransaction {
-        TransactionBuilder::new(ChainId::from("state-free-generic-overlay"), authority)
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-            .sign(keypair.private_key())
+        TransactionBuilder::new(
+            ChainId::from("state-free-generic-overlay"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(keypair.private_key())
     }
 
     #[test]
@@ -4360,8 +4420,7 @@ mod tests_overlay_manifest {
             ivm::syscalls::SYSCALL_STATE_SET,
             ivm::syscalls::SYSCALL_CALL_CONTRACT,
         ] {
-            let mut metadata = Metadata::default();
-            insert_gas_limit(&mut metadata);
+            let metadata = Metadata::default();
             let transaction = state_free_generic_transaction(
                 authority.clone(),
                 &keypair,
@@ -4387,7 +4446,6 @@ mod tests_overlay_manifest {
             "contract_address",
         ] {
             let mut metadata = Metadata::default();
-            insert_gas_limit(&mut metadata);
             metadata.insert(
                 reserved_key.parse().expect("reserved metadata key"),
                 Json::new("malformed-or-forged"),
@@ -4416,8 +4474,7 @@ mod tests_overlay_manifest {
     #[test]
     fn state_free_generic_overlay_still_accepts_stateless_programs() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
+        let metadata = Metadata::default();
         let transaction = state_free_generic_transaction(
             authority,
             &keypair,
@@ -4445,14 +4502,17 @@ mod tests_overlay_manifest {
             crate::query::store::LiveQueryStore::start_test(),
             ChainId::from("generic-overlay"),
         );
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let transaction = TransactionBuilder::new(ChainId::from("generic-overlay"), authority)
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                minimal_generic_program(),
-            )))
-            .sign(keypair.private_key());
+        let metadata = Metadata::default();
+        let transaction = TransactionBuilder::new(
+            ChainId::from("generic-overlay"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_generic_program(),
+        )))
+        .sign(keypair.private_key());
 
         let overlay = build_overlay_for_transaction(&transaction, &state.view())
             .expect("generic HALT overlay");
@@ -4475,18 +4535,20 @@ mod tests_overlay_manifest {
             ChainId::from("generic-overlay-metadata"),
         );
         let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("main"),
         );
-        let transaction =
-            TransactionBuilder::new(ChainId::from("generic-overlay-metadata"), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
-                    minimal_generic_program(),
-                )))
-                .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("generic-overlay-metadata"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(
+            minimal_generic_program(),
+        )))
+        .sign(keypair.private_key());
 
         let error = build_overlay_for_transaction(&transaction, &state.view())
             .expect_err("generic program must not impersonate a contract dispatch");
@@ -4772,20 +4834,19 @@ seiyaku QuarantineArguments {
             chain_id.clone(),
         );
 
-        let mut contract_call_metadata = Metadata::default();
-        insert_gas_limit(&mut contract_call_metadata);
-        let contract_call = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_metadata(contract_call_metadata)
-            .with_executable(Executable::ContractCall(ContractInvocation {
-                contract_address: contract_address.clone(),
-                expected_code_hash: verified.code_hash,
-                entrypoint: "inspect".to_owned(),
-                arguments: Some(bounded_arguments),
-            }))
-            .sign(keypair.private_key());
+        let contract_call_metadata = Metadata::default();
+        let contract_call =
+            TransactionBuilder::new(chain_id.clone(), authority.clone(), test_fee_payment())
+                .with_metadata(contract_call_metadata)
+                .with_executable(Executable::ContractCall(ContractInvocation {
+                    contract_address: contract_address.clone(),
+                    expected_code_hash: verified.code_hash,
+                    entrypoint: "inspect".to_owned(),
+                    arguments: Some(bounded_arguments),
+                }))
+                .sign(keypair.private_key());
 
         let mut raw_metadata = Metadata::default();
-        insert_gas_limit(&mut raw_metadata);
         raw_metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("inspect"),
@@ -4798,7 +4859,7 @@ seiyaku QuarantineArguments {
             "contract_address".parse().expect("metadata key"),
             Json::new(contract_address.to_string()),
         );
-        let raw_ivm = TransactionBuilder::new(chain_id, authority)
+        let raw_ivm = TransactionBuilder::new(chain_id, authority, test_fee_payment())
             .with_metadata(raw_metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(keypair.private_key());
@@ -4889,7 +4950,6 @@ seiyaku ProtectedStateFreeOverlay {
         let (authority, keypair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("protected-state-free-overlay");
         let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("write"),
@@ -4898,7 +4958,7 @@ seiyaku ProtectedStateFreeOverlay {
             "contract_payload".parse().expect("metadata key"),
             Json::from(norito::json!({ "value": "7" })),
         );
-        let transaction = TransactionBuilder::new(chain_id, authority)
+        let transaction = TransactionBuilder::new(chain_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(keypair.private_key());
@@ -4936,7 +4996,6 @@ seiyaku PermissionlessStateFreeOverlay {
             .expect("compile permissionless state-free overlay fixture");
         let (authority, keypair) = gen_account_in("wonderland");
         let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("write"),
@@ -4948,6 +5007,7 @@ seiyaku PermissionlessStateFreeOverlay {
         let transaction = TransactionBuilder::new(
             ChainId::from("permissionless-state-free-overlay"),
             authority,
+            test_fee_payment(),
         )
         .with_metadata(metadata)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
@@ -5036,9 +5096,8 @@ seiyaku ProtectedParameterizedOverlay {
             chain_id.clone(),
         );
 
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let transaction = TransactionBuilder::new(chain_id, authority)
+        let metadata = Metadata::default();
+        let transaction = TransactionBuilder::new(chain_id, authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::ContractCall(ContractInvocation {
                 contract_address,
@@ -5128,18 +5187,20 @@ seiyaku ProtectedParameterizedOverlay {
             )
         };
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let transaction =
-            TransactionBuilder::new(ChainId::from("authorization-overlay"), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(Executable::ContractCall(ContractInvocation {
-                    contract_address: contract_address.clone(),
-                    expected_code_hash: code_hash,
-                    entrypoint: "main".to_owned(),
-                    arguments: None,
-                }))
-                .sign(keypair.private_key());
+        let metadata = iroha_data_model::metadata::Metadata::default();
+        let transaction = TransactionBuilder::new(
+            ChainId::from("authorization-overlay"),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::ContractCall(ContractInvocation {
+            contract_address: contract_address.clone(),
+            expected_code_hash: code_hash,
+            entrypoint: "main".to_owned(),
+            arguments: None,
+        }))
+        .sign(keypair.private_key());
 
         let unauthorized_state = make_state(false);
         let denied = build_overlay_for_transaction(&transaction, &unauthorized_state.view())
@@ -6001,7 +6062,10 @@ seiyaku ProtectedParameterizedOverlay {
             .expect("verified manifest code hash");
         let manifest = verified_manifest.signed(&kp);
         let mut md = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut md);
+        md.insert(
+            "contract_entrypoint".parse().expect("metadata key"),
+            Json::new("main"),
+        );
         md.insert(
             iroha_data_model::smart_contract::manifest::MANIFEST_METADATA_KEY
                 .parse::<iroha_data_model::name::Name>()
@@ -6011,56 +6075,86 @@ seiyaku ProtectedParameterizedOverlay {
         let tx = iroha_data_model::transaction::TransactionBuilder::new(
             ChainId::from("chain"),
             authority_id.clone(),
+            test_fee_payment(),
         )
         .with_metadata(md)
         .with_executable(Executable::Ivm(IvmBytecode::from_compiled(prog.clone())))
         .sign(kp.private_key());
-
-        let summary = IvmCache::new()
+        let mut cache = IvmCache::new();
+        let summary = cache
             .summarize_program(&prog)
-            .expect("summarize the verified contract artifact");
+            .expect("prepare self-describing contract artifact");
 
-        // Case 1: WSV doesn't have the manifest yet → registration helper appends both ISIs.
-        let mut registration = Vec::new();
+        // Case 1: WSV doesn't have the artifact yet → append both registrations. Exercise the
+        // append step directly: dispatching a self-describing artifact also requires a live
+        // contract identity, which intentionally cannot exist before its artifact is registered.
+        let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(
             &state.view(),
             &tx,
             &summary,
             &prog,
-            &mut registration,
+            &mut registrations,
         )
         .expect("append missing contract registrations");
         assert_eq!(
-            registration.len(),
+            registrations.len(),
             2,
             "expected bytecode and manifest registration ISIs"
         );
 
-        // Seed bytecode and manifest into WSV.
+        // Seed only the bytecode into WSV.
         let header =
             iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.contract_code.insert(code_hash, prog.clone());
-        stx.world
-            .contract_manifests
-            .insert(code_hash, manifest.clone());
         stx.apply();
-        let _ = block.commit();
+        block.commit().expect("commit registered contract bytecode");
 
-        // Case 2: WSV already has both artifacts → helper appends no registration.
-        let mut registration = Vec::new();
+        // Case 2: only the manifest is missing → append exactly its registration.
+        let mut registrations = Vec::new();
         append_verified_contract_metadata_registration(
             &state.view(),
             &tx,
             &summary,
             &prog,
-            &mut registration,
+            &mut registrations,
+        )
+        .expect("append missing contract manifest");
+        assert_eq!(registrations.len(), 1);
+        assert!(
+            registrations[0]
+                .as_any()
+                .downcast_ref::<RegisterSmartContractCode>()
+                .is_some(),
+            "the sole missing registration must be the manifest"
+        );
+
+        // Seed the manifest as well.
+        let header =
+            iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+        stx.world
+            .contract_manifests
+            .insert(code_hash, manifest.clone());
+        stx.apply();
+        block.commit().expect("commit registered contract manifest");
+
+        // Case 3: WSV already has both records → append no registration.
+        let mut registrations = Vec::new();
+        append_verified_contract_metadata_registration(
+            &state.view(),
+            &tx,
+            &summary,
+            &prog,
+            &mut registrations,
         )
         .expect("skip existing contract registrations");
         assert!(
-            registration.is_empty(),
-            "no registration when manifest exists"
+            registrations.is_empty(),
+            "no registration when artifact records exist"
         );
     }
 }
@@ -6140,13 +6234,10 @@ mod tests {
             max_cycles: 42,
             ..ivm::ProgramMetadata::default()
         };
-        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
 
         enforce_pre_execution_policy(
             NonZeroU64::new(42).expect("test ceiling is non-zero"),
             &meta,
-            0,
-            &bytecode,
         )
         .expect("artifact at the configured ceiling should be admitted");
     }
@@ -6170,13 +6261,10 @@ mod tests {
             max_cycles: 43,
             ..ivm::ProgramMetadata::default()
         };
-        let bytecode = ivm::encoding::wide::encode_halt().to_le_bytes();
 
         let error = enforce_pre_execution_policy(
             NonZeroU64::new(42).expect("test ceiling is non-zero"),
             &meta,
-            0,
-            &bytecode,
         )
         .expect_err("artifact above the configured ceiling must fail closed");
         assert!(matches!(
@@ -6284,7 +6372,7 @@ mod tests {
     }
 
     #[test]
-    fn overlay_rejects_ivm_without_gas_limit() {
+    fn overlay_rejects_ivm_without_fee_payment_gas_bound() {
         use iroha_data_model::{
             domain::Domain,
             prelude::{AccountId, IvmBytecode, TransactionBuilder},
@@ -6302,15 +6390,19 @@ mod tests {
         let state =
             crate::state::State::new_with_chain(world, kura, query_handle, ChainId::from("chain"));
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+        .sign(kp.private_key());
 
         let err = build_overlay_for_transaction(&tx, &state.view())
-            .expect_err("overlay should require gas_limit metadata");
+            .expect_err("overlay should require a typed fee-payment gas bound");
         assert!(matches!(
             err,
-            OverlayBuildError::GasLimit(msg) if msg.contains("missing gas_limit")
+            OverlayBuildError::GasLimit(msg) if msg.contains("missing gas limit in fee payment intent")
         ));
     }
 
@@ -6396,12 +6488,11 @@ mod tests {
         let attachments = ProofAttachmentList(vec![attachment]);
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -6554,7 +6645,6 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("open"),
@@ -6567,10 +6657,14 @@ seiyaku ProtectedProvedOverlay {
             "contract_alias".parse().expect("metadata key"),
             iroha_primitives::json::Json::new(contract_alias.to_string()),
         );
-        let derivation_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::Ivm(bytecode.clone()))
-            .sign(kp.private_key());
+        let derivation_tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::Ivm(bytecode.clone()))
+        .sign(kp.private_key());
         let proved =
             derive_ivm_proved_payload_from_ivm_execution(&state.view(), &derivation_tx, &vk_record)
                 .expect("derive non-empty proved overlay payload");
@@ -6601,16 +6695,20 @@ seiyaku ProtectedProvedOverlay {
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: proved.bytecode,
-                overlay: proved.overlay.clone(),
-                events_commitment: proved.events_commitment,
-                gas_policy_commitment: proved.gas_policy_commitment,
-            }))
-            .with_attachments(attachments)
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: proved.bytecode,
+            overlay: proved.overlay.clone(),
+            events_commitment: proved.events_commitment,
+            gas_policy_commitment: proved.gas_policy_commitment,
+        }))
+        .with_attachments(attachments)
+        .sign(kp.private_key());
 
         let overlay_built =
             build_overlay_for_transaction(&tx, &state.view()).expect("proved execution overlay");
@@ -6932,7 +7030,6 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let chain_id = state.chain_id.clone();
         let build_tx = |vk_ref: VerifyingKeyId| {
@@ -6941,7 +7038,7 @@ seiyaku ProtectedProvedOverlay {
                 fixture.proof_box("halo2/ipa"),
                 vk_ref,
             );
-            TransactionBuilder::new(chain_id.clone(), authority.clone())
+            TransactionBuilder::new(chain_id.clone(), authority.clone(), test_fee_payment())
                 .with_metadata(metadata.clone())
                 .with_executable(Executable::IvmProved(IvmProved {
                     bytecode: bytecode.clone(),
@@ -7059,17 +7156,20 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: bytecode.clone(),
-                overlay: overlay.clone(),
-                events_commitment: Hash::new(b"replay-events"),
-                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-            }))
-            .sign(kp.private_key());
+        let replay_tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: bytecode.clone(),
+            overlay: overlay.clone(),
+            events_commitment: Hash::new(b"replay-events"),
+            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+        }))
+        .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7106,7 +7206,7 @@ seiyaku ProtectedProvedOverlay {
         let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7205,17 +7305,20 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: bytecode.clone(),
-                overlay: overlay.clone(),
-                events_commitment: Hash::new(b"replay-events"),
-                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-            }))
-            .sign(kp.private_key());
+        let replay_tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: bytecode.clone(),
+            overlay: overlay.clone(),
+            events_commitment: Hash::new(b"replay-events"),
+            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+        }))
+        .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7335,17 +7438,20 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: bytecode.clone(),
-                overlay: overlay.clone(),
-                events_commitment: Hash::new(b"replay-events"),
-                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-            }))
-            .sign(kp.private_key());
+        let replay_tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: bytecode.clone(),
+            overlay: overlay.clone(),
+            events_commitment: Hash::new(b"replay-events"),
+            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+        }))
+        .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7391,16 +7497,20 @@ seiyaku ProtectedProvedOverlay {
                 let attachment =
                     ProofAttachment::new_ref("halo2/ipa".into(), proof_box, vk_id.clone());
                 let attachments = ProofAttachmentList(vec![attachment]);
-                TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-                    .with_metadata(metadata.clone())
-                    .with_executable(Executable::IvmProved(IvmProved {
-                        bytecode: bytecode.clone(),
-                        overlay: overlay.clone(),
-                        events_commitment,
-                        gas_policy_commitment,
-                    }))
-                    .with_attachments(attachments)
-                    .sign(kp.private_key())
+                TransactionBuilder::new(
+                    state.chain_id.clone(),
+                    authority.clone(),
+                    test_fee_payment(),
+                )
+                .with_metadata(metadata.clone())
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: bytecode.clone(),
+                    overlay: overlay.clone(),
+                    events_commitment,
+                    gas_policy_commitment,
+                }))
+                .with_attachments(attachments)
+                .sign(kp.private_key())
             };
 
         let invalid_envelope_cases: [(&str, fn(&mut ZkOpenVerifyEnvelope), &str); 7] = [
@@ -7534,12 +7644,11 @@ seiyaku ProtectedProvedOverlay {
         state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7593,12 +7702,11 @@ seiyaku ProtectedProvedOverlay {
         state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let events_commitment = Hash::new(b"events");
         let gas_policy_commitment = Hash::new(b"gas-policy");
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7713,11 +7821,10 @@ seiyaku ProtectedProvedOverlay {
         let attachments = ProofAttachmentList(vec![attachment]);
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
         let _ = overlay_bad_hash; // mismatch is exercised via `overlay_hash` in proof public inputs.
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7820,9 +7927,8 @@ seiyaku ProtectedProvedOverlay {
         let attachments = ProofAttachmentList(vec![attachment]);
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -7927,17 +8033,20 @@ seiyaku ProtectedProvedOverlay {
         state.pipeline.ivm_proved.allowed_circuits = vec![vk_record.circuit_id.clone()];
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
-        let replay_tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: bytecode.clone(),
-                overlay: overlay.clone(),
-                events_commitment: Hash::new(b"replay-events"),
-                gas_policy_commitment: Hash::new(b"replay-gas-policy"),
-            }))
-            .sign(kp.private_key());
+        let replay_tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::IvmProved(IvmProved {
+            bytecode: bytecode.clone(),
+            overlay: overlay.clone(),
+            events_commitment: Hash::new(b"replay-events"),
+            gas_policy_commitment: Hash::new(b"replay-gas-policy"),
+        }))
+        .sign(kp.private_key());
         let replay = replay_ivm_proved_overlay(
             &state.view(),
             &replay_tx,
@@ -7971,7 +8080,7 @@ seiyaku ProtectedProvedOverlay {
             ProofAttachment::new_ref("halo2/ipa".into(), fixture.proof_box("halo2/ipa"), vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::IvmProved(IvmProved {
                 bytecode,
@@ -8034,13 +8143,16 @@ seiyaku ProtectedProvedOverlay {
         state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         bind_sample_raw_metadata(&mut metadata, &contract_address);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata.clone())
-            .with_executable(Executable::Ivm(bytecode.clone()))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata.clone())
+        .with_executable(Executable::Ivm(bytecode.clone()))
+        .sign(kp.private_key());
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
@@ -8055,15 +8167,16 @@ seiyaku ProtectedProvedOverlay {
         let proved = derive_ivm_proved_payload_from_ivm_execution(&state.view(), &tx, &vk_record)
             .expect("derive proved payload");
 
-        let tx_proved = TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_metadata(metadata)
-            .with_executable(Executable::IvmProved(IvmProved {
-                bytecode: proved.bytecode.clone(),
-                overlay: proved.overlay.clone(),
-                events_commitment: proved.events_commitment,
-                gas_policy_commitment: proved.gas_policy_commitment,
-            }))
-            .sign(kp.private_key());
+        let tx_proved =
+            TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+                .with_metadata(metadata)
+                .with_executable(Executable::IvmProved(IvmProved {
+                    bytecode: proved.bytecode.clone(),
+                    overlay: proved.overlay.clone(),
+                    events_commitment: proved.events_commitment,
+                    gas_policy_commitment: proved.gas_policy_commitment,
+                }))
+                .sign(kp.private_key());
 
         let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
         let summary = ivm_cache
@@ -8196,7 +8309,6 @@ seiyaku DeriveDispatch {
         state.zk.halo2.enabled = true;
 
         let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("open"),
@@ -8210,10 +8322,14 @@ seiyaku DeriveDispatch {
             iroha_primitives::json::Json::new(contract_address.to_string()),
         );
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-            .with_metadata(metadata)
-            .with_executable(Executable::Ivm(bytecode.clone()))
-            .sign(kp.private_key());
+        let tx = TransactionBuilder::new(
+            state.chain_id.clone(),
+            authority.clone(),
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::Ivm(bytecode.clone()))
+        .sign(kp.private_key());
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
@@ -8237,7 +8353,6 @@ seiyaku DeriveDispatch {
         assert_eq!(proved.overlay.as_ref(), &[expected]);
 
         let mut restricted_metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut restricted_metadata);
         restricted_metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             iroha_primitives::json::Json::new("restricted"),
@@ -8246,10 +8361,11 @@ seiyaku DeriveDispatch {
             "contract_address".parse().expect("metadata key"),
             iroha_primitives::json::Json::new(contract_address.to_string()),
         );
-        let restricted_tx = TransactionBuilder::new(state.chain_id.clone(), authority)
-            .with_metadata(restricted_metadata)
-            .with_executable(Executable::Ivm(bytecode))
-            .sign(kp.private_key());
+        let restricted_tx =
+            TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
+                .with_metadata(restricted_metadata)
+                .with_executable(Executable::Ivm(bytecode))
+                .sign(kp.private_key());
         let err =
             derive_ivm_proved_payload_from_ivm_execution(&state.view(), &restricted_tx, &vk_record)
                 .expect_err("proved derivation must enforce protected entrypoint permissions");
@@ -8454,7 +8570,6 @@ seiyaku ProtectedProved {
         state.pipeline.ivm_proved.enabled = true;
 
         let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
         metadata.insert(
             "contract_entrypoint".parse().expect("metadata key"),
             Json::new("write"),
@@ -8467,18 +8582,21 @@ seiyaku ProtectedProved {
             "contract_address".parse().expect("metadata key"),
             Json::new(contract_address.to_string()),
         );
-        let transaction =
-            TransactionBuilder::new(ChainId::from("protected-proved-overlay"), authority)
-                .with_metadata(metadata)
-                .with_executable(Executable::IvmProved(
-                    iroha_data_model::transaction::IvmProved {
-                        bytecode: IvmBytecode::from_compiled(program),
-                        overlay: Vec::<InstructionBox>::new().into(),
-                        events_commitment: Hash::new(b"unverified-events"),
-                        gas_policy_commitment: Hash::new(b"unverified-gas"),
-                    },
-                ))
-                .sign(keypair.private_key());
+        let transaction = TransactionBuilder::new(
+            ChainId::from("protected-proved-overlay"),
+            authority,
+            test_fee_payment(),
+        )
+        .with_metadata(metadata)
+        .with_executable(Executable::IvmProved(
+            iroha_data_model::transaction::IvmProved {
+                bytecode: IvmBytecode::from_compiled(program),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"unverified-events"),
+                gas_policy_commitment: Hash::new(b"unverified-gas"),
+            },
+        ))
+        .sign(keypair.private_key());
 
         ivm::reset_argument_record_decode_count();
         let error = build_overlay_for_transaction(&transaction, &state.view())
@@ -8501,6 +8619,7 @@ seiyaku ProtectedProved {
     fn sample_program() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
+            version_minor: 1,
             ..ivm::ProgramMetadata::default()
         };
         let mut program = meta.encode();
@@ -8513,6 +8632,7 @@ seiyaku ProtectedProved {
     fn sample_program_zk_mode() -> (Vec<u8>, usize, ivm::ProgramMetadata) {
         let meta = ivm::ProgramMetadata {
             max_cycles: 1,
+            version_minor: 1,
             mode: ivm::ivm_mode::ZK,
             ..ivm::ProgramMetadata::default()
         };
@@ -8726,10 +8846,8 @@ seiyaku ProtectedProved {
             Name::from_str("contract_address").expect("static name"),
             Json::new(contract_address.to_string()),
         );
-        insert_gas_limit(&mut metadata);
-        insert_gas_limit(&mut metadata);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -8824,11 +8942,14 @@ seiyaku ProtectedProved {
                 "contract_alias".parse().expect("metadata key"),
                 Json::new(spoofed_alias),
             );
-            insert_gas_limit(&mut metadata);
-            let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(executable)
-                .sign(kp.private_key());
+            let tx = TransactionBuilder::new(
+                state.chain_id.clone(),
+                authority.clone(),
+                test_fee_payment(),
+            )
+            .with_metadata(metadata)
+            .with_executable(executable)
+            .sign(kp.private_key());
             let error = validate_contract_binding(&state.view(), &tx, &summary)
                 .expect_err("spoofed alias must fail before VM/proof execution");
             assert!(
@@ -8924,11 +9045,14 @@ seiyaku ProtectedProved {
                 "contract_address".parse().expect("metadata key"),
                 Json::new(contract_address.to_string()),
             );
-            insert_gas_limit(&mut metadata);
-            let tx = TransactionBuilder::new(state.chain_id.clone(), authority.clone())
-                .with_metadata(metadata)
-                .with_executable(executable)
-                .sign(kp.private_key());
+            let tx = TransactionBuilder::new(
+                state.chain_id.clone(),
+                authority.clone(),
+                test_fee_payment(),
+            )
+            .with_metadata(metadata)
+            .with_executable(executable)
+            .sign(kp.private_key());
             let error = validate_contract_binding(&state.view(), &tx, &substituted_summary)
                 .expect_err("header-substituted artifact must fail before VM/proof execution");
             assert!(
@@ -8977,8 +9101,8 @@ seiyaku ProtectedProved {
                 origin_dsid: Some(dsid),
             },
             budget: HandleBudget {
-                remaining: 10,
-                per_use: Some(10),
+                remaining: "10".parse().expect("canonical handle quantity"),
+                per_use: Some("10".parse().expect("canonical handle quantity")),
             },
             handle_era: 1,
             sub_nonce: 1,
@@ -8998,7 +9122,7 @@ seiyaku ProtectedProved {
                 kind: "transfer".into(),
                 from: authority_str,
                 to: "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76".into(),
-                amount: "5".into(),
+                amount: Some("5".parse().expect("canonical spend quantity")),
             },
         };
 
@@ -9091,9 +9215,8 @@ seiyaku ProtectedProved {
             "expected empty AXT policy snapshot"
         );
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let metadata = iroha_data_model::metadata::Metadata::default();
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(kp.private_key());
@@ -9161,9 +9284,8 @@ seiyaku ProtectedProved {
             Name::from_str("contract_address").expect("static name"),
             Json::new(contract_address.to_string()),
         );
-        insert_gas_limit(&mut metadata);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9216,9 +9338,8 @@ seiyaku ProtectedProved {
             Name::from_str("contract_address").expect("static name"),
             Json::new(contract_address.to_string()),
         );
-        insert_gas_limit(&mut metadata);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9283,9 +9404,8 @@ seiyaku ProtectedProved {
             Name::from_str("contract_address").expect("static name"),
             Json::new(contract_address.to_string()),
         );
-        insert_gas_limit(&mut metadata);
 
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9368,9 +9488,8 @@ seiyaku ProtectedProved {
         );
         program.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let metadata = iroha_data_model::metadata::Metadata::default();
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9414,9 +9533,8 @@ seiyaku ProtectedProved {
             &[literal],
         );
 
-        let mut metadata = iroha_data_model::metadata::Metadata::default();
-        insert_gas_limit(&mut metadata);
-        let tx = TransactionBuilder::new(state.chain_id.clone(), authority)
+        let metadata = iroha_data_model::metadata::Metadata::default();
+        let tx = TransactionBuilder::new(state.chain_id.clone(), authority, test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(
                 iroha_data_model::prelude::IvmBytecode::from_compiled(program),
@@ -9506,10 +9624,9 @@ seiyaku ProtectedProved {
         use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 
         let chain: ChainId = "chain".parse().expect("valid chain id");
-        let mut metadata = Metadata::default();
-        insert_gas_limit(&mut metadata);
+        let metadata = Metadata::default();
         let (program, _, _) = sample_program();
-        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone(), test_fee_payment())
             .with_metadata(metadata)
             .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
             .sign(ALICE_KEYPAIR.private_key());
@@ -9686,7 +9803,7 @@ pub enum OverlayBuildError {
     HeaderPolicy(IvmAdmissionError),
     /// Contract-call metadata was malformed or could not be applied.
     ContractCall(String),
-    /// Missing or invalid `gas_limit` transaction metadata.
+    /// Missing or invalid gas bound in the typed fee-payment intent.
     GasLimit(String),
     /// Loading the program into the VM failed.
     IvmLoad(IvmError),
@@ -10884,12 +11001,7 @@ where
         ));
     }
 
-    enforce_pre_execution_policy(
-        state_ro.pipeline().ivm_max_cycles_upper_bound,
-        &meta,
-        summary.code_offset,
-        bytecode.as_ref(),
-    )?;
+    enforce_pre_execution_policy(state_ro.pipeline().ivm_max_cycles_upper_bound, &meta)?;
     validate_contract_binding(state_ro, tx, &summary)?;
     // Proved executions do not support implicit manifest registration append.
     enforce_manifest_is_pre_registered(state_ro, tx, summary.code_hash)?;

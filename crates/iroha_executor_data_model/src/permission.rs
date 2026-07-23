@@ -110,6 +110,8 @@ pub mod account {
         Domain(DomainId),
         /// Permission scoped to a dataspace alias segment.
         Dataspace(DataSpaceId),
+        /// Permission scoped to one exact resolved account alias.
+        Alias(ResolvedAccountAliasV1),
     }
 
     impl norito::json::JsonSerialize for AccountAliasPermissionScope {
@@ -122,6 +124,10 @@ pub mod account {
                 }
                 Self::Dataspace(value) => {
                     out.push_str("dataspace\",\"value\":");
+                    norito::json::JsonSerialize::json_serialize(value, out);
+                }
+                Self::Alias(value) => {
+                    out.push_str("alias\",\"value\":");
                     norito::json::JsonSerialize::json_serialize(value, out);
                 }
             }
@@ -158,6 +164,11 @@ pub mod account {
                 )),
                 "dataspace" => Ok(Self::Dataspace(
                     <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
+                )),
+                "alias" => Ok(Self::Alias(
+                    <ResolvedAccountAliasV1 as norito::json::JsonDeserialize>::json_from_value(
+                        value,
+                    )?,
                 )),
                 other => Err(norito::json::Error::Message(format!(
                     "unknown alias permission scope `{other}`"
@@ -199,8 +210,25 @@ pub mod account {
 
     permission! {
         /// Permission to resolve account aliases in the specified scope.
+        ///
+        /// An alias scope authorizes one exact alias. A domain scope authorizes only that
+        /// fully-qualified domain, while a dataspace scope authorizes only dataspace-root aliases;
+        /// the three scope kinds are independent.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.
+            pub scope: AccountAliasPermissionScope,
+        }
+    }
+
+    permission! {
+        /// Permission to grant or revoke alias-resolution access in the specified scope.
+        ///
+        /// Only the corresponding alias, domain, or dataspace-alias owner may grant or
+        /// revoke this delegation token. Holding it authorizes delegation of
+        /// [`CanResolveAccountAlias`] for the exact same scope; it never
+        /// authorizes alias mutation or further delegation of this token.
+        pub struct CanDelegateAccountAliasResolution {
+            /// Exact alias scope whose resolution access may be delegated.
             pub scope: AccountAliasPermissionScope,
         }
     }
@@ -253,7 +281,85 @@ pub mod account {
                 .map(|variant| variant.tag.as_str())
                 .collect::<Vec<_>>();
 
-            assert_eq!(tags, vec!["domain", "dataspace"]);
+            assert_eq!(tags, vec!["domain", "dataspace", "alias"]);
+        }
+
+        #[test]
+        fn alias_scope_roundtrips_exact_resolved_alias() {
+            let scope = AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
+                "merchant@banka.paynet"
+                    .parse::<AccountAliasName>()
+                    .expect("canonical account alias"),
+                DataSpaceId::new(7),
+            ));
+            let json = norito::json::to_json(&scope).expect("serialize exact alias scope");
+            let decoded: AccountAliasPermissionScope =
+                norito::json::from_str(&json).expect("deserialize exact alias scope");
+
+            assert_eq!(decoded, scope);
+            assert!(json.contains("merchant"));
+            assert!(json.contains("\"dataspace_id\":7"));
+        }
+
+        #[test]
+        fn exact_alias_scope_matches_shared_alias_setup_fixture() {
+            use norito::json::JsonDeserialize;
+
+            let fixture: norito::json::Value = norito::json::from_str(include_str!(
+                "../../../fixtures/norito_rpc/alias_setup_v1/alias_setup_v1.json"
+            ))
+            .expect("decode shared alias setup fixture");
+            let raw_scope = fixture
+                .as_object()
+                .and_then(|object| object.get("permission_scope_json_vector"))
+                .expect("shared exact alias permission scope");
+            let scope = AccountAliasPermissionScope::json_from_value(raw_scope)
+                .expect("decode shared exact alias permission scope");
+            let expected = AccountAliasPermissionScope::Alias(ResolvedAccountAliasV1::new(
+                "merchant@banka.paynet"
+                    .parse::<AccountAliasName>()
+                    .expect("canonical account alias"),
+                DataSpaceId::new(7),
+            ));
+
+            assert_eq!(scope, expected);
+            let encoded = norito::json::to_json(&scope).expect("encode shared exact alias scope");
+            let encoded: norito::json::Value =
+                norito::json::from_str(&encoded).expect("decode encoded exact alias scope");
+            assert_eq!(&encoded, raw_scope);
+        }
+
+        #[test]
+        fn alias_resolution_delegation_roundtrips_with_an_exact_scope() {
+            let permission = CanDelegateAccountAliasResolution {
+                scope: AccountAliasPermissionScope::Domain(
+                    DomainId::try_new("hbl", "sbp").expect("canonical HBL domain"),
+                ),
+            };
+            let encoded = norito::json::to_json(&permission)
+                .expect("serialize alias-resolution delegation permission");
+            let decoded: CanDelegateAccountAliasResolution = norito::json::from_str(&encoded)
+                .expect("deserialize alias-resolution delegation permission");
+
+            assert_eq!(decoded, permission);
+            assert!(encoded.contains("hbl.sbp"));
+        }
+    }
+}
+
+/// Permission tokens governing reads from restricted Nexus dataspaces.
+pub mod query {
+    use super::*;
+
+    permission! {
+        /// Permission to read non-public ledger data from one exact dataspace.
+        ///
+        /// The token does not authorize writes, reads from any other dataspace,
+        /// or account-alias resolution without its separate exact permission.
+        #[derive(Copy)]
+        pub struct CanReadRestrictedDataspace {
+            /// Exact restricted dataspace whose ledger data may be read.
+            pub dataspace: DataSpaceId,
         }
     }
 }
@@ -374,6 +480,29 @@ pub mod escrow {
         /// Permission to resolve a disputed native asset escrow.
         #[derive(Copy)]
         pub struct CanResolveEscrowDispute;
+    }
+}
+
+/// Permission tokens covering governed offline-settlement releases.
+pub mod offline {
+    use super::*;
+
+    permission! {
+        /// Permission to manage native offline escrow issuance and settlement.
+        #[derive(Copy)]
+        pub struct CanManageOfflineEscrow;
+    }
+
+    permission! {
+        /// Permission to activate an authenticated Kagemusha ABI-20/V4 recursive release.
+        #[derive(Copy)]
+        pub struct CanActivateKagemushaRecursiveReleaseV4;
+    }
+
+    permission! {
+        /// Permission to publish or rotate the governed offline device-attestation policy.
+        #[derive(Copy)]
+        pub struct CanManageOfflineDeviceAttestationPolicy;
     }
 }
 
@@ -571,20 +700,47 @@ pub mod nexus {
     }
 
     permission! {
-        /// Permission to charge Nexus fees to a named policy owned by the sponsor account.
-        pub struct CanUseFeeSponsor {
-            /// Sponsor account that may be debited for fees.
-            pub sponsor: AccountId,
-            /// Sponsor-local policy name that must allow the transaction.
-            pub policy: Name,
+        /// Permission to publish, replace, revoke, or expire one exact UAID manifest.
+        #[derive(Copy)]
+        pub struct CanPublishSpaceDirectoryManifestForUaid {
+            /// Dataspace identifier governed by the manifest.
+            pub dataspace: DataSpaceId,
+            /// Exact universal account identifier governed by this permission.
+            pub uaid: iroha_data_model::nexus::UniversalAccountId,
         }
     }
 
     permission! {
-        /// Permission to manage fee sponsor policies owned by the specified sponsor account.
-        pub struct CanManageFeeSponsorPolicy {
-            /// Sponsor account whose policies may be managed.
+        /// Permission to manage manifests for accounts bound to one exact account-alias domain.
+        pub struct CanPublishSpaceDirectoryManifestForAccountDomain {
+            /// Dataspace identifier governed by the manifest.
+            pub dataspace: DataSpaceId,
+            /// Exact account-alias domain whose bound accounts may be managed.
+            pub domain: DomainId,
+        }
+    }
+
+    permission! {
+        /// Permission to manage fee sponsor programs owned by one sponsor account.
+        pub struct CanManageFeeSponsorProgram {
+            /// Sponsor account whose programs may be created and revised.
             pub sponsor: AccountId,
+        }
+    }
+
+    permission! {
+        /// Permission to enroll or unenroll beneficiaries in one exact sponsor program.
+        pub struct CanEnrollFeeSponsorProgram {
+            /// Exact program whose enrollment set may be managed.
+            pub program_id: FeeSponsorProgramId,
+        }
+    }
+
+    permission! {
+        /// Permission to withdraw assets from one exact sponsor-program vault.
+        pub struct CanWithdrawFeeSponsorProgram {
+            /// Exact program whose paused or closing vault may be withdrawn.
+            pub program_id: FeeSponsorProgramId,
         }
     }
 }
@@ -832,6 +988,7 @@ mod tests {
     use super::oracle::{
         CanManageTwitterBindings, CanRegisterOracleFeed, CanVoteOracleChangeStage,
     };
+    use super::query::CanReadRestrictedDataspace;
     use crate::permission::Permission as _;
     use iroha_data_model::oracle::OracleChangeStage;
     use iroha_data_model::{
@@ -913,6 +1070,25 @@ mod tests {
         assert_eq!(
             CanResolveEscrowDispute::name().as_str(),
             "CanResolveEscrowDispute"
+        );
+    }
+
+    #[test]
+    fn restricted_dataspace_read_permission_is_exact_and_typed() {
+        let permission = CanReadRestrictedDataspace {
+            dataspace: DataSpaceId::new(10),
+        };
+        let json = norito::json::to_json(&permission).expect("serialize permission");
+
+        assert_eq!(
+            CanReadRestrictedDataspace::name().as_str(),
+            "CanReadRestrictedDataspace"
+        );
+        assert_eq!(json, "{\"dataspace\":10}");
+        assert!(
+            norito::json::from_str::<CanReadRestrictedDataspace>("{\"dataspace\":\"sbp\"}")
+                .is_err(),
+            "restricted read grants must carry a numeric DataSpaceId"
         );
     }
 

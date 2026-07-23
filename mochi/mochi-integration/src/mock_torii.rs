@@ -1,4 +1,4 @@
-use std::{fs, net::SocketAddr, path::Path, sync::Arc, time::Duration};
+use std::{fs, net::SocketAddr, num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 
 use axum::{
     Router,
@@ -15,17 +15,31 @@ use color_eyre::{Result, eyre::eyre};
 use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
-        consensus::SumeragiDiagnosticsStatus, consensus_v2::HeightContextId,
-        consensus_v2::PROTOCOL_VERSION, consensus_v2::SumeragiV2BodyState,
-        consensus_v2::SumeragiV2Status, consensus_v2::SumeragiV2StatusPhase,
+        SignedBlock,
+        consensus::SumeragiDiagnosticsStatus,
+        consensus_v2::{
+            ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
+            SumeragiV2GenesisContextParameters, SumeragiV2HeightContextStatus, SumeragiV2Status,
+            SumeragiV2StatusPhase,
+        },
+        stream::{BlockMessage, BlockSubscriptionRequest},
     },
+    events::{
+        EventBox,
+        pipeline::{PipelineEventBox, TransactionEvent, TransactionStatus},
+        stream::{EventMessage, EventSubscriptionRequest},
+    },
+    nexus::{DataSpaceId, LaneId},
     parameter::system::SumeragiConsensusMode,
+    prelude::ChainId,
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_telemetry::metrics::{
     CryptoStatus, GovernanceManifestAdmissionCounters, GovernanceManifestQuorumCounters,
     GovernanceProposalCounters, GovernanceProtectedNamespaceCounters, GovernanceStatus,
     Halo2Status, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
 };
+use iroha_torii_shared::{NORITO_V1_WEBSOCKET_SUBPROTOCOL, uri as torii_uri};
 use norito::json::{self, Value};
 use parking_lot::Mutex;
 use tokio::{
@@ -34,12 +48,43 @@ use tokio::{
     task::JoinHandle,
 };
 
-/// Binary fixture forwarded on the mocked `/block/stream` endpoint.
-pub const CANONICAL_BLOCK_WIRE: &[u8] =
-    include_bytes!("../../mochi-core/tests/fixtures/canonical_block_wire.bin");
-/// Binary fixture forwarded on the mocked `/events` endpoint.
-pub const CANONICAL_EVENT_MESSAGE: &[u8] =
-    include_bytes!("../../mochi-core/tests/fixtures/canonical_event_message.bin");
+fn canonical_block_stream_message() -> Vec<u8> {
+    let signer = mochi_core::development_signing_authorities()
+        .first()
+        .expect("development signer must exist");
+    let chain: ChainId = "mochi-mock-block-stream"
+        .parse()
+        .expect("mock chain id must parse");
+    let mut transaction = TransactionBuilder::new(
+        chain,
+        signer.account_id().clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    );
+    transaction.set_creation_time(Duration::from_secs(42));
+    let transaction = transaction
+        .with_instructions(std::iter::empty::<iroha_data_model::isi::InstructionBox>())
+        .sign(signer.key_pair().private_key());
+    let block = SignedBlock::genesis(
+        vec![transaction],
+        signer.key_pair().private_key(),
+        None,
+        None,
+    );
+    norito::to_bytes(&BlockMessage(block)).expect("canonical block message must encode")
+}
+
+fn canonical_event_stream_message() -> Vec<u8> {
+    let event = EventMessage::new(EventBox::Pipeline(PipelineEventBox::Transaction(
+        TransactionEvent {
+            hash: HashOf::from_untyped_unchecked(Hash::new(b"mochi-mock-transaction")),
+            block_height: Some(NonZeroU64::MIN),
+            lane_id: LaneId::new(0),
+            dataspace_id: DataSpaceId::new(0),
+            status: TransactionStatus::Approved,
+        },
+    )));
+    norito::to_bytes(&event).expect("canonical event message must encode")
+}
 
 /// Deterministic payloads served by the mock Torii instance.
 #[derive(Clone, Debug)]
@@ -50,15 +95,15 @@ pub struct MockToriiData {
     pub sumeragi: SumeragiV2Status,
     /// Snapshot returned from `GET /v1/sumeragi/diagnostics`.
     pub sumeragi_diagnostics: SumeragiDiagnosticsStatus,
-    /// JSON payload returned from `GET /configuration`.
+    /// JSON payload returned from `GET /v1/configuration`.
     pub configuration: Value,
     /// Prometheus metrics payload returned from `GET /metrics`.
     pub metrics: String,
-    /// Raw bytes returned from `POST /query`.
+    /// Raw bytes returned from `POST /v1/query`.
     pub query_response: Vec<u8>,
-    /// Binary WebSocket frame broadcast on `/block/stream`.
+    /// Binary `BlockMessage` frame broadcast on `/v1/blocks/stream`.
     pub block_frame: Vec<u8>,
-    /// Binary WebSocket frame broadcast on `/events`.
+    /// Binary `EventMessage` frame broadcast on `/v1/events/ws`.
     pub event_frame: Vec<u8>,
 }
 
@@ -135,6 +180,19 @@ impl Default for MockToriiData {
             pending_persistence_id: None,
             last_committed_height: 9,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: 1,
+                epoch_end_height: 100,
+                mode: ConsensusMode::Permissioned,
+                epoch_seed: [0xA5; 32],
+                validator_count: 4,
+                quorum: DualQuorum {
+                    min_signers: 3,
+                    total_power: 4,
+                },
+            },
+            last_commit_qc: None,
+            liveness: Default::default(),
         };
         let sumeragi_diagnostics = SumeragiDiagnosticsStatus {
             pipeline_execution: Default::default(),
@@ -177,14 +235,15 @@ impl Default for MockToriiData {
             configuration,
             metrics: "iroha_blocks_total 5\n".to_owned(),
             query_response: vec![0x13, 0x37],
-            block_frame: CANONICAL_BLOCK_WIRE.to_vec(),
-            event_frame: CANONICAL_EVENT_MESSAGE.to_vec(),
+            block_frame: canonical_block_stream_message(),
+            event_frame: canonical_event_stream_message(),
         }
     }
 }
 
 impl MockToriiData {
-    /// Load deterministic fixtures for a mock Torii instance from the provided directory.
+    /// Load deterministic HTTP fixtures and pair them with stream messages encoded from the
+    /// current Torii DTO schema.
     pub fn from_fixture_dir(dir: impl AsRef<Path>) -> Result<Self> {
         let dir = dir.as_ref();
 
@@ -241,12 +300,6 @@ impl MockToriiData {
         let query_path = dir.join("query.bin");
         let query_response = read_bytes(&query_path)?;
 
-        let block_path = dir.join("block.bin");
-        let block_frame = read_bytes(&block_path)?;
-
-        let event_path = dir.join("event.bin");
-        let event_frame = read_bytes(&event_path)?;
-
         Ok(Self {
             status,
             sumeragi,
@@ -254,8 +307,8 @@ impl MockToriiData {
             configuration,
             metrics,
             query_response,
-            block_frame,
-            event_frame,
+            block_frame: canonical_block_stream_message(),
+            event_frame: canonical_event_stream_message(),
         })
     }
 }
@@ -395,12 +448,12 @@ impl MockTorii {
             .route("/status", get(handle_status))
             .route("/v1/sumeragi/status", get(handle_sumeragi_status))
             .route("/v1/sumeragi/diagnostics", get(handle_sumeragi_diagnostics))
-            .route("/configuration", get(handle_configuration))
+            .route(torii_uri::CONFIGURATION, get(handle_configuration))
             .route("/metrics", get(handle_metrics))
-            .route("/transaction", post(handle_transaction))
-            .route("/query", post(handle_query))
-            .route("/block/stream", get(handle_block_stream))
-            .route("/events", get(handle_event_stream))
+            .route(torii_uri::TRANSACTION, post(handle_transaction))
+            .route(torii_uri::QUERY, post(handle_query))
+            .route(torii_uri::BLOCKS_STREAM, get(handle_block_stream))
+            .route(torii_uri::SUBSCRIPTION, get(handle_event_stream))
             .with_state(state.clone());
 
         let server =
@@ -441,7 +494,7 @@ impl MockTorii {
         guard.metrics = metrics.into();
     }
 
-    /// Broadcast a frame on the `/block/stream` feed.
+    /// Broadcast a frame on the `/v1/blocks/stream` feed.
     pub fn broadcast_block(&self, frame: MockToriiFrame) {
         if let MockToriiFrame::Binary(bytes) = &frame {
             let mut guard = self.state.default_block_frame.lock();
@@ -450,7 +503,7 @@ impl MockTorii {
         let _ = self.state.block_tx.send(frame);
     }
 
-    /// Broadcast a frame on the `/events` feed.
+    /// Broadcast a frame on the `/v1/events/ws` feed.
     pub fn broadcast_event(&self, frame: MockToriiFrame) {
         if let MockToriiFrame::Binary(bytes) = &frame {
             let mut guard = self.state.default_event_frame.lock();
@@ -525,17 +578,25 @@ async fn handle_block_stream(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| block_stream(socket, state))
+    ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
+        .on_upgrade(move |socket| block_stream(socket, state))
 }
 
 async fn handle_event_stream(
     State(state): State<AppState>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| event_stream(socket, state))
+    ws.protocols([NORITO_V1_WEBSOCKET_SUBPROTOCOL])
+        .on_upgrade(move |socket| event_stream(socket, state))
 }
 
 async fn block_stream(mut socket: WebSocket, state: AppState) {
+    let Some(Ok(Message::Binary(request))) = socket.recv().await else {
+        return;
+    };
+    if norito::decode_from_bytes::<BlockSubscriptionRequest>(&request).is_err() {
+        return;
+    }
     if let Err(err) = send_default_frame(&mut socket, &state.default_block_frame).await {
         eprintln!("failed to send default block frame: {err}");
         return;
@@ -549,6 +610,15 @@ async fn block_stream(mut socket: WebSocket, state: AppState) {
 }
 
 async fn event_stream(mut socket: WebSocket, state: AppState) {
+    let Some(Ok(Message::Binary(request))) = socket.recv().await else {
+        return;
+    };
+    let Ok(request) = norito::decode_from_bytes::<EventSubscriptionRequest>(&request) else {
+        return;
+    };
+    if request.filters.is_empty() {
+        return;
+    }
     if let Err(err) = send_default_frame(&mut socket, &state.default_event_frame).await {
         eprintln!("failed to send default event frame: {err}");
         return;
@@ -614,6 +684,16 @@ pub fn kagami_default_manifest_json(
         norito::json::value::to_value(&consensus_mode).expect("serialize consensus mode"),
     );
     manifest.insert(
+        "wire_protocol_version".to_string(),
+        norito::json::value::to_value(&u32::from(PROTOCOL_VERSION))
+            .expect("serialize wire protocol version"),
+    );
+    manifest.insert(
+        "sumeragi_v2".to_string(),
+        norito::json::value::to_value(&SumeragiV2GenesisContextParameters::recommended())
+            .expect("serialize Sumeragi v2 genesis context"),
+    );
+    manifest.insert(
         "transactions".to_string(),
         Value::Array(vec![Value::Object(norito::json::Map::new())]),
     );
@@ -627,8 +707,21 @@ mod tests {
     #[test]
     fn default_data_uses_fixtures() {
         let data = MockToriiData::default();
-        assert_eq!(data.block_frame.as_slice(), CANONICAL_BLOCK_WIRE);
-        assert_eq!(data.event_frame.as_slice(), CANONICAL_EVENT_MESSAGE);
+        let block_message: BlockMessage = norito::decode_from_bytes(&data.block_frame)
+            .expect("default block frame must be a canonical BlockMessage");
+        assert_eq!(block_message.0.header().height(), NonZeroU64::MIN);
+        assert_eq!(block_message.0.external_entrypoint_count(), 1);
+        assert_eq!(block_message.0.signatures().len(), 1);
+        let event_message: EventMessage = norito::decode_from_bytes(&data.event_frame)
+            .expect("default event frame must be a canonical EventMessage");
+        assert!(matches!(
+            EventBox::from(event_message),
+            EventBox::Pipeline(PipelineEventBox::Transaction(TransactionEvent {
+                block_height: Some(height),
+                status: TransactionStatus::Approved,
+                ..
+            })) if height == NonZeroU64::MIN
+        ));
     }
 
     #[test]
@@ -668,6 +761,20 @@ mod tests {
         assert_eq!(
             value.get("consensus_mode").and_then(Value::as_str),
             Some("Npos")
+        );
+        assert_eq!(
+            value.get("wire_protocol_version").and_then(Value::as_u64),
+            Some(u64::from(PROTOCOL_VERSION))
+        );
+        assert_eq!(
+            value
+                .get("sumeragi_v2")
+                .and_then(Value::as_object)
+                .and_then(|context| context.get("da_layout"))
+                .and_then(Value::as_object)
+                .and_then(|layout| layout.get("chunk_size_bytes"))
+                .and_then(Value::as_u64),
+            Some(256 * 1024)
         );
     }
 }

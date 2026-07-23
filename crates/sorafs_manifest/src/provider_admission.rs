@@ -1584,7 +1584,8 @@ mod tests {
             profile_aliases: Some(aliases),
             stake: StakePointer {
                 pool_id: [0x22; 32],
-                stake_amount: 5_000,
+                stake_amount: crate::deal::XorQuantity::try_from_micro(5_000)
+                    .expect("fixture stake is representable"),
             },
             capabilities: vec![sample_capability(), sample_range_capability()],
             endpoints: vec![endpoint_entry],
@@ -1610,7 +1611,7 @@ mod tests {
             provider_id: proposal.provider_id,
             profile_id: proposal.profile_id.clone(),
             profile_aliases: proposal.profile_aliases.clone(),
-            stake: proposal.stake,
+            stake: proposal.stake.clone(),
             qos: QosHints {
                 availability: AvailabilityTier::Hot,
                 max_retrieval_latency_ms: 1_500,
@@ -2370,10 +2371,17 @@ mod tests {
         let record = AdmissionRecord::new(base_envelope.clone(), &policy).expect("record");
 
         let mut renewal_proposal = base_envelope.proposal.clone();
-        renewal_proposal.stake.stake_amount += 10_000;
+        renewal_proposal.stake.stake_amount = renewal_proposal
+            .stake
+            .stake_amount
+            .checked_add(
+                &crate::deal::XorQuantity::try_from_micro(10_000)
+                    .expect("fixture increment is representable"),
+            )
+            .expect("fixture stake addition is representable");
         renewal_proposal.endpoints[0].attestation.expires_at += 3_600;
         let mut renewal_advert = base_envelope.advert_body.clone();
-        renewal_advert.stake = renewal_proposal.stake;
+        renewal_advert.stake = renewal_proposal.stake.clone();
         renewal_advert.endpoints = renewal_proposal
             .endpoints
             .iter()
@@ -2411,7 +2419,14 @@ mod tests {
             .expect("renewal applied");
         assert_eq!(
             updated_record.envelope.proposal.stake.stake_amount,
-            base_proposal.stake.stake_amount + 10_000
+            base_proposal
+                .stake
+                .stake_amount
+                .checked_add(
+                    &crate::deal::XorQuantity::try_from_micro(10_000)
+                        .expect("fixture increment is representable"),
+                )
+                .expect("fixture stake addition is representable")
         );
         assert_eq!(
             updated_record.envelope.advert_body.endpoints[0].host_pattern,

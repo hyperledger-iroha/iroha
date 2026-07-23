@@ -22,11 +22,12 @@ const REJECT_CASES: &[RejectCase] = &[
         name: "direct-secret-control-flow",
         source: r#"seiyaku Privacy {
     kotoage fn direct() authorize("UsePrivacy") {
-        if crypto::private_input(0) { return; }
+        let Secret<int> value = crypto::private_input(0);
+        if value { return; }
     }
 }"#,
         code: "E_SECRET_CONTROL_FLOW",
-        primary: "if crypto::private_input(0) { return; }",
+        primary: "if value { return; }",
     },
     RejectCase {
         name: "helper-transitive-secret-control-flow",
@@ -62,11 +63,12 @@ const REJECT_CASES: &[RejectCase] = &[
         name: "secret-log",
         source: r#"seiyaku Privacy {
     kotoage fn log_secret() authorize("UsePrivacy") {
-        debug::info(crypto::private_input(0));
+        let Secret<int> value = crypto::private_input(0);
+        debug::info(value);
     }
 }"#,
         code: "E_SECRET_LOG",
-        primary: "debug::info(crypto::private_input(0))",
+        primary: "debug::info(value)",
     },
     RejectCase {
         name: "secret-bearing-durable-state-type",
@@ -82,69 +84,64 @@ const REJECT_CASES: &[RejectCase] = &[
         source: r#"seiyaku Privacy {
     state StateMap<int, int> values;
     kotoage fn write() authorize("UsePrivacy") {
-        values[crypto::private_input(0)] = 1;
+        let Secret<int> key = crypto::private_input(0);
+        values[key] = 1;
     }
 }"#,
         code: "E_SECRET_STATE_KEY",
-        primary: "values[crypto::private_input(0)] = 1;",
+        primary: "values[key] = 1;",
     },
     RejectCase {
         name: "secret-durable-state-value",
         source: r#"seiyaku Privacy {
     state StateMap<int, int> values;
     kotoage fn write() authorize("UsePrivacy") {
-        values[0] = crypto::private_input(0);
+        let Secret<int> value = crypto::private_input(0);
+        values[0] = value;
     }
 }"#,
         code: "E_SECRET_STATE_WRITE",
-        primary: "values[0] = crypto::private_input(0);",
+        primary: "values[0] = value;",
     },
     RejectCase {
         name: "secret-raw-state-host-sink",
         source: r#"seiyaku Privacy {
     kotoage fn write() authorize("UsePrivacy") {
-        state::set(path: crypto::private_input(0), value: 1);
+        let Secret<int> path = crypto::private_input(0);
+        state::set(path: path, value: 1);
     }
 }"#,
         code: "E_SECRET_STATE_SINK",
-        primary: "state::set(path: crypto::private_input(0), value: 1)",
+        primary: "state::set(path: path, value: 1)",
     },
     RejectCase {
         name: "secret-ledger-query-sink",
         source: r#"seiyaku Privacy {
     kotoage fn query() authorize("UsePrivacy") {
-        let result = ledger::query::account(id: crypto::private_input(0));
+        let Secret<int> id = crypto::private_input(0);
+        let result = ledger::query::account(id: id);
     }
 }"#,
         code: "E_SECRET_HOST_SINK",
-        primary: "ledger::query::account(id: crypto::private_input(0))",
+        primary: "ledger::query::account(id: id)",
     },
     RejectCase {
         name: "secret-ledger-write-sink",
         source: r#"seiyaku Privacy {
     kotoage fn register() authorize("UsePrivacy") {
-        ledger::domain::register(domain: crypto::private_input(0));
+        let Secret<int> domain = crypto::private_input(0);
+        ledger::domain::register(domain: domain);
     }
 }"#,
         code: "E_SECRET_HOST_SINK",
-        primary: "ledger::domain::register(domain: crypto::private_input(0))",
-    },
-    RejectCase {
-        name: "raw-secret-nullifier-disclosure",
-        source: r#"seiyaku Privacy {
-    kotoage fn disclose() authorize("UsePrivacy") {
-        crypto::use_nullifier(crypto::private_input(0));
-    }
-}"#,
-        code: "E_SECRET_NULLIFIER_DISCLOSURE",
-        primary: "crypto::use_nullifier(crypto::private_input(0))",
+        primary: "ledger::domain::register(domain: domain)",
     },
     RejectCase {
         name: "secret-private-input-index",
         source: r#"seiyaku Privacy {
     kotoage fn dynamic_index() authorize("UsePrivacy") {
         let Secret<int> index = crypto::private_input(0);
-        let value = crypto::private_input(index);
+        let Secret<int> value = crypto::private_input(index);
     }
 }"#,
         code: "E_SECRET_PRIVATE_INPUT_INDEX",

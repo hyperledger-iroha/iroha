@@ -1,7 +1,7 @@
 //! Golden structural schemas for the first-release public Offline requests.
 
 use iroha_data_model::offline::{
-    KagemushaRecursiveSpendRedeemRequestV2, KagemushaRecursiveSpendTopUpRequestV2,
+    KagemushaRecursiveSpendRedeemRequestV4, KagemushaRecursiveSpendTopUpRequestV4,
 };
 use iroha_schema::IntoSchema;
 use sha2::{Digest as _, Sha256};
@@ -18,13 +18,13 @@ fn structural_schema_hash<T: IntoSchema>() -> String {
 }
 
 #[test]
-fn public_offline_request_structural_schemas_are_frozen_for_v1() {
+fn public_offline_request_structural_schemas_are_frozen_for_abi20_v4() {
     assert_eq!(
-        structural_schema_hash::<KagemushaRecursiveSpendTopUpRequestV2>(),
-        "e4df2ad21939cb32b251406f431c3d7a"
+        structural_schema_hash::<KagemushaRecursiveSpendTopUpRequestV4>(),
+        "61c0b26a37f66702fec5f6fe3ec0fd7b"
     );
     assert_eq!(
-        structural_schema_hash::<KagemushaRecursiveSpendRedeemRequestV2>(),
-        "6bcd95587f27af1626d014a2b2494eb0"
+        structural_schema_hash::<KagemushaRecursiveSpendRedeemRequestV4>(),
+        "9baef4065151b262dd09536997e51933"
     );
 }

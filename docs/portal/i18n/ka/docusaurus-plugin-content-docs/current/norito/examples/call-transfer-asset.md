@@ -34,16 +34,12 @@ slug: /norito/examps/call-transfer-asset
 [ჩამოტვირთეთ Kotodama წყარო](/norito-snippets/call-transfer-asset.ko)
 
 ```kotodama
-// Direct builtin call (no contract-style call syntax) inside a contract.
+// Direct builtin call (no raw call syntax) inside a seiyaku.
 seiyaku TransferCall {
     kotoage fn pay() authorize("AssetTransferRole") {
         ledger::asset::transfer(
-            source: AccountId::parse(
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB",
-            ),
-            destination: AccountId::parse(
-                "sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76",
-            ),
+            source: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV", ),
+            destination: AccountId::parse("sorauﾛ1NfｷgﾉﾓﾉBｦKﾌﾘﾒoﾇﾂﾛrG81ﾋjWﾎﾕVncwﾌSｱ3pﾘﾋﾉhUS9Q76", ),
             asset_definition: AssetDefinitionId::parse("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
             amount: 10,
             dataspace: DataSpaceId::parse("0"),

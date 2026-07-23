@@ -76,6 +76,30 @@ var swiftSettings: [SwiftSetting] = [
     .define("IROHASWIFT_BRIDGE_PRESENT")
 ]
 
+// Keep Google's Apple Nearby implementation deterministic for fresh Xcode
+// checkouts. Nearby's transitive Abseil branch is additionally locked by the
+// checked-in Package.resolved file.
+let packageDependencies: [Package.Dependency] = [
+    .package(
+        url: "https://github.com/google/nearby.git",
+        revision: "53568fe88281d4408e48e3ebec7d8560bed7077d"
+    ),
+    .package(
+        url: "https://github.com/firebase/boringssl-SwiftPM.git",
+        exact: "0.7.2"
+    )
+]
+let mobileTransportDependencies: [Target.Dependency] = [
+    "IrohaSwift",
+    .product(
+        name: "NearbyConnections",
+        package: "nearby",
+        condition: .when(platforms: [.iOS, .macOS])
+    )
+]
+let mobileTransportTestDependencies: [Target.Dependency] =
+    testDependencies + ["IrohaSwiftMobileTransports"]
+
 let package = Package(
     name: "IrohaSwift",
     platforms: [
@@ -85,8 +109,12 @@ let package = Package(
     products: [
         .library(
             name: "IrohaSwift",
-            targets: ["IrohaSwift"])
+            targets: ["IrohaSwift"]),
+        .library(
+            name: "IrohaSwiftMobileTransports",
+            targets: ["IrohaSwiftMobileTransports"])
     ],
+    dependencies: packageDependencies,
     targets: targets + [
         .target(
             name: "IrohaSwift",
@@ -97,6 +125,12 @@ let package = Package(
             swiftSettings: swiftSettings,
             linkerSettings: irohaSwiftLinkerSettings
         ),
+        .target(
+            name: "IrohaSwiftMobileTransports",
+            dependencies: mobileTransportDependencies,
+            path: "Sources/IrohaSwiftMobileTransports",
+            swiftSettings: swiftSettings
+        ),
         .testTarget(
             name: "IrohaSwiftTests",
             dependencies: testDependencies,
@@ -104,6 +138,12 @@ let package = Package(
             resources: [
                 .process("Fixtures")
             ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "IrohaSwiftMobileTransportsTests",
+            dependencies: mobileTransportTestDependencies,
+            path: "Tests/IrohaSwiftMobileTransportsTests",
             swiftSettings: swiftSettings
         )
     ]

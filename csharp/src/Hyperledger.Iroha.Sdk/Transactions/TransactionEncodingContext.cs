@@ -222,6 +222,60 @@ internal sealed class TransactionEncodingContext
         return executable.ToArray();
     }
 
+    public byte[] EncodeExecutableBatch(IReadOnlyList<TransactionBatchEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            throw new ArgumentException("Executable batches must contain at least one item.", nameof(entries));
+        }
+
+        var sequence = new OfflineNoritoWriter();
+        sequence.WriteLength((ulong)entries.Count);
+        foreach (var entry in entries)
+        {
+            var item = new OfflineNoritoWriter();
+            switch (entry)
+            {
+                case TransactionBatchEntry.InstructionEntry instruction:
+                    item.WriteUInt32LittleEndian(0);
+                    item.WriteField(EncodeInstruction(instruction.Value));
+                    break;
+                case TransactionBatchEntry.ContractCallEntry call:
+                    item.WriteUInt32LittleEndian(1);
+                    item.WriteField(EncodeContractInvocation(call.Invocation));
+                    break;
+                default:
+                    throw new ArgumentException("Unknown executable batch entry.", nameof(entries));
+            }
+            sequence.WriteField(item.ToArray());
+        }
+
+        var executable = new OfflineNoritoWriter();
+        executable.WriteUInt32LittleEndian(4);
+        executable.WriteField(sequence.ToArray());
+        return executable.ToArray();
+    }
+
+    private byte[] EncodeContractInvocation(TransactionContractInvocation invocation)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeString(invocation.ContractAddress));
+        writer.WriteField(invocation.ExpectedCodeHashSpan);
+        writer.WriteField(EncodeString(invocation.Entrypoint));
+        var arguments = new OfflineNoritoWriter();
+        if (invocation.HasArguments)
+        {
+            arguments.WriteByte(1);
+            arguments.WriteField(EncodeBytesVec(invocation.ArgumentsSpan));
+        }
+        else
+        {
+            arguments.WriteByte(0);
+        }
+        writer.WriteField(arguments.ToArray());
+        return writer.ToArray();
+    }
+
     public byte[] EncodeAssetId(string assetDefinitionId, string accountId, ulong? dataspaceId = null)
     {
         var writer = new OfflineNoritoWriter();
@@ -234,6 +288,21 @@ internal sealed class TransactionEncodingContext
     public byte[] EncodeAssetDefinitionId(string literal)
     {
         return EncodeAssetDefinitionAddress(literal);
+    }
+
+    public byte[] EncodeFeePaymentIntent(FeePaymentIntent feePayment)
+    {
+        ArgumentNullException.ThrowIfNull(feePayment);
+
+        var writer = new OfflineNoritoWriter();
+        writer.WriteUInt32LittleEndian(feePayment.PayerTag);
+        writer.WriteField(feePayment switch
+        {
+            AuthorityFeePaymentIntent authority => EncodeAuthorityFeePayment(authority),
+            SponsorFeePaymentIntent sponsor => EncodeSponsorFeePayment(sponsor),
+            _ => throw new ArgumentException("Unknown fee payment intent subtype.", nameof(feePayment)),
+        });
+        return writer.ToArray();
     }
 
     public byte[] EncodeNftId(string nftId)
@@ -360,25 +429,36 @@ internal sealed class TransactionEncodingContext
         }
     }
 
-    private byte[] EncodeAssetDefinitionAddress(string literal)
+    internal static string CanonicalizeAssetDefinitionId(
+        string literal,
+        string paramName = "assetDefinitionId")
     {
-        var exactLiteral = RequireExactNonBlank(literal, nameof(literal));
+        var exactLiteral = RequireExactNonBlank(literal, paramName);
         if (exactLiteral.IndexOfAny([':', '#', '@', '$']) >= 0)
         {
-            throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
+            throw new ArgumentException($"Invalid asset definition id `{literal}`.", paramName);
         }
 
-        var payload = DecodeBase58(exactLiteral);
+        var payload = DecodeBase58(exactLiteral, paramName);
         if (payload.Length != 21 || payload[0] != AssetDefinitionVersion)
         {
-            throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
+            throw new ArgumentException($"Invalid asset definition id `{literal}`.", paramName);
         }
 
         var uuidBytes = payload.AsSpan(1, 16);
         if ((uuidBytes[6] >> 4) != 0x4 || (uuidBytes[8] & 0xC0) != 0x80)
         {
-            throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
+            throw new ArgumentException($"Invalid asset definition id `{literal}`.", paramName);
         }
+
+        return exactLiteral;
+    }
+
+    private byte[] EncodeAssetDefinitionAddress(string literal)
+    {
+        var exactLiteral = CanonicalizeAssetDefinitionId(literal, nameof(literal));
+        var payload = DecodeBase58(exactLiteral, nameof(literal));
+        var uuidBytes = payload.AsSpan(1, 16);
 
         var writer = new OfflineNoritoWriter();
         foreach (var value in uuidBytes)
@@ -460,7 +540,7 @@ internal sealed class TransactionEncodingContext
         return [.. bytes];
     }
 
-    private static byte[] DecodeBase58(string literal)
+    private static byte[] DecodeBase58(string literal, string paramName)
     {
         var zeroCount = literal.TakeWhile(static character => character == '1').Count();
         var bytes = new List<byte> { 0 };
@@ -469,7 +549,7 @@ internal sealed class TransactionEncodingContext
         {
             if (!Base58Alphabet.TryGetValue(character, out var value))
             {
-                throw new ArgumentException($"Invalid asset definition id `{literal}`.", nameof(literal));
+                throw new ArgumentException($"Invalid asset definition id `{literal}`.", paramName);
             }
 
             var carry = value;
@@ -499,6 +579,60 @@ internal sealed class TransactionEncodingContext
         }
 
         return decoded;
+    }
+
+    private byte[] EncodeAuthorityFeePayment(AuthorityFeePaymentIntent payment)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeFeeChargeLimits(payment.ChargeLimits));
+        writer.WriteField(EncodeOption(payment.GasLimit, EncodeUInt64));
+        return writer.ToArray();
+    }
+
+    private byte[] EncodeSponsorFeePayment(SponsorFeePaymentIntent payment)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeFeeSponsorProgramId(payment.ProgramId));
+        writer.WriteField(EncodeUInt64(payment.ProgramRevision));
+        writer.WriteField(EncodeFeeChargeLimits(payment.ChargeLimits));
+        writer.WriteField(EncodeOption(payment.GasLimit, EncodeUInt64));
+        return writer.ToArray();
+    }
+
+    private byte[] EncodeFeeSponsorProgramId(FeeSponsorProgramId programId)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(EncodeAccountId(programId.Sponsor));
+        writer.WriteField(EncodeName(programId.Name));
+        return writer.ToArray();
+    }
+
+    private byte[] EncodeFeeChargeLimits(IReadOnlyList<FeeChargeLimit> limits)
+    {
+        var writer = new OfflineNoritoWriter();
+        writer.WriteLength((ulong)limits.Count);
+        foreach (var limit in limits)
+        {
+            writer.WriteField(EncodeFeeChargeLimit(limit));
+        }
+        return writer.ToArray();
+    }
+
+    private byte[] EncodeFeeChargeLimit(FeeChargeLimit limit)
+    {
+        var kind = new OfflineNoritoWriter();
+        kind.WriteUInt32LittleEndian(limit.Kind switch
+        {
+            FeeChargeKind.Nexus => 0,
+            FeeChargeKind.PipelineGas => 1,
+            _ => throw new ArgumentOutOfRangeException(nameof(limit), "Unknown fee charge kind."),
+        });
+
+        var writer = new OfflineNoritoWriter();
+        writer.WriteField(kind.ToArray());
+        writer.WriteField(EncodeAssetDefinitionId(limit.AssetDefinitionId));
+        writer.WriteField(EncodeQuantity(NumericV1.QuantityValue.ParseCanonical(limit.MaxAmount)));
+        return writer.ToArray();
     }
 
     private static byte[] DecodeFixedBytesLiteral(string literal, int expectedLength)

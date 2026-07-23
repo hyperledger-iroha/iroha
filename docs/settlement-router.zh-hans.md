@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 每个数据空间缓冲区帐户中的通道元数据连线：
 - `settlement.buffer_account` — 持有储备金的账户（例如，`buffer::cbdc_treasury`）。
 - `settlement.buffer_asset` — 借记净空的资产定义（通常为 `xor#sora`）。
-- `settlement.buffer_capacity_micro` — 微 XOR（十进制字符串）中配置的容量。
+- `settlement.buffer_capacity` — 微 XOR（十进制字符串）中配置的容量。
 
 缺少元数据会禁用该通道的缓冲区快照（遥测回退到零容量/状态）。## 转换管道
 1. **报价：** `SettlementEngine::quote` 将配置的 epsilon + 波动率保证金和折扣层应用于 TWAP 报价，返回 `SettlementReceipt` 以及 `xor_due` 和 `xor_after_haircut` 加上时间戳和调用者提供的`source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

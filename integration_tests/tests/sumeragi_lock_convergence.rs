@@ -45,10 +45,10 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..3 {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("lock convergence seed {idx}"),
-        ))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, format!("lock convergence seed {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     network
         .ensure_blocks_with(|height| height.total >= 3)
@@ -98,10 +98,13 @@ async fn sumeragi_view_change_lock_convergence() -> Result<()> {
     for (idx, peer) in running.iter().enumerate() {
         let submit_client = peer.client();
         match task::spawn_blocking(move || {
-            submit_client.submit(Log::new(
-                Level::INFO,
-                format!("lock convergence view-change tick {idx}"),
-            ))
+            submit_client.submit(
+                Log::new(
+                    Level::INFO,
+                    format!("lock convergence view-change tick {idx}"),
+                ),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
         })
         .await
         {
@@ -211,10 +214,10 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..3 {
-        client.submit_blocking(Log::new(
-            Level::INFO,
-            format!("lock convergence restart seed {idx}"),
-        ))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, format!("lock convergence restart seed {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     network
         .ensure_blocks_with(|height| height.total >= 3)
@@ -309,10 +312,13 @@ async fn sumeragi_restart_retains_lock_convergence() -> Result<()> {
         .ok_or_else(|| eyre!("no running peers after restart"))?
         .client();
     wait_client
-        .submit_all([Log::new(
-            Level::INFO,
-            "lock convergence restart tick".to_string(),
-        )])
+        .submit_all(
+            [Log::new(
+                Level::INFO,
+                "lock convergence restart tick".to_string(),
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err("submit lock convergence restart tick")?;
     let _ = wait_for_height(&wait_client, target_height, Duration::from_secs(60)).await?;
     let final_deadline = Instant::now() + Duration::from_secs(60);

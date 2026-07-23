@@ -2,8 +2,8 @@
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
 
 use std::time::{Duration, Instant};
+use std::{num::NonZeroU64, str::FromStr as _};
 
-use base64::Engine as _;
 use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::crypto::{Algorithm, KeyPair};
@@ -124,11 +124,15 @@ seiyaku DynamicAccessCounter {
             .find(|entrypoint| entrypoint.name == entrypoint_name)
             .unwrap_or_else(|| panic!("missing `{entrypoint_name}` entrypoint"));
         assert!(
-            entrypoint
-                .write_keys
-                .iter()
-                .any(|key| key == "state:Counters"),
+            entrypoint.write_keys.iter().any(|key| key == "state:*"),
             "`{entrypoint_name}` must transitively report the dynamic StateMap write: {entrypoint:?}"
+        );
+        assert_eq!(entrypoint.access_hints_complete, Some(false));
+        assert!(
+            entrypoint
+                .access_hints_skipped
+                .iter()
+                .any(|reason| reason == "dynamic state path is not compiler-resolved")
         );
     }
     artifact
@@ -407,6 +411,104 @@ async fn wait_for_tx_applied(
     }
 }
 
+pub(super) fn deploy_contract_locally_signed(
+    client: &iroha::client::Client,
+    artifact: &[u8],
+    contract_alias: iroha_data_model::smart_contract::ContractAlias,
+) -> Result<(
+    iroha_data_model::smart_contract::ContractAddress,
+    String,
+    String,
+)> {
+    use iroha_data_model::isi::smart_contract_code::{
+        CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+        SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
+    };
+
+    let verified = ivm::verify_contract_artifact(artifact)
+        .map_err(|error| eyre!("verify contract artifact: {error}"))?;
+    let manifest = verified
+        .manifest
+        .try_signed(&client.key_pair)
+        .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
+    let authority: Account = client.query_single(FindAccountById::new(client.account.clone()))?;
+    let nonce_key =
+        Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)?;
+    let deploy_nonce = authority
+        .metadata()
+        .get(&nonce_key)
+        .map(|value| {
+            value
+                .try_into_any_norito::<u64>()
+                .map_err(|_| eyre!("contract deployment nonce metadata is not a canonical u64"))
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_data_model::account::address::chain_discriminant(),
+        &client.account,
+        deploy_nonce,
+        iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+    )
+    .map_err(|error| eyre!("derive contract address: {error}"))?;
+    let mut metadata = Metadata::default();
+    for key in ["gov_contract_address", "contract_address"] {
+        metadata.insert(
+            Name::from_str(key)?,
+            iroha_primitives::json::Json::new(contract_address.to_string()),
+        );
+    }
+    let total_size = u64::try_from(artifact.len())?;
+    let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
+    if chunk_count == 0 {
+        return Err(eyre!("contract artifact must not be empty"));
+    }
+    for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
+        let chunk_index = u32::try_from(index)?;
+        let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
+            code_hash: verified.code_hash,
+            total_size,
+            chunk_index,
+            chunk_count,
+            chunk: chunk.to_vec(),
+        })];
+        if chunk_index + 1 == chunk_count {
+            instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
+                code_hash: verified.code_hash,
+                total_size,
+                chunk_count,
+            }));
+        }
+        client.submit_all_blocking_with_metadata(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            metadata.clone(),
+        )?;
+    }
+    client.submit_blocking_with_metadata(
+        RegisterSmartContractCode { manifest },
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        metadata.clone(),
+    )?;
+    client.submit_blocking_with_metadata(
+        CommitContractDeployment {
+            expected_deploy_nonce: deploy_nonce,
+            contract_address: contract_address.clone(),
+            code_hash: verified.code_hash,
+            contract_alias,
+            lease_expiry_ms: None,
+            expected_previous_contract_address: None,
+        },
+        metadata,
+    )?;
+
+    Ok((
+        contract_address,
+        hex::encode(verified.code_hash.as_ref()),
+        hex::encode(verified.abi_hash.as_ref()),
+    ))
+}
+
 async fn deploy_contract_artifact(
     client: &iroha::client::Client,
     http: &reqwest::Client,
@@ -414,51 +516,21 @@ async fn deploy_contract_artifact(
     alias_name: &str,
     stage: &str,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
-    let baseline = client.get_status()?.txs_approved;
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(artifact);
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         alias_name,
         None,
         "universal",
     )
     .map_err(|error| eyre!("{stage}: invalid contract alias: {error}"))?;
-    let response = tokio::task::spawn_blocking({
+    let (contract_address, _, _) = tokio::task::spawn_blocking({
         let client = client.clone();
-        move || {
-            client.post_contract_deploy_json(
-                &iroha_test_samples::ALICE_ID.clone(),
-                iroha_test_samples::ALICE_KEYPAIR.private_key(),
-                &code_b64,
-                &contract_alias,
-                None,
-            )
-        }
+        let artifact = artifact.to_vec();
+        move || deploy_contract_locally_signed(&client, &artifact, contract_alias)
     })
     .await
     .expect("deploy contract task")?;
-
-    if let Some(tx_hash_hex) = response
-        .get("tx_hash_hex")
-        .and_then(norito::json::Value::as_str)
-    {
-        wait_for_tx_applied(
-            http,
-            &client.torii_url,
-            tx_hash_hex,
-            Duration::from_secs(60),
-            stage,
-        )
-        .await?;
-    } else {
-        wait_for_approved_txs(client, baseline, Duration::from_secs(60), stage).await?;
-    }
-
-    response
-        .get("contract_address")
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("{stage}: response missing contract_address: {response:?}"))?
-        .parse()
-        .map_err(|error| eyre!("{stage}: invalid contract_address: {error}"))
+    let _ = (http, stage);
+    Ok(contract_address)
 }
 
 async fn contract_state_json_value(
@@ -532,61 +604,19 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let code_bytes = minimal_contract_artifact();
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code_bytes);
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "deploy_test",
         None,
         "universal",
     )
     .expect("contract alias");
-    let pk = iroha_data_model::prelude::ExposedPrivateKey(
-        iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
-    );
-    let authority_literal = iroha_test_samples::ALICE_ID.to_string();
-    let body = norito::json::object([
-        (
-            "authority",
-            norito::json::to_value(&authority_literal).expect("serialize authority"),
-        ),
-        (
-            "private_key",
-            norito::json::to_value(&format!("{pk}")).expect("serialize private key"),
-        ),
-        (
-            "code_b64",
-            norito::json::to_value(&code_b64).expect("serialize bytecode"),
-        ),
-        (
-            "contract_alias",
-            norito::json::to_value(&contract_alias).expect("serialize contract alias"),
-        ),
-    ])
-    .expect("serialize contract deploy body");
-
-    // POST /v1/contracts/deploy
-    let post_url = client.torii_url.join("/v1/contracts/deploy").unwrap();
+    let (_, code_hash_hex, _) = tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
+    })
+    .await
+    .expect("locally signed contract deployment task")?;
     let http = integration_tests::http::client();
-    let resp = http
-        .post(post_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&body).unwrap())
-        .send()
-        .await?;
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        panic!("POST /v1/contracts/deploy returned {status}: {body}");
-    }
-    let deploy_body: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
-    let code_hash_hex = deploy_body
-        .get("contracts")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|contracts| contracts.first())
-        .and_then(|contract| contract.get("code_hash_hex"))
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| eyre!("deploy response missing contracts[0].code_hash_hex"))?
-        .to_owned();
 
     // Poll status until we see the deploy transaction committed
     let deadline = Instant::now() + std::time::Duration::from_secs(120);
@@ -763,9 +793,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_direct",
                 Some(&payload),
                 None,
-                None,
-                None,
-                100_000,
+                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
             )
         }
     });
@@ -782,9 +810,7 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
                 "bump_via_helper",
                 Some(&payload),
                 None,
-                None,
-                None,
-                100_000,
+                &FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(100_000)),
             )
         }
     });
@@ -1165,64 +1191,22 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
     network.ensure_blocks(1).await?;
 
     let code_bytes = contract_state_probe_artifact();
-    let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code_bytes);
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "contract_state_probe",
         None,
         "universal",
     )
     .expect("contract alias");
+    let (_, code_hash_hex, _) = tokio::task::spawn_blocking({
+        let client = client.clone();
+        move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
+    })
+    .await
+    .expect("locally signed contract deployment task")?;
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
     let authority_literal = iroha_test_samples::ALICE_ID.to_string();
-
-    let deploy_body = norito::json::object([
-        (
-            "authority",
-            norito::json::to_value(&authority_literal).expect("serialize authority"),
-        ),
-        (
-            "private_key",
-            norito::json::to_value(&format!("{pk}")).expect("serialize private key"),
-        ),
-        (
-            "code_b64",
-            norito::json::to_value(&code_b64).expect("serialize bytecode"),
-        ),
-        (
-            "contract_alias",
-            norito::json::to_value(&contract_alias).expect("serialize contract alias"),
-        ),
-    ])
-    .expect("serialize deploy body");
-
-    let baseline = client.get_status()?.txs_approved;
-    let deploy_url = client.torii_url.join("/v1/contracts/deploy").unwrap();
-    let deploy_resp = http
-        .post(deploy_url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&deploy_body)?)
-        .send()
-        .await?;
-    if !deploy_resp.status().is_success() {
-        let status = deploy_resp.status();
-        let body = deploy_resp.text().await.unwrap_or_default();
-        return Err(eyre!("deploy returned {status}: {body}"));
-    }
-    let deploy_payload: norito::json::Value = norito::json::from_str(&deploy_resp.text().await?)?;
-    let code_hash_hex = deploy_payload
-        .get("contracts")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|contracts| contracts.first())
-        .and_then(|contract| contract.get("code_hash_hex"))
-        .and_then(norito::json::Value::as_str)
-        .ok_or_else(|| {
-            eyre!("deploy response missing contracts[0].code_hash_hex: {deploy_payload:?}")
-        })?
-        .to_owned();
-    wait_for_approved_txs(&client, baseline, Duration::from_secs(30), "deploy").await?;
 
     let activate_body = norito::json::object([
         (
@@ -1315,8 +1299,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             norito::json::to_value("hajimari").expect("serialize entrypoint"),
         ),
         (
-            "gas_limit",
-            norito::json::to_value(&10_000u64).expect("serialize gas limit"),
+            "fee_payment",
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ))
+            .expect("serialize fee payment intent"),
         ),
     ])
     .expect("serialize hajimari body");
@@ -1388,8 +1376,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
             norito::json::to_value("verify").expect("serialize entrypoint"),
         ),
         (
-            "gas_limit",
-            norito::json::to_value(&10_000u64).expect("serialize gas limit"),
+            "fee_payment",
+            norito::json::to_value(&FeePaymentIntent::authority(
+                Vec::new(),
+                NonZeroU64::new(10_000),
+            ))
+            .expect("serialize fee payment intent"),
         ),
     ])
     .expect("serialize verify body");

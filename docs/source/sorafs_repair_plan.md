@@ -167,7 +167,7 @@ struct SlashProposalV1 {
     provider_id: ProviderId,
     manifest_digest: Digest32,
     auditor_account: String,
-    proposed_penalty_nano: U128,
+    proposed_penalty: U128,
     submitted_at_unix: Timestamp,
     rationale: String,
 }
@@ -250,7 +250,7 @@ struct SignedAuditorRequestV1 {
 
 5. **Failure & Escalation**
    - Retries use exponential backoff derived from `sorafs.repair.backoff_initial_secs` and `sorafs.repair.backoff_max_secs`, with `sorafs.repair.max_attempts` enforcing the cap.
-   - After the final failure (or SLA breach), tasks move to `escalated` and a `RepairSlashProposalV1` draft is generated using `sorafs.repair.default_slash_penalty_nano` for auditor review.
+   - After the final failure (or SLA breach), tasks move to `escalated` and a `RepairSlashProposalV1` draft is generated using `sorafs.repair.default_slash_penalty` for auditor review.
    - Escalations automatically notify governance via `sorafs_governance_event`.
 
 6. **Governance Decision**
@@ -271,9 +271,9 @@ The escalation policy is sourced from `governance.sorafs_repair_escalation` in `
 | `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
 | `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
 | `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `max_penalty` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
+- Scheduler-generated proposals are capped at `max_penalty`; auditor submissions above the cap are rejected.
 - Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
 
 ## Auditor API Surface
@@ -365,7 +365,7 @@ The rollout evidence scripts have focused Python coverage in:
 - `iroha sorafs repair claim --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a worker claim.
 - `iroha sorafs repair complete --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a completion update.
 - `iroha sorafs repair fail --ticket-id <id> --manifest-digest <hex> --provider-id <hex>`: signs a failure update.
-- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty-nano <n> --rationale <text>`: submits an unapproved slash proposal for governance review. The CLI never accepts or embeds vote counts or approval timestamps; decisions are derived exclusively from authenticated votes durably recorded by the repair store.
+- `iroha sorafs repair escalate --ticket-id <id> --manifest-digest <hex> --provider-id <hex> --penalty <quantity> --rationale <text>`: submits an unapproved slash proposal for governance review. The CLI never accepts or embeds vote counts or approval timestamps; decisions are derived exclusively from authenticated votes durably recorded by the repair store.
 - `iroha sorafs gc inspect`: reports retained manifests and retention deadlines (read-only).
 - `iroha sorafs gc dry-run`: reports only expired manifests that GC would evict (read-only).
 - CLI commands return JSON payloads from Torii (Norito-encoded values rendered as JSON).
@@ -396,7 +396,7 @@ The rollout evidence scripts have focused Python coverage in:
 | `minimum_voters` | `3` | Minimum distinct votes (approve + reject + abstain) required to consider a decision. |
 | `dispute_window_secs` | `86,400` (24h) | Minimum delay from escalation to approval. |
 | `appeal_window_secs` | `604,800` (7d) | Minimum delay after approval before a decision is final. |
-| `max_penalty_nano` | `1,000,000,000` | Cap on slash penalties (nano-XOR). |
+| `max_penalty` | `1,000,000,000` | Cap on slash penalties (nano-XOR). |
 
 `RepairEscalationApprovalV1` remains a canonical output/reference payload for a
 decision derived from stored votes; it is not accepted as proposal authority.

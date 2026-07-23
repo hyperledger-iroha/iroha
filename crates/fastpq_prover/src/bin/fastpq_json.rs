@@ -20,13 +20,14 @@ use iroha_crypto::Hash;
 use iroha_data_model::{
     DataSpaceId,
     block::{BlockHeader, consensus::LaneBlockCommitment},
-    fastpq::{FastpqTransitionBatch, TRANSFER_TRANSCRIPTS_METADATA_KEY, normalized_numeric_to_u64},
+    fastpq::{FastpqTransitionBatch, normalized_numeric_to_u64},
     nexus::{
         AxtDescriptor, AxtEffectBinding, AxtFastpqBinding, AxtProofEnvelope, AxtTouchSpec,
         LANE_RELAY_FASTPQ_EFFECT_TYPE, LaneFastpqProofMaterial, LaneId, LaneRelayEnvelope,
         ProofBlob, TouchManifest, lane_relay_fastpq_claim_digest,
     },
 };
+use iroha_primitives::numeric::Quantity;
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
     json, to_bytes,
@@ -532,85 +533,16 @@ fn prove_request(
 
 fn build_batch_from_request(request: &ProofRequest) -> Result<TransitionBatch, String> {
     let binding = request_to_binding(request);
-    let mut batch = if request.batch_base64.trim().is_empty() {
-        descriptor_fixture_batch(request)?
-    } else {
-        decode_request_batch(&request.batch_base64)?
-    };
+    if request.batch_base64.trim().is_empty() {
+        return Err(
+            "FASTPQ prove/verify requires an execution-captured batch_base64; \
+             synthetic descriptor-only batches are forbidden"
+                .to_string(),
+        );
+    }
+    let mut batch = decode_request_batch(&request.batch_base64)?;
     bind_axt_batch(&mut batch, &binding)
         .map_err(|err| format!("failed to bind AXT metadata to FASTPQ batch: {err}"))?;
-    Ok(batch)
-}
-
-fn descriptor_fixture_batch(request: &ProofRequest) -> Result<TransitionBatch, String> {
-    let parameter = normalized_parameter(&request.parameter);
-    let claim_type = normalized_claim_type(&request.claim_type)?;
-    let seed = format!(
-        "{}:{}:{}:{}:{}:{}",
-        request.source_dsid,
-        request.source_tx_commitment,
-        request.claim_digest,
-        request.witness_commitment,
-        request.policy_commitment,
-        request.verified_effect_type
-    );
-    let mut batch = TransitionBatch::new(
-        parameter,
-        PublicInputs {
-            dsid: dsid_bytes(request.source_dsid),
-            slot: request.relay_block_height.max(1),
-            old_root: digest32(format!("old:{seed}").as_bytes()),
-            new_root: digest32(format!("new:{seed}").as_bytes()),
-            perm_root: digest32(format!("perm:{seed}").as_bytes()),
-            tx_set_hash: digest32(format!("tx:{seed}").as_bytes()),
-        },
-    );
-
-    if matches!(claim_type.as_str(), "tx_predicate" | "value_conservation") {
-        let amount = request
-            .effect_binding
-            .as_ref()
-            .and_then(|binding| binding.source_amount_i64)
-            .unwrap_or(1)
-            .unsigned_abs()
-            .max(1);
-        let destination_amount = request
-            .effect_binding
-            .as_ref()
-            .and_then(|binding| binding.destination_amount_i64)
-            .unwrap_or_else(|| amount.cast_signed())
-            .unsigned_abs()
-            .max(1);
-        batch.push(StateTransition::new(
-            format!("fastpq/fixture/source/{seed}").into_bytes(),
-            amount.to_le_bytes().to_vec(),
-            0_u64.to_le_bytes().to_vec(),
-            OperationKind::Transfer,
-        ));
-        batch.push(StateTransition::new(
-            format!("fastpq/fixture/destination/{seed}").into_bytes(),
-            0_u64.to_le_bytes().to_vec(),
-            destination_amount.to_le_bytes().to_vec(),
-            OperationKind::Transfer,
-        ));
-        batch.metadata.insert(
-            TRANSFER_TRANSCRIPTS_METADATA_KEY.into(),
-            digest32(format!("transfer-transcripts:{seed}").as_bytes()).to_vec(),
-        );
-    } else {
-        batch.push(StateTransition::new(
-            format!("fastpq/fixture/{claim_type}/{seed}").into_bytes(),
-            vec![0],
-            vec![1],
-            OperationKind::MetaSet,
-        ));
-    }
-
-    batch.metadata.insert(
-        "entry_hash".into(),
-        decode_hex_digest(&request.source_tx_commitment, "source_tx_commitment")?.to_vec(),
-    );
-    batch.sort();
     Ok(batch)
 }
 
@@ -718,23 +650,21 @@ fn build_relay_artifacts(
             source_amount_i64: Some(1),
             destination_amount_i64: Some(1),
         });
+    let source_amount = u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))
+        .map_err(|_| "positive source amount must fit Quantity".to_string())?;
+    let destination_amount =
+        u128::try_from(effect_binding.destination_amount_i64.unwrap_or(1).max(1))
+            .map_err(|_| "positive destination amount must fit Quantity".to_string())?;
     let settlement_commitment = LaneBlockCommitment {
         block_height,
         lane_id,
         lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
         dataspace_id,
         tx_count: 1,
-        total_local_micro: u128::try_from(effect_binding.source_amount_i64.unwrap_or(1).max(1))
-            .unwrap_or(1),
-        total_xor_due_micro: u128::try_from(
-            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
-        )
-        .unwrap_or(1),
-        total_xor_after_haircut_micro: u128::try_from(
-            effect_binding.destination_amount_i64.unwrap_or(1).max(1),
-        )
-        .unwrap_or(1),
-        total_xor_variance_micro: 0,
+        total_local_amount: source_amount.into(),
+        total_xor_due: destination_amount.into(),
+        total_xor_after_haircut: destination_amount.into(),
+        total_xor_variance: Quantity::zero(),
         swap_metadata: None,
         receipts: Vec::new(),
         nexus_fee_receipts: Vec::new(),
@@ -942,13 +872,6 @@ fn decode_hex_digest(value: &str, field: &str) -> Result<[u8; 32], String> {
     Ok(array)
 }
 
-fn digest32(bytes: &[u8]) -> [u8; 32] {
-    let digest = Sha256::digest(bytes);
-    let mut output = [0_u8; 32];
-    output.copy_from_slice(&digest);
-    output
-}
-
 fn digest32_with_domain(domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(domain);
@@ -1060,6 +983,29 @@ fn duration_ms(duration: Duration) -> f64 {
 mod tests {
     use super::*;
 
+    fn proof_request(batch_base64: impl Into<String>) -> ProofRequest {
+        ProofRequest {
+            parameter: AXT_DEFAULT_PARAMETER.to_owned(),
+            source_dsid: 12,
+            source_dataspace: "cbuae".to_owned(),
+            source_receipt_id: "receipt-1".to_owned(),
+            target_dsids: vec![10],
+            source_tx_commitment: "11".repeat(32),
+            claim_type: "tx_predicate".to_owned(),
+            claim_digest: "22".repeat(32),
+            witness_commitment: "33".repeat(32),
+            policy_commitment: "44".repeat(32),
+            verified_effect_type: LANE_RELAY_FASTPQ_EFFECT_TYPE.to_owned(),
+            corridor: "CBUAE_TO_SBP".to_owned(),
+            verifier_id: "fastpq-prover".to_owned(),
+            verifier_version: "test".to_owned(),
+            source_lane_id: 1,
+            relay_block_height: 1,
+            batch_base64: batch_base64.into(),
+            effect_binding: None,
+        }
+    }
+
     fn empty_batch_base64() -> String {
         let batch = TransitionBatch::new(
             AXT_DEFAULT_PARAMETER.to_string(),
@@ -1073,6 +1019,16 @@ mod tests {
             },
         );
         BASE64_STANDARD.encode(to_bytes(&batch).expect("encode transition batch"))
+    }
+
+    #[test]
+    fn prove_and_verify_batch_builder_rejects_missing_execution_capture() {
+        for batch_base64 in ["", " \t\n"] {
+            let err = build_batch_from_request(&proof_request(batch_base64))
+                .expect_err("descriptor-only requests must not synthesize a batch");
+            assert!(err.contains("requires an execution-captured batch_base64"));
+            assert!(err.contains("synthetic descriptor-only batches are forbidden"));
+        }
     }
 
     #[test]

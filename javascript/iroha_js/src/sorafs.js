@@ -1,4 +1,7 @@
 import { getNativeBinding } from "./native.js";
+import { NumericV1, NumericV1Error } from "./numericV1.js";
+
+const SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH = 155;
 
 function isPlainObject(value) {
   if (value === null || typeof value !== "object") {
@@ -427,6 +430,12 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
   if (!isPlainObject(fields)) {
     throw new TypeError("fields must be an object");
   }
+  rejectRetiredOrderbookFields(fields, [
+    "pricePerGibMicroXor",
+    "price_per_gib_micro_xor",
+    "pricePerGibMicro",
+    "price_per_gib_micro",
+  ]);
   const quantityGib = decimalIntegerString(
     requiredField(fields, "quantityGib", "quantityGib", "quantity_gib"),
     "quantityGib",
@@ -442,6 +451,11 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
   const nonce = decimalIntegerString(
     requiredField(fields, "nonce", "nonce"),
     "nonce",
+    { positive: true },
+  );
+  const pricePerGib = canonicalXorQuantityString(
+    requiredUniqueField(fields, "pricePerGib", "pricePerGib", "price_per_gib"),
+    "pricePerGib",
     { positive: true },
   );
   const orderId = deriveOrderbookOrderId(ownerAccount, nonce);
@@ -463,16 +477,7 @@ export function buildSignedOrderbookOrderRequest(fields, privateKey) {
       orderId,
       String(requiredField(fields, "side", "side")),
       String(requiredField(fields, "tier", "tier")),
-      decimalIntegerString(
-        requiredField(
-          fields,
-          "pricePerGibMicroXor",
-          "pricePerGibMicroXor",
-          "price_per_gib_micro_xor",
-        ),
-        "pricePerGibMicroXor",
-        { positive: true },
-      ),
+      pricePerGib,
       quantityGib,
       remainingValue === undefined
         ? undefined
@@ -544,59 +549,75 @@ export function buildSignedOrderbookSettlementReceipt(fields, privateKey) {
   if (!isPlainObject(fields)) {
     throw new TypeError("fields must be an object");
   }
+  rejectRetiredOrderbookFields(fields, [
+    "xorDebitedMicroXor",
+    "xor_debited_micro_xor",
+    "xorDebitedMicro",
+    "xor_debited_micro",
+    "providerCreditMicroXor",
+    "provider_credit_micro_xor",
+    "providerCreditMicro",
+    "provider_credit_micro",
+    "feeAmountMicroXor",
+    "fee_amount_micro_xor",
+    "feeAmountMicro",
+    "fee_amount_micro",
+  ]);
+  const receiptId = fixedBytesField(fields, "receiptId", "receiptId", "receipt_id");
+  const channelId = fixedBytesField(fields, "channelId", "channelId", "channel_id");
+  const tradeId = fixedBytesField(fields, "tradeId", "tradeId", "trade_id");
+  const rangeStart = decimalIntegerString(
+    requiredField(fields, "rangeStart", "rangeStart", "range_start"),
+    "rangeStart",
+  );
+  const rangeEnd = decimalIntegerString(
+    requiredField(fields, "rangeEnd", "rangeEnd", "range_end"),
+    "rangeEnd",
+    { positive: true },
+  );
+  const chunkHash = fixedBytesField(fields, "chunkHash", "chunkHash", "chunk_hash");
+  const bytesDelivered = decimalIntegerString(
+    requiredField(fields, "bytesDelivered", "bytesDelivered", "bytes_delivered"),
+    "bytesDelivered",
+    { positive: true },
+  );
+  const xorDebited = canonicalXorQuantityString(
+    requiredUniqueField(fields, "xorDebited", "xorDebited", "xor_debited"),
+    "xorDebited",
+    { positive: true },
+  );
+  const providerCredit = canonicalXorQuantityString(
+    requiredUniqueField(fields, "providerCredit", "providerCredit", "provider_credit"),
+    "providerCredit",
+  );
+  const feeAmount = canonicalXorQuantityString(
+    requiredUniqueField(fields, "feeAmount", "feeAmount", "fee_amount"),
+    "feeAmount",
+  );
+  const issuedAtUnix = decimalIntegerString(
+    requiredField(fields, "issuedAtUnix", "issuedAtUnix", "issued_at_unix"),
+    "issuedAtUnix",
+    { positive: true },
+  );
+  const privateKeyBytes = toBuffer(privateKey);
   const binding = requireSorafsNativeFunction(
     "sorafsBuildSignedOrderbookSettlementReceipt",
     "orderbook settlement receipt builder",
   );
   return requireSignedBuilderBuffer(
     binding.sorafsBuildSignedOrderbookSettlementReceipt(
-      fixedBytesField(fields, "receiptId", "receiptId", "receipt_id"),
-      fixedBytesField(fields, "channelId", "channelId", "channel_id"),
-      fixedBytesField(fields, "tradeId", "tradeId", "trade_id"),
-      decimalIntegerString(
-        requiredField(fields, "rangeStart", "rangeStart", "range_start"),
-        "rangeStart",
-      ),
-      decimalIntegerString(
-        requiredField(fields, "rangeEnd", "rangeEnd", "range_end"),
-        "rangeEnd",
-        { positive: true },
-      ),
-      fixedBytesField(fields, "chunkHash", "chunkHash", "chunk_hash"),
-      decimalIntegerString(
-        requiredField(fields, "bytesDelivered", "bytesDelivered", "bytes_delivered"),
-        "bytesDelivered",
-        { positive: true },
-      ),
-      decimalIntegerString(
-        requiredField(
-          fields,
-          "xorDebitedMicroXor",
-          "xorDebitedMicroXor",
-          "xor_debited_micro_xor",
-        ),
-        "xorDebitedMicroXor",
-        { positive: true },
-      ),
-      decimalIntegerString(
-        requiredField(
-          fields,
-          "providerCreditMicroXor",
-          "providerCreditMicroXor",
-          "provider_credit_micro_xor",
-        ),
-        "providerCreditMicroXor",
-      ),
-      decimalIntegerString(
-        requiredField(fields, "feeAmountMicroXor", "feeAmountMicroXor", "fee_amount_micro_xor"),
-        "feeAmountMicroXor",
-      ),
-      decimalIntegerString(
-        requiredField(fields, "issuedAtUnix", "issuedAtUnix", "issued_at_unix"),
-        "issuedAtUnix",
-        { positive: true },
-      ),
-      toBuffer(privateKey),
+      receiptId,
+      channelId,
+      tradeId,
+      rangeStart,
+      rangeEnd,
+      chunkHash,
+      bytesDelivered,
+      xorDebited,
+      providerCredit,
+      feeAmount,
+      issuedAtUnix,
+      privateKeyBytes,
     ),
     "orderbook settlement receipt builder",
   );
@@ -1092,12 +1113,55 @@ function decimalIntegerString(value, label, { positive = false } = {}) {
   return normalized.toString();
 }
 
+function canonicalXorQuantityString(value, label, { positive = false } = {}) {
+  if (typeof value !== "string") {
+    throw new TypeError(`${label} must be a canonical XOR quantity string`);
+  }
+  if (value.length > SORAFS_XOR_QUANTITY_MAX_TEXT_LENGTH) {
+    throw new RangeError(`${label} exceeds the canonical XOR quantity text bound`);
+  }
+  let quantity;
+  try {
+    quantity = NumericV1.decodeQuantityJson(value);
+  } catch (error) {
+    if (!(error instanceof NumericV1Error)) {
+      throw error;
+    }
+    throw new TypeError(
+      `${label} must be a canonical non-negative XOR quantity (${error.code})`,
+    );
+  }
+  if (quantity.scale > 9) {
+    throw new RangeError(`${label} must have at most 9 fractional decimal places`);
+  }
+  if (positive && quantity.mantissa <= 0n) {
+    throw new RangeError(`${label} must be greater than zero`);
+  }
+  return quantity.toString();
+}
+
+function rejectRetiredOrderbookFields(fields, names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(fields, name)) {
+      throw new TypeError(`${name} is retired; use unit-neutral XOR quantity fields`);
+    }
+  }
+}
+
 function requiredField(object, label, ...names) {
   const value = readPayloadField(object, ...names);
   if (value === undefined || value === null) {
     throw new TypeError(`${label} is required`);
   }
   return value;
+}
+
+function requiredUniqueField(object, label, ...names) {
+  const present = names.filter((name) => Object.prototype.hasOwnProperty.call(object, name));
+  if (present.length > 1) {
+    throw new TypeError(`${label} must be supplied exactly once`);
+  }
+  return requiredField(object, label, ...names);
 }
 
 function optionalField(object, ...names) {

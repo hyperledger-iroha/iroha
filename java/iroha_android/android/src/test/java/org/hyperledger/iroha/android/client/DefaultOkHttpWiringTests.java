@@ -22,6 +22,7 @@ import okio.ByteString;
 import org.hyperledger.iroha.android.client.ClientResponse;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpTransportExecutor;
 import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnector;
+import org.hyperledger.iroha.android.client.okhttp.OkHttpWebSocketConnectorFactory;
 import org.hyperledger.iroha.android.client.stream.ServerSentEvent;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStream;
 import org.hyperledger.iroha.android.client.stream.ToriiEventStreamClient;
@@ -132,7 +133,7 @@ public final class DefaultOkHttpWiringTests {
   }
 
   @Test
-  public void toriiWebSocketDefaultsToOkHttpConnector() throws Exception {
+  public void toriiWebSocketUsesInjectedOkHttpConnector() throws Exception {
     try (MockWebServer server = new MockWebServer()) {
       server.enqueue(new MockResponse().withWebSocketUpgrade(new ScriptedWebSocket()));
       server.start();
@@ -141,6 +142,7 @@ public final class DefaultOkHttpWiringTests {
       final ToriiWebSocketClient client =
           ToriiWebSocketClient.builder()
               .setBaseUri(new URI(server.url("/").toString()))
+              .setWebSocketConnector(OkHttpWebSocketConnectorFactory.createDefault())
               .build();
 
       final ToriiWebSocketSession session =

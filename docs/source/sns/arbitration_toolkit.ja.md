@@ -88,7 +88,8 @@ Workflow phases:
    populates the schema, verifies the selector, stores attachments in
    Norito-backed object storage, and enqueues the case with calculated SLA
    deadlines.
-2. **Triage:** Case manager validates jurisdiction, confirms payment proofs, and
+2. **Triage:** Case manager validates jurisdiction, confirms the canonical alias
+   plan and ledger transaction evidence, and
    either escalates to guardians (urgent) or schedules the hearing window.
 3. **Hearing:** Respondents upload statements via `sns governance case file`,
    optional synchronous calls are recorded, and `actions[]` receives the

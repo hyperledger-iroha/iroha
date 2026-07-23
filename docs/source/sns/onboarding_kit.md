@@ -9,39 +9,36 @@ summary: Dashboards, pricing cheatsheets, and registrar tooling required by road
 **Related assets:** `dashboards/grafana/sns_suffix_analytics.json`, `docs/portal/docs/sns/kpi-dashboard.md`.
 
 This guide bundles the analytics package and registrar onboarding collateral
-needed to exercise `.sora`, `.nexus`, and `.dao` launches. It ties together the
-Grafana dashboard, pricing references, DNS helpers, and developer automation so
+for explicitly selected live SNS policies. It ties together the Grafana
+dashboard, live policy inspection, DNS helpers, and developer automation so
 governance has deterministic evidence when approving registrars or suffixes.
 
 ## 1. Metric bundle
 
 ### 1.1 Grafana dashboard & portal mirror
 
-Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or your
-preferred analytics backend) before inviting stakeholders:
+The checked-in `dashboards/grafana/sns_suffix_analytics.json` still contains
+pre-clean-break bulk-settlement series. Do not import it or treat it as
+financial evidence until those queries are regenerated from canonical alias
+plans and committed transaction receipts. A read-only reporting adapter may
+export those records to Grafana; it must never create payment evidence or
+participate in consensus.
 
-```bash
-curl -H "Content-Type: application/json" \
-     -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
-     -X POST https://grafana.sora.net/api/dashboards/db \
-     --data-binary @dashboards/grafana/sns_suffix_analytics.json
-```
-
-- The same JSON powers the portal analytics page at
-  `docs/portal/docs/sns/kpi-dashboard.md`, so operators outside Grafana can
-  review the metrics via the iframe embed.
+- The portal page at `docs/portal/docs/sns/kpi-dashboard.md` defines the safe
+  data contract. Do not embed the legacy dashboard there until its queries
+  satisfy that contract.
 - `ci/check_docs_portal.sh` already exercises the embed; run it after updating
   the dashboard JSON to catch stale hashes before publishing.
 
 ### 1.2 Panels & signals
 
-| Panel | Underlying metrics | Evidence produced |
+| Panel | Canonical source | Evidence produced |
 |-------|--------------------|-------------------|
-| Registrations / Renewals | `sns_registrar_status_total{status}`, `sns_registrar_status_total{resolver="renewal"}` | Per-suffix throughput, regression detection. |
-| ARPU / Net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Revenue split + ARPU rollups per suffix and registrar. |
+| Setup dispositions | `AliasTransactionPlanV1` plus the committed transaction result | No-op, repair, create, and conflict counts without inventing per-resource submissions. |
+| Native charges | Exact planner quotes matched to committed ledger debits | Totals by payment asset, policy version, and resource. |
+| Onboarding readiness | Sorted `AliasSetupReportV1` snapshots | Ready/Pending/Blocked history and stable diagnostic codes. |
 | Disputes & freezes | `guardian_freeze_active`, `sns_governance_activation_total`, `sns_dispute_outcome_total` | Shows open freezes, arbitration cadence, dispute backlog. |
-| SLA/error rates | `torii_request_duration_seconds`, error-labelled `sns_registrar_status_total` | Highlights registrar/API faults before they hit the governance annex. |
-| Bulk manifests | `sns_bulk_release_manifest_total`, `sns_bulk_release_payment_*` | Links CSV drops to finance exports for settlement reconciliation. |
+| Lifecycle operations | Verified renewal/auto-renew plans and transaction receipts | CAS failures, suspensions, retries, and successful renewals. |
 
 Export PDF or CSV snapshots from Grafana (or the portal embed) during the
 monthly review and attach them to the annex entry under
@@ -53,22 +50,21 @@ hashes and Grafana URLs there for long-term audits.
 ### 1.3 Regulatory annex automation
 
 Automate the KPI annex generation so governance reviewers receive a consistent
-snapshot:
+snapshot only after the dashboard has passed the safe-source review above:
 
 ```bash
 cargo xtask sns-annex \
-  --suffix .sora \
+  --suffix .example \
   --cycle 2026-03 \
   --dashboard dashboards/grafana/sns_suffix_analytics.json \
-  --dashboard-artifact artifacts/sns/regulatory/.sora/2026-03/sns_suffix_analytics.json \
-  --output docs/source/sns/reports/.sora/2026-03.md \
+  --dashboard-artifact artifacts/sns/regulatory/.example/2026-03/sns_suffix_analytics.json \
+  --output docs/source/sns/reports/.example/2026-03.md \
   --regulatory-entry docs/source/sns/regulatory/eu-dsa/2026-03.md \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
 - The command hashes the exported JSON, records the dashboard metadata, and
-  writes a Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md`
-  (mirroring the `.sora` example added in this change).
+  writes a Markdown annex under `docs/source/sns/reports/<suffix>/<cycle>.md`.
 - Pass `--dashboard-artifact` to copy the export into
   `artifacts/sns/regulatory/<suffix>/<cycle>/` automatically so the annex
   references the canonical evidence path instead of your workstation file.
@@ -129,74 +125,71 @@ coverage required by SN-8.
   `docs/source/sns/reports/<name>_launch.md` note that records the selector
   samples, zonefile hashes, and GAR evidence.
 
-### 2.2 Pricing & coefficient cheatsheet
+### 2.2 Pricing and lease-policy preflight
 
-Base fees (USD equivalent, before suffix coefficient):
-
-| Label length | Base fee |
-|--------------|----------|
-| 3 | $240 |
-| 4 | $90 |
-| 5 | $30 |
-| 6–9 | $12 |
-| 10+ | $8 |
-
-Suffix coefficients (`Final fee = base × coefficient`):
-
-| Suffix | Coefficient |
-|--------|-------------|
-| `.sora` | 1.0× |
-| `.nexus` | 0.8× |
-| `.dao` | 1.3× |
-
-Term modifiers: 2‑year renewals receive −5 %; 5‑year renewals receive −12 %.
-Grace = 30 days, redemption = 60 days (20 % fee, min $5, max $200). Document
-any governance-approved deviations in the registrar’s onboarding ticket.
+Do not embed fee tables, suffix coefficients, term discounts, or lifecycle
+windows in onboarding collateral. Inspect the active SNS policy through the
+read-only policy surface and obtain an `AliasTransactionPlanV1` immediately
+before approval. The quote guard records the expected policy version, payment
+asset, maximum amount, and deadline; consensus recomputes and charges the exact
+amount. Record those live values and any planner blockers in the registrar's
+onboarding ticket.
 
 ### 2.3 Premium auctions vs renewals
 
-1. **Premium commit/reveal** (SN-3) — sealed bids enter via
-   `RegisterNameRequestV1` with `pricing_class_hint = "premium"`, settle via the
-   registrar APIs, and emit `sns_premium_commit_total`. Publish the auction
-   manifest under `docs/source/sns/reports/` for future audits.
-2. **Dutch reopen** — when grace + redemption elapse, the registrar publishes a
-   Dutch reopen manifest detailing the initial multiplier (10×) and daily decay
-   (15 %). Track the decay status in the KPI dashboard by tagging the manifest
-   ID in `sns_bulk_release_manifest_total`.
-3. **Renewals** — `sns_registrar_status_total{resolver="renewal"}` surfaces the
-   renewal flow. Include the renewal plan (including autorenew notices and SLA)
-   in the registrar’s onboarding package.
+1. **Premium commit/reveal** (SN-3) — an auction may determine acquisition
+   entitlement, but it does not restore a direct registration DTO or mutation
+   route. The winning resource is resolved and planned through the same signed
+   `AliasIntentV1`/`EnsureAlias` flow, with any required endorsement validated
+   before the atomic transaction executes. Publish the auction manifest under
+   `docs/source/sns/reports/` for future audits.
+2. **Dutch reopen** — when the policy-defined lifecycle permits reopening, the
+   registrar publishes the governed schedule without hard-coding multipliers
+   in client tooling. Track it in a read-only report keyed by the canonical
+   auction record and resulting alias plan hash.
+3. **Renewals** — archive the verified renewal plan and ordinary transaction
+   receipt. For auto-renew, also capture the configured revision and any native
+   retry or suspension status.
 
 ### 2.4 Developer APIs & automation
 
-- REST + CLI contracts live in `docs/source/sns/registrar_api.md`.
+- The clean-break plan/local-sign/apply contract lives in
+  `docs/source/sns/registrar_api.md`.
 - `scripts/sns_bulk_onboard.py` (documented in
-  `docs/source/sns/bulk_onboarding_toolkit.md`) ingests CSV manifests, emits
-  NDJSON, and optionally POSTs `/v1/sns/names`. Capture the resulting
-  `submissions.log` in `artifacts/sns/releases/<timestamp>/`.
-- Torii/CLI submissions must log governance hooks, payment proofs, and alias
-  wiring so that the KPI dashboard can link the manifest ID back to finance.
-- Combine the helper with the KPI dashboard filters: include the manifest ID in
-  `--submission-log` entries so finance can filter revenue panels per release.
+  `docs/source/sns/bulk_onboarding_toolkit.md`) consumes typed, secret-free
+  setup intents and delegates signed planning plus atomic apply to `iroha app
+  alias setup`. It does not call a direct SNS mutation endpoint.
+- Persist the canonical `AliasTransactionPlanV1` beside the operator change
+  record. Its hash, live-state anchor, dispositions, framed instructions, and
+  exact asset totals replace ad-hoc payment-proof and per-resource submission
+  logs.
+- Use `irohad --check-config` and the authenticated onboarding-readiness report
+  as the preflight evidence for generated or manually operated peers.
+- Running `sns_bulk_onboard.py` without a mode flag only writes a verified plan.
+  An approved mutation must pass `--apply` explicitly; tokens and key material
+  remain outside the intent, plan, and command line.
 
 ### 2.5 Evidence checklist
 
-1. Ticket in the registrar tracker including suffix, contact, and payment rails.
+1. Ticket in the registrar tracker including suffix, contact, expected payment
+   asset, policy version, and approved caps.
 2. DNS/resolver evidence bundle (`scripts/sns_zonefile_skeleton.py` output).
-3. Pricing worksheet referencing the tables above plus any negotiated overrides.
-4. API smoke-test artefacts (Torii `POST /v1/sns/names` samples, CLI output).
-5. KPI dashboard screenshot + CSV export stored under
-   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`.
+3. Live policy snapshot plus the planner quote and quote-guard values.
+4. API smoke-test artefacts (signed plan, verified plan hash, and the single
+   ordinary transaction result).
+5. Safe read-only report export stored under
+   `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`; do not attach output from
+   the legacy bulk-settlement dashboard.
 
 ## 3. Readiness checklist
 
 | Step | Owner | Command / Artefact |
 |------|-------|--------------------|
-| Import dashboard JSON | Product Analytics | `curl … --data-binary @dashboards/grafana/sns_suffix_analytics.json` |
+| Validate reporting source | Product Analytics | Query review plus a sample joining exact plan quotes to committed transaction debits; the legacy dashboard is not imported. |
 | Publish portal page | Docs/DevRel | `npm run build` inside `docs/portal`, ensure `sns/kpi-dashboard` renders. |
 | Generate onboarding kit | DevRel | Copy this file, fill registrar-specific deltas, attach to ticket. |
 | DNS rehearsal | Networking/Ops | `scripts/sns_zonefile_skeleton.py` + `docs/source/sorafs_gateway_dns_owner_runbook.md` steps. |
-| Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py registrations.csv --ndjson … --submission-log …` |
+| Registrar automation dry run | Registrar eng | `python3 scripts/sns_bulk_onboard.py setup.json --plan-file setup.plan.json` |
 | Governance evidence | Governance Council | File annex updates + attach dashboard exports and artefacts. |
 
 Run this checklist before activating every registrar or suffix. Attach the

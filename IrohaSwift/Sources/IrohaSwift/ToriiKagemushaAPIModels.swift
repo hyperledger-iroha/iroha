@@ -7,12 +7,270 @@ public enum KagemushaToriiAPI {
         case topUp = "/v1/offline/top-up"
         case redeem = "/v1/offline/redeem"
         case operations = "/v1/offline/operations"
+        case receiverLineage = "/v1/offline/receiver-lineage"
 
         public var path: String { rawValue }
     }
 
     public static func operationPath(_ operationId: String) throws -> String {
         "\(Endpoint.operations.path)/\(try KagemushaOperationValidation.operationId(operationId))"
+    }
+}
+
+/// Native-verified proof that a signed payment request's exact receiver registration is finalized.
+///
+/// Construction is restricted to the Torii client after native verification of the request
+/// digest, registration tuple/lifetime, admitting transaction and Merkle paths, policy, header,
+/// and historical V2 finality certificate.
+public struct KagemushaRecipientRegistrationLineage: Equatable, Sendable {
+    public static let maximumArchiveBytes = 4 * 1024 * 1024
+    public let noritoArchive: Data
+
+    init(verifiedArchive: Data) throws {
+        guard !verifiedArchive.isEmpty,
+              verifiedArchive.count <= Self.maximumArchiveBytes else {
+            throw ToriiClientError.invalidPayload(
+                "Kagemusha receiver lineage exceeds its canonical response bound"
+            )
+        }
+        self.noritoArchive = Data(verifiedArchive)
+    }
+}
+
+/// App-owned durable checkpoint supplied to native receiver-lineage
+/// verification. `contextID` is the exact marked Iroha HeightContextId.
+public struct KagemushaFinalityCheckpointV2: Equatable, Sendable {
+    public let height: UInt64
+    public let contextID: Data
+
+    public init(height: UInt64, contextID: Data) throws {
+        guard (1...UInt64(Int64.max)).contains(height),
+              contextID.count == 32,
+              contextID.contains(where: { $0 != 0 }),
+              contextID.last.map({ ($0 & 1) == 1 }) == true else {
+            throw KagemushaRecursiveSpendError.invalidField("finalityCheckpoint")
+        }
+        self.height = height
+        self.contextID = Data(contextID)
+    }
+
+    init(promotedCheckpointBytes: Data) throws {
+        guard promotedCheckpointBytes.count == 40 else {
+            throw KagemushaRecursiveSpendError.invalidArchive("promotedCheckpoint")
+        }
+        let height = promotedCheckpointBytes.prefix(8).reduce(UInt64(0)) {
+            ($0 << 8) | UInt64($1)
+        }
+        try self.init(height: height, contextID: Data(promotedCheckpointBytes.suffix(32)))
+    }
+}
+
+/// Canonical reusable Torii query for one receiver registration tuple.
+public struct KagemushaRecipientLineageQueryV2: Equatable, Sendable {
+    public static let maximumArchiveBytes = 32 * 1_024
+    public let noritoArchive: Data
+    public let trustedCheckpointHeight: UInt64
+
+    public init(
+        chainID: String,
+        recipient: String,
+        receiverDeviceID: String,
+        assetDefinitionID: String,
+        trustedCheckpointHeight: UInt64
+    ) throws {
+        try KagemushaRecursiveSpend.requirePortableText(
+            chainID,
+            field: "lineageQuery.chainID",
+            maximum: 256
+        )
+        _ = try AccountAddress.parseEncoded(recipient, expectedPrefix: 0x02F1)
+        try KagemushaRecursiveSpend.requirePortableText(
+            receiverDeviceID,
+            field: "lineageQuery.receiverDeviceID"
+        )
+        guard AssetDefinitionAddress.decode(assetDefinitionID) != nil,
+              (1...UInt64(Int64.max)).contains(trustedCheckpointHeight),
+              let archive = try NoritoNativeBridge.shared
+                .kagemushaRecipientLineageQueryCreateV2(
+                    chainID: Data(chainID.utf8),
+                    recipient: Data(recipient.utf8),
+                    receiverDeviceID: Data(receiverDeviceID.utf8),
+                    assetDefinitionID: Data(assetDefinitionID.utf8),
+                    trustedCheckpointHeight: trustedCheckpointHeight
+                ) else {
+            if AssetDefinitionAddress.decode(assetDefinitionID) == nil
+                || !(1...UInt64(Int64.max)).contains(trustedCheckpointHeight) {
+                throw KagemushaRecursiveSpendError.invalidField("lineageQuery")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("lineageQuery")
+        }
+        self.noritoArchive = archive
+        self.trustedCheckpointHeight = trustedCheckpointHeight
+    }
+}
+
+public struct KagemushaVerifiedRecipientRegistrationLineageV2: Equatable, Sendable {
+    public let lineage: KagemushaRecipientRegistrationLineage
+    public let promotedCheckpoint: KagemushaFinalityCheckpointV2
+}
+
+public extension KagemushaRecipientRegistrationLineage {
+    static func verifyV2(
+        request: KagemushaRecipientPaymentRequest,
+        lineageArchive: Data,
+        verifiedAtMilliseconds: UInt64,
+        trustedCheckpoint: KagemushaFinalityCheckpointV2
+    ) throws -> KagemushaVerifiedRecipientRegistrationLineageV2 {
+        guard (1...UInt64(Int64.max)).contains(verifiedAtMilliseconds),
+              !lineageArchive.isEmpty,
+              lineageArchive.count <= Self.maximumArchiveBytes,
+              let result = try NoritoNativeBridge.shared
+                .kagemushaRecipientRegistrationLineageVerifyV2(
+                    requestArchive: request.archive,
+                    lineageArchive: lineageArchive,
+                    verifiedAtMilliseconds: verifiedAtMilliseconds,
+                    trustedCheckpointHeight: trustedCheckpoint.height,
+                    trustedCheckpointContextID: trustedCheckpoint.contextID
+                ) else {
+            if verifiedAtMilliseconds == 0 || lineageArchive.isEmpty
+                || lineageArchive.count > Self.maximumArchiveBytes {
+                throw KagemushaRecursiveSpendError.invalidField("receiverLineage")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard result.lineage == lineageArchive else {
+            throw KagemushaRecursiveSpendError.invalidArchive("receiverLineage.canonical")
+        }
+        return KagemushaVerifiedRecipientRegistrationLineageV2(
+            lineage: try KagemushaRecipientRegistrationLineage(
+                verifiedArchive: result.lineage
+            ),
+            promotedCheckpoint: try KagemushaFinalityCheckpointV2(
+                promotedCheckpointBytes: result.promotedCheckpoint
+            )
+        )
+    }
+}
+
+public struct KagemushaProjectedRecipientReceiveOfferV2: Equatable, Sendable {
+    public let request: KagemushaRecipientPaymentRequest
+    public let lineageArchive: Data
+    public let publisherCheckpointEnvelope: Data
+}
+
+public struct KagemushaVerifiedRecipientReceiveOfferV2: Equatable, Sendable {
+    public let request: KagemushaRecipientPaymentRequest
+    public let lineage: KagemushaRecipientRegistrationLineage
+    public let publisherCheckpointEnvelope: Data
+    public let promotedCheckpoint: KagemushaFinalityCheckpointV2
+}
+
+/// Canonical portable receive offer carried as the Kagemusha IPM1
+/// RECEIVE_REQUEST body. Native projection is the only decoder, so Swift never
+/// guesses the Rust `Archived<T>` alignment or header padding.
+public struct KagemushaRecipientReceiveOfferV2: Equatable, Sendable {
+    public static let maximumArchiveBytes = 24_576
+    public static let maximumPublisherEnvelopeBytes = 2_048
+    public let noritoArchive: Data
+
+    public init(
+        request: KagemushaRecipientPaymentRequest,
+        lineageArchive: Data,
+        publisherCheckpointEnvelope: Data
+    ) throws {
+        guard !lineageArchive.isEmpty,
+              lineageArchive.count <= KagemushaRecipientRegistrationLineage.maximumArchiveBytes,
+              (1...Self.maximumPublisherEnvelopeBytes)
+                .contains(publisherCheckpointEnvelope.count),
+              let archive = try NoritoNativeBridge.shared
+                .kagemushaRecipientReceiveOfferCreateV2(
+                    requestArchive: request.archive,
+                    lineageArchive: lineageArchive,
+                    publisherCheckpointEnvelope: publisherCheckpointEnvelope
+                ) else {
+            if lineageArchive.isEmpty
+                || lineageArchive.count > KagemushaRecipientRegistrationLineage.maximumArchiveBytes
+                || !(1...Self.maximumPublisherEnvelopeBytes)
+                    .contains(publisherCheckpointEnvelope.count) {
+                throw KagemushaRecursiveSpendError.invalidField("recipientReceiveOffer")
+            }
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        try self.init(validatingNativeArchive: archive)
+    }
+
+    public init(noritoArchive: Data) throws {
+        try self.init(validatingNativeArchive: noritoArchive)
+    }
+
+    public func project() throws -> KagemushaProjectedRecipientReceiveOfferV2 {
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecipientReceiveOfferProjectV2(offerArchive: noritoArchive) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        return KagemushaProjectedRecipientReceiveOfferV2(
+            request: try KagemushaRecursiveSpendCodecs.decodeRecipientRequest(result.request),
+            lineageArchive: result.lineage,
+            publisherCheckpointEnvelope: result.publisherEnvelope
+        )
+    }
+
+    /// Verify the exact offer after app policy authenticated the projected
+    /// publisher envelope and selected the corresponding durable checkpoint.
+    public func verify(
+        atMilliseconds: UInt64,
+        trustedCheckpoint: KagemushaFinalityCheckpointV2,
+        authenticatedPublisherCheckpointEnvelope: Data
+    ) throws -> KagemushaVerifiedRecipientReceiveOfferV2 {
+        guard (1...UInt64(Int64.max)).contains(atMilliseconds),
+              (1...Self.maximumPublisherEnvelopeBytes)
+                .contains(authenticatedPublisherCheckpointEnvelope.count) else {
+            throw KagemushaRecursiveSpendError.invalidField("recipientReceiveOffer.verify")
+        }
+        let projected = try project()
+        guard projected.publisherCheckpointEnvelope
+                == authenticatedPublisherCheckpointEnvelope else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "recipientReceiveOffer.publisherEnvelope"
+            )
+        }
+        guard let result = try NoritoNativeBridge.shared
+            .kagemushaRecipientReceiveOfferVerifyV2(
+                offerArchive: noritoArchive,
+                verifiedAtMilliseconds: atMilliseconds,
+                trustedCheckpointHeight: trustedCheckpoint.height,
+                trustedCheckpointContextID: trustedCheckpoint.contextID
+            ) else {
+            throw KagemushaRecursiveSpendError.nativeBridgeUnavailable
+        }
+        guard result.request == projected.request.archive,
+              result.lineage == projected.lineageArchive,
+              result.publisherEnvelope == authenticatedPublisherCheckpointEnvelope else {
+            throw KagemushaRecursiveSpendError.invalidArchive(
+                "recipientReceiveOffer.nativeProjection"
+            )
+        }
+        return KagemushaVerifiedRecipientReceiveOfferV2(
+            request: projected.request,
+            lineage: try KagemushaRecipientRegistrationLineage(
+                verifiedArchive: result.lineage
+            ),
+            publisherCheckpointEnvelope: result.publisherEnvelope,
+            promotedCheckpoint: try KagemushaFinalityCheckpointV2(
+                promotedCheckpointBytes: result.promotedCheckpoint
+            )
+        )
+    }
+
+    private init(validatingNativeArchive archive: Data) throws {
+        guard !archive.isEmpty, archive.count <= Self.maximumArchiveBytes else {
+            throw KagemushaRecursiveSpendError.invalidArchive("recipientReceiveOffer")
+        }
+        self.noritoArchive = Data(archive)
+        _ = try project()
     }
 }
 
@@ -41,6 +299,8 @@ public enum KagemushaOperationError: Error, LocalizedError, Equatable, Sendable 
 
 /// A schema-bound Kagemusha top-up command submitted directly to Torii.
 public struct KagemushaTopUpRequest: Equatable, Sendable {
+    /// Exact ABI-21/V4 top-up archive ceiling enforced by Torii.
+    public static let maximumArchiveBytes = 512 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -50,8 +310,10 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
         let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.topUpRequestWireName,
-            operationIdFieldIndex: 5,
-            fieldCount: 7
+            operationIdFieldIndex: 6,
+            fieldCount: 8,
+            expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
+            maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
         self.archive = validated.archive
@@ -62,6 +324,8 @@ public struct KagemushaTopUpRequest: Equatable, Sendable {
 
 /// A schema-bound Kagemusha redemption command submitted directly to Torii.
 public struct KagemushaRedeemRequest: Equatable, Sendable {
+    /// Exact ABI-21/V4 redemption archive ceiling enforced by Torii.
+    public static let maximumArchiveBytes = 48 * 1_024 * 1_024
     /// Lowercase hex derived from the archive's nonzero 32-byte operation ID.
     public let operationId: String
     private let archive: Data
@@ -71,8 +335,10 @@ public struct KagemushaRedeemRequest: Equatable, Sendable {
         let validated = try KagemushaOperationValidation.requestArchive(
             noritoArchive,
             schema: KagemushaRecursiveSpend.redeemRequestWireName,
-            operationIdFieldIndex: 7,
-            fieldCount: 9
+            operationIdFieldIndex: 8,
+            fieldCount: 10,
+            expectedWireVersion: KagemushaRecursiveSpend.wireVersionV4,
+            maximumArchiveBytes: Self.maximumArchiveBytes
         )
         self.operationId = validated.operationId
         self.archive = validated.archive
@@ -109,7 +375,10 @@ public struct KagemushaOperationReference: Codable, Equatable, Sendable {
             statusUri,
             operationId: validatedOperationId
         )
-        self.submittedAtMs = submittedAtMs
+        self.submittedAtMs = try KagemushaOperationValidation.positive(
+            submittedAtMs,
+            field: "submitted_at_ms"
+        )
     }
 
     public init(from decoder: Decoder) throws {
@@ -155,10 +424,10 @@ public struct KagemushaTopUpAnchor: Equatable, Sendable {
                 <= KagemushaRecursiveSpend.topUpFinalityAnchorMaximumArchiveBytes else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
-        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchor(
+        let wireValue = try KagemushaRecursiveSpendCodecs.decodeTopUpAnchorV4(
             Data(noritoArchive)
         )
-        self.archive = Data(wireValue.archive)
+        self.archive = Data(wireValue.noritoArchive)
         self.anchorDigest = Data(wireValue.anchorDigest)
         self.operationId = wireValue.topUpOperationID.hexLowercased()
         self.finalizedTransactionHash = wireValue.finalizedTransactionHash.hexLowercased()
@@ -397,7 +666,10 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
                 transactionHash,
                 field: "transaction_hash"
             )
-            self.submittedAtMs = submittedAtMs
+            self.submittedAtMs = try KagemushaOperationValidation.positive(
+                submittedAtMs,
+                field: "submitted_at_ms"
+            )
         }
     }
 
@@ -454,13 +726,24 @@ public enum KagemushaOperationStatus: Equatable, Sendable {
 }
 
 public enum KagemushaOperationCodec {
+    /// A reference contains only bounded identifiers, tags, a status URI, and
+    /// a timestamp. Reject oversized input before Norito frame parsing.
+    public static let referenceMaximumArchiveBytes = 4 * 1_024
+    /// Applied top-up status may contain the 2 MiB finality proof plus its
+    /// anchor and framing. Three MiB is a tight first-release wire ceiling.
+    public static let statusMaximumArchiveBytes = 3 * 1_024 * 1_024
+    /// Upper bound for every individual textual field decoded by this codec.
+    public static let maximumTextFieldUTF8Bytes = 64 * 1_024
+
     private static let referenceSchema =
         "iroha_torii_shared::offline_api::OfflineOperationReference"
     private static let statusSchema =
         "iroha_torii_shared::offline_api::OfflineOperationStatus"
 
     public static func decodeReference(_ archive: Data) throws -> KagemushaOperationReference {
-        guard let frame = noritoDecodeFrame(archive),
+        guard !archive.isEmpty,
+              archive.count <= referenceMaximumArchiveBytes,
+              let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: referenceSchema),
               frame.header.flags == NoritoHeader.compactLen,
@@ -521,7 +804,9 @@ public enum KagemushaOperationCodec {
     }
 
     public static func decodeStatus(_ archive: Data) throws -> KagemushaOperationStatus {
-        guard let frame = noritoDecodeFrame(archive),
+        guard !archive.isEmpty,
+              archive.count <= statusMaximumArchiveBytes,
+              let frame = noritoDecodeFrame(archive),
               frame.header.compression == .none,
               frame.header.schema == noritoSchemaHash(forTypeName: statusSchema),
               frame.header.flags == NoritoHeader.compactLen,
@@ -618,7 +903,7 @@ public enum KagemushaOperationCodec {
             try $0.readBytes($0.remaining())
         }
         let anchorArchive = KagemushaRecursiveSpend.frameArchive(
-            schema: KagemushaRecursiveSpend.topUpAnchorWireName,
+            schema: KagemushaRecursiveSpend.topUpAnchorWireNameV4,
             payload: anchorPayload
         )
         let anchor = try KagemushaTopUpAnchor(noritoArchive: anchorArchive)
@@ -895,7 +1180,7 @@ public enum KagemushaOperationCodec {
         compact: Bool
     ) throws -> String {
         let length = compact ? try reader.readVarint() : try reader.readUInt64LE()
-        guard length <= UInt64(Int.max),
+        guard length <= UInt64(maximumTextFieldUTF8Bytes),
               let value = String(
                 data: try reader.readBytes(Int(length)),
                 encoding: .utf8
@@ -963,6 +1248,8 @@ private enum KagemushaOperationValidation {
 
     static func exactText(_ value: String, field: String) throws -> String {
         guard !value.isEmpty,
+              value.utf8.count
+                <= KagemushaOperationCodec.maximumTextFieldUTF8Bytes,
               value.trimmingCharacters(in: .whitespacesAndNewlines) == value,
               !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains)
         else {
@@ -992,11 +1279,14 @@ private enum KagemushaOperationValidation {
         _ value: Data,
         schema: String,
         operationIdFieldIndex: Int,
-        fieldCount: Int
+        fieldCount: Int,
+        expectedWireVersion: UInt16,
+        maximumArchiveBytes: Int
     ) throws -> (archive: Data, operationId: String) {
         guard let requiredPaddingLength = KagemushaRecursiveSpend
             .requiredHeaderPaddingLength(forWireName: schema),
               !value.isEmpty,
+              value.count <= maximumArchiveBytes,
               value.count <= KagemushaRecursiveSpend.artifactMaximumFileBytes,
               let frame = noritoDecodeFrame(value),
               frame.header.schema == noritoSchemaHash(forTypeName: schema),
@@ -1020,6 +1310,19 @@ private enum KagemushaOperationValidation {
             throw KagemushaOperationError.invalidNoritoArchive
         }
         guard reader.remaining() == 0 else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+
+        guard fields[0].count == MemoryLayout<UInt16>.size else {
+            throw KagemushaOperationError.invalidNoritoArchive
+        }
+        var decodedVersion: UInt16 = 0
+        fields[0].withUnsafeBytes { buffer in
+            if let baseAddress = buffer.baseAddress {
+                memcpy(&decodedVersion, baseAddress, MemoryLayout<UInt16>.size)
+            }
+        }
+        guard UInt16(littleEndian: decodedVersion) == expectedWireVersion else {
             throw KagemushaOperationError.invalidNoritoArchive
         }
 

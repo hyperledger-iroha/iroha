@@ -92,7 +92,7 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   (`.github/workflows/integration_tests_multilane.yml`), replacing the retired
   `pytests/nexus/test_multilane_pipeline.py` reference; keep the hash for
   `defaults/nexus/config.toml` (`nexus.enabled = true`, blake2b
-  `5434666dee1a353467a927189b27422a9c85366a14134ba54b3be83a1beed13d`) in sync
+  `db08a1a2a8290906473a4429663d5144a6d6872fbe823d2e7c383c38e2fdcd69`) in sync
   with the tracker when refreshing rehearsal bundles.
 
 ## Runtime Lane Lifecycle
@@ -186,20 +186,20 @@ using the `#quarterly-routed-trace-audit-schedule` anchor.
   parser, so direct actual-config swaps cannot disable Nexus while carrying
   lane, dataspace, or routing overrides, enabling autoscale, enabling
   lane-relay emergency overrides, or enabling the relay worker. The relay
-  worker also requires lane-relay-burn settlement with a canonical sponsor
-  account at the state boundary, matching the parser guard. Activated
-  lane-relay-burn fee receipts
-  require a canonical sponsor even when the relay worker is disabled, and
-  emergency relay multisig thresholds cannot exceed member count. Per-dataspace
-  fee sponsors also require fee sponsorship, enabled Nexus, and a dataspace key
-  present in the active dataspace catalog. Runtime config swaps also mirror the
+  worker also requires lane-relay-burn settlement at the state boundary,
+  matching the parser guard. Authority-paid Nexus fees are rejected in this
+  mode until an authenticated authority spend-lease protocol exists; sponsor
+  receipts require a verified source allocation for the exact program revision
+  and asset. Emergency relay multisig thresholds cannot exceed member count.
+  Per-dataspace defaults name one exact `fee_sponsor_program_id` and require
+  enabled Nexus plus a dataspace key present in the active catalog; there is no
+  sponsorship toggle or account fallback. Runtime config swaps also mirror the
   parser's fee-shape checks: the Nexus fee asset selector must be the canonical
   XOR asset definition id or `xor#universal`/`xor#universal.universal` after
   genesis binds the alias to a canonical Base58 asset definition, and is
-  trimmed to the parser-normalized selector, the fee sink literal cannot be
-  blank, blank canonical sponsors are treated as absent, and each sponsored
-  contract allowlist entry must name a contract target plus at least one
-  non-empty entrypoint.
+  trimmed to the parser-normalized selector, while the fee sink literal cannot
+  be blank. Operation allow/deny selectors and asset budgets live on immutable
+  on-chain sponsor-program revisions rather than in runtime configuration.
 - State snapshots now carry a versioned `nexus_runtime` record with the exact
   effective lane catalog and autoscale transition cursor. Startup overlays
   current static policy onto those restored stateful values, validates the

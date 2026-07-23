@@ -121,6 +121,7 @@ fn tx_gossip_frame_payload_cap(
     let dummy_signed = match iroha_data_model::transaction::TransactionBuilder::new(
         chain_id.clone(),
         dummy_authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions(std::iter::empty::<InstructionBox>())
     .try_sign(dummy_keypair.private_key())
@@ -2014,10 +2015,11 @@ impl TransactionGossiper {
                         }
                         Err(crate::queue::Failure {
                             tx,
-                            err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
                         }) => {
                             iroha_logger::debug!(
                                 tx = %tx.hash(),
+                                code = %code,
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -2036,10 +2038,12 @@ impl TransactionGossiper {
                         }
                         Err(crate::queue::Failure {
                             tx,
-                            err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
+                            err:
+                                crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
                         }) => {
                             iroha_logger::warn!(
                                 tx = %tx.hash(),
+                                code = %code,
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -2487,10 +2491,11 @@ impl TransactionGossiper {
                         }
                         Err(crate::queue::Failure {
                             tx,
-                            err: crate::queue::Error::NexusFeeAdmissionRejected { reason },
+                            err: crate::queue::Error::NexusFeeAdmissionRejected { code, reason },
                         }) => {
                             iroha_logger::debug!(
                                 tx = %tx.hash(),
+                                code = %code,
                                 reason,
                                 "Dropping gossiped transaction rejected by Nexus fee admission"
                             );
@@ -2509,10 +2514,12 @@ impl TransactionGossiper {
                         }
                         Err(crate::queue::Failure {
                             tx,
-                            err: crate::queue::Error::NexusFeeAdmissionConfigInvalid { reason },
+                            err:
+                                crate::queue::Error::NexusFeeAdmissionConfigInvalid { code, reason },
                         }) => {
                             iroha_logger::warn!(
                                 tx = %tx.hash(),
+                                code = %code,
                                 reason,
                                 "Dropping gossiped transaction due to invalid Nexus fee configuration"
                             );
@@ -3519,9 +3526,13 @@ mod tests {
     fn build_transaction(message: &str) -> (SignedTransaction, AcceptedTransaction<'static>) {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = (*ALICE_ID).clone();
-        let signed = TransactionBuilder::new(chain_id, authority)
-            .with_instructions([Log::new(Level::INFO, message.to_string())])
-            .sign(ALICE_KEYPAIR.private_key());
+        let signed = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, message.to_string())])
+        .sign(ALICE_KEYPAIR.private_key());
         let accepted = AcceptedTransaction::new_unchecked(Cow::Owned(signed.clone()));
         (signed, accepted)
     }
@@ -3595,9 +3606,13 @@ mod tests {
     fn build_sealed_commitment_entrypoint() -> TransactionEntrypoint {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = (*ALICE_ID).clone();
-        let inner = TransactionBuilder::new(chain_id.clone(), authority.clone())
-            .with_instructions([Log::new(Level::INFO, "sealed-inner".to_string())])
-            .sign(ALICE_KEYPAIR.private_key());
+        let inner = TransactionBuilder::new(
+            chain_id.clone(),
+            authority.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Log::new(Level::INFO, "sealed-inner".to_string())])
+        .sign(ALICE_KEYPAIR.private_key());
         let reveal_deadline_height = 10;
         let commitment = compute_sealed_transaction_commitment(
             &chain_id,
@@ -3681,9 +3696,13 @@ mod tests {
         let instructions: [InstructionBox; 1] =
             [Box::new(RegisterRamLfeProgramPolicy { policy }).into_instruction_box()];
 
-        TransactionBuilder::new(chain_id, owner)
-            .with_instructions(instructions)
-            .sign(ALICE_KEYPAIR.private_key())
+        TransactionBuilder::new(
+            chain_id,
+            owner,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(instructions)
+        .sign(ALICE_KEYPAIR.private_key())
     }
 
     #[test]
@@ -3827,6 +3846,7 @@ mod tests {
 deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS),
             deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
             deferred_send_max_bytes_per_peer: defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+            deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
             dns_refresh_interval: None,
             dns_refresh_ttl: None,
             p2p_proxy: None,
@@ -3994,10 +4014,14 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         );
         let chain_id: ChainId = "probe-signing".parse().expect("chain id");
         let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
-        let transaction = TransactionBuilder::new(chain_id, authority)
-            .with_instructions(std::iter::empty::<InstructionBox>())
-            .try_sign(keypair.private_key())
-            .expect("checked transaction gossip frame probe signing");
+        let transaction = TransactionBuilder::new(
+            chain_id,
+            authority,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions(std::iter::empty::<InstructionBox>())
+        .try_sign(keypair.private_key())
+        .expect("checked transaction gossip frame probe signing");
         transaction
             .verify_signature()
             .expect("transaction gossip frame probe signature should verify");
@@ -6301,7 +6325,7 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         }
 
         impl LaneRouter for FixedRouter {
-            fn route(&self, _tx: &crate::tx::AcceptedTransaction<'_>) -> RoutingDecision {
+            fn route(&self, _tx: &dyn crate::queue::TransactionRoutingView) -> RoutingDecision {
                 RoutingDecision::new(self.lane, self.dataspace)
             }
         }
@@ -6497,16 +6521,20 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
         ));
         let mixed_domain_signed = |primary: &str, secondary: &str| {
             let chain_id: ChainId = "test-chain".parse().expect("chain id");
-            TransactionBuilder::new(chain_id, (*ALICE_ID).clone())
-                .with_instructions([
-                    InstructionBox::from(Register::domain(Domain::new(
-                        DomainId::try_new(primary, "acme").expect("first dataspace domain id"),
-                    ))),
-                    InstructionBox::from(Register::domain(Domain::new(
-                        DomainId::try_new(secondary, "bank").expect("second dataspace domain id"),
-                    ))),
-                ])
-                .sign(ALICE_KEYPAIR.private_key())
+            TransactionBuilder::new(
+                chain_id,
+                (*ALICE_ID).clone(),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new(primary, "acme").expect("first dataspace domain id"),
+                ))),
+                InstructionBox::from(Register::domain(Domain::new(
+                    DomainId::try_new(secondary, "bank").expect("second dataspace domain id"),
+                ))),
+            ])
+            .sign(ALICE_KEYPAIR.private_key())
         };
         let stale_signed = mixed_domain_signed("stalenativeamx", "stalenativepeer");
         let valid_signed = mixed_domain_signed("validnativeamx", "validnativepeer");

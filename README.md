@@ -128,25 +128,23 @@ See the full endpoint reference in:
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
-For contract apps, Torii now exposes both single-contract deploy and bundle
-deploy surfaces. The maintained public path is:
+Contract deployment is a locally signed consensus transaction flow. Clients
+upload and finalize bytecode, register the locally signed manifest, then submit
+`CommitContractDeployment` with the exact expected authority nonce and previous
+alias target. Torii never accepts deployment private keys and does not expose a
+server-side deploy or deploy-bundle route. The maintained public HTTP paths are:
 
-- `iroha contract app build|plan|deploy|resume` for `iroha.app.toml` bundles
-- `POST /v1/contracts/deploy-bundle` for compiled bundle deploys (`?dry_run=true`
-  for deterministic planning)
-- `GET /v1/contracts/deploy-bundles/{bundle_digest}` for receipt/status lookup
-- `POST /v1/contracts/deploy` for the single-contract path, implemented through
-  the same planner/executor as a one-contract bundle
+- `GET /v1/contracts/code/{code_hash}` and
+  `GET /v1/contracts/code-bytes/{code_hash}` for registered artifacts
+- `POST /v1/contracts/aliases/resolve` for the current signed alias binding
 - `POST /v1/contracts/view/batch` for batched read-only contract queries in one
   round-trip
 
-For the public-safe Torii posture, contract deploy/call/view/status routes stay
-public, while higher-risk app-facing surfaces are opt-in:
+For the public-safe Torii posture, contract call/view/status routes stay public,
+while higher-risk app-facing surfaces are opt-in:
 
 - `torii.webhooks_enabled = false` by default
 - `torii.zk_attachments_enabled = false` by default
-- `torii.deploy_rate_per_origin_per_sec = 4` plus
-  `torii.deploy_burst_per_origin = 8` are the public deploy baseline
 - trader/app rollups such as `/v1/contracts/rollups/swaps/fills` and
   `/v1/contracts/rollups/trader/account` remain app-facing surfaces rather than
   part of the public-safe baseline

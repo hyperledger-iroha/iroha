@@ -14,6 +14,7 @@ use crate::{
     compiler::{CompileReport, Compiler, CompilerMode, CompilerOptions},
     diagnostic::{
         Diagnostic, DiagnosticBundle, DiagnosticLabel, DiagnosticPhase, SourcePosition, SourceSpan,
+        phase_for_semantic_failure,
     },
     lexer::{Token, TokenKind},
     semantic::TypedProgram,
@@ -507,7 +508,7 @@ impl CompilerSession {
                 if !error_codes.insert(error.code) {
                     return Err(DiagnosticBundle::single(Diagnostic::error(
                         "E_DUPLICATE_ERROR_CODE",
-                        DiagnosticPhase::Semantic,
+                        DiagnosticPhase::Resolve,
                         format!(
                             "test graph assigns duplicate seiyaku error code {}",
                             error.code
@@ -585,7 +586,7 @@ fn enforce_argument_register_window(
                             .parameter_name_source(&function.name, &parameter.name)
                             .and_then(|range| source_range_span(source, range));
                         DiagnosticBundle::single(Diagnostic::error(
-                            "K2099",
+                            "K2098",
                             DiagnosticPhase::Semantic,
                             format!(
                                 "parameter `{}` of function `{}` retained an unresolved ABI type",
@@ -651,7 +652,7 @@ fn semantic_error_diagnostic(
 ) -> DiagnosticBundle {
     DiagnosticBundle::single(Diagnostic::error(
         error.code,
-        DiagnosticPhase::Semantic,
+        phase_for_semantic_failure(error.code),
         error.message,
         source_start_span(source_name),
     ))
@@ -885,6 +886,7 @@ fn reject_production_test_surface(
             (
                 ProductionTestSurface::TestFunction,
                 Some(SourceSpan {
+                    package_identity: None,
                     source: source_name.map(ToOwned::to_owned),
                     start: SourcePosition {
                         line: function.location.line,
@@ -993,6 +995,7 @@ fn non_deployable_module_diagnostic(source_name: Option<&str>) -> DiagnosticBund
 
 fn source_start_span(source_name: Option<&str>) -> Option<SourceSpan> {
     Some(SourceSpan {
+        package_identity: None,
         source: source_name.map(ToOwned::to_owned),
         start: SourcePosition { line: 1, column: 1 },
         end: SourcePosition { line: 1, column: 2 },
@@ -1086,6 +1089,32 @@ mod tests {
         assert!(diagnostics.diagnostics.iter().any(|diagnostic| {
             diagnostic.code == "E_RESERVED_DECLARATION"
                 && diagnostic.message.contains("type `Amount`")
+        }));
+    }
+
+    #[test]
+    fn retired_type_words_are_rejected_as_source_unit_identities() {
+        let session = CompilerSession::default();
+        let contract_diagnostics = session
+            .build(CompileRequest {
+                source: "seiyaku Amount { view fn run() {} }",
+                source_name: Some("retired-contract.ko"),
+            })
+            .expect_err("a retired numeric type must not identify a deployable seiyaku");
+        assert!(contract_diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_RESERVED_DECLARATION"
+                && diagnostic.message.contains("source unit `Amount`")
+        }));
+
+        let module_diagnostics = session
+            .check(CompileRequest {
+                source: "module i64 { fn run() {} }",
+                source_name: Some("retired-module.ko"),
+            })
+            .expect_err("a retired numeric type must not identify a module");
+        assert!(module_diagnostics.diagnostics.iter().any(|diagnostic| {
+            diagnostic.code == "E_RESERVED_DECLARATION"
+                && diagnostic.message.contains("source unit `i64`")
         }));
     }
 

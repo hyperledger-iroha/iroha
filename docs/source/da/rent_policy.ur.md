@@ -29,11 +29,11 @@ Norito پے لوڈز تاکہ کرایہ کے حوالے اور مراعات ی�
 
 | فیلڈ | تفصیل | ڈیفالٹ |
 | ------- | ------------- | --------- |
-| `base_rate_per_gib_month` | XOR نے برقرار رکھنے کے ہر مہینے میں فی گیب وصول کیا۔ | `250_000` مائکرو زور (0.25 XOR) |
+| `base_rate_per_gib_month` | XOR نے برقرار رکھنے کے ہر مہینے میں فی گیب وصول کیا۔ | `"0.25"` XOR |
 | `protocol_reserve_bps` | پروٹوکول ریزرو (بیس پوائنٹس) پر جانے والے کرایہ کا حصہ۔ | `2_000` (20 ٪) |
 | `pdp_bonus_bps` | بونس فیصد فی کامیاب PDP تشخیص۔ | `500` (5 ٪) |
 | `potr_bonus_bps` | بونس فیصد فی کامیاب پوٹر تشخیص۔ | `250` (2.5 ٪) |
-| `egress_credit_per_gib` | جب کوئی فراہم کنندہ ڈی اے ڈیٹا کی 1GIB پیش کرتا ہے تو کریڈٹ ادا کیا جاتا ہے۔ | `1_500` مائکرو XOR |
+| `egress_credit_per_gib` | جب کوئی فراہم کنندہ ڈی اے ڈیٹا کی 1GIB پیش کرتا ہے تو کریڈٹ ادا کیا جاتا ہے۔ | `"0.0015"` XOR |
 
 تمام بنیادی نقطہ اقدار کو `BASIS_POINTS_PER_UNIT` (10000) کے خلاف توثیق کیا گیا ہے۔
 پالیسی کی تازہ کاریوں کو گورننس کے ذریعے سفر کرنا چاہئے ، اور ہر Torii نوڈ کو بے نقاب کیا جاتا ہے
@@ -42,11 +42,11 @@ Norito پے لوڈز تاکہ کرایہ کے حوالے اور مراعات ی�
 
 ```toml
 [torii.da_ingest.rent_policy]
-base_rate_per_gib_month_micro = 250000        # 0.25 XOR/GiB-month
+base_rate_per_gib_month = "0.25"        # 0.25 XOR/GiB-month
 protocol_reserve_bps = 2000                   # 20% protocol reserve
 pdp_bonus_bps = 500                           # 5% PDP bonus
 potr_bonus_bps = 250                          # 2.5% PoTR bonus
-egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
+egress_credit_per_gib = "0.0015"    # 0.0015 XOR/GiB egress credit
 ```
 
 سی ایل آئی ٹولنگ (`iroha app da rent-quote`) وہی Norito/JSON پالیسی آدانوں کو قبول کرتا ہے
@@ -80,12 +80,12 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
   "policy": { "...": "DaRentPolicyV1 fields elided" },
   "quote": { "...": "DaRentQuote breakdown" },
   "ledger_projection": {
-    "rent_due": { "micro": 7500000 },
-    "protocol_reserve_due": { "micro": 1500000 },
-    "provider_reward_due": { "micro": 6000000 },
-    "pdp_bonus_pool": { "micro": 375000 },
-    "potr_bonus_pool": { "micro": 187500 },
-    "egress_credit_per_gib": { "micro": 1500 }
+    "rent_due": "7.5",
+    "protocol_reserve_due": "1.5",
+    "provider_reward_due": "6",
+    "pdp_bonus_pool": "0.375",
+    "potr_bonus_pool": "0.1875",
+    "egress_credit_per_gib": "0.0015"
   }
 }
 ```لیجر پروجیکشن سیکشن براہ راست ڈی اے کرایہ لیجر داعش میں کھلاتا ہے: یہ
@@ -105,12 +105,12 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 ```json
 {
   "quote_path": "artifacts/da/rent_quotes/2025-12-07/rent.json",
-  "rent_due_micro_xor": 7500000,
-  "protocol_reserve_due_micro_xor": 1500000,
-  "provider_reward_due_micro_xor": 6000000,
-  "pdp_bonus_pool_micro_xor": 375000,
-  "potr_bonus_pool_micro_xor": 187500,
-  "egress_credit_per_gib_micro_xor": 1500,
+  "rent_due": "7.5",
+  "protocol_reserve_due": "1.5",
+  "provider_reward_due": "6",
+  "pdp_bonus_pool": "0.375",
+  "potr_bonus_pool": "0.1875",
+  "egress_credit_per_gib": "0.0015",
   "instructions": [
     { "Transfer": { "...": "payer -> treasury base rent instruction elided" }},
     { "Transfer": { "...": "treasury -> reserve" }},
@@ -121,7 +121,7 @@ egress_credit_per_gib_micro = 1500            # 0.0015 XOR/GiB egress credit
 }
 ```
 
-حتمی `egress_credit_per_gib_micro_xor` فیلڈ ڈیش بورڈز اور ادائیگی کی اجازت دیتا ہے
+حتمی `egress_credit_per_gib` فیلڈ ڈیش بورڈز اور ادائیگی کی اجازت دیتا ہے
 نظام الاوقات کرایہ کی پالیسی کے ساتھ ایگریس معاوضوں کو سیدھ میں کرتے ہیں جس نے اس کو تیار کیا ہے
 اسکرپٹنگ گلو میں پالیسی ریاضی کی بحالی کے بغیر حوالہ۔
 
@@ -134,17 +134,17 @@ use iroha_data_model::da::types::DaRentPolicyV1;
 let policy = DaRentPolicyV1::default();
 let quote = policy.quote(10, 3).expect("policy validated");
 
-assert_eq!(quote.base_rent.as_micro(), 7_500_000);      // 7.5 XOR total rent
-assert_eq!(quote.protocol_reserve.as_micro(), 1_500_000); // 20% reserve
-assert_eq!(quote.provider_reward.as_micro(), 6_000_000);  // Direct provider payout
-assert_eq!(quote.pdp_bonus.as_micro(), 375_000);          // PDP success bonus
-assert_eq!(quote.potr_bonus.as_micro(), 187_500);         // PoTR success bonus
-assert_eq!(quote.egress_credit_per_gib.as_micro(), 1_500);
+assert_eq!(quote.base_rent.to_string(), "7.5");      // 7.5 XOR total rent
+assert_eq!(quote.protocol_reserve.to_string(), "1.5"); // 20% reserve
+assert_eq!(quote.provider_reward.to_string(), "6");  // Direct provider payout
+assert_eq!(quote.pdp_bonus.to_string(), "0.375");          // PDP success bonus
+assert_eq!(quote.potr_bonus.to_string(), "0.1875");         // PoTR success bonus
+assert_eq!(quote.egress_credit_per_gib.to_string(), "0.0015");
 ```
 
 اقتباس Torii نوڈس ، SDKs ، اور ٹریژری رپورٹس میں تولیدی ہے کیونکہ
 اس میں ایڈہاک ریاضی کے بجائے ڈٹرمینسٹک Norito ڈھانچے کا استعمال کیا گیا ہے۔ آپریٹرز کر سکتے ہیں
-JSON/CBOR انکوڈڈ `DaRentPolicyV1` کو گورننس کی تجاویز یا کرایہ پر منسلک کریں
+Norito/JSON انکوڈڈ `DaRentPolicyV1` کو گورننس کی تجاویز یا کرایہ پر منسلک کریں
 کسی بھی بلاب کے لئے کون سے پیرامیٹرز نافذ تھے یہ ثابت کرنے کے لئے آڈٹ۔
 
 ## بونس اور ذخائر

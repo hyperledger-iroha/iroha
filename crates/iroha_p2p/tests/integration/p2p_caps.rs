@@ -18,7 +18,10 @@ use iroha_crypto::{
 };
 use iroha_data_model::{ChainId, prelude::Peer};
 use iroha_futures::supervisor::ShutdownSignal;
-use iroha_p2p::{NetworkHandle, network::message::*};
+use iroha_p2p::{
+    NetworkHandle,
+    network::{NetworkActorAdmissionError, NetworkActorAdmissionRejection, message::*},
+};
 #[cfg(any(feature = "p2p_tls", feature = "quic"))]
 use iroha_primitives::addr::SocketAddrHost;
 use iroha_primitives::addr::{SocketAddr, socket_addr};
@@ -103,6 +106,8 @@ fn make_config(
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_PER_PEER,
         deferred_send_max_bytes_per_peer:
             iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+        deferred_send_max_bytes_total:
+            iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
         peer_gossip_period: PEER_GOSSIP_PERIOD,
         peer_gossip_max_period: PEER_GOSSIP_PERIOD,
         trust_decay_half_life: iroha_config::parameters::defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -286,19 +291,32 @@ async fn topic_cap_violation_disconnects() {
         return;
     }
 
-    // Track initial consensus cap violation counter so we can assert the drop path increments it.
+    // Track the initial consensus cap counter so exact actor admission can be
+    // shown to account for the rejected frame.
     let start_cap = iroha_p2p::network::cap_violations_consensus();
 
-    // Send a BigMsg exceeding topic cap (Consensus cap=1k, send 8k)
+    // Submit a BigMsg exceeding the topic cap (Consensus cap=1 KiB, data=8 KiB).
     let big = BigMsg {
         topic: 0,
         data: vec![0u8; 8192],
     };
-    net2.post(Post {
-        data: big,
-        peer_id: p1.id().clone(),
-        priority: Priority::High,
-    });
+    let rejection = net2
+        .post_recoverable(
+            Post {
+                data: big,
+                peer_id: p1.id().clone(),
+                priority: Priority::High,
+            },
+            None,
+        )
+        .expect_err("the oversized consensus frame must fail recoverable admission");
+    assert!(matches!(
+        rejection,
+        NetworkActorAdmissionError::Rejected {
+            reason: NetworkActorAdmissionRejection::FrameTooLarge,
+            ..
+        }
+    ));
     let end_cap = tokio::time::timeout(Duration::from_millis(1_000), async {
         loop {
             let current = iroha_p2p::network::cap_violations_consensus();
@@ -311,12 +329,8 @@ async fn topic_cap_violation_disconnects() {
     .await
     .expect("consensus cap violation counter should increase");
 
-    // Expect net1 to have dropped net2 after violation or soon after
-    let count = net1.online_peers(std::collections::HashSet::len);
-    assert!(count == 0 || count == 1);
-
-    // The inbound fast path should reject the oversized frame without
-    // re-encoding payloads; the consensus cap counter should increment.
+    // Exact outbound admission rejects the oversized canonical frame before
+    // transferring ownership, and the consensus cap counter records it.
     assert!(
         end_cap > start_cap,
         "consensus cap violations should increment for oversized frame"

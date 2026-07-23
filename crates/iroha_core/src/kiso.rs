@@ -706,6 +706,7 @@ mod tests {
                 deferred_send_max_per_peer: defaults::network::DEFERRED_SEND_MAX_PER_PEER,
                 deferred_send_max_bytes_per_peer:
                     defaults::network::DEFERRED_SEND_MAX_BYTES_PER_PEER,
+                deferred_send_max_bytes_total: iroha_config::parameters::defaults::network::DEFERRED_SEND_MAX_BYTES_TOTAL,
                 peer_gossip_period: defaults::network::PEER_GOSSIP_PERIOD,
                 peer_gossip_max_period: defaults::network::PEER_GOSSIP_PERIOD,
                 trust_decay_half_life: defaults::network::TRUST_DECAY_HALF_LIFE,
@@ -1000,7 +1001,7 @@ mod tests {
                     },
                 transport: iroha_config::parameters::actual::ToriiTransport::default(),
                 mcp: iroha_config::parameters::actual::ToriiMcp::default(),
-                onboarding: None,
+                account_onboarding: None,
                 faucet: None,
                 kagemusha_commands: None,
                 proof_api: iroha_config::parameters::actual::ProofApi {
@@ -1540,10 +1541,10 @@ mod tests {
                     .parse()
                     .expect("valid default citizenship asset id"),
                 citizenship_bond_amount:
-                    iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT,
+                    iroha_config::parameters::defaults::governance::CITIZENSHIP_BOND_AMOUNT.into(),
                 citizenship_escrow_account:
                     iroha_config::parameters::defaults::governance::citizenship_escrow_account_id(),
-                min_bond_amount: 150,
+                min_bond_amount: 150_u64.into(),
                 bond_escrow_account:
                     iroha_config::parameters::defaults::governance::bond_escrow_account_id(),
                 slash_receiver_account:
@@ -1596,7 +1597,7 @@ mod tests {
                 parliament_term_blocks:
                     iroha_config::parameters::defaults::governance::PARLIAMENT_TERM_BLOCKS,
                 parliament_min_stake:
-                    iroha_config::parameters::defaults::governance::PARLIAMENT_MIN_STAKE,
+                    iroha_config::parameters::defaults::governance::parliament_min_stake(),
                 parliament_eligibility_asset_id: iroha_config::parameters::defaults::governance::parliament_eligibility_asset_id()
                     .parse()
                     .expect("valid default governance asset id"),

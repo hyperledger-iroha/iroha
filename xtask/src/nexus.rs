@@ -19,6 +19,7 @@ use iroha_data_model::{
     },
     nexus::{DataSpaceId, LaneCompliancePolicy, LaneId},
 };
+use iroha_primitives::numeric::Quantity;
 use iroha_telemetry::metrics::Status;
 use norito::{
     core::NoritoDeserialize as _,
@@ -201,30 +202,30 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                 lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(7),
                 tx_count: 2,
-                total_local_micro: 7_500_000,
-                total_xor_due_micro: 3_050_000,
-                total_xor_after_haircut_micro: 3_000_000,
-                total_xor_variance_micro: 50_000,
+                total_local_amount: quantity("7.5"),
+                total_xor_due: quantity("3.05"),
+                total_xor_after_haircut: quantity("3"),
+                total_xor_variance: quantity("0.05"),
                 swap_metadata: Some(LaneSwapMetadata {
                     epsilon_bps: 25,
                     twap_window_seconds: 60,
                     liquidity_profile: LaneLiquidityProfile::Tier1,
-                    twap_local_per_xor: "8123.445500".to_string(),
+                    twap_local_per_xor: "8123.4455".parse().expect("canonical TWAP"),
                     volatility_class: LaneVolatilityClass::Stable,
                 }),
                 receipts: vec![
                     receipt(
                         "4f25818e98f7b549a21ceda9a1f3812d95d64c83f7d02c361e13caf113e53344",
-                        4_000_000,
-                        1_620_000,
-                        1_600_000,
+                        "4",
+                        "1.62",
+                        "1.6",
                         1_726_296_400_000,
                     ),
                     receipt(
                         "ab56be456758d5be8d3d24ae7ef44c6a0ca1cf4a788ad18cf3b987fe9954f0d2",
-                        3_500_000,
-                        1_430_000,
-                        1_400_000,
+                        "3.5",
+                        "1.43",
+                        "1.4",
                         1_726_296_401_200,
                     ),
                 ],
@@ -240,37 +241,37 @@ fn sample_commitments() -> Vec<CommitmentFixture> {
                 lane_incarnation: iroha_crypto::Hash::new(b"lane-block-commitment-incarnation"),
                 dataspace_id: DataSpaceId::new(24),
                 tx_count: 3,
-                total_local_micro: 9_300_000,
-                total_xor_due_micro: 4_200_000,
-                total_xor_after_haircut_micro: 4_050_000,
-                total_xor_variance_micro: 150_000,
+                total_local_amount: quantity("9.3"),
+                total_xor_due: quantity("4.2"),
+                total_xor_after_haircut: quantity("4.05"),
+                total_xor_variance: quantity("0.15"),
                 swap_metadata: Some(LaneSwapMetadata {
                     epsilon_bps: 120,
                     twap_window_seconds: 300,
                     liquidity_profile: LaneLiquidityProfile::Tier3,
-                    twap_local_per_xor: "1.245600".to_string(),
+                    twap_local_per_xor: "1.2456".parse().expect("canonical TWAP"),
                     volatility_class: LaneVolatilityClass::Dislocated,
                 }),
                 receipts: vec![
                     receipt(
                         "beadf1f4a09fd303cc6971f2f58d7f2c1eca1aa1a5d2cda7088fcfd97994cb8a",
-                        3_300_000,
-                        1_600_000,
-                        1_550_000,
+                        "3.3",
+                        "1.6",
+                        "1.55",
                         1_726_297_000_500,
                     ),
                     receipt(
                         "d74fefc1c3f216e8844141493dfd9e4fb3c947ff9b35331a37c6ae16a5f97028",
-                        2_800_000,
-                        1_300_000,
-                        1_250_000,
+                        "2.8",
+                        "1.3",
+                        "1.25",
                         1_726_297_001_250,
                     ),
                     receipt(
                         "cedf9cb93f1b8f52a08ff19793b0ce6049db0a89c9a6ec7fd65dd8f5ecd0f92b",
-                        3_200_000,
-                        1_300_000,
-                        1_250_000,
+                        "3.2",
+                        "1.3",
+                        "1.25",
                         1_726_297_001_900,
                     ),
                 ],
@@ -692,20 +693,29 @@ fn micro_xor_to_units(value: u128) -> f64 {
     (value as f64) / 1_000_000.0
 }
 
+fn quantity(value: &str) -> Quantity {
+    value.parse().expect("canonical quantity fixture")
+}
+
 fn receipt(
     source_hex: &str,
-    local_amount_micro: u128,
-    xor_due_micro: u128,
-    xor_after_haircut_micro: u128,
+    local_amount: &str,
+    xor_due: &str,
+    xor_after_haircut: &str,
     timestamp_ms: u64,
 ) -> LaneSettlementReceipt {
-    let variance = xor_due_micro.saturating_sub(xor_after_haircut_micro);
+    let local_amount = quantity(local_amount);
+    let xor_due = quantity(xor_due);
+    let xor_after_haircut = quantity(xor_after_haircut);
+    let variance = xor_due
+        .checked_sub(&xor_after_haircut)
+        .expect("fixture haircut cannot exceed XOR due");
     LaneSettlementReceipt {
         source_id: hex32(source_hex),
-        local_amount_micro,
-        xor_due_micro,
-        xor_after_haircut_micro,
-        xor_variance_micro: variance,
+        local_amount,
+        xor_due,
+        xor_after_haircut,
+        xor_variance: variance,
         timestamp_ms,
     }
 }

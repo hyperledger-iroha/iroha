@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DEFAULT_PROFILE="single-peer"
+PYTHON_BIN="${MOCHI_PYTHON:-python3}"
 
 usage() {
   cat <<'EOF'
@@ -23,6 +24,7 @@ Environment:
   MOCHI_PROFILE_SLUG           Explicit sandbox slug override when MOCHI_PROFILE is custom
   MOCHI_CARGO_TARGET_DIR       Cargo target dir for `cargo run`/auto-builds (default: <workspace>/.mochi/build-target)
   MOCHI_START_TIMEOUT_SECONDS  Seconds to wait for session.json readiness (default: 1200)
+  MOCHI_PYTHON                 Python interpreter used for path, JSON, and detached-process helpers (default: python3)
 
 All other MOCHI_* variables supported by `mochi sandbox serve` are forwarded to the child process.
 EOF
@@ -30,7 +32,7 @@ EOF
 
 resolve_workspace_root() {
   local root="${MOCHI_WORKSPACE_ROOT:-$PWD}"
-  python3 - "$root" <<'PY'
+  "$PYTHON_BIN" - "$root" <<'PY'
 import os
 import sys
 
@@ -65,7 +67,7 @@ resolve_sandbox_root() {
 resolve_cargo_target_dir() {
   local workspace_root="$1"
   local root="${MOCHI_CARGO_TARGET_DIR:-${workspace_root}/.mochi/build-target}"
-  python3 - "$root" <<'PY'
+  "$PYTHON_BIN" - "$root" <<'PY'
 import os
 import sys
 
@@ -87,7 +89,7 @@ shell_quote() {
 json_field() {
   local session_file="$1"
   local field="$2"
-  python3 - "$session_file" "$field" <<'PY'
+  "$PYTHON_BIN" - "$session_file" "$field" <<'PY'
 import json
 import sys
 
@@ -119,7 +121,7 @@ PY
 session_ready() {
   local session_file="$1"
   [[ -f "$session_file" ]] || return 1
-  python3 - "$session_file" <<'PY'
+  "$PYTHON_BIN" - "$session_file" <<'PY'
 import json
 import sys
 
@@ -250,9 +252,9 @@ cmd_up() {
   rm -f "$session_file"
   : >"$log_file"
 
-  local -a cmd=(cargo run -p mochi-ui -- sandbox serve --build-binaries --workspace-root "$workspace_root" --profile "$profile_arg")
+  local -a cmd=(cargo run -p mochi-ui --features gui --bin mochi -- sandbox serve --build-binaries --workspace-root "$workspace_root" --profile "$profile_arg")
 
-  pid="$(python3 - "$REPO_ROOT" "$cargo_target_dir" "$log_file" "${cmd[@]}" <<'PY'
+  pid="$("$PYTHON_BIN" - "$REPO_ROOT" "$cargo_target_dir" "$log_file" "${cmd[@]}" <<'PY'
 import os
 import subprocess
 import sys

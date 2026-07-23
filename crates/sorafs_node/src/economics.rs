@@ -214,12 +214,9 @@ fn encode_checkpoint_bounded<T: norito::core::NoritoSerialize>(
     checkpoint: &T,
     max_bytes: usize,
 ) -> Result<Vec<u8>, EconomicsRuntimeError> {
-    let exact = checkpoint.encoded_len_exact().ok_or_else(|| {
-        EconomicsRuntimeError::Checkpoint(format!(
-            "{label} checkpoint does not expose an exact encoded length"
-        ))
-    })?;
-    if exact > max_bytes {
+    if let Some(exact) = checkpoint.encoded_len_exact()
+        && exact > max_bytes
+    {
         return Err(EconomicsRuntimeError::Checkpoint(format!(
             "{label} checkpoint length {exact} exceeds maximum {max_bytes}"
         )));
@@ -249,7 +246,9 @@ mod tests {
     };
 
     use ed25519_dalek::{Signer as _, SigningKey};
+    use iroha_crypto::numeric::Quantity;
     use sorafs_manifest::{
+        deal::XorQuantity,
         hedging::signed::{
             HEDGING_FEED_BINDING_VERSION_V1, HEDGING_FEED_TRUST_POLICY_VERSION_V1,
             HEDGING_TRUSTED_SIGNER_VERSION_V1, HedgingFeedBindingV1, HedgingTrustedSignerV1,
@@ -273,6 +272,16 @@ mod tests {
     use crate::{NodeHandle, NodeInitError, config::RuntimeRetentionPolicy, config::StorageConfig};
 
     const NOW: u64 = 1_800_000_000;
+
+    fn xor(value: &str) -> XorQuantity {
+        value.parse().expect("canonical XOR quantity")
+    }
+
+    fn quantity_from_micro(value: u64) -> Quantity {
+        format!("{}.{:06}", value / 1_000_000, value % 1_000_000)
+            .parse()
+            .expect("canonical micro-unit quantity")
+    }
 
     fn pricing_keys() -> [SigningKey; 2] {
         [
@@ -310,8 +319,8 @@ mod tests {
             effective_from_unix,
             tiers: vec![PricingTierV1 {
                 tier_id: "hot".into(),
-                storage_price_milliu_per_gib_hour: 500,
-                egress_price_milliu_per_gib: 50,
+                storage_price_per_gib_hour: xor("0.5"),
+                egress_price_per_gib: xor("0.05"),
                 min_collateral_ratio_bps: Some(15_000),
                 notes: None,
             }],
@@ -325,7 +334,7 @@ mod tests {
             },
             micropayment_policy: Some(PricingMicropaymentPolicyV1 {
                 payout_probability_bps: 100,
-                max_voucher_value_nanos: 5_000_000_000,
+                max_voucher_value: xor("5"),
                 notes: None,
             }),
         }
@@ -397,7 +406,7 @@ mod tests {
                 feed_id: "primary".into(),
                 source: "primary-source".into(),
                 observed_at_unix,
-                xor_usd_micros: 2_000_000 + u64::from(evidence_byte),
+                xor_usd_price: quantity_from_micro(2_000_000 + u64::from(evidence_byte)),
                 weight_bps: 10_000,
                 evidence_digest: [evidence_byte; 32],
                 status: HedgingFeedStatusV1::Ok,
@@ -494,7 +503,7 @@ mod tests {
             .derive_latest_hedging_reference_price(NOW, NOW, 60, 500)
             .expect("derive governed reference price");
         assert_eq!(decision.decision.feeds.len(), 1);
-        assert_eq!(decision.decision.xor_usd_micros, feed.feed.xor_usd_micros);
+        assert_eq!(decision.decision.xor_usd_price, feed.feed.xor_usd_price);
 
         drop(node);
         let restored = NodeHandle::try_new(config).expect("restore economics checkpoints");

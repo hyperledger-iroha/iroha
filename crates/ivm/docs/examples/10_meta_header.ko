@@ -4,9 +4,9 @@
 seiyaku MetaDemo {
     // hajimari/始まり hook staged by the runtime at activation.
     hajimari() {
-        // Emit a ZK opcode so capability inference is exercised. Vector width is
-        // not a source-level option in V1.
-        let _digest = crypto::poseidon2(left: 1, right: 2);
+        // Full-width hash syscalls are source-visible; scalar proof-gadget
+        // opcodes are intentionally internal.
+        let _digest = crypto::iroha_hash(b"meta-demo");
         let a = 1;
     }
 }

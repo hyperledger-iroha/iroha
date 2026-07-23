@@ -10,16 +10,16 @@ from typing import Optional
 
 from iroha_python import (
     Ed25519KeyPair,
-    SignedTransactionEnvelope,
     TransactionConfig,
     TransactionDraft,
+    authority_fee_payment,
     create_torii_client,
+    sponsor_fee_payment,
 )
 
 
 def build_sample_transaction(
     config: TransactionConfig,
-    keypair: Ed25519KeyPair,
     *,
     domain_id: str,
     account_id: str,
@@ -28,8 +28,8 @@ def build_sample_transaction(
     quantity: Decimal,
     burn_quantity: Optional[Decimal] = None,
     transfer_destination: Optional[str] = None,
-) -> tuple[TransactionDraft, SignedTransactionEnvelope]:
-    """Return the draft and signed envelope for a sample asset mint flow."""
+) -> TransactionDraft:
+    """Return one exact unsigned draft for a sample asset mint flow."""
 
     draft = TransactionDraft(config)
     draft.register_domain(domain_id) \
@@ -44,8 +44,7 @@ def build_sample_transaction(
         draft.burn_asset_quantity(asset_id, burn_quantity)
     if transfer_destination is not None:
         draft.transfer_asset_quantity(asset_id, quantity, transfer_destination)
-    envelope = draft.sign_with_keypair(keypair)
-    return draft, envelope
+    return draft
 
 
 def main() -> None:
@@ -81,6 +80,21 @@ def main() -> None:
         help="Optional account id to transfer the minted asset to after burn (uses original quantity)",
     )
     parser.add_argument("--ttl-ms", type=int, default=120_000, help="Transaction TTL in milliseconds")
+    parser.add_argument(
+        "--fee-payer",
+        choices=("authority", "sponsor"),
+        default="authority",
+        help="Explicit signature-bound fee payer (default: %(default)s)",
+    )
+    parser.add_argument(
+        "--fee-program",
+        help="Exact <canonical-I105>/<name> sponsor program",
+    )
+    parser.add_argument(
+        "--fee-program-revision",
+        type=int,
+        help="Exact non-zero immutable sponsor-program revision",
+    )
     parser.add_argument("--submit", action="store_true", help="Submit the signed transaction to Torii")
     parser.add_argument("--wait", action="store_true", help="Submit and wait for a terminal status")
     parser.add_argument(
@@ -103,9 +117,23 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if args.fee_payer == "sponsor":
+        if not args.fee_program or not args.fee_program_revision:
+            parser.error("--fee-payer sponsor requires --fee-program and --fee-program-revision")
+        requested_fee_payment = sponsor_fee_payment(
+            args.fee_program,
+            args.fee_program_revision,
+            charge_limits=[],
+        )
+    else:
+        if args.fee_program is not None or args.fee_program_revision is not None:
+            parser.error("--fee-program and --fee-program-revision require --fee-payer sponsor")
+        requested_fee_payment = authority_fee_payment(charge_limits=[])
+
     config = TransactionConfig(
         chain_id=args.chain_id,
         authority=args.authority,
+        fee_payment=requested_fee_payment,
         ttl_ms=args.ttl_ms,
     )
     keypair = Ed25519KeyPair.from_private_key(bytes.fromhex(args.private_key_hex))
@@ -125,9 +153,8 @@ def main() -> None:
     except ValueError as exc:
         parser.error(str(exc))
 
-    draft, envelope = build_sample_transaction(
+    draft = build_sample_transaction(
         config,
-        keypair,
         domain_id=args.domain_id,
         account_id=args.account_id,
         asset_definition_id=args.asset_definition_id,
@@ -137,7 +164,16 @@ def main() -> None:
         transfer_destination=args.transfer_destination,
     )
 
+    client = create_torii_client(
+        args.base_url,
+        auth_token=args.auth_token,
+        api_token=args.api_token,
+    )
+    envelope, fee_quote = draft.quote_and_sign(client, keypair.private_key)
+
     payload = json.loads(envelope.to_json())
+    print("Fee quote:")
+    print(json.dumps(fee_quote, indent=2))
     print("Signed transaction envelope:")
     print(json.dumps(payload, indent=2))
 
@@ -148,11 +184,6 @@ def main() -> None:
         print(f"Envelope JSON written to {destination}")
 
     if args.submit:
-        client = create_torii_client(
-            args.base_url,
-            auth_token=args.auth_token,
-            api_token=args.api_token,
-        )
         if args.wait:
             status = client.submit_transaction_envelope_and_wait(
                 envelope,
@@ -166,11 +197,6 @@ def main() -> None:
     else:
         print("Draft contains", len(list(draft.instructions)), "instructions. Use --submit to relay.")
 
-
-if __name__ == "__main__":
-    main()
-
-
 def _parse_quantity(value: Optional[str], flag: str) -> Decimal:
     if value is None:
         raise ValueError(f"{flag} requires a numeric value")
@@ -181,3 +207,7 @@ def _parse_quantity(value: Optional[str], flag: str) -> Decimal:
     if parsed <= 0:
         raise ValueError(f"{flag} must be greater than zero")
     return parsed
+
+
+if __name__ == "__main__":
+    main()

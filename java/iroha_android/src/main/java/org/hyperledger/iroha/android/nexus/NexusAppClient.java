@@ -110,6 +110,7 @@ public final class NexusAppClient {
                     normalized.destinationAccountId())))
         .setTimeToLiveMs(normalized.ttlMs())
         .setNonce(normalized.nonce())
+        .setFeePayment(normalized.feePayment())
         .setMetadata(normalized.metadata())
         .build();
     final byte[] payloadBytes;

@@ -89,7 +89,8 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
     // Basic shape keys
     assert!(v.get("latest").is_some());
     assert!(v.get("roots").is_some());
-    assert!(v.get("height").is_some());
+    assert!(v.get("evaluated_block_height").is_some());
+    assert!(v.get("evaluated_block_hash").is_some());
     assert_eq!(v.get("latest").and_then(|value| value.as_str()), Some(""));
     assert_eq!(
         v.get("roots")
@@ -97,7 +98,17 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
             .map(std::vec::Vec::len),
         Some(0)
     );
-    assert_eq!(v.get("height").and_then(|value| value.as_u64()), Some(0));
+    assert_eq!(
+        v.get("evaluated_block_height")
+            .and_then(|value| value.as_u64()),
+        Some(1)
+    );
+    assert_eq!(
+        v.get("evaluated_block_hash")
+            .and_then(|value| value.as_str())
+            .map(str::len),
+        Some(64)
+    );
 }
 
 #[tokio::test]

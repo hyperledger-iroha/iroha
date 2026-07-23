@@ -374,6 +374,12 @@ impl LayerableAuthentication for UnauthenticatedRoute {}
 /// policy-specific adversarial tests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum HandlerAuthentication {
+    /// Canonical account request authentication performed by the handler.
+    ///
+    /// These handlers bind the request body and route to an on-ledger account,
+    /// enforce freshness and replay protection, and then apply account-scoped
+    /// permissions before returning protected data.
+    CanonicalAccountSignature,
     /// WebAuthn/bootstrap credential exchange performed by the handler.
     OperatorCredentialExchange,
     /// Authentication performed as part of a protocol-native handshake.
@@ -383,6 +389,7 @@ pub(crate) enum HandlerAuthentication {
 impl HandlerAuthentication {
     const fn catalog_policy(self) -> AuthenticationPolicy {
         match self {
+            Self::CanonicalAccountSignature => AuthenticationPolicy::CanonicalAccountSignature,
             Self::OperatorCredentialExchange => AuthenticationPolicy::OperatorCredentialExchange,
             Self::ProtocolHandshake => AuthenticationPolicy::ProtocolHandshake,
         }
@@ -414,6 +421,21 @@ impl<S> CatalogMethodRouter<S, ToriiDefaultAuthentication>
 where
     S: Clone + Send + Sync + 'static,
 {
+    /// Seal the descriptor witness for Torii's route-aware onboarding gate.
+    ///
+    /// The composed router installs the concrete gate outside media parsing
+    /// and inside listener-wide API-token authentication. This marker prevents
+    /// either onboarding route from being mounted under the ordinary default
+    /// authentication descriptor by accident.
+    #[must_use]
+    pub(crate) fn authenticated_onboarding(self) -> CatalogMethodRouter<S, SealedAuthentication> {
+        CatalogMethodRouter {
+            method: self.method,
+            authentication: SealedAuthentication(AuthenticationPolicy::OnboardingToken),
+            inner: self.inner,
+        }
+    }
+
     /// Declare that this route intentionally has no route-specific credential.
     ///
     /// Listener-wide controls, including the configured Torii API token, still
@@ -763,6 +785,14 @@ mod tests {
         Listener::Torii,
     )
     .with_authentication(AuthenticationPolicy::OperatorSignature);
+    const ACCOUNT_AUTHENTICATED: RouteDescriptor = RouteDescriptor::new(
+        "test.account_authenticated",
+        HttpMethod::Post,
+        "/v1/tests/account-authenticated",
+        ApiSurface::Public,
+        Listener::Torii,
+    )
+    .with_authentication(AuthenticationPolicy::CanonicalAccountSignature);
     const ROUTES: &[RouteDescriptor] = &[READ, WRITE, FEATURED];
 
     #[cfg(feature = "app_api")]
@@ -969,6 +999,26 @@ mod tests {
 
         let (_, manifest) = builder.finish().expect("matching witnesses must mount");
         assert_eq!(manifest.explicit_routes(), &[HANDSHAKE, PUBLIC_HEALTH]);
+    }
+
+    #[test]
+    fn canonical_account_handler_witness_matches_only_account_authentication() {
+        let mut builder = RouterBuilder::new(
+            (),
+            RouteCatalog::new(&[ACCOUNT_AUTHENTICATED]),
+            EnabledFeatures::none(),
+        )
+        .expect("valid catalog");
+        builder.route(
+            &ACCOUNT_AUTHENTICATED,
+            catalog_post(|| async {})
+                .authenticated_in_handler(HandlerAuthentication::CanonicalAccountSignature),
+        );
+
+        let (_, manifest) = builder
+            .finish()
+            .expect("canonical account witness must mount");
+        assert_eq!(manifest.explicit_routes(), &[ACCOUNT_AUTHENTICATED]);
     }
 
     #[test]

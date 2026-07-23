@@ -3,20 +3,20 @@
     "2025-q2",
     "current"
   ],
-  "generatedAt": "2026-07-13T04:57:20.187Z",
+  "generatedAt": "2026-07-19T06:00:11.234Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
-      "bytes": 931530,
-      "sha256": "42ebd06d77f4bbe5b8e0ad755d429f6eeddb1f0e182508167c30e0faebe9c9b7",
-      "blake3": "6ae3fd8f39bc0b945f9600079a8ba5a8f738432c41529b070d50d8f922508c25",
-      "updatedAt": "2026-07-13T04:57:20.176Z",
+      "bytes": 1249974,
+      "sha256": "01daf487e680dc0e3b1b436e7b427dd3ee7f232ec2322d6fedd7b9e440cfc751",
+      "blake3": "4aef8880bdd3a274c60bd2399a00de73b63c2a25d5b32cb860fc5185d47c8dba",
       "signed": false,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
-      "signatureHex": null
+      "signatureHex": null,
+      "updatedAt": "2026-07-19T06:00:11.234Z"
     },
     {
       "label": "2025-q2",
@@ -24,25 +24,25 @@
       "bytes": 12436,
       "sha256": "fead7abd7a092d1acb9f9750ad09bcdb0da4c3e86f0f966478d7e7ba8045adc0",
       "blake3": null,
-      "updatedAt": "2026-07-13T04:05:18.391Z",
       "signed": false,
       "manifestPath": null,
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
-      "signatureHex": null
+      "signatureHex": null,
+      "updatedAt": "2026-07-11T20:00:55.016Z"
     },
     {
       "label": "current",
       "path": "versions/current/torii.json",
-      "bytes": 931530,
-      "sha256": "42ebd06d77f4bbe5b8e0ad755d429f6eeddb1f0e182508167c30e0faebe9c9b7",
-      "blake3": "6ae3fd8f39bc0b945f9600079a8ba5a8f738432c41529b070d50d8f922508c25",
-      "updatedAt": "2026-07-13T04:57:20.165Z",
+      "bytes": 1249974,
+      "sha256": "01daf487e680dc0e3b1b436e7b427dd3ee7f232ec2322d6fedd7b9e440cfc751",
+      "blake3": "4aef8880bdd3a274c60bd2399a00de73b63c2a25d5b32cb860fc5185d47c8dba",
       "signed": false,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
-      "signatureHex": null
+      "signatureHex": null,
+      "updatedAt": "2026-07-19T06:00:11.234Z"
     }
   ]
 }

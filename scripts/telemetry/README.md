@@ -40,11 +40,12 @@ Utility scripts for Android telemetry readiness and SoraFS chaos drill tracking.
   flag-like values intended for the hook. These preflights keep TLS/ECH drills
   deterministic.
 - `reserve_ledger_digest.py`: converts `sorafs reserve ledger` JSON into
-  dashboard-friendly summaries. The helper now accepts multiple `--ledger`
-  paths + optional `--label` overrides, emits Markdown/JSON/NDJSON batches, and
-  writes Prometheus textfiles (`--out-prom`) so economics dashboards ingest the
-  same transfer feed used in governance evidence. Use it inside rent automation
-  or to keep Alertmanager in sync with treasury executions.
+  dashboard-friendly summaries. It requires canonical exact XOR strings,
+  rejects the retired micro-XOR schema and ambiguous JSON, and preserves
+  sub-micro and wider-than-`u128` values in JSON, Markdown, NDJSON, and
+  Prometheus output. The helper accepts multiple `--ledger` paths + optional
+  `--label` overrides so economics dashboards ingest the same transfer feed
+  used in governance evidence.
 - `capacity_reconcile.py`: compares the capacity fee ledger emitted by
   `/v1/sorafs/capacity/state` against executed XOR transfers (JSON or NDJSON)
   and reports missing/overpaid settlements or penalties. It writes JSON

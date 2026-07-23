@@ -15,14 +15,18 @@ public sealed class TransactionBuilderTests
     private const string FixtureSeedHex = "616e64726f69642d666978747572652d7369676e696e672d6b65792d30313032";
     private const string FixtureChainId = "00000042";
     private const string FixtureAccountId = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
+    private static FeePaymentIntent EmptyAuthorityFeePayment =>
+        FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>());
 
     [Fact]
     public void TransactionBuilderRejectsPaddedTopLevelFields()
     {
-        Assert.Throws<ArgumentException>(() => new TransactionBuilder(" 00000042", FixtureAccountId));
-        Assert.Throws<ArgumentException>(() => new TransactionBuilder("00000042", $" {FixtureAccountId}"));
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(" 00000042", FixtureAccountId, EmptyAuthorityFeePayment));
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder("00000042", $" {FixtureAccountId}", EmptyAuthorityFeePayment));
 
-        var builder = new TransactionBuilder("00000042", FixtureAccountId);
+        var builder = new TransactionBuilder("00000042", FixtureAccountId, EmptyAuthorityFeePayment);
         Assert.Throws<ArgumentException>(() => builder.SetMetadata(" trace ", JsonValue.Create("abc")));
         Assert.Throws<ArgumentException>(
             () => builder.ReplaceMetadata(
@@ -48,12 +52,134 @@ public sealed class TransactionBuilderTests
         Assert.Throws<ArgumentException>(() => context.EncodeHashLiteral(" " + new string('a', 64)));
         Assert.Throws<ArgumentException>(() => context.EncodeFixedBytesLiteral(" 0x0102", expectedLength: 2));
     }
+
+    [Fact]
+    public void ExecutableBatchEncodingPreservesInstructionCallInstructionOrder()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        var instruction = TransactionInstruction.TransferAsset(
+            FixtureAssetDefinitionId,
+            "1",
+            FixtureAccountId);
+        var hash = Enumerable.Repeat((byte)0xA5, 32).ToArray();
+        var invocation = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            hash,
+            "run",
+            [1, 2, 3]);
+        var encoded = context.EncodeExecutableBatch([
+            TransactionBatchEntry.Instruction(instruction),
+            TransactionBatchEntry.ContractCall(invocation),
+            TransactionBatchEntry.Instruction(instruction),
+        ]);
+
+        Assert.Equal(4U, BinaryPrimitives.ReadUInt32LittleEndian(encoded));
+        var sequenceOffset = 12;
+        Assert.Equal(3UL, BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(sequenceOffset)));
+        var cursor = sequenceOffset + 8;
+        var tags = new List<uint>();
+        for (var index = 0; index < 3; index++)
+        {
+            var itemLength = checked((int)BinaryPrimitives.ReadUInt64LittleEndian(encoded.AsSpan(cursor)));
+            cursor += 8;
+            tags.Add(BinaryPrimitives.ReadUInt32LittleEndian(encoded.AsSpan(cursor)));
+            cursor += itemLength;
+        }
+        Assert.Equal([0U, 1U, 0U], tags);
+        Assert.Equal(encoded.Length, cursor);
+
+        hash[0] = 0;
+        Assert.Equal(0xA5, invocation.ExpectedCodeHash[0]);
+
+        var emptyArguments = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            Enumerable.Repeat((byte)0xA5, 32).ToArray(),
+            "run",
+            Array.Empty<byte>());
+        Assert.NotNull(emptyArguments.Arguments);
+        Assert.Empty(emptyArguments.Arguments!);
+    }
+
+    [Fact]
+    public void ExecutableBatchBuilderRequiresGasAndEmitsCanonicalJsonShape()
+    {
+        var invocation = new TransactionContractInvocation(
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            Enumerable.Repeat((byte)0x11, 32).ToArray(),
+            "run");
+        var missingGas = new TransactionBuilder(
+            FixtureChainId,
+            FixtureAccountId,
+            EmptyAuthorityFeePayment)
+            .AddContractCall(invocation);
+        Assert.Throws<InvalidOperationException>(() => missingGas.BuildUnsignedPayload());
+
+        var instruction = TransactionInstruction.TransferAsset(
+            FixtureAssetDefinitionId,
+            "1",
+            FixtureAccountId);
+        var payload = new TransactionBuilder(
+            FixtureChainId,
+            FixtureAccountId,
+            FeePaymentIntent.Authority(Array.Empty<FeeChargeLimit>(), gasLimit: 100_000))
+            .WithExecutableBatch([
+                TransactionBatchEntry.Instruction(instruction),
+                TransactionBatchEntry.ContractCall(invocation),
+                TransactionBatchEntry.Instruction(instruction),
+            ])
+            .SetCreationTimeMilliseconds(1_736_000_000_000)
+            .BuildUnsignedPayload();
+
+        var batch = Assert.IsType<JsonArray>(payload.Executable["Batch"]);
+        Assert.Equal(3, batch.Count);
+        Assert.NotNull(batch[0]!["Instruction"]);
+        Assert.NotNull(batch[1]!["ContractCall"]);
+        Assert.NotNull(batch[2]!["Instruction"]);
+        Assert.Matches(
+            "^hash:[0-9A-F]{64}#[0-9A-F]{4}$",
+            batch[1]!["ContractCall"]!["expected_code_hash"]!.GetValue<string>());
+        var json = JsonSerializer.Serialize(payload);
+        Assert.Contains("\"instructions\":{\"Batch\"", json);
+        Assert.DoesNotContain("\"Executable\"", json);
+    }
+
+    [Fact]
+    public void ContractInvocationRequiresCanonicalV1Bech32mAddress()
+    {
+        var hash = Enumerable.Repeat((byte)0x11, 32).ToArray();
+        var validAddresses = new[]
+        {
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtydf6x",
+        };
+        foreach (var address in validAddresses)
+        {
+            _ = new TransactionContractInvocation(address, hash, "run");
+        }
+
+        var invalidAddresses = new[]
+        {
+            "abc",
+            " tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            "TAIRAC1QYQQQQQQQQQQQQPUTUV64ZHF0A0A4HHLQDJ2LHNWUZQ4XJQDDCYQ8",
+            "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyqp",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8q7ca9ly",
+            "tairac1qgqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8qtm5n60",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpkqaty5s",
+            "tairac1qyqqqqqqqqqqqzgfpg9scrgwpugpzysnzs23v9ccrydpk8pkjeu85",
+        };
+        foreach (var address in invalidAddresses)
+        {
+            Assert.Throws<ArgumentException>(
+                () => new TransactionContractInvocation(address, hash, "run"));
+        }
+    }
     private const string FixtureAssetDefinitionId = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
 
     [Theory]
-    [InlineData("swift_transfer_asset_basic", 760, 1378, "6b53feec300853b8b83254701fb64a0c14b3bcf423fb5adcfdca116dd7f94855")]
-    [InlineData("swift_mint_asset_basic", 650, 1268, "63be57674418ffa41d3e3d44b4f00ad7a9082c19f62237552ab1ad55c435ea53")]
-    [InlineData("swift_burn_asset_basic", 650, 1268, "dba14577aa2f4ce40232e50c6ca4eb9ff54a5ee59331754d554c881b7b3bc423")]
+    [InlineData("swift_transfer_asset_basic", 805, 1423, "aaf57e9f247a5d92ba3c4c7d5076bd4aacf9b24b7de3b11e511b026784dec38b")]
+    [InlineData("swift_mint_asset_basic", 695, 1313, "e38b26f35c901bf2099facd691511ea1ad1d1ebc7c43d98a9f473731fdeecd09")]
+    [InlineData("swift_burn_asset_basic", 695, 1313, "8e2d28a9da78b1db4800d1e2e86be623a7d566235616c08daf813d9dcdd9a907")]
     public void BuildSignedProducesDeterministicGoldenOutputs(
         string fixtureName,
         int expectedPayloadLength,
@@ -69,7 +195,8 @@ public sealed class TransactionBuilderTests
 
         var builder = new TransactionBuilder(
             payload.GetProperty("chain").GetString()!,
-            payload.GetProperty("authority").GetString()!)
+            payload.GetProperty("authority").GetString()!,
+            EmptyAuthorityFeePayment)
             .SetCreationTimeMilliseconds((ulong)payload.GetProperty("creation_time_ms").GetInt64())
             .SetTimeToLiveMilliseconds((ulong)payload.GetProperty("time_to_live_ms").GetInt64())
             .SetNonce((uint)payload.GetProperty("nonce").GetInt32());
@@ -250,7 +377,8 @@ public sealed class TransactionBuilderTests
     [InlineData(FixtureChainId, "n753Xnﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛﾛ")]
     public void ConstructorRejectsNonExactRequiredFields(string chainId, string authorityAccountId)
     {
-        Assert.Throws<ArgumentException>(() => new TransactionBuilder(chainId, authorityAccountId));
+        Assert.Throws<ArgumentException>(() =>
+            new TransactionBuilder(chainId, authorityAccountId, EmptyAuthorityFeePayment));
     }
 
     [Fact]
@@ -705,7 +833,10 @@ public sealed class TransactionBuilderTests
     [Fact]
     public async Task LedgerClientSubmitAndWaitPollsUntilTerminalState()
     {
-        var transaction = new TransactionBuilder("00000042", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+        var transaction = new TransactionBuilder(
+            "00000042",
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .TransferAsset("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", "15.75", "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
             .SetCreationTimeMilliseconds(1736000000000)
             .SetTimeToLiveMilliseconds(3500)
@@ -775,7 +906,8 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+                EmptyAuthorityFeePayment)
             .SetAssetKeyValue(
                 "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
@@ -815,7 +947,8 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetDomainKeyValue(
                 "wonderland",
                 "display_name",
@@ -853,7 +986,8 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+                EmptyAuthorityFeePayment)
             .SetDomainKeyValue(
                 "wonderland",
                 "display_name",
@@ -939,7 +1073,8 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.SetNftKeyValue(
                 "dragon$wonderland",
                 "rarity",
@@ -976,7 +1111,8 @@ public sealed class TransactionBuilderTests
     {
         var envelope = new TransactionBuilder(
                 "00000042",
-                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+                "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+                EmptyAuthorityFeePayment)
             .SetNftKeyValue(
                 "dragon$wonderland",
                 "rarity",
@@ -1310,7 +1446,7 @@ public sealed class TransactionBuilderTests
 
     private static TransactionBuilder NewTransactionBuilder()
     {
-        return new TransactionBuilder(FixtureChainId, FixtureAccountId);
+        return new TransactionBuilder(FixtureChainId, FixtureAccountId, EmptyAuthorityFeePayment);
     }
 
     private static void AssertArgumentDiagnostic(
@@ -1695,7 +1831,8 @@ public sealed class TransactionBuilderTests
     {
         var builder = new TransactionBuilder(
             "00000042",
-            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53")
+            "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53",
+            EmptyAuthorityFeePayment)
             .AddInstruction(TransactionInstruction.TransferDomain(
                 "wonderland",
                 "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53"))
@@ -1719,7 +1856,7 @@ public sealed class TransactionBuilderTests
         var authority = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
         var destination = "sorauﾛ1NｲﾘｳdPBeｼRoｸQ2ﾔgｼQqeｶﾍｽﾁhRW2ｺｿZ9ﾕｦUﾅRX5NJYH53";
 
-        var envelope = new TransactionBuilder("00000042", authority)
+        var envelope = new TransactionBuilder("00000042", authority, EmptyAuthorityFeePayment)
             .TransferDomain("wonderland", destination)
             .TransferAssetDefinition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM", destination)
             .TransferNft("dragon$wonderland", destination)

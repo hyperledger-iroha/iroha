@@ -10,6 +10,11 @@ import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 
 class SorafsReferenceValidatorsTest {
+    private val maxScaledXor =
+        "6703903964971298549787012499102923063739682910296196688861780721860882015" +
+            "036773488400937149083451713845015929093243025426876941405973284973216824" +
+            ".503042047"
+
     @Test
     fun exposesBridgeSelectors() {
         assertEquals(1, SorafsOrderbookPayloadKind.ORDER_REQUEST.bridgeCode)
@@ -26,9 +31,9 @@ class SorafsReferenceValidatorsTest {
         assertEquals(1, SorafsOrderbookSide.BID.bridgeCode)
         assertEquals(3, SorafsOrderbookTier.ARCHIVE.bridgeCode)
         assertEquals(4, SorafsOrderbookCancelReason.REPLACED.bridgeCode)
-        assertEquals(16, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
-        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(15))
-        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(16))
+        assertEquals(19, SorafsReferenceValidators.REQUIRED_BRIDGE_ABI_VERSION)
+        assertTrue(!SorafsReferenceValidators.isBridgeAbiSupported(18))
+        assertTrue(SorafsReferenceValidators.isBridgeAbiSupported(19))
     }
 
     @Test
@@ -108,7 +113,7 @@ class SorafsReferenceValidatorsTest {
             SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
                 side = SorafsOrderbookSide.BID,
                 tier = SorafsOrderbookTier.HOT,
-                pricePerGibMicroXor = "1",
+                pricePerGib = "1",
                 quantityGib = 1,
                 ownerAccount = oversized,
                 expiryUnix = 1,
@@ -139,7 +144,7 @@ class SorafsReferenceValidatorsTest {
                 orderId = ByteArray(31) { 0x11.toByte() },
                 side = SorafsOrderbookSide.BID,
                 tier = SorafsOrderbookTier.HOT,
-                pricePerGibMicroXor = "42",
+                pricePerGib = "42",
                 quantityGib = 7,
                 ownerAccount = byteArrayOf(0x01),
                 expiryUnix = 123,
@@ -163,14 +168,38 @@ class SorafsReferenceValidatorsTest {
                 rangeEnd = 64,
                 chunkHash = ByteArray(32) { 0x24.toByte() },
                 bytesDelivered = 64,
-                xorDebitedMicroXor = "not-a-decimal",
-                providerCreditMicroXor = "10",
-                feeAmountMicroXor = "1",
+                xorDebited = "not-a-decimal",
+                providerCredit = "10",
+                feeAmount = "1",
                 issuedAtUnix = 123,
                 privateKey = ByteArray(32) { 0xB7.toByte() },
             )
         }
-        assertTrue(error.message.orEmpty().contains("xorDebitedMicroXor"))
+        assertTrue(error.message.orEmpty().contains("xorDebited"))
+    }
+
+    @Test
+    fun rejectsNoncanonicalOrOverprecisionXorQuantitiesBeforeNativeDispatch() {
+        assertEquals(155, maxScaledXor.length)
+        for (value in listOf("1.0", "0.0000000001", "1".repeat(156))) {
+            val error = assertThrows(IllegalArgumentException::class.java) {
+                SorafsReferenceValidators.buildSignedOrderbookSettlementReceipt(
+                    receiptId = ByteArray(32) { 0x21.toByte() },
+                    channelId = ByteArray(32) { 0x22.toByte() },
+                    tradeId = ByteArray(32) { 0x23.toByte() },
+                    rangeStart = 0,
+                    rangeEnd = 64,
+                    chunkHash = ByteArray(32) { 0x24.toByte() },
+                    bytesDelivered = 64,
+                    xorDebited = value,
+                    providerCredit = "0",
+                    feeAmount = "0",
+                    issuedAtUnix = 123,
+                    privateKey = ByteArray(32) { 0xB7.toByte() },
+                )
+            }
+            assertTrue(error.message.orEmpty().contains("xorDebited"))
+        }
     }
 
     @Test
@@ -226,7 +255,7 @@ class SorafsReferenceValidatorsTest {
         val maximumOwnerOrder = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
             side = SorafsOrderbookSide.BID,
             tier = SorafsOrderbookTier.HOT,
-            pricePerGibMicroXor = "1",
+            pricePerGib = "1",
             quantityGib = 1,
             ownerAccount = maximumOwner,
             expiryUnix = 1_800_000_000,
@@ -260,7 +289,7 @@ class SorafsReferenceValidatorsTest {
         val signed = SorafsReferenceValidators.buildSignedOrderbookOrderRequest(
             side = SorafsOrderbookSide.BID,
             tier = SorafsOrderbookTier.HOT,
-            pricePerGibMicroXor = "1250000",
+            pricePerGib = maxScaledXor,
             quantityGib = 64,
             ownerAccount = owner,
             expiryUnix = 1_800_000_000,
@@ -281,7 +310,7 @@ class SorafsReferenceValidatorsTest {
                 orderId = ByteArray(32) { 0x11.toByte() },
                 side = SorafsOrderbookSide.BID,
                 tier = SorafsOrderbookTier.HOT,
-                pricePerGibMicroXor = "1250000",
+                pricePerGib = "0.000000001",
                 quantityGib = 64,
                 ownerAccount = owner,
                 expiryUnix = 1_800_000_000,

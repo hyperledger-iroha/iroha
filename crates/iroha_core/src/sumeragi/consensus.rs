@@ -20,11 +20,12 @@ use iroha_crypto::HashOf;
 pub use iroha_data_model::block::consensus::{
     BlockSubject, CertPhase, Certificate, ConsensusBlockHeader, ConsensusGenesisModeParams,
     ConsensusGenesisParams, Evidence, EvidenceKind, EvidencePayload, ExecKv, ExecWitness,
-    ExecWitnessMsg, Height, LaneBlockDescriptorV1, LaneBlockProposalPayloadHintV1,
-    LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1, NposGenesisParams, PayloadRequest,
-    PayloadResponse, Proposal, Qc, QcAggregate, QcRef, QcVote, QuorumPolicy, RbcChunk,
-    RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady, RbcReadySignature, Reconfig,
-    RoundId, ValidatorIndex, ValidatorSetId, View, VrfCommit, VrfReveal, default_chain_order_hash,
+    ExecWitnessMsg, Height, LaneBlockCertificateV1, LaneBlockDescriptorV1,
+    LaneBlockProposalPayloadHintV1, LaneBlockProposalV1, LaneBlockQcV1, LaneBlockVoteBodyV1,
+    NposGenesisParams, PayloadRequest, PayloadResponse, Proposal, Qc, QcAggregate, QcRef, QcVote,
+    QuorumPolicy, RbcChunk, RbcChunkRequest, RbcDeliver, RbcInit, RbcInitRequest, RbcReady,
+    RbcReadySignature, Reconfig, RoundId, ValidatorIndex, ValidatorSetId, View, VrfCommit,
+    VrfReveal, default_chain_order_hash,
 };
 /// Live consensus protocol revision. Legacy v1 types above are archival only.
 pub const PROTO_VERSION: u32 = iroha_data_model::block::consensus_v2::PROTOCOL_VERSION as u32;
@@ -201,8 +202,8 @@ pub fn consensus_genesis_params_from_parameters(
                 vrf_commit_window_blocks: npos.vrf_commit_window_blocks(),
                 vrf_reveal_window_blocks: npos.vrf_reveal_window_blocks(),
                 max_validators: npos.max_validators(),
-                min_self_bond: npos.min_self_bond(),
-                min_nomination_bond: npos.min_nomination_bond(),
+                min_self_bond: npos.min_self_bond().clone(),
+                min_nomination_bond: npos.min_nomination_bond().clone(),
                 max_nominator_concentration_pct: npos.max_nominator_concentration_pct(),
                 seat_band_pct: npos.seat_band_pct(),
                 max_entity_correlation_pct: npos.max_entity_correlation_pct(),
@@ -1019,8 +1020,8 @@ mod tests {
                 vrf_commit_window_blocks: 100,
                 vrf_reveal_window_blocks: 40,
                 max_validators: 32,
-                min_self_bond: 1,
-                min_nomination_bond: 1,
+                min_self_bond: 1_u64.into(),
+                min_nomination_bond: 1_u64.into(),
                 max_nominator_concentration_pct: 25,
                 seat_band_pct: 5,
                 max_entity_correlation_pct: 25,
@@ -1079,7 +1080,7 @@ mod tests {
         let params = permissioned_genesis_params();
         let baseline = compute_consensus_fingerprint_from_params(&chain, &params)
             .expect("canonical fixture must fingerprint");
-        let mut changed_context = params;
+        let mut changed_context = params.clone();
         changed_context.v2_context.nexus_amx_context_hash[0] ^= 1;
         let changed_context = compute_consensus_fingerprint_from_params(&chain, &changed_context)
             .expect("changed signed context must remain valid");
@@ -1103,8 +1104,8 @@ mod tests {
                 vrf_commit_window_blocks: 100,
                 vrf_reveal_window_blocks: 40,
                 max_validators: 128,
-                min_self_bond: 1_000,
-                min_nomination_bond: 1,
+                min_self_bond: 1_000_u64.into(),
+                min_nomination_bond: 1_u64.into(),
                 max_nominator_concentration_pct: 40,
                 seat_band_pct: 15,
                 max_entity_correlation_pct: 25,

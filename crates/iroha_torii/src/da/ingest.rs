@@ -60,7 +60,6 @@ use sorafs_car::{
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, ChunkingProfileV1,
-    deal::XorAmount,
     pdp::{PdpCommitmentV1, PdpMerkleTreeV1},
 };
 use zstd::stream::read::Decoder as ZstdDecoder;
@@ -350,7 +349,7 @@ pub async fn handler_post_da_ingest(
                 manifest.manifest_hash,
                 manifest.storage_ticket,
                 pdp_commitment_bytes.clone(),
-                manifest.manifest.rent_quote,
+                manifest.manifest.rent_quote.clone(),
                 stripe_layout,
             )
             .map_err(|(status, message)| {

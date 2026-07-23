@@ -12,6 +12,7 @@ use crate::governance::types::ParliamentBody;
 #[cfg(not(feature = "governance"))]
 type ParliamentBody = ();
 
+use iroha_primitives::numeric::Quantity;
 use norito::codec::{Decode, Encode};
 
 #[cfg(not(feature = "governance"))]
@@ -220,8 +221,8 @@ pub struct BallotProof {
         norito(with = "crate::json_helpers::fixed_bytes_hex::option")
     )]
     pub nullifier: Option<[u8; 32]>,
-    /// Optional lock amount hint (decimal string).
-    pub amount: Option<String>,
+    /// Optional exact lock amount hint.
+    pub amount: Option<Quantity>,
     /// Optional lock duration hint in blocks.
     pub duration_blocks: Option<u64>,
     /// Optional direction hint (Aye/Nay/Abstain).
@@ -236,7 +237,7 @@ pub struct CastPlainBallot {
     /// Account submitting the ballot.
     pub owner: AccountId,
     /// Quadratic voting credit amount committed by the ballot.
-    pub amount: u128,
+    pub amount: Quantity,
     /// Duration of the lock in blocks.
     pub duration_blocks: u64,
     /// 0=Aye, 1=Nay, 2=Abstain
@@ -445,7 +446,7 @@ pub struct RegisterCitizen {
     /// Account receiving citizenship.
     pub owner: AccountId,
     /// Amount to bond (must meet or exceed the configured floor).
-    pub amount: u128,
+    pub amount: Quantity,
 }
 
 impl crate::seal::Instruction for RegisterCitizen {}
@@ -466,8 +467,8 @@ pub struct SlashGovernanceLock {
     pub referendum_id: String,
     /// Account whose bond lock will be reduced.
     pub owner: AccountId,
-    /// Amount (smallest units) to slash from the lock.
-    pub amount: u128,
+    /// Exact amount to slash from the lock.
+    pub amount: Quantity,
     /// Human-readable reason recorded with the slash event.
     pub reason: String,
 }
@@ -481,8 +482,8 @@ pub struct RestituteGovernanceLock {
     pub referendum_id: String,
     /// Account receiving the restitution.
     pub owner: AccountId,
-    /// Amount (smallest units) to restore to the lock.
-    pub amount: u128,
+    /// Exact amount to restore to the lock.
+    pub amount: Quantity,
     /// Human-readable reason recorded with the restitution event.
     pub reason: String,
 }
@@ -550,7 +551,7 @@ impl_governance_decode_from_slice!(CastZkBallot {
 impl_governance_decode_from_slice!(CastPlainBallot {
     referendum_id: String,
     owner: AccountId,
-    amount: u128,
+    amount: Quantity,
     duration_blocks: u64,
     direction: u8,
 });
@@ -558,14 +559,14 @@ impl_governance_decode_from_slice!(CastPlainBallot {
 impl_governance_decode_from_slice!(SlashGovernanceLock {
     referendum_id: String,
     owner: AccountId,
-    amount: u128,
+    amount: Quantity,
     reason: String,
 });
 
 impl_governance_decode_from_slice!(RestituteGovernanceLock {
     referendum_id: String,
     owner: AccountId,
-    amount: u128,
+    amount: Quantity,
     reason: String,
 });
 
@@ -609,7 +610,7 @@ impl_governance_decode_from_slice!(RecordCitizenServiceOutcome {
 
 impl_governance_decode_from_slice!(RegisterCitizen {
     owner: AccountId,
-    amount: u128,
+    amount: Quantity,
 });
 
 impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
@@ -617,6 +618,7 @@ impl_governance_decode_from_slice!(UnregisterCitizen { owner: AccountId });
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
+    use iroha_primitives::numeric::Numeric;
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -695,6 +697,28 @@ mod tests {
             .expect("registered")
             .expect("decode");
         assert_eq!(crate::isi::Instruction::dyn_encode(&*decoded), payload);
+    }
+
+    #[derive(Encode)]
+    struct ForgedCastPlainBallot {
+        referendum_id: String,
+        owner: AccountId,
+        amount: Numeric,
+        duration_blocks: u64,
+        direction: u8,
+    }
+
+    #[test]
+    fn governance_amount_rejects_negative_numeric_payload() {
+        let encoded = ForgedCastPlainBallot {
+            referendum_id: "referendum-1".to_owned(),
+            owner: account(1),
+            amount: Numeric::new(-1_i32, 0),
+            duration_blocks: 100,
+            direction: 0,
+        }
+        .encode();
+        assert!(CastPlainBallot::decode_from_slice(&encoded).is_err());
     }
 
     #[test]
@@ -832,20 +856,20 @@ mod tests {
         assert_slice_roundtrip(CastPlainBallot {
             referendum_id: "referendum-1".to_owned(),
             owner: account(1),
-            amount: 1_000,
+            amount: 1_000_u64.into(),
             duration_blocks: 100,
             direction: 0,
         });
         assert_slice_roundtrip(SlashGovernanceLock {
             referendum_id: "referendum-1".to_owned(),
             owner: account(1),
-            amount: 100,
+            amount: 100_u64.into(),
             reason: "misconduct".to_owned(),
         });
         assert_slice_roundtrip(RestituteGovernanceLock {
             referendum_id: "referendum-1".to_owned(),
             owner: account(1),
-            amount: 50,
+            amount: 50_u64.into(),
             reason: "appeal accepted".to_owned(),
         });
         assert_slice_roundtrip(EnactReferendum {
@@ -882,7 +906,7 @@ mod tests {
         });
         assert_slice_roundtrip(RegisterCitizen {
             owner: account(1),
-            amount: 2_000,
+            amount: 2_000_u64.into(),
         });
         assert_slice_roundtrip(UnregisterCitizen { owner: account(1) });
     }
@@ -916,7 +940,7 @@ mod tests {
             CastPlainBallot {
                 referendum_id: "referendum-1".to_owned(),
                 owner: account(1),
-                amount: 1_000,
+                amount: 1_000_u64.into(),
                 duration_blocks: 100,
                 direction: 0,
             },
@@ -944,7 +968,7 @@ mod tests {
             &registry,
             RegisterCitizen {
                 owner: account(1),
-                amount: 2_000,
+                amount: 2_000_u64.into(),
             },
         );
     }

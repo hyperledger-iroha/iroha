@@ -16,6 +16,8 @@ namespace Hyperledger.Iroha.Torii;
 
 public sealed partial class ToriiClient : IDisposable
 {
+    public const string AccountOnboardingTokenHeaderName = "X-Iroha-Onboarding-Token";
+
     private const int QueryProjectionArchiveVersion = 1;
     private const int QueryProjectionSchemaVersion = 1;
     private const int QueryProjectionBlobClassCustomId = 1001;
@@ -61,7 +63,11 @@ public sealed partial class ToriiClient : IDisposable
         ArgumentNullException.ThrowIfNull(baseUri);
 
         BaseUri = NormalizeBaseUri(baseUri);
-        HttpClient = httpClient ?? new HttpClient();
+        HttpClient = httpClient ?? new HttpClient(new HttpClientHandler
+        {
+            AllowAutoRedirect = false,
+        });
+        HttpClient.DefaultRequestHeaders.Remove(AccountOnboardingTokenHeaderName);
         ownsHttpClient = httpClient is null;
         Options = options?.Snapshot() ?? new ToriiClientOptions();
         serializerOptions = CreateSerializerOptions(Options.JsonSerializerOptions);
@@ -106,6 +112,136 @@ public sealed partial class ToriiClient : IDisposable
         using var content = CreateJsonContent(request);
         using var response = await SendAsync(HttpMethod.Post, path, query, content, cancellationToken: cancellationToken);
         return await DeserializeAsync<TResponse>(response, cancellationToken);
+    }
+
+    private async Task<TResponse> PostAccountOnboardingAsync<TRequest, TResponse>(
+        string path,
+        TRequest request,
+        string exactOnboardingToken,
+        CancellationToken cancellationToken)
+    {
+        using var content = CreateJsonContent(request);
+        try
+        {
+            using var response = await SendAsync(
+                HttpMethod.Post,
+                path,
+                query: null,
+                content,
+                accept: "application/json",
+                configureRequest: httpRequest =>
+                {
+                    httpRequest.Headers.Remove(AccountOnboardingTokenHeaderName);
+                    if (!httpRequest.Headers.TryAddWithoutValidation(
+                            AccountOnboardingTokenHeaderName,
+                            exactOnboardingToken))
+                    {
+                        throw new InvalidOperationException("Unable to set the account onboarding credential header.");
+                    }
+                },
+                cancellationToken);
+            return await DeserializeAccountOnboardingAsync<TResponse>(
+                response,
+                exactOnboardingToken,
+                cancellationToken);
+        }
+        catch (ToriiApiException error)
+        {
+            throw new ToriiApiException(
+                error.StatusCode.GetValueOrDefault(HttpStatusCode.InternalServerError),
+                error.RequestUri,
+                RedactAccountOnboardingCredential(error.ResponseBody, exactOnboardingToken),
+                RedactAccountOnboardingCredential(error.ReasonPhrase, exactOnboardingToken));
+        }
+    }
+
+    private static string? RedactAccountOnboardingCredential(string? value, string credential) =>
+        value?.Replace(credential, "<redacted>", StringComparison.Ordinal);
+
+    private async Task<TResponse> DeserializeAccountOnboardingAsync<TResponse>(
+        HttpResponseMessage response,
+        string exactOnboardingToken,
+        CancellationToken cancellationToken)
+    {
+        var responseText = await ReadStrictUtf8TextContentAsync(
+            response.Content,
+            "Torii account onboarding response body",
+            cancellationToken);
+        var redactedText = RedactAccountOnboardingCredential(responseText, exactOnboardingToken)
+            ?? string.Empty;
+        JsonDocument parsed;
+        try
+        {
+            parsed = JsonDocument.Parse(redactedText, new JsonDocumentOptions { MaxDepth = 128 });
+        }
+        catch (JsonException)
+        {
+            throw new JsonException("Torii account onboarding response body was not valid JSON.");
+        }
+
+        using (parsed)
+        using (var redactedDocument = RedactAccountOnboardingJson(
+                   parsed.RootElement,
+                   exactOnboardingToken))
+        {
+            ToriiIdentifierJson.RejectDuplicateProperties(
+                redactedDocument.RootElement,
+                DuplicatePropertyContext<TResponse>(response));
+            var value = redactedDocument.RootElement.Deserialize<TResponse>(serializerOptions);
+            return value
+                ?? throw new JsonException(
+                    $"Torii response for `{response.RequestMessage?.RequestUri}` deserialized to null.");
+        }
+    }
+
+    private static JsonDocument RedactAccountOnboardingJson(
+        JsonElement root,
+        string exactOnboardingToken)
+    {
+        using var buffer = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            WriteRedactedAccountOnboardingJson(writer, root, exactOnboardingToken);
+        }
+        return JsonDocument.Parse(buffer.ToArray(), new JsonDocumentOptions { MaxDepth = 128 });
+    }
+
+    private static void WriteRedactedAccountOnboardingJson(
+        Utf8JsonWriter writer,
+        JsonElement element,
+        string exactOnboardingToken)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject())
+                {
+                    writer.WritePropertyName(
+                        RedactAccountOnboardingCredential(property.Name, exactOnboardingToken)!);
+                    WriteRedactedAccountOnboardingJson(
+                        writer,
+                        property.Value,
+                        exactOnboardingToken);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteRedactedAccountOnboardingJson(writer, item, exactOnboardingToken);
+                }
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(
+                    RedactAccountOnboardingCredential(element.GetString(), exactOnboardingToken));
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
     }
 
     public async Task<string> GetHealthAsync(CancellationToken cancellationToken = default)
@@ -615,19 +751,62 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiAccountOnboardingResponse> RegisterAccountAsync(
-        ToriiAccountOnboardingRequest request,
+    public async Task<ToriiAccountOnboardingPlanReceipt> PlanAccountOnboardingAsync(
+        ToriiAccountOnboardingPlanRequest request,
+        string onboardingToken,
+        string expectedAuthority,
+        string expectedChainId,
+        ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeAccountOnboardingRequest(request);
+        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
+        var normalizedRequest = NormalizeAccountOnboardingPlanRequest(request);
 
-        var response = await PostAsync<ToriiAccountOnboardingRequest, ToriiAccountOnboardingResponse>(
-            "/v1/accounts/onboard",
+        var receipt = await PostAccountOnboardingAsync<ToriiAccountOnboardingPlanRequest, ToriiAccountOnboardingPlanReceipt>(
+            "/v1/accounts/onboard/plan",
             normalizedRequest,
+            exactOnboardingToken,
+            cancellationToken: cancellationToken);
+
+        ToriiAccountOnboardingReceiptVerifier.RequirePinned(
+            receipt,
+            expectedAuthority,
+            expectedChainId,
+            canonicalBodyEncoder);
+        RequireMatchingAccountOnboardingRequest(
+            normalizedRequest,
+            receipt.Body.Request,
+            nameof(receipt));
+        return receipt;
+    }
+
+    public async Task<ToriiAccountOnboardingResponse> ApplyAccountOnboardingAsync(
+        ToriiAccountOnboardingPlanReceipt receipt,
+        string onboardingToken,
+        string expectedAuthority,
+        string expectedChainId,
+        ToriiAccountOnboardingPlanBodyEncoder canonicalBodyEncoder,
+        CancellationToken cancellationToken = default)
+    {
+        ToriiAccountOnboardingReceiptVerifier.RequirePinned(
+            receipt,
+            expectedAuthority,
+            expectedChainId,
+            canonicalBodyEncoder);
+        var exactOnboardingToken = RequireAccountOnboardingToken(onboardingToken);
+        var response = await PostAccountOnboardingAsync<ToriiAccountOnboardingApplyRequest, ToriiAccountOnboardingResponse>(
+            "/v1/accounts/onboard",
+            new ToriiAccountOnboardingApplyRequest { Receipt = receipt },
+            exactOnboardingToken,
             cancellationToken: cancellationToken);
 
         ValidateAccountOnboardingResponse(response, "account onboarding response");
+        if (!string.Equals(response.AccountId, receipt.Body.Request.AccountId, StringComparison.Ordinal)
+            || !string.Equals(response.Alias, receipt.Body.Request.Alias, StringComparison.Ordinal))
+        {
+            throw new JsonException("account onboarding response does not match the pinned receipt intent");
+        }
         return response;
     }
 
@@ -676,22 +855,37 @@ public sealed partial class ToriiClient : IDisposable
 
     public async Task<ToriiVpnProfile> GetVpnProfileAsync(CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiVpnProfile>("/v1/vpn/profile", cancellationToken: cancellationToken);
-        ValidateVpnProfile(response, "vpn profile response");
-        return response;
+        using var response = await SendExpectingStatusAsync(
+            HttpMethod.Get,
+            "/v1/vpn/profile",
+            query: null,
+            content: null,
+            HttpStatusCode.OK,
+            allowedStatusCode: null,
+            cancellationToken);
+        var profile = await DeserializeAsync<ToriiVpnProfile>(response, cancellationToken);
+        ValidateVpnProfile(profile, "vpn profile response");
+        return profile;
     }
 
     public async Task<ToriiVpnQuote> CreateVpnQuoteAsync(
         ToriiVpnQuoteCreateRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/quotes");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnQuoteCreateRequest(request);
 
-        var response = await PostAsync<ToriiVpnQuoteCreateRequest, ToriiVpnQuote>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/quotes",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnQuote>(httpResponse, cancellationToken);
         ValidateVpnQuote(response, "vpn quote response");
         return response;
     }
@@ -700,13 +894,20 @@ public sealed partial class ToriiClient : IDisposable
         ToriiVpnSessionCreateRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnSessionCreateRequest(request);
 
-        var response = await PostAsync<ToriiVpnSessionCreateRequest, ToriiVpnSession>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/sessions",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnSession>(httpResponse, cancellationToken);
         ValidateVpnSession(response, "vpn session response");
         return response;
     }
@@ -715,12 +916,14 @@ public sealed partial class ToriiClient : IDisposable
         string sessionId,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions/{session_id}");
         var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
-        using var response = await SendAllowingStatusAsync(
+        using var response = await SendExpectingStatusAsync(
             HttpMethod.Get,
             $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
+            HttpStatusCode.OK,
             HttpStatusCode.NotFound,
             cancellationToken);
 
@@ -738,12 +941,14 @@ public sealed partial class ToriiClient : IDisposable
         string sessionId,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/sessions/{session_id}");
         var encodedSessionId = EncodeVpnSessionPathSegment(sessionId, nameof(sessionId));
-        using var response = await SendAllowingStatusAsync(
+        using var response = await SendExpectingStatusAsync(
             HttpMethod.Delete,
             $"/v1/vpn/sessions/{encodedSessionId}",
             query: null,
             content: null,
+            HttpStatusCode.OK,
             HttpStatusCode.NotFound,
             cancellationToken);
 
@@ -761,39 +966,37 @@ public sealed partial class ToriiClient : IDisposable
         ToriiVpnReceiptSubmitRequest request,
         CancellationToken cancellationToken = default)
     {
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/receipts");
         ArgumentNullException.ThrowIfNull(request);
         var normalizedRequest = NormalizeVpnReceiptSubmitRequest(request);
 
-        var response = await PostAsync<ToriiVpnReceiptSubmitRequest, ToriiVpnReceipt>(
+        using var content = CreateJsonContent(normalizedRequest);
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Post,
             "/v1/vpn/receipts",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
+            query: null,
+            content,
+            HttpStatusCode.Created,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnReceipt>(httpResponse, cancellationToken);
         ValidateVpnReceipt(response, "vpn receipt response");
         return response;
     }
 
     public async Task<ToriiVpnReceiptListResponse> ListVpnReceiptsAsync(CancellationToken cancellationToken = default)
     {
-        var response = await GetAsync<ToriiVpnReceiptListResponse>(
+        RequireVpnCanonicalRequestCredentials("/v1/vpn/receipts");
+        using var httpResponse = await SendExpectingStatusAsync(
+            HttpMethod.Get,
             "/v1/vpn/receipts",
-            cancellationToken: cancellationToken);
+            query: null,
+            content: null,
+            HttpStatusCode.OK,
+            allowedStatusCode: null,
+            cancellationToken);
+        var response = await DeserializeAsync<ToriiVpnReceiptListResponse>(httpResponse, cancellationToken);
         ValidateVpnReceiptListResponse(response, "vpn receipt list response");
-        return response;
-    }
-
-    public async Task<ToriiMultisigAccountOnboardingResponse> RegisterMultisigAccountAsync(
-        ToriiMultisigAccountOnboardingRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeMultisigAccountOnboardingRequest(request);
-
-        var response = await PostAsync<ToriiMultisigAccountOnboardingRequest, ToriiMultisigAccountOnboardingResponse>(
-            "/v1/accounts/onboard/multisig",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateMultisigAccountOnboardingResponse(response, "multisig account onboarding response");
         return response;
     }
 
@@ -850,22 +1053,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiDeployContractResponse> DeployContractAsync(
-        ToriiDeployContractRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeDeployContractRequest(request);
-
-        var response = await PostAsync<ToriiDeployContractRequest, ToriiDeployContractResponse>(
-            "/v1/contracts/deploy",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateDeployContractResponse(response, "contract deploy response");
-        return response;
-    }
-
     public async Task<ToriiContractCodeRecord> GetContractCodeAsync(
         string codeHash,
         CancellationToken cancellationToken = default)
@@ -916,38 +1103,6 @@ public sealed partial class ToriiClient : IDisposable
         return response;
     }
 
-    public async Task<ToriiDeployAndActivateContractInstanceResponse> DeployAndActivateContractInstanceAsync(
-        ToriiDeployAndActivateContractInstanceRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeDeployAndActivateContractInstanceRequest(request);
-
-        var response = await PostAsync<ToriiDeployAndActivateContractInstanceRequest, ToriiDeployAndActivateContractInstanceResponse>(
-            "/v1/contracts/instance",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateDeployAndActivateContractInstanceResponse(response, "contract instance deploy response");
-        return response;
-    }
-
-    public async Task<ToriiActivateContractInstanceResponse> ActivateContractInstanceAsync(
-        ToriiActivateContractInstanceRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        var normalizedRequest = NormalizeActivateContractInstanceRequest(request);
-
-        var response = await PostAsync<ToriiActivateContractInstanceRequest, ToriiActivateContractInstanceResponse>(
-            "/v1/contracts/instance/activate",
-            normalizedRequest,
-            cancellationToken: cancellationToken);
-
-        ValidateActivateContractInstanceResponse(response, "contract instance activation response");
-        return response;
-    }
-
     public async Task<ToriiContractStateResponse> GetContractStateAsync(
         ToriiContractStateQuery query,
         CancellationToken cancellationToken = default)
@@ -975,6 +1130,48 @@ public sealed partial class ToriiClient : IDisposable
             normalizedRequest,
             cancellationToken: cancellationToken);
         ValidateContractCallResponse(response, "contract call response");
+        return response;
+    }
+
+    /// <summary>Quotes the exact unsigned transaction payload using account-signed Torii auth.</summary>
+    public async Task<ToriiFeeQuoteResponse> QuoteFeesAsync(
+        UnsignedTransactionPayload payload,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(payload);
+        RequireCanonicalRequestCredentials("/v1/fees/quote");
+        if (!string.Equals(
+                Options.CanonicalRequestCredentials!.AccountId,
+                payload.Authority,
+                StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "Canonical request account must equal the unsigned transaction authority.");
+        }
+
+        var response = await PostAsync<ToriiFeeQuoteRequest, ToriiFeeQuoteResponse>(
+            "/v1/fees/quote",
+            new ToriiFeeQuoteRequest { Payload = payload },
+            cancellationToken: cancellationToken);
+        ValidateFeeQuoteResponse(response, payload.FeePayment, "fee quote response");
+        return response;
+    }
+
+    /// <summary>Looks up one exact on-chain sponsor program using account-signed Torii auth.</summary>
+    public async Task<ToriiFeeSponsorProgram> GetFeeSponsorProgramAsync(
+        FeeSponsorProgramId programId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(programId);
+        RequireCanonicalRequestCredentials("/v1/fee-sponsor-programs/by-id");
+        var response = await PostAsync<ToriiFeeSponsorProgramLookupRequest, ToriiFeeSponsorProgram>(
+            "/v1/fee-sponsor-programs/by-id",
+            new ToriiFeeSponsorProgramLookupRequest { ProgramId = programId.ToString() },
+            cancellationToken: cancellationToken);
+        if (response.Id != programId)
+        {
+            throw new JsonException("Fee sponsor program lookup returned a different program id.");
+        }
         return response;
     }
 
@@ -1053,6 +1250,32 @@ public sealed partial class ToriiClient : IDisposable
             cancellationToken: cancellationToken);
         ValidateMultisigResponse(response, "multisig response");
         return response;
+    }
+
+    public async Task<ToriiMultisigResponse> ApproveMultisigAsync(
+        ToriiMultisigApproveRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigApproveRequest(request);
+        var response = await PostAsync<ToriiMultisigApproveRequest, ToriiMultisigResponse>(
+            "/v1/multisig/approve",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
+        ValidateMultisigResponse(response, "multisig approval response");
+        return response;
+    }
+
+    public async Task<ToriiMultisigCancelResponse> CancelMultisigAsync(
+        ToriiMultisigCancelRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var normalizedRequest = NormalizeMultisigCancelRequest(request);
+        return await PostAsync<ToriiMultisigCancelRequest, ToriiMultisigCancelResponse>(
+            "/v1/multisig/cancel",
+            normalizedRequest,
+            cancellationToken: cancellationToken);
     }
 
     public async Task<ToriiMultisigContractCallResponse> ApproveMultisigContractCallAsync(
@@ -1619,6 +1842,53 @@ public sealed partial class ToriiClient : IDisposable
         throw exception;
     }
 
+    private async Task<HttpResponseMessage> SendExpectingStatusAsync(
+        HttpMethod method,
+        string path,
+        string? query,
+        HttpContent? content,
+        HttpStatusCode expectedStatusCode,
+        HttpStatusCode? allowedStatusCode,
+        CancellationToken cancellationToken)
+    {
+        var request = await CreateRequestAsync(
+            method,
+            path,
+            query,
+            content,
+            accept: null,
+            configureRequest: null,
+            cancellationToken);
+        var response = await HttpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+        if (response.StatusCode == expectedStatusCode
+            || (allowedStatusCode.HasValue && response.StatusCode == allowedStatusCode.Value))
+        {
+            return response;
+        }
+
+        var exception = await CreateApiExceptionAsync(response, cancellationToken);
+        response.Dispose();
+        throw exception;
+    }
+
+    private void RequireVpnCanonicalRequestCredentials(string route)
+    {
+        if (Options.CanonicalRequestCredentials is null)
+        {
+            throw new InvalidOperationException(
+                $"VPN route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
+    }
+
+    private void RequireCanonicalRequestCredentials(string route)
+    {
+        if (Options.CanonicalRequestCredentials is null)
+        {
+            throw new InvalidOperationException(
+                $"Route `{route}` requires ToriiClientOptions.CanonicalRequestCredentials.");
+        }
+    }
+
     private async Task<HttpRequestMessage> CreateRequestAsync(
         HttpMethod method,
         string path,
@@ -1775,6 +2045,21 @@ public sealed partial class ToriiClient : IDisposable
         }
 
         return value;
+    }
+
+    private static string RequireAccountOnboardingToken(string? onboardingToken)
+    {
+        ArgumentNullException.ThrowIfNull(onboardingToken);
+        var bytes = Encoding.UTF8.GetBytes(onboardingToken);
+        if (bytes.Length is < 32 or > 256
+            || bytes.Any(static value => value is < 0x21 or > 0x7e))
+        {
+            throw new ArgumentException(
+                "Account onboarding token must contain 32...256 printable ASCII bytes without spaces or normalization.",
+                nameof(onboardingToken));
+        }
+
+        return onboardingToken;
     }
 
     private static string RequireExactRequestMethod(string? value, string paramName)
@@ -2457,7 +2742,33 @@ public sealed partial class ToriiClient : IDisposable
 
     private static void ValidateAccountOnboardingResponse(ToriiAccountOnboardingResponse response, string context)
     {
-        ToriiOnboardingJson.ValidateAccountOnboardingResponse(response, context);
+        ArgumentNullException.ThrowIfNull(response);
+        _ = ToriiAccountOnboardingReceiptVerifier.RequireCanonicalAccountId(
+            response.AccountId,
+            $"{context}.account_id");
+        _ = ToriiAccountOnboardingReceiptVerifier.RequireAlias(response.Alias, $"{context}.alias");
+        if (response.TransactionHashHex is not null)
+        {
+            _ = ToriiExplorerDirectMetadata.RequireExactSizedHex(
+                response.TransactionHashHex,
+                $"{context}.tx_hash_hex",
+                32);
+        }
+        var expectedDisposition = response.Status switch
+        {
+            "Queued" => "create",
+            "Repaired" => "repair",
+            "Unchanged" => "no_op",
+            _ => throw new JsonException($"{context}.status must be Queued, Repaired, or Unchanged."),
+        };
+        if (!string.Equals(response.Disposition?.Kind, expectedDisposition, StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.disposition does not match status.");
+        }
+        if ((response.Status == "Unchanged") != (response.TransactionHashHex is null))
+        {
+            throw new JsonException($"{context}.tx_hash_hex presence does not match status.");
+        }
     }
 
     private static void ValidateAccountFaucetResponse(ToriiAccountFaucetResponse response, string context)
@@ -2468,13 +2779,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateAccountFaucetPuzzle(ToriiAccountFaucetPuzzle response, string context)
     {
         ToriiAccountFaucetJson.ValidateAccountFaucetPuzzle(response, context);
-    }
-
-    private static void ValidateMultisigAccountOnboardingResponse(
-        ToriiMultisigAccountOnboardingResponse response,
-        string context)
-    {
-        ToriiOnboardingJson.ValidateMultisigAccountOnboardingResponse(response, context);
     }
 
     private static void ValidateVpnProfile(ToriiVpnProfile response, string context)
@@ -2534,25 +2838,6 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateVpnTxInstruction(ToriiVpnTxInstruction instruction, string context)
     {
         ToriiVpnJson.ValidateVpnTxInstruction(instruction, context);
-    }
-
-    private static void ValidateDeployContractResponse(ToriiDeployContractResponse response, string context)
-    {
-        ToriiContractDeploymentJson.ValidateDeployContractResponse(response, context);
-    }
-
-    private static void ValidateDeployAndActivateContractInstanceResponse(
-        ToriiDeployAndActivateContractInstanceResponse response,
-        string context)
-    {
-        ToriiContractDeploymentJson.ValidateDeployAndActivateContractInstanceResponse(response, context);
-    }
-
-    private static void ValidateActivateContractInstanceResponse(
-        ToriiActivateContractInstanceResponse response,
-        string context)
-    {
-        ToriiContractDeploymentJson.ValidateActivateContractInstanceResponse(response, context);
     }
 
     private static void ValidateContractCodeRecord(ToriiContractCodeRecord response, string context)
@@ -2714,6 +2999,40 @@ public sealed partial class ToriiClient : IDisposable
     private static void ValidateContractCallResponse(ToriiContractCallResponse response, string context)
     {
         ToriiContractCallJson.ValidateContractCallResponse(response, context);
+    }
+
+    private static void ValidateFeeQuoteResponse(
+        ToriiFeeQuoteResponse response,
+        FeePaymentIntent requestedIntent,
+        string context)
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        if (response.Intent is null)
+        {
+            throw new JsonException($"{context}.intent must not be null.");
+        }
+        if (!requestedIntent.HasSamePayerAndGasBound(response.Intent))
+        {
+            throw new JsonException(
+                $"{context}.intent changed the selected payer, sponsor revision, or gas bound.");
+        }
+        if (response.Observation is null || response.Observation.NextBlockHeight == 0)
+        {
+            throw new JsonException($"{context}.observation.next_block_height must be positive.");
+        }
+        if (response.Decision?.Value?.DebitSource is null
+            || !string.Equals(response.Decision.Status, "accepted", StringComparison.Ordinal))
+        {
+            throw new JsonException($"{context}.decision must be accepted with a debit source.");
+        }
+        if (response.Components is null || response.Capacities is null)
+        {
+            throw new JsonException($"{context} component and capacity arrays must not be null.");
+        }
+        if (!response.Components.SequenceEqual(response.Intent.ChargeLimits))
+        {
+            throw new JsonException($"{context}.components must equal the returned intent charge limits.");
+        }
     }
 
     private static void ValidateContractViewResponse(ToriiContractViewResponse response, string context)
@@ -5267,105 +5586,40 @@ public sealed partial class ToriiClient : IDisposable
         return new StringContent(json, Encoding.UTF8, "application/json");
     }
 
-    private static ToriiAccountOnboardingRequest NormalizeAccountOnboardingRequest(
-        ToriiAccountOnboardingRequest request)
+    private static ToriiAccountOnboardingPlanRequest NormalizeAccountOnboardingPlanRequest(
+        ToriiAccountOnboardingPlanRequest request)
     {
-        var accountId = request.AccountId is null
-            ? null
-            : ToriiAccountFaucetPow.RequireExactAccountId(request.AccountId, nameof(request.AccountId));
-        var publicKeyHex = NormalizeOptionalExactSizedHex(
-            request.PublicKeyHex,
-            nameof(request.PublicKeyHex),
-            32);
-        if (accountId is null && publicKeyHex is null)
+        if (request.Version != 1)
         {
-            throw new ArgumentException(
-                "Provide either account_id or public_key_hex.",
-                nameof(request.AccountId));
+            throw new ArgumentOutOfRangeException(nameof(request.Version), "Version must be 1.");
         }
-        if (accountId is not null && publicKeyHex is not null)
-        {
-            throw new ArgumentException(
-                "Provide exactly one of account_id or public_key_hex.",
-                nameof(request.AccountId));
-        }
-        if (request.Identity is not null)
-        {
-            throw new ArgumentException(
-                "Raw identity metadata is not accepted; provide identity_commitment_hex.",
-                nameof(request.Identity));
-        }
-
-        var permissions = NormalizeExactStringList(
+        var permissions = ToriiAccountOnboardingReceiptVerifier.NormalizePermissions(
             request.Permissions,
-            nameof(request.Permissions),
-            allowEmpty: true);
+            nameof(request.Permissions));
 
         return request with
         {
-            Alias = NormalizeExactValue(request.Alias, nameof(request.Alias)),
-            AccountId = accountId,
-            PublicKeyHex = publicKeyHex,
-            Identity = null,
-            IdentityCommitmentHex = NormalizeOptionalExactSizedHex(
-                request.IdentityCommitmentHex,
-                nameof(request.IdentityCommitmentHex),
-                32),
-            Uaid = NormalizeUaidLiteral(request.Uaid, nameof(request.Uaid)),
+            Alias = ToriiAccountOnboardingReceiptVerifier.RequireAlias(request.Alias, nameof(request.Alias)),
+            AccountId = ToriiAccountOnboardingReceiptVerifier.RequireCanonicalAccountId(
+                request.AccountId,
+                nameof(request.AccountId)),
             Permissions = permissions,
         };
     }
 
-    private static ToriiMultisigAccountOnboardingRequest NormalizeMultisigAccountOnboardingRequest(
-        ToriiMultisigAccountOnboardingRequest request)
+    private static void RequireMatchingAccountOnboardingRequest(
+        ToriiAccountOnboardingPlanRequest expected,
+        ToriiAccountOnboardingPlanRequest actual,
+        string context)
     {
-        if (request.RequiredSigners == 0)
+        if (actual is null
+            || expected.Version != actual.Version
+            || !string.Equals(expected.Alias, actual.Alias, StringComparison.Ordinal)
+            || !string.Equals(expected.AccountId, actual.AccountId, StringComparison.Ordinal)
+            || !expected.Permissions.SequenceEqual(actual.Permissions, StringComparer.Ordinal))
         {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.RequiredSigners),
-                "Required signers must be positive.");
+            throw new JsonException($"{context} does not contain the exact requested onboarding intent.");
         }
-
-        var memberAccountIds = NormalizeAccountIdList(
-            request.MemberAccountIds,
-            nameof(request.MemberAccountIds),
-            allowEmpty: false);
-        var memberWeights = request.MemberWeights
-            ?? throw new ArgumentException(
-                "Member weights cannot be null.",
-                nameof(request.MemberWeights));
-
-        if (memberWeights.Count != memberAccountIds.Count)
-        {
-            throw new ArgumentException(
-                "Member weights count must match member account ids count.",
-                nameof(request.MemberWeights));
-        }
-        if (memberWeights.Any(weight => weight == 0))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.MemberWeights),
-                "Member weights must be positive.");
-        }
-        if (request.RequiredSigners > memberWeights.Aggregate(0, (total, weight) => total + weight))
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.RequiredSigners),
-                "Required signers must not exceed total member weight.");
-        }
-        if (request.TransactionTtlMilliseconds == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.TransactionTtlMilliseconds),
-                "Transaction TTL must be positive when provided.");
-        }
-
-        return request with
-        {
-            Alias = NormalizeExactValue(request.Alias, nameof(request.Alias)),
-            MemberAccountIds = memberAccountIds,
-            MemberWeights = memberWeights.ToArray(),
-        };
     }
 
     private static ToriiAccountFaucetRequest NormalizeAccountFaucetRequest(
@@ -5428,7 +5682,7 @@ public sealed partial class ToriiClient : IDisposable
         return request with
         {
             ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
-            MeteringPublicKeyHex = NormalizeExactSizedHex(
+            MeteringPublicKeyHex = NormalizeVpnExactSizedHex(
                 request.MeteringPublicKeyHex,
                 nameof(request.MeteringPublicKeyHex),
                 32),
@@ -5442,11 +5696,11 @@ public sealed partial class ToriiClient : IDisposable
         {
             ExitClass = NormalizeOptionalVpnExitClass(request.ExitClass, nameof(request.ExitClass)),
             QuoteId = NormalizeExactSizedHex(request.QuoteId, nameof(request.QuoteId), 32),
-            PaymentTransactionHash = NormalizeExactSizedHex(
+            PaymentTransactionHash = NormalizeVpnExactSizedHex(
                 request.PaymentTransactionHash,
                 nameof(request.PaymentTransactionHash),
                 32),
-            MeteringPublicKeyHex = NormalizeExactSizedHex(
+            MeteringPublicKeyHex = NormalizeVpnExactSizedHex(
                 request.MeteringPublicKeyHex,
                 nameof(request.MeteringPublicKeyHex),
                 32),
@@ -5458,50 +5712,12 @@ public sealed partial class ToriiClient : IDisposable
     {
         return request with
         {
-            RelayReceiptHex = NormalizeExactHex(request.RelayReceiptHex, nameof(request.RelayReceiptHex)),
-            ClientVoucherHex = NormalizeExactHex(request.ClientVoucherHex, nameof(request.ClientVoucherHex)),
-            LeaseIdHex = NormalizeOptionalExactSizedHexOrEmpty(
+            RelayReceiptHex = NormalizeVpnExactHex(request.RelayReceiptHex, nameof(request.RelayReceiptHex)),
+            ClientVoucherHex = NormalizeVpnExactHex(request.ClientVoucherHex, nameof(request.ClientVoucherHex)),
+            LeaseIdHex = NormalizeOptionalVpnExactSizedHexOrEmpty(
                 request.LeaseIdHex,
                 nameof(request.LeaseIdHex),
                 32),
-        };
-    }
-
-    private static ToriiDeployContractRequest NormalizeDeployContractRequest(
-        ToriiDeployContractRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
-            ContractAlias = NormalizeExactValue(request.ContractAlias, nameof(request.ContractAlias)),
-        };
-    }
-
-    private static ToriiDeployAndActivateContractInstanceRequest NormalizeDeployAndActivateContractInstanceRequest(
-        ToriiDeployAndActivateContractInstanceRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            CodeBase64 = NormalizeExactBase64(request.CodeBase64, nameof(request.CodeBase64)),
-        };
-    }
-
-    private static ToriiActivateContractInstanceRequest NormalizeActivateContractInstanceRequest(
-        ToriiActivateContractInstanceRequest request)
-    {
-        return request with
-        {
-            Authority = ToriiAccountFaucetPow.RequireExactAccountId(request.Authority, nameof(request.Authority)),
-            PrivateKey = NormalizeExactValue(request.PrivateKey, nameof(request.PrivateKey)),
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            CodeHash = NormalizeExactSizedHex(request.CodeHash, nameof(request.CodeHash), 32),
         };
     }
 
@@ -5517,9 +5733,17 @@ public sealed partial class ToriiClient : IDisposable
             nameof(request.ContractAddress),
             nameof(request.ContractAlias),
             requireTarget: true);
-        if (request.GasLimit == 0)
+        if (request.CreationTimeMilliseconds == 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive.");
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+        if (request.TransactionTimeToLiveMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.TransactionTimeToLiveMilliseconds),
+                "Transaction TTL must be positive when provided.");
         }
 
         return request with
@@ -5531,8 +5755,10 @@ public sealed partial class ToriiClient : IDisposable
             ContractAddress = contractAddress,
             ContractAlias = contractAlias,
             Entrypoint = NormalizeOptionalExactValue(request.Entrypoint, nameof(request.Entrypoint)),
-            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: true),
         };
     }
 
@@ -5558,6 +5784,24 @@ public sealed partial class ToriiClient : IDisposable
         };
     }
 
+    private static FeePaymentIntent NormalizeFeePaymentIntent(
+        FeePaymentIntent? feePayment,
+        string paramName,
+        bool requireGasLimit)
+    {
+        if (feePayment is null)
+        {
+            throw new ArgumentNullException(paramName);
+        }
+        if (requireGasLimit && !feePayment.GasLimit.HasValue)
+        {
+            throw new ArgumentException(
+                "Fee payment must include a positive gas limit for contract execution.",
+                paramName);
+        }
+        return feePayment;
+    }
+
     private static ToriiMultisigProposeRequest NormalizeMultisigProposeRequest(
         ToriiMultisigProposeRequest request)
     {
@@ -5566,46 +5810,8 @@ public sealed partial class ToriiClient : IDisposable
             request.MultisigAccountAlias);
         var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
         var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
-        ValidateDetachedSigningPair(publicKeyHex, signatureBase64);
-        if (request.CreationTimeMilliseconds == 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(request.CreationTimeMilliseconds),
-                "Creation time must be positive when provided.");
-        }
-
-        return request with
-        {
-            MultisigAccountId = multisigAccountId,
-            MultisigAccountAlias = multisigAccountAlias,
-            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
-                request.SignerAccountId,
-                nameof(request.SignerAccountId)),
-            PublicKeyHex = publicKeyHex,
-            SignatureBase64 = signatureBase64,
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
-            Instructions = NormalizeExactBase64List(
-                request.Instructions,
-                nameof(request.Instructions),
-                allowEmpty: false),
-        };
-    }
-
-    private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
-        ToriiMultisigContractCallProposeRequest request)
-    {
-        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
-            request.MultisigAccountId,
-            request.MultisigAccountAlias);
         var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
-        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
-        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
         ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
-        if (request.GasLimit.HasValue && request.GasLimit.Value == 0)
-        {
-            throw new ArgumentOutOfRangeException(nameof(request.GasLimit), "Gas limit must be positive when provided.");
-        }
-
         if (request.CreationTimeMilliseconds == 0)
         {
             throw new ArgumentOutOfRangeException(
@@ -5623,12 +5829,150 @@ public sealed partial class ToriiClient : IDisposable
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
-            Namespace = NormalizeExactValue(request.Namespace, nameof(request.Namespace)),
-            ContractId = NormalizeExactValue(request.ContractId, nameof(request.ContractId)),
-            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
-            GasAssetId = NormalizeOptionalExactValue(request.GasAssetId, nameof(request.GasAssetId)),
-            FeeSponsor = NormalizeOptionalAccountId(request.FeeSponsor, nameof(request.FeeSponsor)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            Instructions = NormalizeExactBase64List(
+                request.Instructions,
+                nameof(request.Instructions),
+                allowEmpty: false),
         };
+    }
+
+    private static ToriiMultisigContractCallProposeRequest NormalizeMultisigContractCallProposeRequest(
+        ToriiMultisigContractCallProposeRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        var (contractAddress, contractAlias) = NormalizeContractTarget(
+            request.ContractAddress,
+            request.ContractAlias,
+            nameof(request.ContractAddress),
+            nameof(request.ContractAlias),
+            requireTarget: true);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            ContractAddress = contractAddress,
+            ContractAlias = contractAlias,
+            Entrypoint = NormalizeExactValue(request.Entrypoint, nameof(request.Entrypoint)),
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: true),
+        };
+    }
+
+    private static ToriiMultisigApproveRequest NormalizeMultisigApproveRequest(
+        ToriiMultisigApproveRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            ProposalId = request.ProposalId is null
+                ? null
+                : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
+            InstructionsHash = request.InstructionsHash is null
+                ? null
+                : NormalizeExactSizedHex(request.InstructionsHash, nameof(request.InstructionsHash), 32),
+        };
+    }
+
+    private static ToriiMultisigCancelRequest NormalizeMultisigCancelRequest(
+        ToriiMultisigCancelRequest request)
+    {
+        var (multisigAccountId, multisigAccountAlias) = NormalizeMultisigSelector(
+            request.MultisigAccountId,
+            request.MultisigAccountAlias);
+        var privateKey = NormalizeOptionalExactValue(request.PrivateKey, nameof(request.PrivateKey));
+        var publicKeyHex = NormalizeOptionalExactSizedHex(request.PublicKeyHex, nameof(request.PublicKeyHex), 32);
+        var signatureBase64 = NormalizeOptionalExactBase64(request.SignatureBase64, nameof(request.SignatureBase64));
+        ValidateSigningMaterial(privateKey, publicKeyHex, signatureBase64);
+        ValidateMultisigProposalSelector(request.ProposalId, request.InstructionsHash);
+        if (request.CreationTimeMilliseconds == 0)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(request.CreationTimeMilliseconds),
+                "Creation time must be positive when provided.");
+        }
+
+        return request with
+        {
+            MultisigAccountId = multisigAccountId,
+            MultisigAccountAlias = multisigAccountAlias,
+            SignerAccountId = ToriiAccountFaucetPow.RequireExactAccountId(
+                request.SignerAccountId,
+                nameof(request.SignerAccountId)),
+            PrivateKey = privateKey,
+            PublicKeyHex = publicKeyHex,
+            SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
+            ProposalId = request.ProposalId is null
+                ? null
+                : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
+            InstructionsHash = request.InstructionsHash is null
+                ? null
+                : NormalizeExactSizedHex(request.InstructionsHash, nameof(request.InstructionsHash), 32),
+        };
+    }
+
+    private static void ValidateMultisigProposalSelector(string? proposalId, string? instructionsHash)
+    {
+        if (proposalId is null && instructionsHash is null)
+        {
+            throw new ArgumentException(
+                "Provide either proposal_id or instructions_hash.",
+                nameof(proposalId));
+        }
     }
 
     private static ToriiMultisigContractCallApproveRequest NormalizeMultisigContractCallApproveRequest(
@@ -5664,6 +6008,10 @@ public sealed partial class ToriiClient : IDisposable
             PrivateKey = privateKey,
             PublicKeyHex = publicKeyHex,
             SignatureBase64 = signatureBase64,
+            FeePayment = NormalizeFeePaymentIntent(
+                request.FeePayment,
+                nameof(request.FeePayment),
+                requireGasLimit: false),
             ProposalId = request.ProposalId is null
                 ? null
                 : NormalizeExactSizedHex(request.ProposalId, nameof(request.ProposalId), 32),
@@ -6395,9 +6743,6 @@ public sealed partial class ToriiClient : IDisposable
                 request.SubmittedEpoch,
                 nameof(request.SubmittedEpoch),
                 allowZero: true),
-            GasAssetId = request.GasAssetId is null
-                ? null
-                : NormalizeExactValue(request.GasAssetId, nameof(request.GasAssetId)),
             Alias = request.Alias is null
                 ? null
                 : NormalizeSoraFsPinAlias(request.Alias, nameof(request.Alias)),
@@ -6827,7 +7172,24 @@ public sealed partial class ToriiClient : IDisposable
             ?? throw new ArgumentException("Value cannot be null or whitespace.", paramName);
     }
 
-    private static string NormalizeOptionalExactSizedHexOrEmpty(
+    private static string NormalizeVpnExactSizedHex(
+        string? value,
+        string paramName,
+        int expectedBytes)
+    {
+        var exact = NormalizeExactValue(value, paramName);
+        var payload = RemoveOptionalHexPrefix(exact);
+        if (payload.Length != expectedBytes * 2 || !payload.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException(
+                $"Value must be a {expectedBytes}-byte hex string with an optional 0x prefix.",
+                paramName);
+        }
+
+        return payload.ToLowerInvariant();
+    }
+
+    private static string NormalizeOptionalVpnExactSizedHexOrEmpty(
         string? value,
         string paramName,
         int expectedBytes)
@@ -6837,20 +7199,26 @@ public sealed partial class ToriiClient : IDisposable
             return string.Empty;
         }
 
-        return NormalizeExactSizedHex(value, paramName, expectedBytes);
+        return NormalizeVpnExactSizedHex(value, paramName, expectedBytes);
     }
 
-    private static string NormalizeExactHex(string? value, string paramName)
+    private static string NormalizeVpnExactHex(string? value, string paramName)
     {
         var exact = NormalizeExactValue(value, paramName);
-        if (exact.Length % 2 != 0 || !IsHex(exact))
+        var payload = RemoveOptionalHexPrefix(exact);
+        if (payload.Length == 0 || payload.Length % 2 != 0 || !IsHex(payload))
         {
             throw new ArgumentException(
-                "Value must contain an even number of hexadecimal characters.",
+                "Value must contain a non-empty even number of hexadecimal characters with an optional 0x prefix.",
                 paramName);
         }
 
-        return exact.ToLowerInvariant();
+        return payload.ToLowerInvariant();
+    }
+
+    private static string RemoveOptionalHexPrefix(string value)
+    {
+        return value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value[2..] : value;
     }
 
     private static string NormalizeOptionalVpnExitClass(string? value, string paramName)

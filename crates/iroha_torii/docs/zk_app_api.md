@@ -37,7 +37,7 @@ Notes
   - `./storage/torii/zk_attachments/{id}.json` (metadata)
 - Prover reports persist under `./storage/torii/zk_prover/reports/{id}.json`.
 - Base directory is configured with `torii.data_dir`; tests/dev harnesses can override with `data_dir::OverrideGuard`.
-- IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and request metadata that includes `gas_limit`.
+- IVM derive/prove require bytecode with the IVM ZK mode bit set (`mode & ZK != 0`) and a required typed `fee_payment` intent whose `gas_limit` is set. Obtain the exact intent from `POST /v1/fees/quote`; legacy `fee_sponsor`, `gas_limit`, and `gas_asset_id` metadata keys are rejected.
 - `/v1/zk/ivm/derive` accepts verifying keys with backend `halo2/ipa` or `stark/fri` (including `stark/fri/...` variants) (must be compatible with `ivm-execution-v1`).
 - `/v1/zk/ivm/prove` accepts `vk_ref.backend` `halo2/ipa` and `stark/fri` (including `stark/fri/...` variants) when the node is built with `zk-stark`.
 - STARK verification (`stark/fri` family) is supported when built with feature `zk-stark` and enabled via config (`zk.stark.enabled=true`).

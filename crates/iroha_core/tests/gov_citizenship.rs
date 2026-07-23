@@ -61,7 +61,7 @@ fn register_and_revoke_citizenship_moves_bond() {
 
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_asset_id = def_id.clone();
-    gov_cfg.citizenship_bond_amount = 50;
+    gov_cfg.citizenship_bond_amount = 50_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
 
@@ -71,7 +71,7 @@ fn register_and_revoke_citizenship_moves_bond() {
 
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 50,
+        amount: 50_u64.into(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("citizen bond succeeds");
@@ -83,7 +83,7 @@ fn register_and_revoke_citizenship_moves_bond() {
         .cloned()
         .expect("citizen record stored");
     assert_eq!(record.owner, *ALICE_ID);
-    assert_eq!(record.amount, 50);
+    assert_eq!(record.amount, Quantity::from(50_u64));
     assert_eq!(record.bonded_height, 1);
 
     let alice_asset_id = AssetId::new(def_id.clone(), ALICE_ID.clone());
@@ -125,10 +125,10 @@ fn citizenship_gate_blocks_and_allows_governance() {
     let mut gov_cfg = state.gov.clone();
     gov_cfg.voting_asset_id = def_id.clone();
     gov_cfg.citizenship_asset_id = def_id.clone();
-    gov_cfg.citizenship_bond_amount = 10;
+    gov_cfg.citizenship_bond_amount = 10_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0;
+    gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 10;
     state.set_gov(gov_cfg);
 
@@ -176,7 +176,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
     let ballot = iroha_data_model::isi::governance::CastPlainBallot {
         referendum_id: "citizen-ref".to_string(),
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
         duration_blocks: 20,
         direction: 0,
     };
@@ -193,7 +193,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
     // Bond citizenship and retry.
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 10,
+        amount: 10_u64.into(),
     }
     .execute(&ALICE_ID, &mut stx)
     .expect("citizen bond succeeds");
@@ -216,7 +216,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
         stx.world
             .citizens()
             .get(&*ALICE_ID)
-            .is_some_and(|rec| rec.amount >= 10)
+            .is_some_and(|rec| rec.amount >= Quantity::from(10_u64))
     );
     assert!(stx.world.governance_locks().get("citizen-ref").is_some());
 }
@@ -234,7 +234,7 @@ fn citizenship_records_persist_across_transactions() {
 
     let mut gov_cfg = state.gov.clone();
     gov_cfg.citizenship_asset_id = def_id.clone();
-    gov_cfg.citizenship_bond_amount = 50;
+    gov_cfg.citizenship_bond_amount = 50_u64.into();
     gov_cfg.citizenship_escrow_account = BOB_ID.clone();
     state.set_gov(gov_cfg);
 
@@ -243,7 +243,7 @@ fn citizenship_records_persist_across_transactions() {
     let mut stx_1 = block_1.transaction();
     RegisterCitizen {
         owner: ALICE_ID.clone(),
-        amount: 50,
+        amount: 50_u64.into(),
     }
     .execute(&ALICE_ID, &mut stx_1)
     .expect("citizen bond succeeds");
@@ -259,7 +259,7 @@ fn citizenship_records_persist_across_transactions() {
         .get(&*ALICE_ID)
         .cloned()
         .expect("citizen record should persist after tx apply");
-    assert_eq!(citizen_record.amount, 50);
+    assert_eq!(citizen_record.amount, Quantity::from(50_u64));
 
     let header_2 = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
     let mut block_2 = state.block(header_2);

@@ -3,6 +3,7 @@
 
 use std::{string::String, vec::Vec};
 
+use iroha_primitives::numeric::Quantity;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
@@ -14,35 +15,40 @@ pub mod sccp;
 mod sccp_registry;
 pub use sccp::{
     SCCP_OUTBOUND_MESSAGE_MAX_PAYLOAD_BYTES_V1, SCCP_OUTBOUND_MESSAGES_MAX_PER_BLOCK_V1,
-    SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1, SccpInboundAnchorHighWaterKeyV1,
-    SccpInboundMessageKeyV1, SccpInboundMessageRecordV1, SccpLaneIdV1, SccpNetworkV1,
-    SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1, SccpOutboundMessageIndexKeyV1,
-    SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1, SccpOutboundPendingUsageV1,
-    SccpOutboundProofRecordV1, SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
+    SCCP_SOLANA_TESTNET_GENESIS_HASH_V1, SCCP_V1_JSON_SAFE_INTEGER_MAX, SccpEvmSourceEmitterV1,
+    SccpInboundAnchorHighWaterKeyV1, SccpInboundMessageKeyV1, SccpInboundMessageRecordV1,
+    SccpLaneIdV1, SccpNetworkV1, SccpOutboundMessageContextV1, SccpOutboundMessageDescriptorV1,
+    SccpOutboundMessageIndexKeyV1, SccpOutboundMessageKeyV1, SccpOutboundPendingMessageRecordV1,
+    SccpOutboundPendingUsageV1, SccpOutboundProofRecordV1, SccpSolanaSourceEmitterV1,
+    SccpSourceEmitterV1, SccpSourceIdentityV1, SccpTronSourceEmitterV1,
 };
 pub use sccp_registry::{
     SCCP_V1_MAX_GOVERNED_LANES, SCCP_V1_MAX_KEY_BYTES, SCCP_V1_MAX_LIVE_GOVERNED_ROUTES,
     SCCP_V1_MAX_LIVE_ROUTES_PER_LANE, SCCP_V1_MAX_PAYLOAD_AMOUNT_SCALE,
     SCCP_V1_MAX_RETAINED_NATIVE_TRUST_ANCHORS_PER_LANE, SCCP_V1_MAX_RETAINED_ROUTES_PER_LANE,
-    SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID,
-    SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1, SccpBn254G2PointV1,
-    SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1, SccpGovernedLaneV1,
-    SccpGovernedRouteV1, SccpGroth16Bn254IcV1, SccpGroth16Bn254SemanticCircuitV1,
-    SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1, SccpOutboundProofPolicyV1,
-    SccpRegistryV1, SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError,
-    SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1, SccpSoraSettlementV1,
-    SccpTronDestinationDeploymentV1, canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
+    SCCP_V1_MAX_SORA_OUTBOUND_GAS_LIMIT, SCCP_V1_SORA_OUTBOUND_EXECUTION_SEMANTICS,
+    SCCP_V1_TAIRA_TO_SOLANA_TOKEN_MULTIPLIER, SCCP_V1_TAIRA_TO_TOKEN_MULTIPLIER,
+    SCCP_V1_TAIRA_XOR_ASSET_DEFINITION_ID, SCCP_V1_XOR_PAYLOAD_AMOUNT_SCALE, SccpBn254G1PointV1,
+    SccpBn254G2PointV1, SccpDestinationDeploymentV1, SccpEvmDestinationDeploymentV1,
+    SccpGovernedLaneV1, SccpGovernedRouteV1, SccpGroth16Bn254IcV1,
+    SccpGroth16Bn254SemanticCircuitV1, SccpGroth16Bn254VerifyingKeyV1, SccpInboundFinalityCutoffV1,
+    SccpOutboundProofPolicyV1, SccpPortableVerifyingKeyRefV1, SccpRegistryV1,
+    SccpRouteActivationV1, SccpRouteKeyV1, SccpRouteValidationError, SccpSemanticProofProfileV1,
+    SccpSolanaDestinationDeploymentV1, SccpSoraFinalityAnchorV1, SccpSoraOutboundExecutionPolicyV1,
+    SccpSoraSettlementV1, SccpTronDestinationDeploymentV1,
+    canonical_sccp_groth16_bn254_public_signal_schema_bytes_v1,
     canonical_sccp_groth16_bn254_verifying_key_bytes_v1, canonical_sccp_lane_id_bytes_v1,
     canonical_sccp_network_bytes_v1, canonical_sccp_semantic_proof_profile_bytes_v1,
     canonical_sccp_sora_finality_anchor_bytes_v1, canonical_sccp_source_emitter_bytes_v1,
     canonical_sccp_source_identity_bytes_v1, sccp_evm_destination_binding_hash_v1,
-    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_tron_xor_route_config_hash_v1,
-    sccp_groth16_bn254_public_signal_schema_hash_v1, sccp_groth16_bn254_verifying_key_hash_v1,
-    sccp_lane_id_hash_v1, sccp_network_identity_hash_v1, sccp_network_tag_v1,
-    sccp_semantic_proof_profile_hash_v1, sccp_sora_finality_anchor_hash_v1,
-    sccp_sora_taira_chain_id_hash_v1, sccp_source_emitter_identity_hash_v1,
-    sccp_source_identity_hash_v1, sccp_tron_destination_binding_hash_v1,
-    sccp_v1_taira_xor_asset_definition_id,
+    sccp_exact_evm_xor_route_config_hash_v1, sccp_exact_solana_xor_route_config_hash_v1,
+    sccp_exact_tron_xor_route_config_hash_v1, sccp_groth16_bn254_public_signal_schema_hash_v1,
+    sccp_groth16_bn254_verifying_key_hash_v1, sccp_lane_id_hash_v1, sccp_network_identity_hash_v1,
+    sccp_network_tag_v1, sccp_semantic_proof_profile_hash_v1,
+    sccp_solana_destination_binding_hash_v1, sccp_solana_native_verifier_config_hash_v1,
+    sccp_sora_finality_anchor_hash_v1, sccp_sora_taira_chain_id_hash_v1,
+    sccp_source_emitter_identity_hash_v1, sccp_source_identity_hash_v1,
+    sccp_tron_destination_binding_hash_v1, sccp_v1_taira_xor_asset_definition_id,
 };
 
 /// Definition metadata for a wrapped asset originating from another chain.
@@ -82,8 +88,8 @@ pub struct BridgeReceipt {
     pub dest_tx: Option<[u8; 32]>,
     /// Hash of the verification proof submitted for this action.
     pub proof_hash: [u8; 32],
-    /// Amount transferred (integer units matching the asset definition).
-    pub amount: u128,
+    /// Exact non-negative amount transferred in the asset's native precision.
+    pub amount: Quantity,
     /// Canonical Iroha asset id bytes.
     pub asset_id: Vec<u8>,
     /// Recipient identifier bytes (Iroha account id or external address payload).
@@ -209,6 +215,10 @@ pub enum BridgeNativeProofBackendV1 {
     #[codec(index = 2)]
     #[norito(rename = "tron_dpos_v1")]
     TronDpos,
+    /// Solana proof using the governed Agave finalized-state verifier.
+    #[codec(index = 3)]
+    #[norito(rename = "solana_agave_v1")]
+    SolanaAgave,
 }
 
 impl BridgeNativeProofBackendV1 {
@@ -219,6 +229,7 @@ impl BridgeNativeProofBackendV1 {
             Self::EthereumBeacon => "bridge/sccp/native/ethereum-beacon-v1",
             Self::BscParlia => "bridge/sccp/native/bsc-parlia-v1",
             Self::TronDpos => "bridge/sccp/native/tron-dpos-v1",
+            Self::SolanaAgave => "bridge/sccp/native/solana-agave-v1",
         }
     }
 
@@ -239,7 +250,7 @@ impl BridgeNativeProofBackendV1 {
             ) | (
                 Self::TronDpos,
                 SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
-            )
+            ) | (Self::SolanaAgave, SccpNetworkV1::SolanaTestnet)
         )
     }
 }
@@ -263,9 +274,10 @@ pub struct SccpNativeTrustAnchorV1 {
     pub anchor_hash: [u8; 32],
     /// Backend-specific consensus-progress coordinate committed by `anchor_hash`.
     ///
-    /// Ethereum lanes use a finalized beacon slot. BSC and TRON lanes use a
-    /// finalized block height. This is intentionally distinct from an
-    /// Ethereum execution-block height carried by an admitted event proof.
+    /// Ethereum lanes use a finalized beacon slot, Solana lanes use a rooted
+    /// Agave slot, and BSC/TRON lanes use a finalized block height. This is
+    /// intentionally distinct from an Ethereum execution-block height carried
+    /// by an admitted event proof.
     pub checkpoint_height: u64,
 }
 
@@ -280,9 +292,10 @@ impl SccpNativeTrustAnchorV1 {
     /// to this anchor's governance interval.
     ///
     /// The next retained checkpoint is an inclusive upper boundary. The
-    /// one-height overlap lets BSC/TRON prove the boundary block while the
-    /// successor checkpoint itself becomes usable. Without a successor the
-    /// current checkpoint remains open-ended.
+    /// one-coordinate overlap lets BSC/TRON prove the boundary block and
+    /// Solana prove the boundary rooted slot while the successor checkpoint
+    /// itself becomes usable. Without a successor the current checkpoint
+    /// remains open-ended.
     #[must_use]
     pub fn admits_anchor_interval_height(
         self,
@@ -350,6 +363,10 @@ pub enum BridgeSccpDestinationProofBackendV1 {
     #[codec(index = 1)]
     #[norito(rename = "tron_groth16_bn254_v1")]
     TronGroth16Bn254,
+    /// Solana native-program Groth16 verifier over BN254.
+    #[codec(index = 2)]
+    #[norito(rename = "solana_groth16_bn254_v1")]
+    SolanaGroth16Bn254,
 }
 
 impl BridgeSccpDestinationProofBackendV1 {
@@ -359,7 +376,27 @@ impl BridgeSccpDestinationProofBackendV1 {
         match self {
             Self::EvmGroth16Bn254 => "evm-groth16-bn254-v1",
             Self::TronGroth16Bn254 => "tron-groth16-bn254-v1",
+            Self::SolanaGroth16Bn254 => "solana-groth16-bn254-v1",
         }
+    }
+
+    /// Return whether this closed verifier backend belongs to an exact
+    /// external destination profile.
+    #[must_use]
+    pub const fn supports_destination_network(self, target: SccpNetworkV1) -> bool {
+        matches!(
+            (self, target),
+            (
+                Self::EvmGroth16Bn254,
+                SccpNetworkV1::EthereumMainnet
+                    | SccpNetworkV1::EthereumSepolia
+                    | SccpNetworkV1::BscMainnet
+                    | SccpNetworkV1::BscTestnet
+            ) | (
+                Self::TronGroth16Bn254,
+                SccpNetworkV1::TronMainnet | SccpNetworkV1::TronNile | SccpNetworkV1::TronShasta
+            ) | (Self::SolanaGroth16Bn254, SccpNetworkV1::SolanaTestnet)
+        )
     }
 }
 
@@ -534,6 +571,13 @@ pub struct BridgeProofRecord {
 /// Current schema version of [`BridgeFinalityProof`].
 pub const BRIDGE_FINALITY_PROOF_VERSION_V1: u8 = 1;
 
+/// Current schema version of [`BridgeFinalityAttestationBodyV1`].
+pub const BRIDGE_FINALITY_ATTESTATION_VERSION_V1: u8 = 1;
+
+/// Domain separating a Torii finality attestation from every other node signature.
+pub const BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1: &[u8] =
+    b"iroha:bridge-finality-attestation:v1\0";
+
 /// Exact Sumeragi-v2 finality proof for one Iroha block.
 ///
 /// The durable finality artifact is the single source of consensus context,
@@ -555,6 +599,218 @@ pub struct BridgeFinalityProof {
     pub block_header: crate::block::BlockHeader,
     /// Exact immutable finality artifact persisted by the Sumeragi-v2 apply path.
     pub finality_artifact: crate::block::consensus_v2::finality::V2FinalityArtifact,
+}
+
+/// Exact challenge-bound statement signed by one Torii node for a durable-tip capture.
+///
+/// `genesis_block_hash` is the first entry of the same committed state snapshot whose
+/// durable tip produced `finality_proof`. The challenge is supplied by the caller and
+/// prevents a previously signed capture from being replayed into a later audit run.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct BridgeFinalityAttestationBodyV1 {
+    /// Attestation schema version.
+    pub version: u8,
+    /// Unpredictable caller challenge, required to be non-zero.
+    pub challenge: [u8; 32],
+    /// Chain identifier repeated outside the proof for explicit signed routing identity.
+    pub chain_id: crate::ChainId,
+    /// Canonical identity of the node which signs this body.
+    pub node_id: crate::peer::PeerId,
+    /// Hash of the canonical encoded `node_id`.
+    pub node_fingerprint: iroha_crypto::Hash,
+    /// Actual committed block hash at height one in the captured state snapshot.
+    pub genesis_block_hash: iroha_crypto::HashOf<crate::block::BlockHeader>,
+    /// Exact Kura-backed finality proof for the committed genesis block.
+    ///
+    /// This binds the genesis execution commitment and post-state root, not only
+    /// the signed block header/payload identity.
+    pub genesis_finality_proof: BridgeFinalityProof,
+    /// Authoritative reducer-owned status captured for the same durable tip.
+    pub status: crate::block::consensus_v2::SumeragiV2Status,
+    /// Exact current-source proof for that durable tip.
+    pub finality_proof: BridgeFinalityProof,
+}
+
+impl BridgeFinalityAttestationBodyV1 {
+    /// Return the domain-separated typed digest signed by the reporting node.
+    #[must_use]
+    pub fn signing_hash(&self) -> iroha_crypto::HashOf<Self> {
+        let encoded = self.encode();
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new_from_chunks(&[
+            BRIDGE_FINALITY_ATTESTATION_SIGNATURE_DOMAIN_V1,
+            &encoded,
+        ]))
+    }
+
+    /// Validate all non-cryptographic duplicate bindings inside the signed body.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeFinalityAttestationValidationError`] when the version,
+    /// challenge, node identity, reducer status, or embedded proof disagree.
+    pub fn validate_consistency(&self) -> Result<(), BridgeFinalityAttestationValidationError> {
+        use crate::block::consensus_v2::PROTOCOL_VERSION;
+
+        if self.version != BRIDGE_FINALITY_ATTESTATION_VERSION_V1 {
+            return Err(
+                BridgeFinalityAttestationValidationError::UnsupportedAttestationVersion {
+                    expected: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+                    actual: self.version,
+                },
+            );
+        }
+        if self.challenge.iter().all(|byte| *byte == 0) {
+            return Err(BridgeFinalityAttestationValidationError::ZeroChallenge);
+        }
+        let expected_node_fingerprint = iroha_crypto::Hash::new(self.node_id.encode());
+        if self.node_fingerprint != expected_node_fingerprint {
+            return Err(BridgeFinalityAttestationValidationError::NodeFingerprintMismatch);
+        }
+        if self.status.node_fingerprint != self.node_fingerprint {
+            return Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch);
+        }
+        self.status
+            .validate()
+            .map_err(|_| BridgeFinalityAttestationValidationError::InvalidStatus)?;
+        if self.status.restart_required {
+            return Err(BridgeFinalityAttestationValidationError::RestartRequired);
+        }
+        if self.status.protocol_version != PROTOCOL_VERSION {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        validate_bridge_finality_proof_structure(&self.genesis_finality_proof, &self.chain_id)
+            .map_err(BridgeFinalityAttestationValidationError::InvalidGenesisProof)?;
+        let genesis_artifact = &self.genesis_finality_proof.finality_artifact;
+        if genesis_artifact.protocol_version != self.status.protocol_version {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        if genesis_artifact.height != 1 {
+            return Err(BridgeFinalityAttestationValidationError::GenesisProofHeightMismatch);
+        }
+        if genesis_artifact.block_hash != self.genesis_block_hash {
+            return Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch);
+        }
+        validate_bridge_finality_proof_structure(&self.finality_proof, &self.chain_id)
+            .map_err(BridgeFinalityAttestationValidationError::InvalidProof)?;
+        let artifact = &self.finality_proof.finality_artifact;
+        if artifact.height == 1 && self.genesis_finality_proof != self.finality_proof {
+            return Err(BridgeFinalityAttestationValidationError::HeightOneProofMismatch);
+        }
+        if artifact.protocol_version != self.status.protocol_version {
+            return Err(BridgeFinalityAttestationValidationError::ProtocolVersionMismatch);
+        }
+        if self.status.last_committed_height != artifact.height {
+            return Err(BridgeFinalityAttestationValidationError::StatusHeightMismatch);
+        }
+        if self.status.last_committed_subject.as_ref() != Some(&artifact.subject) {
+            return Err(BridgeFinalityAttestationValidationError::StatusSubjectMismatch);
+        }
+        let Some(status_commit) = self.status.last_commit_qc.as_ref() else {
+            return Err(BridgeFinalityAttestationValidationError::StatusCommitMissing);
+        };
+        if status_commit.certificate != artifact.commit_qc.as_ref() {
+            return Err(BridgeFinalityAttestationValidationError::StatusCommitMismatch);
+        }
+        Ok(())
+    }
+}
+
+/// One node's signature over an exact challenge-bound durable-tip statement.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(no_fast_from_json))]
+#[norito(deny_unknown_fields)]
+pub struct BridgeFinalityAttestationV1 {
+    /// Complete signed statement.
+    pub body: BridgeFinalityAttestationBodyV1,
+    /// Signature made by `body.node_id` over `body.signing_hash()`.
+    pub signature: iroha_crypto::SignatureOf<BridgeFinalityAttestationBodyV1>,
+}
+
+impl BridgeFinalityAttestationV1 {
+    /// Validate the signed body and its reporting-node signature.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BridgeFinalityAttestationValidationError`] for an inconsistent
+    /// body or a signature which does not verify under the declared node key.
+    pub fn verify(&self) -> Result<(), BridgeFinalityAttestationValidationError> {
+        self.body.validate_consistency()?;
+        self.signature
+            .verify_hash(self.body.node_id.public_key(), self.body.signing_hash())
+            .map_err(|_| BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+    }
+}
+
+/// Failure while validating a challenge-bound node finality attestation.
+#[allow(variant_size_differences)]
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum BridgeFinalityAttestationValidationError {
+    /// Attestation schema version is unsupported.
+    #[error("bridge finality attestation version {actual} is unsupported; expected {expected}")]
+    UnsupportedAttestationVersion {
+        /// Supported version.
+        expected: u8,
+        /// Version carried in the signed body.
+        actual: u8,
+    },
+    /// A zero challenge is replayable and therefore forbidden.
+    #[error("bridge finality attestation challenge must be non-zero")]
+    ZeroChallenge,
+    /// The signed node fingerprint is not the hash of the canonical node id.
+    #[error("bridge finality attestation node fingerprint does not match node id")]
+    NodeFingerprintMismatch,
+    /// The authoritative status belongs to another node.
+    #[error("bridge finality attestation status belongs to another node")]
+    StatusNodeMismatch,
+    /// The reducer status is structurally invalid.
+    #[error("bridge finality attestation contains an invalid Sumeragi-v2 status")]
+    InvalidStatus,
+    /// The reporting node is fail-stopped.
+    #[error("bridge finality attestation status requires a node restart")]
+    RestartRequired,
+    /// Status and proof do not use the compiled current protocol.
+    #[error("bridge finality attestation protocol versions do not match")]
+    ProtocolVersionMismatch,
+    /// The exact proof is structurally invalid or belongs to another chain.
+    #[error("bridge finality attestation proof is invalid: {0}")]
+    InvalidProof(BridgeFinalityVerifyError),
+    /// The height-one proof is structurally invalid or belongs to another chain.
+    #[error("bridge finality attestation genesis proof is invalid: {0}")]
+    InvalidGenesisProof(BridgeFinalityVerifyError),
+    /// The genesis proof is not for height one.
+    #[error("bridge finality attestation genesis proof is not for height one")]
+    GenesisProofHeightMismatch,
+    /// The genesis proof does not authenticate the declared committed genesis hash.
+    #[error("bridge finality attestation genesis proof block does not match genesis block hash")]
+    GenesisProofBlockMismatch,
+    /// At height one, genesis and tip must be the exact same durable Kura proof.
+    #[error("bridge finality attestation height-one genesis and tip proofs do not match exactly")]
+    HeightOneProofMismatch,
+    /// Status and proof name different committed heights.
+    #[error("bridge finality attestation status and proof heights do not match")]
+    StatusHeightMismatch,
+    /// Status and proof name different committed block subjects.
+    #[error("bridge finality attestation status and proof subjects do not match")]
+    StatusSubjectMismatch,
+    /// The status does not expose its latest authenticated durable CommitQC.
+    #[error("bridge finality attestation status has no durable CommitQC")]
+    StatusCommitMissing,
+    /// Status and proof carry different exact CommitQCs.
+    #[error("bridge finality attestation status and proof CommitQCs do not match")]
+    StatusCommitMismatch,
+    /// The signature does not verify under the declared canonical node key.
+    #[error("bridge finality attestation node signature is invalid")]
+    InvalidNodeSignature,
 }
 
 /// Commitment covering a block hash and its exact Sumeragi-v2 context.
@@ -675,15 +931,16 @@ pub enum BridgeFinalityVerifyError {
     /// Block header predecessor differs from the finalized subject predecessor.
     #[error("block header predecessor does not match the finalized subject")]
     BlockHeaderParentMismatch,
-    /// Block header view-change index differs from the `CommitQC` round view.
+    /// `CommitQC` proposal origin differs from the block header's immutable origin view and the
+    /// header is not the canonical fixed-view genesis exception.
     #[error(
-        "block header view {header_view} does not match finality certificate view {certificate_view}"
+        "finality proposal origin view {proposal_view} does not match block header origin view {header_view}"
     )]
-    BlockHeaderViewMismatch {
+    BlockHeaderProposalViewMismatch {
         /// View-change index recomputed from the block header.
         header_view: u64,
-        /// View carried by the exact `CommitQC` round.
-        certificate_view: u64,
+        /// View carried by the exact `CommitQC` proposal round.
+        proposal_view: u64,
     },
     /// V2 certificate/roster cryptography failed.
     #[error("Sumeragi-v2 finality cryptography failed: {0}")]
@@ -923,10 +1180,10 @@ fn validate_bridge_finality_proof_structure(
         return Err(BridgeFinalityVerifyError::BlockHeaderParentMismatch);
     }
     let header_view = proof.block_header.view_change_index();
-    if header_view != artifact.commit_qc.round.view {
-        return Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
+    if !artifact.proposal_origin_matches_header(&proof.block_header) {
+        return Err(BridgeFinalityVerifyError::BlockHeaderProposalViewMismatch {
             header_view,
-            certificate_view: artifact.commit_qc.round.view,
+            proposal_view: artifact.commit_qc.proposal_round.view,
         });
     }
     Ok(())
@@ -991,7 +1248,8 @@ fn verify_successor_bridge_finality_proof(
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+    use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature, SignatureOf};
+    use iroha_primitives::numeric::Numeric;
     use iroha_version::DecodeAll;
 
     use super::*;
@@ -1027,6 +1285,75 @@ mod tests {
 
     fn make_boundary_v2_fixture(chain_id: &str) -> V2Fixture {
         make_v2_fixture_config(chain_id, &[40, 30, 20, 10], &[0, 1, 2], true)
+    }
+
+    fn attestation_for_fixture(fixture: &V2Fixture) -> BridgeFinalityAttestationV1 {
+        use crate::block::consensus_v2::{
+            SumeragiV2BodyState, SumeragiV2CommitQcStatus, SumeragiV2HeightContextStatus,
+            SumeragiV2Status, SumeragiV2StatusPhase,
+        };
+
+        let artifact = &fixture.proof.finality_artifact;
+        let context = &artifact.height_context;
+        let signer = &fixture.keys[0];
+        let node_id = PeerId::new(signer.public_key().clone());
+        let signed_power = artifact
+            .commit_qc
+            .signers
+            .iter()
+            .map(|index| context.roster[usize::try_from(*index).expect("signer index")].power)
+            .sum();
+        let status = SumeragiV2Status {
+            protocol_version: wire::PROTOCOL_VERSION,
+            node_fingerprint: Hash::new(node_id.encode()),
+            build_fingerprint: Hash::new(b"attestation fixture build"),
+            config_fingerprint: Hash::new(b"attestation fixture config"),
+            restart_required: false,
+            height_context_id: context.id(),
+            height: artifact.height,
+            view: artifact.commit_qc.round.view,
+            phase: SumeragiV2StatusPhase::PendingApply,
+            leader: context.leader(artifact.commit_qc.round.view),
+            locked_prepare_qc: None,
+            highest_prepare_qc: None,
+            last_timeout_certificate: None,
+            body_state: SumeragiV2BodyState::Applied,
+            pending_persistence_id: None,
+            last_committed_height: artifact.height,
+            last_committed_subject: Some(artifact.subject),
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
+                quorum: context.quorum,
+            },
+            last_commit_qc: Some(SumeragiV2CommitQcStatus {
+                certificate: artifact.commit_qc.as_ref(),
+                validator_count: u32::try_from(context.roster.len()).expect("validator count"),
+                signer_count: u32::try_from(artifact.commit_qc.signers.len())
+                    .expect("signer count"),
+                min_signers: context.quorum.min_signers,
+                signed_power,
+                total_power: context.quorum.total_power,
+            }),
+            liveness: Default::default(),
+        };
+        let body = BridgeFinalityAttestationBodyV1 {
+            version: BRIDGE_FINALITY_ATTESTATION_VERSION_V1,
+            challenge: *Hash::new(b"unpredictable finality capture challenge").as_ref(),
+            chain_id: context.chain_id.clone(),
+            node_fingerprint: status.node_fingerprint,
+            node_id,
+            genesis_block_hash: fixture.proof.block_header.hash(),
+            genesis_finality_proof: fixture.proof.clone(),
+            status,
+            finality_proof: fixture.proof.clone(),
+        };
+        let signature = SignatureOf::try_from_hash(signer.private_key(), body.signing_hash())
+            .expect("sign finality attestation fixture");
+        BridgeFinalityAttestationV1 { body, signature }
     }
 
     #[expect(
@@ -1166,6 +1493,7 @@ mod tests {
         );
         let mut commit_qc = QuorumCertificate {
             round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1174,6 +1502,7 @@ mod tests {
         };
         let preimage = Vote {
             round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1295,6 +1624,7 @@ mod tests {
         );
         let commit_qc = wire::QuorumCertificate {
             round,
+            proposal_round: round,
             phase: wire::GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -1320,8 +1650,10 @@ mod tests {
     fn resign_v2_proof(proof: &mut BridgeFinalityProof, keys: &[KeyPair]) {
         let artifact = &mut proof.finality_artifact;
         artifact.commit_qc.round.context_id = artifact.height_context.id();
+        artifact.commit_qc.proposal_round.context_id = artifact.height_context.id();
         let preimage = wire::Vote {
             round: artifact.commit_qc.round,
+            proposal_round: artifact.commit_qc.proposal_round,
             phase: wire::GlobalPhase::Commit,
             subject: artifact.subject,
             execution_commitment: artifact.commit_qc.execution_commitment,
@@ -1531,6 +1863,10 @@ mod tests {
                 BridgeNativeProofBackendV1::TronDpos,
                 "bridge/sccp/native/tron-dpos-v1",
             ),
+            (
+                BridgeNativeProofBackendV1::SolanaAgave,
+                "bridge/sccp/native/solana-agave-v1",
+            ),
         ];
         for &(backend, expected_label) in &backends {
             assert_eq!(backend.backend_label(), expected_label);
@@ -1547,6 +1883,7 @@ mod tests {
             SccpNetworkV1::TronMainnet,
             SccpNetworkV1::TronNile,
             SccpNetworkV1::TronShasta,
+            SccpNetworkV1::SolanaTestnet,
         ];
         for &(backend, _) in &backends {
             for source in external_profiles {
@@ -1563,13 +1900,22 @@ mod tests {
                         SccpNetworkV1::TronMainnet
                             | SccpNetworkV1::TronNile
                             | SccpNetworkV1::TronShasta
+                    ) | (
+                        BridgeNativeProofBackendV1::SolanaAgave,
+                        SccpNetworkV1::SolanaTestnet
                     )
                 );
                 assert_eq!(backend.supports_source_network(source), expected);
             }
             assert!(!backend.supports_source_network(SccpNetworkV1::SoraTaira));
         }
-        assert!(BridgeNativeProofBackendV1::decode_all(&mut &[0xff][..]).is_err());
+        for unknown_tag in [4_u32, u32::MAX] {
+            let encoded = unknown_tag.encode();
+            assert!(
+                BridgeNativeProofBackendV1::decode_all(&mut encoded.as_slice()).is_err(),
+                "unknown native backend tag {unknown_tag} unexpectedly decoded"
+            );
+        }
 
         let proof = BridgeProof {
             range: BridgeProofRange {
@@ -1636,6 +1982,71 @@ mod tests {
 
     #[test]
     fn sccp_destination_container_separates_all_commitment_roles() {
+        for (backend, label) in [
+            (
+                BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+                "evm-groth16-bn254-v1",
+            ),
+            (
+                BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+                "tron-groth16-bn254-v1",
+            ),
+            (
+                BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+                "solana-groth16-bn254-v1",
+            ),
+        ] {
+            assert_eq!(backend.backend_label(), label);
+            let encoded = backend.encode();
+            assert_eq!(
+                BridgeSccpDestinationProofBackendV1::decode_all(&mut encoded.as_slice())
+                    .expect("closed destination backend decodes"),
+                backend
+            );
+        }
+        for backend in [
+            BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+            BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+            BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+        ] {
+            for network in [
+                SccpNetworkV1::SoraTaira,
+                SccpNetworkV1::EthereumMainnet,
+                SccpNetworkV1::EthereumSepolia,
+                SccpNetworkV1::BscMainnet,
+                SccpNetworkV1::BscTestnet,
+                SccpNetworkV1::TronMainnet,
+                SccpNetworkV1::TronNile,
+                SccpNetworkV1::TronShasta,
+                SccpNetworkV1::SolanaTestnet,
+            ] {
+                let expected = matches!(
+                    (backend, network),
+                    (
+                        BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
+                        SccpNetworkV1::EthereumMainnet
+                            | SccpNetworkV1::EthereumSepolia
+                            | SccpNetworkV1::BscMainnet
+                            | SccpNetworkV1::BscTestnet
+                    ) | (
+                        BridgeSccpDestinationProofBackendV1::TronGroth16Bn254,
+                        SccpNetworkV1::TronMainnet
+                            | SccpNetworkV1::TronNile
+                            | SccpNetworkV1::TronShasta
+                    ) | (
+                        BridgeSccpDestinationProofBackendV1::SolanaGroth16Bn254,
+                        SccpNetworkV1::SolanaTestnet
+                    )
+                );
+                assert_eq!(backend.supports_destination_network(network), expected);
+            }
+        }
+        let unknown_backend = 3_u32.encode();
+        assert!(
+            BridgeSccpDestinationProofBackendV1::decode_all(&mut unknown_backend.as_slice())
+                .is_err()
+        );
+
         let proof = BridgeSccpDestinationProofV1 {
             backend: BridgeSccpDestinationProofBackendV1::EvmGroth16Bn254,
             route_configuration_hash: [0x71; 32],
@@ -1681,13 +2092,44 @@ mod tests {
             source_tx: [0x11; 32],
             dest_tx: Some([0x22; 32]),
             proof_hash: [0x33; 32],
-            amount: 42,
+            amount: 42_u64.into(),
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         };
         let buf = r.encode();
         let dec = BridgeReceipt::decode_all(&mut &buf[..]).expect("decode");
         assert_eq!(r, dec);
+    }
+
+    #[derive(Encode)]
+    struct ForgedBridgeReceipt {
+        lane: LaneId,
+        direction: Vec<u8>,
+        source_tx: [u8; 32],
+        dest_tx: Option<[u8; 32]>,
+        proof_hash: [u8; 32],
+        amount: Numeric,
+        asset_id: Vec<u8>,
+        recipient: Vec<u8>,
+    }
+
+    #[test]
+    fn bridge_receipt_rejects_negative_numeric_amount() {
+        let forged = ForgedBridgeReceipt {
+            lane: LaneId::from(1),
+            direction: b"mint".to_vec(),
+            source_tx: [0x11; 32],
+            dest_tx: None,
+            proof_hash: [0x33; 32],
+            amount: Numeric::new(-1_i32, 0),
+            asset_id: b"wBTC#btc".to_vec(),
+            recipient: b"alice@main".to_vec(),
+        };
+        let encoded = forged.encode();
+        assert!(
+            BridgeReceipt::decode_all(&mut encoded.as_slice()).is_err(),
+            "a negative signed payload must not decode as a bridge amount"
+        );
     }
 
     #[cfg(feature = "json")]
@@ -1699,7 +2141,7 @@ mod tests {
             source_tx: [0x11; 32],
             dest_tx: None,
             proof_hash: [0x33; 32],
-            amount: 42,
+            amount: 42_u64.into(),
             asset_id: b"wBTC#btc".to_vec(),
             recipient: b"alice@main".to_vec(),
         };
@@ -1963,6 +2405,63 @@ mod tests {
             .finality_artifact
             .verify()
             .expect("roundtripped proof remains cryptographically valid");
+    }
+
+    #[test]
+    fn bridge_finality_attestation_binds_challenge_node_genesis_status_and_proof() {
+        let fixture = make_v2_fixture("attested-proof-chain");
+        let attestation = attestation_for_fixture(&fixture);
+        attestation.verify().expect("valid node attestation");
+
+        let encoded = attestation.encode();
+        let decoded = BridgeFinalityAttestationV1::decode_all(&mut encoded.as_slice())
+            .expect("decode finality attestation");
+        assert_eq!(decoded, attestation);
+        decoded.verify().expect("roundtripped attestation verifies");
+
+        let mut changed_challenge = attestation.clone();
+        changed_challenge.body.challenge = *Hash::new(b"another capture challenge").as_ref();
+        assert_eq!(
+            changed_challenge.verify(),
+            Err(BridgeFinalityAttestationValidationError::InvalidNodeSignature)
+        );
+
+        let mut changed_genesis = attestation.clone();
+        changed_genesis.body.genesis_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"another committed genesis"));
+        assert_eq!(
+            changed_genesis.verify(),
+            Err(BridgeFinalityAttestationValidationError::GenesisProofBlockMismatch)
+        );
+
+        let alternate = make_v2_fixture("attested-proof-chain");
+        let mut substituted_genesis_proof = attestation;
+        substituted_genesis_proof.body.genesis_block_hash = alternate.proof.block_header.hash();
+        substituted_genesis_proof.body.genesis_finality_proof = alternate.proof;
+        assert_eq!(
+            substituted_genesis_proof.verify(),
+            Err(BridgeFinalityAttestationValidationError::HeightOneProofMismatch)
+        );
+    }
+
+    #[test]
+    fn bridge_finality_attestation_rejects_replayable_or_mixed_node_status() {
+        let fixture = make_v2_fixture("strict-attested-proof-chain");
+        let attestation = attestation_for_fixture(&fixture);
+
+        let mut zero_challenge = attestation.clone();
+        zero_challenge.body.challenge = [0; 32];
+        assert_eq!(
+            zero_challenge.body.validate_consistency(),
+            Err(BridgeFinalityAttestationValidationError::ZeroChallenge)
+        );
+
+        let mut mixed_node = attestation;
+        mixed_node.body.status.node_fingerprint = Hash::new(b"another Torii node");
+        assert_eq!(
+            mixed_node.body.validate_consistency(),
+            Err(BridgeFinalityAttestationValidationError::StatusNodeMismatch)
+        );
     }
 
     #[cfg(feature = "json")]
@@ -2370,6 +2869,7 @@ mod tests {
 
         let mut view_attack = make_v2_fixture("chain-a");
         view_attack.proof.block_header.set_view_change_index(7);
+        view_attack.proof.finality_artifact.commit_qc.round.view = 9;
         rebind_v2_proof_to_header(&mut view_attack.proof, &view_attack.keys);
         assert_eq!(
             view_attack
@@ -2377,8 +2877,8 @@ mod tests {
                 .finality_artifact
                 .validate_for_header(&view_attack.proof.block_header),
             Err(
-                crate::block::consensus_v2::finality::V2FinalityValidationError::AssociatedViewMismatch {
-                    certificate: 0,
+                crate::block::consensus_v2::finality::V2FinalityValidationError::AssociatedProposalViewMismatch {
+                    proposal: 0,
                     block: 7,
                 }
             )
@@ -2394,11 +2894,43 @@ mod tests {
         );
         assert_eq!(
             verifier.verify(&view_attack.proof),
-            Err(BridgeFinalityVerifyError::BlockHeaderViewMismatch {
+            Err(BridgeFinalityVerifyError::BlockHeaderProposalViewMismatch {
                 header_view: 7,
-                certificate_view: 0,
+                proposal_view: 0,
             })
         );
+    }
+
+    #[test]
+    fn verifier_accepts_locked_block_certified_after_its_origin_view() {
+        let mut delayed = make_v2_fixture("chain-a");
+        delayed.proof.block_header.set_view_change_index(3);
+        delayed
+            .proof
+            .finality_artifact
+            .commit_qc
+            .proposal_round
+            .view = 3;
+        delayed.proof.finality_artifact.commit_qc.round.view = 5;
+        rebind_v2_proof_to_header(&mut delayed.proof, &delayed.keys);
+
+        delayed
+            .proof
+            .finality_artifact
+            .validate_for_header(&delayed.proof.block_header)
+            .expect("a later-view certificate is valid for the exact locked block");
+        let mut verifier = BridgeFinalityVerifier::with_context(
+            delayed
+                .proof
+                .finality_artifact
+                .height_context
+                .chain_id
+                .clone(),
+            delayed.proof.finality_artifact.context_id(),
+        );
+        verifier
+            .verify(&delayed.proof)
+            .expect("bridge verification accepts a later-view certificate");
     }
 
     #[test]

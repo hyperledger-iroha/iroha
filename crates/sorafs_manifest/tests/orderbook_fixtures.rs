@@ -174,7 +174,7 @@ fn runtime_snapshot_fixture_decodes_and_validates() {
     );
     let expected_escrow = trade_escrow_requirement_v1(&snapshot.trades[0])
         .expect("fixture trade escrow should compute")
-        .checked_sub(snapshot.settlement_receipts[0].xor_debited)
+        .checked_sub(&snapshot.settlement_receipts[0].xor_debited)
         .expect("fixture receipt debit should fit escrow");
     assert_eq!(snapshot.settlement_channels[0].xor_locked, expected_escrow);
     assert_eq!(

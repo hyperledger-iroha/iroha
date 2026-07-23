@@ -21,10 +21,7 @@ use iroha_data_model::{
     peer::PeerId,
     prelude::AccountId,
 };
-use iroha_primitives::{
-    BigInt,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::numeric::{Numeric, Quantity, RoundingMode};
 
 use super::prelude::*;
 use crate::{
@@ -180,7 +177,7 @@ impl Execute for RegisterPublicLaneValidator {
         ensure_positive_amount(&self.initial_stake, "initial stake")?;
         let meets_min = meets_min_stake(
             &self.initial_stake,
-            state_transaction.nexus.staking.min_validator_stake,
+            &state_transaction.nexus.staking.min_validator_stake,
         )?;
         if !meets_min {
             return Err(Error::InvariantViolation(
@@ -1060,6 +1057,7 @@ impl Execute for ClaimPublicLaneRewards {
             &state_transaction.world,
             &state_transaction.nexus.dataspace_catalog,
             &state_transaction.nexus.fees.fee_sink_account_id,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .ok_or_else(|| {
             Error::InvariantViolation(
@@ -1068,8 +1066,11 @@ impl Execute for ClaimPublicLaneRewards {
             )
         })?;
         let fee_asset = resolve_nexus_fee_asset_definition(state_transaction)?;
-        let dust_threshold = state_transaction.nexus.staking.reward_dust_threshold;
-        let dust_quantity = Quantity::from(u128::from(dust_threshold));
+        let dust_threshold = state_transaction
+            .nexus
+            .staking
+            .reward_dust_threshold
+            .clone();
 
         for (asset_id, (amount, max_epoch)) in claim_totals {
             if amount.is_zero() {
@@ -1085,7 +1086,7 @@ impl Execute for ClaimPublicLaneRewards {
                     "reward asset definition must match the configured fee asset".into(),
                 ));
             }
-            if dust_threshold > 0 && amount < dust_quantity {
+            if !dust_threshold.is_zero() && amount < dust_threshold {
                 state_transaction
                     .world
                     .public_lane_reward_claims
@@ -1375,6 +1376,7 @@ fn validate_reward_sink(
         &state_transaction.world,
         &state_transaction.nexus.dataspace_catalog,
         &state_transaction.nexus.fees.fee_sink_account_id,
+        state_transaction.block_unix_timestamp_ms(),
     )
     .ok_or_else(|| {
         Error::InvariantViolation(
@@ -1458,26 +1460,14 @@ fn duration_millis(duration: Duration) -> u64 {
     u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
-pub(crate) fn meets_min_stake(amount: &Quantity, min_units: u64) -> Result<bool, Error> {
-    let scale = amount.scale();
-    let multiplier = BigInt::pow10(scale).ok_or(Error::Math(MathError::Overflow))?;
-    let threshold = BigInt::from(i128::from(min_units))
-        .checked_mul(&multiplier)
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    Ok(amount.mantissa() >= &threshold)
+pub(crate) fn meets_min_stake(amount: &Quantity, minimum: &Quantity) -> Result<bool, Error> {
+    Ok(amount >= minimum)
 }
 
 fn slash_within_limit(amount: &Quantity, total: &Quantity, max_bps: u16) -> Result<bool, Error> {
-    let target_scale = amount.scale().max(total.scale());
-    let amount_scaled = scale_amount_to(amount, target_scale)?;
-    let total_scaled = scale_amount_to(total, target_scale)?;
-    let lhs = amount_scaled
-        .checked_mul(&BigInt::from(10_000i32))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    let rhs = total_scaled
-        .checked_mul(&BigInt::from(i32::from(max_bps)))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    Ok(lhs <= rhs)
+    Ok(!amount
+        .cmp_mul_u64(10_000, total, u64::from(max_bps))
+        .is_gt())
 }
 
 fn is_self_stake_share_staker(
@@ -1488,19 +1478,6 @@ fn is_self_stake_share_staker(
     staker == validator || staker == stake_account
 }
 
-fn scale_amount_to(amount: &Quantity, target_scale: u32) -> Result<BigInt, Error> {
-    let current_scale = amount.scale();
-    if target_scale < current_scale {
-        return Err(Error::Math(MathError::Overflow));
-    }
-    let factor = BigInt::pow10(target_scale.saturating_sub(current_scale))
-        .ok_or(Error::Math(MathError::Overflow))?;
-    amount
-        .mantissa()
-        .checked_mul(&factor)
-        .map_err(|_| Error::Math(MathError::Overflow))
-}
-
 /// Compute the maximum slashable amount given a total bonded stake and max ratio.
 pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantity, Error> {
     if total.is_zero() || max_bps == 0 {
@@ -1509,19 +1486,19 @@ pub(crate) fn max_slash_amount(total: &Quantity, max_bps: u16) -> Result<Quantit
     if max_bps >= 10_000 {
         return Ok(total.clone());
     }
-    let scaled = total
-        .mantissa()
-        .checked_mul(&BigInt::from(i32::from(max_bps)))
+    let mut amount = total
+        .try_mul_div_decimal_round(
+            &Numeric::from(u64::from(max_bps)),
+            &Numeric::from(10_000_u64),
+            total.scale(),
+            RoundingMode::TowardZero,
+        )
         .map_err(|_| Error::Math(MathError::Overflow))?;
-    let (mut mantissa, _) = scaled
-        .checked_div_rem(&BigInt::from(10_000i32))
-        .map_err(|_| Error::Math(MathError::Overflow))?;
-    if mantissa.is_zero() {
-        mantissa = BigInt::from(1i32);
+    if amount.is_zero() {
+        amount = Quantity::try_from_numeric(Numeric::new(1_u64, total.scale()))
+            .map_err(|_| Error::Math(MathError::Overflow))?;
     }
-    let numeric =
-        Numeric::try_new(mantissa, total.scale()).map_err(|_| Error::Math(MathError::Overflow))?;
-    Quantity::from_canonical_numeric(numeric).map_err(|_| Error::Math(MathError::Overflow))
+    Ok(amount)
 }
 
 fn ensure_validator_peer_registered(
@@ -1855,6 +1832,7 @@ fn stake_context(
         dataspace_catalog,
         &staking_cfg.stake_escrow_account_id,
         "stake_escrow_account_id",
+        now_ms,
     )?;
     let slash_sink_account: AccountId = if let Some(account) = slash_sink_override {
         account.clone()
@@ -1864,6 +1842,7 @@ fn stake_context(
             dataspace_catalog,
             &staking_cfg.slash_sink_account_id,
             "slash_sink_account_id",
+            now_ms,
         )?
     };
 
@@ -1880,9 +1859,10 @@ fn parse_staking_account_literal(
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     literal: &str,
     field: &'static str,
+    now_ms: u64,
 ) -> Result<AccountId, Error> {
     if let Some(account) =
-        crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
+        crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
     {
         return Ok(account);
     }
@@ -5762,7 +5742,7 @@ mod tests {
     #[test]
     fn register_rejects_below_min_stake() {
         let mut state = setup_state();
-        state.nexus.get_mut().staking.min_validator_stake = 2_000;
+        state.nexus.get_mut().staking.min_validator_stake = 2_000_u64.into();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
@@ -6136,7 +6116,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(0), 1_000);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),
@@ -6193,7 +6173,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(11), 500);
-        stx.nexus.staking.reward_dust_threshold = 100;
+        stx.nexus.staking.reward_dust_threshold = 100_u64.into();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),
@@ -6249,7 +6229,7 @@ mod tests {
         let lane_id = LaneId::new(13);
         let (_sink, validator, reward_asset, asset_def_id) =
             configure_reward_fixture(&mut stx, lane_id, 50);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
         stx.world.public_lane_rewards.insert(
             (lane_id, 1),
             PublicLaneRewardRecord {
@@ -6302,7 +6282,7 @@ mod tests {
 
         let (_sink, validator, reward_asset, _asset_def_id) =
             configure_reward_fixture(&mut stx, LaneId::new(12), 200);
-        stx.nexus.staking.reward_dust_threshold = 0;
+        stx.nexus.staking.reward_dust_threshold = Quantity::zero();
 
         let share = PublicLaneRewardShare {
             account: validator.clone(),
@@ -6372,6 +6352,21 @@ mod tests {
         .execute(&ALICE_ID, &mut stx);
 
         assert!(res.is_err(), "expected slash ratio guard to reject");
+    }
+
+    #[test]
+    fn slash_ratio_arithmetic_accepts_representable_results_at_512_bit_boundary() {
+        let maximum: Quantity = "6703903964971298549787012499102923063739682910296196688861780721860882015036773488400937149083451713845015929093243025426876941405973284973216824503042047"
+            .parse()
+            .expect("signed maximum quantity");
+
+        assert!(slash_within_limit(&maximum, &maximum, 10_000).expect("exact comparison"));
+        assert!(!slash_within_limit(&maximum, &maximum, 9_999).expect("exact comparison"));
+
+        let capped = max_slash_amount(&maximum, 9_999)
+            .expect("wide product is divided before the final domain check");
+        assert!(capped < maximum);
+        assert!(slash_within_limit(&capped, &maximum, 9_999).expect("capped amount is legal"));
     }
 
     #[test]

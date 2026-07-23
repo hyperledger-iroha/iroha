@@ -9,20 +9,30 @@ import java.util.Objects;
 public final class ZkRootsResponse {
   private final String latest;
   private final List<String> roots;
-  private final int height;
+  private final long evaluatedBlockHeight;
+  private final String evaluatedBlockHash;
 
-  public ZkRootsResponse(final String latest, final List<String> roots, final int height) {
+  public ZkRootsResponse(
+      final String latest,
+      final List<String> roots,
+      final long evaluatedBlockHeight,
+      final String evaluatedBlockHash) {
     this.latest = normalizeRootHexOrEmpty(latest, "latest");
     final List<String> checkedRoots = Objects.requireNonNull(roots, "roots");
     final ArrayList<String> normalized = new ArrayList<>(checkedRoots.size());
     for (int i = 0; i < checkedRoots.size(); i++) {
       normalized.add(normalizeRootHex(checkedRoots.get(i), "roots[" + i + "]"));
     }
-    if (height < 0) {
-      throw new IllegalArgumentException("height must be non-negative");
+    if (evaluatedBlockHeight < 0) {
+      throw new IllegalArgumentException("evaluated_block_height must be non-negative");
+    }
+    this.evaluatedBlockHash = normalizeRootHex(evaluatedBlockHash, "evaluated_block_hash");
+    if ((evaluatedBlockHeight == 0L) != this.evaluatedBlockHash.equals("0".repeat(64))) {
+      throw new IllegalArgumentException(
+          "the zero block hash is reserved for evaluated_block_height=0");
     }
     this.roots = Collections.unmodifiableList(normalized);
-    this.height = height;
+    this.evaluatedBlockHeight = evaluatedBlockHeight;
   }
 
   public String latest() {
@@ -33,8 +43,27 @@ public final class ZkRootsResponse {
     return roots;
   }
 
-  public int height() {
-    return height;
+  public long evaluatedBlockHeight() {
+    return evaluatedBlockHeight;
+  }
+
+  public String evaluatedBlockHash() {
+    return evaluatedBlockHash;
+  }
+
+  public byte[] evaluatedBlockHashBytes() {
+    return decodeHex32(evaluatedBlockHash, "evaluated_block_hash");
+  }
+
+  public ZkRootsResponse requireEvaluatedSnapshot(
+      final long expectedHeight, final byte[] expectedBlockHash) {
+    if (expectedHeight != evaluatedBlockHeight) {
+      throw new IllegalArgumentException("root witness height does not match readiness");
+    }
+    if (!java.util.Arrays.equals(expectedBlockHash, evaluatedBlockHashBytes())) {
+      throw new IllegalArgumentException("root witness block hash does not match readiness");
+    }
+    return this;
   }
 
   public byte[] latestRootBytes() {

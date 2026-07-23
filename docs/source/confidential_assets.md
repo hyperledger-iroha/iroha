@@ -165,6 +165,22 @@ New networks that start with confidentiality enabled encode the desired policy d
 - `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
 - Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
 
+### V1 public-amount proof scalars
+
+The public economic fields on `Shield`, `Unshield`, and
+`SubmitZkAceAuthorizedTransfer` use the canonical non-negative `Quantity` type.
+The V1 unshield and ZK-ACE circuits, however, bind their public amount as a
+whole-unit unsigned 128-bit scalar. This scalar is the numeric value itself,
+not an asset-scale atomic-unit mantissa. Before any proof verification,
+nullifier accounting, policy transition, or balance mutation, runtime admission
+therefore requires the submitted `Quantity` to have canonical scale `0` and a
+mantissa in `0..=2^128-1`, then converts it exactly. Fractional quantities and
+values above `u128::MAX` fail without rounding, truncation, or state effects.
+The asset's `NumericSpec` is checked independently before effects. Supporting
+fractional public amounts in a future circuit requires an explicitly versioned
+public-input schema that defines its governed asset-scale conversion; V1 must
+not infer that conversion.
+
 ## Ledger Flow
 1. **MintConfidential { asset_id, amount, recipient_hint }**
    - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.

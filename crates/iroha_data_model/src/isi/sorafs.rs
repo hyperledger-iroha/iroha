@@ -1026,6 +1026,7 @@ impl_sorafs_decode_from_slice!(FinalizeSorafsModerationCase {
 
 #[cfg(test)]
 mod tests {
+    use iroha_primitives::numeric::{Numeric, Quantity};
     use norito::core::DecodeFromSlice;
 
     use super::*;
@@ -1045,6 +1046,14 @@ mod tests {
 
     fn provider(byte: u8) -> ProviderId {
         ProviderId::new([byte; 32])
+    }
+
+    fn xor_quantity_nanos(value: u128) -> Quantity {
+        Quantity::from_canonical_numeric(Numeric::new(
+            value,
+            crate::sorafs::pricing::XOR_QUANTITY_SCALE,
+        ))
+        .expect("u128 nano-XOR SoraFS fixture fits Quantity")
     }
 
     fn order_id() -> ReplicationOrderId {
@@ -1115,10 +1124,10 @@ mod tests {
     fn provider_credit() -> ProviderCreditRecord {
         ProviderCreditRecord::new(
             provider(0x34),
-            10_000,
-            20_000,
-            15_000,
-            1_000,
+            xor_quantity_nanos(10_000),
+            xor_quantity_nanos(20_000),
+            xor_quantity_nanos(15_000),
+            xor_quantity_nanos(1_000),
             100,
             200,
             Metadata::default(),

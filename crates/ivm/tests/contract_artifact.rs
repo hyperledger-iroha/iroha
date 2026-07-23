@@ -78,10 +78,21 @@ fn contract_artifact_with_code(
     access_set_hints: Option<AccessSetHints>,
     code: &[u32],
 ) -> Vec<u8> {
+    contract_artifact_with_mode_and_code(abi_version, 0, 0, entrypoints, access_set_hints, code)
+}
+
+fn contract_artifact_with_mode_and_code(
+    abi_version: u8,
+    mode: u8,
+    features_bitmap: u64,
+    entrypoints: Vec<ivm::EmbeddedEntrypointDescriptor>,
+    access_set_hints: Option<AccessSetHints>,
+    code: &[u32],
+) -> Vec<u8> {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
         version_minor: 1,
-        mode: 0,
+        mode,
         vector_length: 0,
         max_cycles: 0,
         abi_version,
@@ -90,7 +101,7 @@ fn contract_artifact_with_code(
         seiyaku_name: "TestContract".to_owned(),
         compiler_fingerprint: "ivm-tests".to_owned(),
         abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
-        features_bitmap: 0,
+        features_bitmap,
         access_set_hints,
         kotoba: Vec::new(),
         entrypoints,
@@ -237,7 +248,7 @@ fn verifier_rejects_stale_embedded_abi_hash_before_execution() {
     assert!(
         error
             .to_string()
-            .contains("embedded CNTR abi_hash does not match the runtime ABI descriptor"),
+            .contains("contract interface abi_hash does not match the runtime ABI descriptor"),
         "unexpected stale-ABI error: {error}"
     );
 }
@@ -678,9 +689,14 @@ fn signed_manifest_rejects_every_execution_header_mutation() {
     let mut max_cycles = original.clone();
     max_cycles[8..16].copy_from_slice(&1_u64.to_le_bytes());
     mutations.push(("max_cycles", max_cycles));
-    let mut abi_version = original;
+    let mut abi_version = original.clone();
     abi_version[16] = 0;
     mutations.push(("abi_version", abi_version));
+    for index in 17..ivm::HEADER_SIZE {
+        let mut abi_hash = original.clone();
+        abi_hash[index] ^= 0xff;
+        mutations.push(("abi_hash", abi_hash));
+    }
 
     for (field, mutated) in mutations {
         let Ok(verified) = ivm::verify_contract_artifact(&mutated) else {
@@ -976,6 +992,46 @@ fn verify_rejects_private_input_syscall_without_zk_mode() {
 }
 
 #[test]
+fn prepared_contract_derives_transitive_private_input_requirement_from_bytecode() {
+    use ivm::instruction::wide;
+
+    let private_input = ivm::encoding::wide::encode_sys(
+        wide::system::SCALL,
+        ivm::syscalls::SYSCALL_GET_PRIVATE_INPUT as u8,
+    );
+    let bytes = contract_artifact_with_mode_and_code(
+        1,
+        ivm::ivm_mode::ZK,
+        ivm::CONTRACT_FEATURE_BIT_ZK,
+        vec![
+            entrypoint("private_commitment", EntryPointKind::Kotoage, 0),
+            entrypoint("plain", EntryPointKind::Kotoage, 16),
+        ],
+        None,
+        &[
+            ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
+            ivm::encoding::wide::encode_halt(),
+            private_input,
+            ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0),
+            ivm::encoding::wide::encode_halt(),
+        ],
+    );
+    let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.into_boxed_slice()))
+        .expect("valid ZK contract prepares");
+
+    assert_eq!(
+        prepared.entrypoint_requires_private_inputs("private_commitment"),
+        Some(true),
+        "private input hidden in a helper must be derived transitively"
+    );
+    assert_eq!(
+        prepared.entrypoint_requires_private_inputs("plain"),
+        Some(false)
+    );
+    assert_eq!(prepared.entrypoint_requires_private_inputs("missing"), None);
+}
+
+#[test]
 fn verify_derives_transitive_view_effects_from_bytecode() {
     use ivm::instruction::wide;
 
@@ -1173,7 +1229,7 @@ fn strict_return_integrity_allows_nested_direct_calls_for_raw_and_prepared_loads
 }
 
 #[test]
-fn strict_return_stack_has_a_deterministic_depth_bound() {
+fn verifier_rejects_self_recursive_direct_calls_before_execution() {
     use ivm::instruction::wide;
 
     let bytes = contract_artifact_with_code(
@@ -1185,16 +1241,66 @@ fn strict_return_stack_has_a_deterministic_depth_bound() {
             ivm::encoding::wide::encode_halt(),
         ],
     );
-    let prepared = ivm::prepare_contract(std::sync::Arc::from(bytes.into_boxed_slice()))
-        .expect("cyclic direct-call fixture prepares");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_prepared(&prepared)
-        .expect("prepared contract loads");
-
-    assert_eq!(
-        vm.run().expect_err("unbounded call depth must trap"),
-        ivm::VMError::AssertionFailed
+    let error = ivm::verify_contract_artifact(&bytes)
+        .expect_err("self-recursive bytecode must fail artifact admission");
+    assert!(
+        error.to_string().contains("recursive direct-call cycle"),
+        "unexpected recursion error: {error}"
     );
+}
+
+#[test]
+fn verifier_rejects_mutual_and_unreachable_direct_call_cycles() {
+    use ivm::instruction::wide;
+
+    let return_from_helper = ivm::encoding::wide::encode_rr(wide::control::JALR, 0, 1, 0);
+    let mutual = contract_artifact_with_code(
+        1,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[
+            ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
+            ivm::encoding::wide::encode_halt(),
+            ivm::encoding::wide::encode_offset24(wide::control::JALS, 2),
+            return_from_helper,
+            ivm::encoding::wide::encode_offset24(wide::control::JALS, -2),
+            return_from_helper,
+        ],
+    );
+    let error = ivm::verify_contract_artifact(&mutual)
+        .expect_err("mutually recursive helpers must fail artifact admission");
+    assert!(error.to_string().contains("recursive direct-call cycle"));
+
+    let unreachable = contract_artifact_with_code(
+        1,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[
+            ivm::encoding::wide::encode_halt(),
+            ivm::encoding::wide::encode_offset24(wide::control::JALS, 0),
+            ivm::encoding::wide::encode_halt(),
+        ],
+    );
+    let error = ivm::verify_contract_artifact(&unreachable)
+        .expect_err("an unreachable recursive helper must still fail artifact admission");
+    assert!(error.to_string().contains("recursive direct-call cycle"));
+}
+
+#[test]
+fn verifier_does_not_confuse_an_ordinary_branch_loop_with_recursion() {
+    use ivm::instruction::wide;
+
+    let bytes = contract_artifact_with_code(
+        1,
+        vec![entrypoint("main", EntryPointKind::Kotoage, 0)],
+        None,
+        &[
+            ivm::encoding::wide::encode_branch(wide::control::BNE, 2, 0, 0),
+            ivm::encoding::wide::encode_halt(),
+        ],
+    );
+    ivm::verify_contract_artifact(&bytes)
+        .expect("an ordinary control-flow loop is not a recursive function call");
 }
 
 #[test]
@@ -1412,7 +1518,6 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
         "言挙げ",
         "始まり_",
         "fn",
-        "i64",
         "account_id",
         "__kotodama_link_private",
     ] {
@@ -1437,14 +1542,9 @@ fn verify_rejects_noncanonical_or_reserved_entrypoint_names() {
 
     for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
         let artifact = contract_artifact(1, vec![entrypoint(name, EntryPointKind::Kotoage, 0)]);
-        let error = ivm::verify_contract_artifact(&artifact)
-            .expect_err("every retired numeric type name must remain reserved");
-        assert!(
-            error
-                .to_string()
-                .contains("canonical Kotodama V1 identifier"),
-            "unexpected error for retired numeric name `{name}`: {error}"
-        );
+        ivm::verify_contract_artifact(&artifact).unwrap_or_else(|error| {
+            panic!("retired numeric entrypoint name `{name}` was rejected: {error}")
+        });
     }
 }
 
@@ -1458,7 +1558,6 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
         "Ｌedger", // Full-width `Ｌ`.
         "seiyaku",
         "match",
-        "i64",
         "__kotodama_link_private",
     ] {
         let artifact = contract_artifact_with_seiyaku_name(name);
@@ -1469,6 +1568,18 @@ fn verify_rejects_noncanonical_or_reserved_seiyaku_names() {
                 .to_string()
                 .contains("canonical Kotodama V1 identifier"),
             "unexpected error for `{name}`: {error}"
+        );
+    }
+
+    for name in kotodama_lang::semantic::V1_RETIRED_NUMERIC_TYPE_NAMES {
+        let artifact = contract_artifact_with_seiyaku_name(name);
+        let error = ivm::verify_contract_artifact(&artifact)
+            .expect_err("every retired numeric type name must remain reserved for source units");
+        assert!(
+            error
+                .to_string()
+                .contains("canonical Kotodama V1 identifier"),
+            "unexpected error for retired seiyaku name `{name}`: {error}"
         );
     }
 
@@ -1839,5 +1950,8 @@ fn verify_rejects_invalid_dynamic_access_hints() {
 fn verify_rejects_unsupported_abi_version() {
     let bytes = contract_artifact(2, vec![entrypoint("main", EntryPointKind::Kotoage, 0)]);
     let err = ivm::verify_contract_artifact(&bytes).expect_err("abi version mismatch must fail");
-    assert!(err.to_string().contains("unsupported abi_version 2"));
+    assert!(
+        err.to_string()
+            .contains("unsupported IVM program ABI version 2")
+    );
 }

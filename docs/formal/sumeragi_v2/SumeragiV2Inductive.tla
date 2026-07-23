@@ -85,7 +85,8 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.view = nodeView[request.node]
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
-                     request.vote.context, request.vote.subject)
+                     request.vote.context, request.vote.view,
+                     request.vote.subject)
        /\ CanAppendVote(prepareIntents, request.vote)
        /\ PrepareCarriesHigherSafeQc(request.vote)
   /\ \A request \in pendingLockCommit:
@@ -98,11 +99,12 @@ PendingVoteWritesAuthorized ==
        /\ request.vote.subject = request.qc.subject
        /\ request.qc.phase = "Prepare"
        /\ request.qc \in prepareQCs
-       /\ request.vote.view = nodeView[request.node]
-       /\ ~NodeTimedOut(request.node, request.vote.view)
+       /\ \/ CurrentOpenPrepareForCommit(request.node, request.qc)
+          \/ HistoricalLockedPrepareForCommit(request.node, request.qc)
        /\ request.vote.subject \in ValidSubjects
        /\ BodyHeldBy(durableBodies, request.node,
-                     request.vote.context, request.vote.subject)
+                     request.vote.context, request.vote.view,
+                     request.vote.subject)
        /\ request.qc.view >= lockRank[request.node]
        /\ (request.qc.view = lockRank[request.node]
              => request.qc.subject = lockSubject[request.node])
@@ -133,8 +135,8 @@ PendingCertificateWritesAuthorized ==
        /\ request.tc.context = context
        /\ TCValid(request.tc)
        /\ request.tc.votes # {}
-       /\ request.tc.view < MaxView
-       /\ request.tc.view >= nodeView[request.node]
+       /\ request.tc.view + 1 \in Views
+       /\ request.tc.view + 1 >= nodeView[request.node]
   /\ \A request \in pendingDecision:
        /\ request.qc \in commitQCs
        /\ request.qc.context = context
@@ -197,6 +199,7 @@ FormedTimeoutCertificatesSound ==
     /\ tc.height = tc.context.height
     /\ tc.context.epoch \in Epochs
     /\ tc.view \in Views
+    /\ IsFiniteSet(tc.votes)
     /\ tc.votes # {}
     /\ TimeoutVotesDisjoint(tc.votes)
     /\ TimeoutHighsConflictFree(tc.votes)
@@ -209,8 +212,45 @@ FormedTimeoutCertificatesSound ==
          /\ vote.signer \in Honest => vote \in timeoutIntents
     /\ TCMaximumProtectsReports(tc)
 
+TimeoutCertificateSelectorsSound ==
+  \A tc \in formedTCs:
+    HighestTimeoutVote(tc.votes) \in tc.votes
+
 DurableTimeoutsProtectCommits ==
   TimeoutIntentProtectsCommits(timeoutIntents, commitIntents)
+
+(***************************************************************************
+If an honest durable Commit is not strictly protected by one of that node's
+older timeout reports, the Commit must have the exact PrepareQC selected by a
+durably installed TC.  This is the retained provenance needed when a node
+learned the lock through the TC and validated its body only afterward.
+***************************************************************************)
+HistoricalLockedCommitAuthorizationInvariant ==
+  /\ \A request \in pendingLockCommit:
+       request.vote.view < nodeView[request.node]
+         => HistoricalLockedPrepareForCommit(request.node, request.qc)
+  /\ \A timeoutVote \in timeoutIntents, commitVote \in commitIntents:
+       (/\ timeoutVote.signer \in Honest
+        /\ commitVote.signer = timeoutVote.signer
+        /\ commitVote.context = timeoutVote.context
+        /\ commitVote.phase = "Commit"
+        /\ commitVote.view <= timeoutVote.view
+        /\ ~TimeoutVoteStrictlyProtectsCommit(timeoutVote, commitVote))
+         => InstalledTcAuthorizesCommitVote(commitVote)
+
+\* Legacy release-ledger alias.  The canonical invariant name is source
+\* neutral because recovery itself also accepts an exact durable Commit
+\* intent carried through a later no-high TC.
+HistoricalTcLockedCommitAuthorizationInvariant ==
+  HistoricalLockedCommitAuthorizationInvariant
+
+(***************************************************************************
+This authorization invariant is a derived consequence of
+PendingVoteWritesAuthorized and DurableTimeoutsProtectCommits.  It is kept as
+the named release obligation below, but is deliberately not duplicated as an
+independent reducer conjunct: doing so would add the same proof obligation to
+every action-preservation branch without strengthening the invariant.
+***************************************************************************)
 
 HighestAndLockAreCertified ==
   \A node \in ValidatorIds:
@@ -228,6 +268,27 @@ HighestAndLockAreCertified ==
                /\ qc.view = lockRank[node]
                /\ qc.subject = lockSubject[node])
 
+(***************************************************************************
+Every non-empty durable lock has one of the two reducer origins which can
+reconstruct it after a view change.  PersistLockCommit records the matching
+local Commit intent atomically with the lock.  PersistInstallTC records the TC
+which selected an advancing lock.  A later no-high TC may retain either source
+without replacing it.  This reverse direction is intentionally separate from
+LocksCoverOwnCommits (which states Commit => lock) and from
+HighestAndLockAreCertified (which states only that a matching abstract QC
+exists).
+***************************************************************************)
+DurableLockRecoveryProvenanceInvariant ==
+  \A node \in ValidatorIds:
+    \/ lockRank[node] = NoRank
+    \/ ExactLockedCommitIntents(
+         node, lockRank[node], lockSubject[node]) # {}
+    \/ \E installed \in installedTCs:
+         /\ installed.node = node
+         /\ installed.tc.context = context
+         /\ TcHighRank(installed.tc) = lockRank[node]
+         /\ TcHighSubject(installed.tc) = lockSubject[node]
+
 ReducerProvenanceInvariant ==
   /\ HonestVoteUnique(prepareIntents)
   /\ HonestVoteUnique(commitIntents)
@@ -244,6 +305,7 @@ ReducerProvenanceInvariant ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 ReducerProvenanceWithoutVoteTransport ==
   /\ HonestVoteUnique(prepareIntents)
@@ -260,6 +322,7 @@ ReducerProvenanceWithoutVoteTransport ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 ReducerProvenanceWithoutTimeoutTransport ==
   /\ HonestVoteUnique(prepareIntents)
@@ -276,6 +339,7 @@ ReducerProvenanceWithoutTimeoutTransport ==
   /\ FormedTimeoutCertificatesSound
   /\ DurableTimeoutsProtectCommits
   /\ HighestAndLockAreCertified
+  /\ DurableLockRecoveryProvenanceInvariant
 
 LineageInvariant ==
   /\ PrepareLineageSound
@@ -295,7 +359,8 @@ StrongInductiveInvariant ==
 
 ProofRelevantVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    durableBodies, receivedVotes, receivedQCs, receivedTimeoutVotes,
+    durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -306,7 +371,8 @@ ProofRelevantVars ==
 
 ProofRelevantWithoutDurableVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    receivedVotes, receivedQCs, receivedTimeoutVotes, receivedTCs,
+    retainedLockedBodies, receivedVotes, receivedQCs,
+    receivedTimeoutVotes, receivedTCs,
     proposalIntents, prepareIntents, commitIntents, timeoutIntents,
     prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -317,7 +383,8 @@ ProofRelevantWithoutDurableVars ==
 
 ProofRelevantWithoutPendingProposalVars ==
   <<height, context, contextHistory, nodeView, generation, up, gst,
-    durableBodies, receivedVotes, receivedQCs, receivedTimeoutVotes,
+    durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs, receivedTimeoutVotes,
     receivedTCs, proposalIntents, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject,
@@ -332,7 +399,8 @@ LineageVars ==
     prepareQCs, commitQCs, lockRank, lockSubject>>
 
 ProvenanceVars ==
-  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs,
     receivedTimeoutVotes, receivedTCs, prepareIntents, commitIntents,
     timeoutIntents, prepareQCs, commitQCs, formedTCs, installedTCs,
     lockRank, lockSubject, highestRank, highestSubject, pendingPrepare,
@@ -341,7 +409,8 @@ ProvenanceVars ==
     timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutVoteTransportVars ==
-  <<height, context, nodeView, durableBodies, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedQCs,
     receivedTimeoutVotes,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
@@ -350,7 +419,8 @@ ProvenanceWithoutVoteTransportVars ==
     qcNetwork, timeoutNetwork, tcNetwork>>
 
 ProvenanceWithoutTimeoutTransportVars ==
-  <<height, context, nodeView, durableBodies, receivedVotes, receivedQCs,
+  <<height, context, nodeView, durableBodies, retainedLockedBodies,
+    receivedVotes, receivedQCs,
     receivedTCs, prepareIntents, commitIntents, timeoutIntents, prepareQCs,
     commitQCs, formedTCs, installedTCs, lockRank, lockSubject, highestRank,
     highestSubject, pendingPrepare, pendingObservePrepare,

@@ -118,7 +118,10 @@ async fn npos_telemetry_soak_matches_metrics_under_chunk_loss() -> Result<()> {
     let client = network.client();
     let status = client.get_status()?;
     for idx in status.blocks..2 {
-        client.submit_blocking(Log::new(Level::INFO, format!("telemetry seed {idx}")))?;
+        client.submit_blocking(
+            Log::new(Level::INFO, format!("telemetry seed {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     wait_for_total_height_quorum_with_bounded_lag(&network, 2).await?;
 
@@ -496,7 +499,10 @@ async fn inject_large_rbc_payloads(
         let prefix = format!("{batch_prefix}-{idx:02}-");
         let filler = "L".repeat(RBC_PAYLOAD_BYTES.saturating_sub(prefix.len()));
         let message = format!("{prefix}{filler}");
-        submit_client.submit(Log::new(Level::INFO, message))?;
+        submit_client.submit(
+            Log::new(Level::INFO, message),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     Ok(())
 }
@@ -508,7 +514,10 @@ fn submit_progress_logs(
 ) -> Result<()> {
     let client = network.client();
     for idx in 0..blocks {
-        client.submit(Log::new(Level::INFO, format!("{prefix} block {idx}")))?;
+        client.submit(
+            Log::new(Level::INFO, format!("{prefix} block {idx}")),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     Ok(())
 }

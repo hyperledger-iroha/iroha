@@ -8,53 +8,59 @@ use norito::{
 };
 use time::OffsetDateTime;
 
-use crate::{MicroXor, ShadowPrice};
+use crate::{Quantity, ShadowPrice};
+
+/// Receipt construction failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum SettlementReceiptError {
+    /// Millisecond timestamp is outside the canonical timestamp domain.
+    #[error("settlement receipt timestamp is out of range")]
+    TimestampOutOfRange,
+}
 
 /// Receipt produced once a transaction has been admitted with an associated
-/// shadow price.  The structure is designed to be serialised via Norito and
-/// committed to nightly reconciliation reports without leaking implementation
-/// details about the conversion path.
+/// shadow price.
 #[derive(
     Clone, Debug, Eq, PartialEq, NoritoSerialize, NoritoDeserialize, JsonSerialize, JsonDeserialize,
 )]
 pub struct SettlementReceipt {
-    /// Identifier emitted by the caller (e.g., transaction hash).
+    /// Identifier emitted by the caller (for example, a transaction hash).
     pub source_id: [u8; 32],
-    /// Local gas token amount debited from the user or sponsor.
-    pub local_amount_micro: u128,
-    /// XOR amount booked immediately.
-    pub xor_due: MicroXor,
-    /// Expected XOR after applying the configured haircut.
-    pub xor_with_haircut: MicroXor,
+    /// Exact local gas-token amount debited from the user or sponsor.
+    pub local_amount: Quantity,
+    /// Exact XOR amount booked immediately.
+    pub xor_due: crate::XorQuantity,
+    /// Exact XOR expected after applying the configured haircut.
+    pub xor_with_haircut: crate::XorQuantity,
     /// Timestamp (UTC) when the receipt was generated.
     pub timestamp: crate::TimestampMs,
 }
 
 impl SettlementReceipt {
-    /// Build a new receipt using the provided shadow price and a supplied UTC timestamp in milliseconds.
-    #[must_use]
+    /// Build a receipt using a supplied UTC timestamp in milliseconds.
+    ///
+    /// # Errors
+    /// Rejects timestamps outside the canonical `time` domain.
     pub fn new_with_timestamp_ms(
         source_id: [u8; 32],
-        local_amount_micro: u128,
+        local_amount: Quantity,
         shadow: &ShadowPrice,
         timestamp_ms: u64,
-    ) -> Self {
-        let nanos = i128::from(timestamp_ms) * 1_000_000;
-        let timestamp = OffsetDateTime::from_unix_timestamp_nanos(nanos)
-            .expect("timestamp within supported range");
-        Self {
+    ) -> Result<Self, SettlementReceiptError> {
+        let timestamp = crate::TimestampMs::from_unix_millis(timestamp_ms)
+            .map_err(|_| SettlementReceiptError::TimestampOutOfRange)?;
+        Ok(Self {
             source_id,
-            local_amount_micro,
-            xor_due: shadow.xor_due,
-            xor_with_haircut: shadow.xor_with_haircut,
-            timestamp: crate::TimestampMs::from(timestamp),
-        }
+            local_amount,
+            xor_due: shadow.xor_due.clone(),
+            xor_with_haircut: shadow.xor_with_haircut.clone(),
+            timestamp,
+        })
     }
 
-    /// Build a new receipt using the provided shadow price and the current UTC
-    /// timestamp (rounded to milliseconds to keep serialised output stable).
+    /// Build a receipt using the current UTC timestamp rounded to milliseconds.
     #[must_use]
-    pub fn new(source_id: [u8; 32], local_amount_micro: u128, shadow: &ShadowPrice) -> Self {
+    pub fn new(source_id: [u8; 32], local_amount: Quantity, shadow: &ShadowPrice) -> Self {
         let now = OffsetDateTime::now_utc()
             .replace_nanosecond(0)
             .expect("nanosecond must be in range");
@@ -62,59 +68,62 @@ impl SettlementReceipt {
         let clamped_timestamp_ms = timestamp_ms_i128.clamp(0, i128::from(u64::MAX));
         let timestamp_ms =
             u64::try_from(clamped_timestamp_ms).expect("timestamp is clamped to the u64 range");
-        Self::new_with_timestamp_ms(source_id, local_amount_micro, shadow, timestamp_ms)
+        Self::new_with_timestamp_ms(source_id, local_amount, shadow, timestamp_ms)
+            .expect("current UTC timestamp is representable")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use norito::{decode_from_bytes, json};
-    use rust_decimal::Decimal;
     use time::Duration;
 
     use crate::{
+        Numeric, Quantity,
         config::{EpsilonBps, SettlementConfig},
         haircut::{HaircutTier, LiquidityProfile},
         price::ShadowPriceCalculator,
-        receipt::SettlementReceipt,
+        receipt::{SettlementReceipt, SettlementReceiptError},
         volatility::VolatilityBucket,
     };
 
-    #[test]
-    fn receipt_rounds_timestamp() {
-        let calculator = ShadowPriceCalculator::new(SettlementConfig {
+    fn shadow(local: &Quantity) -> crate::ShadowPrice {
+        ShadowPriceCalculator::new(SettlementConfig {
             twap_window: crate::DurationSeconds::new(Duration::seconds(60)),
             epsilon: EpsilonBps::new(25),
             buffer_horizon_hours: 72,
-        });
-        let shadow = calculator.compute(
-            Decimal::new(1_000_000, 0),
-            Decimal::new(100, 0),
+        })
+        .compute(
+            local,
+            &Numeric::from(100_u32),
             HaircutTier::new(LiquidityProfile::Tier1),
             VolatilityBucket::Stable,
-        );
-        let receipt = SettlementReceipt::new([0xAA; 32], 1_000_000, &shadow);
-
-        assert_eq!(receipt.timestamp.as_offset_datetime().millisecond(), 0);
-        assert_eq!(receipt.source_id, [0xAA; 32]);
-        assert_eq!(receipt.local_amount_micro, 1_000_000);
+        )
+        .expect("valid shadow price")
     }
 
     #[test]
-    fn receipt_norito_roundtrip() {
-        let calculator = ShadowPriceCalculator::new(SettlementConfig {
-            twap_window: crate::DurationSeconds::new(Duration::seconds(30)),
-            epsilon: EpsilonBps::new(15),
-            buffer_horizon_hours: 24,
-        });
-        let shadow = calculator.compute(
-            Decimal::new(500_000, 0),
-            Decimal::new(50, 0),
-            HaircutTier::new(LiquidityProfile::Tier1),
-            VolatilityBucket::Stable,
-        );
-        let receipt =
-            SettlementReceipt::new_with_timestamp_ms([0x11; 32], 500_000, &shadow, 1_687_123_456);
+    fn receipt_rounds_timestamp() {
+        let local = Quantity::from(1_000_000_u64);
+        let receipt = SettlementReceipt::new([0xAA; 32], local.clone(), &shadow(&local));
+
+        assert_eq!(receipt.timestamp.as_offset_datetime().millisecond(), 0);
+        assert_eq!(receipt.source_id, [0xAA; 32]);
+        assert_eq!(receipt.local_amount, local);
+    }
+
+    #[test]
+    fn receipt_norito_roundtrip_preserves_wide_fractional_amounts() {
+        let local: Quantity = "340282366920938463463374607431768211456.125"
+            .parse()
+            .expect("wide canonical quantity");
+        let receipt = SettlementReceipt::new_with_timestamp_ms(
+            [0x11; 32],
+            local.clone(),
+            &shadow(&local),
+            1_687_123_456,
+        )
+        .expect("timestamp");
 
         let bytes = norito::to_bytes(&receipt).expect("encode");
         let decoded: SettlementReceipt = decode_from_bytes(&bytes).expect("decode");
@@ -123,5 +132,20 @@ mod tests {
         let json_text = json::to_json(&receipt).expect("json encode");
         let parsed: SettlementReceipt = json::from_str(&json_text).expect("json decode");
         assert_eq!(parsed, receipt);
+        assert!(json_text.contains(&format!("\"{}\"", local)));
+    }
+
+    #[test]
+    fn receipt_rejects_out_of_range_timestamp_without_panicking() {
+        let local = Quantity::one();
+        assert_eq!(
+            SettlementReceipt::new_with_timestamp_ms(
+                [0; 32],
+                local.clone(),
+                &shadow(&local),
+                u64::MAX,
+            ),
+            Err(SettlementReceiptError::TimestampOutOfRange)
+        );
     }
 }

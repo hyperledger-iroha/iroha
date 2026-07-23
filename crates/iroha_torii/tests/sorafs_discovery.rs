@@ -86,7 +86,7 @@ use sorafs_manifest::{
     ProviderAdmissionCouncilPolicy, ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1,
     ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, QosHints, RendezvousTopic,
     SignatureAlgorithm, StakePointer, StorageClass as ManifestStorageClass, StreamBudgetV1,
-    TransportHintV1, TransportProtocol, compute_advert_body_digest,
+    TransportHintV1, TransportProtocol, XorQuantity, compute_advert_body_digest,
     compute_envelope_authorization_digest, compute_proposal_digest,
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
@@ -1391,7 +1391,8 @@ fn make_signed_advert(
         profile_aliases: Some(vec!["sorafs.sf1@1.0.0".to_owned(), "sorafs-sf1".to_owned()]),
         stake: StakePointer {
             pool_id: stake_pool_id,
-            stake_amount: 5_000_000,
+            stake_amount: XorQuantity::try_from_micro(5_000_000)
+                .expect("fixture stake is representable"),
         },
         qos: QosHints {
             availability: AvailabilityTier::Hot,
@@ -1462,7 +1463,7 @@ fn make_signed_advert(
         provider_id,
         profile_id: body_clone.profile_id.clone(),
         profile_aliases: body_clone.profile_aliases.clone(),
-        stake: body_clone.stake,
+        stake: body_clone.stake.clone(),
         capabilities: body_clone.capabilities.clone(),
         endpoints: vec![EndpointAdmissionV1 {
             endpoint: body_clone
@@ -1811,7 +1812,6 @@ where
         chunk_digest_sha3_256_hex: hex::encode(manifest.chunk_digest_sha3_256),
         content_length: manifest.content_length,
         submitted_epoch,
-        gas_asset_id: None,
         alias: None,
         successor_of_hex: None,
     };
@@ -1895,9 +1895,13 @@ fn create_manifest_setup_with_seed(
         successor_of,
     );
     let chain_id = harness.chain_id.as_ref().clone();
-    let register_tx = TransactionBuilder::new(chain_id.clone(), authority.account.clone())
-        .with_instructions([dm::InstructionBox::from(register)])
-        .sign(&authority.private_key.0);
+    let register_tx = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.account.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([dm::InstructionBox::from(register)])
+    .sign(&authority.private_key.0);
     submit_transaction(harness, register_tx, next_height);
 
     if let Some(timestamp) = status_timestamp_unix {
@@ -2007,12 +2011,12 @@ fn seed_paid_pin_record_for_storage_manifest(
         storage_class: registry_storage_class_from_manifest(manifest.pin_policy.storage_class),
         retention_epoch: manifest.pin_policy.retention_epoch,
     };
-    let amount_nano = harness
+    let amount = harness
         .state
         .view()
         .world()
         .sorafs_pricing()
-        .public_pin_fee_nano(
+        .public_pin_fee(
             policy.storage_class,
             plan.content_length,
             policy.min_replicas,
@@ -2037,7 +2041,7 @@ fn seed_paid_pin_record_for_storage_manifest(
         paid_by: authority.account.clone(),
         fee_asset_id: harness.state.gov.sorafs_pin_fee_asset_id.clone(),
         treasury_account_id: harness.state.gov.sorafs_pin_fee_treasury_account.clone(),
-        amount_nano,
+        amount,
     });
     record.approve(5, None);
 

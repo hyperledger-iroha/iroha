@@ -28,7 +28,17 @@ pub mod fingerprint;
 /// Sumeragi v2 wire protocol version.
 pub const PROTOCOL_VERSION: u16 = 3;
 /// Consensus-wide upper bound for one voting roster.
-pub const MAX_VALIDATORS_PER_HEIGHT: usize = 4_096;
+///
+/// This is a protocol admission limit, not a local resource-tuning knob.  It
+/// must stay aligned with the production reducer and the formal Sumeragi v2
+/// model so every admitted wire value has a representable verified state.
+pub const MAX_VALIDATORS_PER_HEIGHT: usize = 128;
+/// Maximum exact Commit vote groups exposed by one active-height liveness snapshot.
+///
+/// A reducer may retain one historical exact-lock group while the current
+/// round contains at most one distinct subject group per validator.
+pub const MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT: usize = MAX_VALIDATORS_PER_HEIGHT + 1;
+const MAX_LIVENESS_IGNORE_REASONS: usize = 12;
 /// Tight allocation bound for one consensus signature or aggregate.
 pub const MAX_CONSENSUS_SIGNATURE_BYTES: usize = 256;
 const HEIGHT_CONTEXT_IDENTITY_VERSION: u16 = 3;
@@ -50,8 +60,8 @@ const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-
 /// Keeping the bytes here lets configuration-independent genesis builders emit
 /// a valid signed template without introducing a data-model/config cycle.
 pub const RECOMMENDED_NEXUS_AMX_CONTEXT_HASH: [u8; 32] = [
-    212, 70, 210, 25, 235, 128, 26, 231, 82, 205, 1, 104, 224, 244, 123, 58, 207, 83, 186, 77, 92,
-    150, 95, 210, 152, 63, 79, 147, 244, 218, 110, 167,
+    234, 106, 76, 240, 125, 39, 95, 30, 253, 3, 79, 200, 36, 73, 150, 119, 19, 65, 12, 108, 19,
+    223, 247, 205, 27, 171, 181, 31, 56, 200, 112, 91,
 ];
 
 /// Block height in the v2 protocol.
@@ -427,10 +437,10 @@ impl HeightContext {
     /// Return the typed hash that identifies every round in this context.
     ///
     /// The identity commits to the parent CommitQC's semantic finality key
-    /// (parent context, height, phase, subject, and execution commitment), rather than its view,
-    /// aggregate signature, or signer subset. Two nodes that finalized the same
-    /// parent through different valid CommitQCs must derive the same next-height
-    /// context.
+    /// (parent context, height, proposal origin, phase, subject, and execution commitment),
+    /// rather than its finality view, aggregate signature, or signer subset. Two nodes that
+    /// finalized the same proposal through different valid CommitQCs must derive the same
+    /// next-height context.
     #[must_use]
     pub fn id(&self) -> HeightContextId {
         let identity = HeightContextIdentity {
@@ -448,6 +458,7 @@ impl HeightContext {
                 .map(|certificate| ParentCommitIdentity {
                     context_id: certificate.round.context_id,
                     height: certificate.round.height,
+                    proposal_round: certificate.proposal_round,
                     phase: certificate.phase,
                     subject: certificate.subject,
                     execution_commitment: certificate.execution_commitment,
@@ -510,11 +521,15 @@ impl HeightContext {
             }
             (_, Some(parent), None)
                 if parent.phase != GlobalPhase::Commit
-                    || parent.round.height.checked_add(1) != Some(self.height) =>
+                    || parent.round.height.checked_add(1) != Some(self.height)
+                    || parent.proposal_round.context_id != parent.round.context_id
+                    || parent.proposal_round.height != parent.round.height
+                    || parent.proposal_round.view > parent.round.view =>
             {
                 return Err(ValidationError::InvalidParentCommit);
             }
-            (_, Some(_), None) | (_, None, Some(_)) => {}
+            (_, Some(_), None) => {}
+            (_, None, Some(_)) => return Err(ValidationError::InvalidParentCommit),
         }
         if let Some(parent) = &self.parent_commit_qc {
             parent.execution_commitment.validate()?;
@@ -606,6 +621,7 @@ struct HeightContextIdentity {
 struct ParentCommitIdentity {
     context_id: HeightContextId,
     height: Height,
+    proposal_round: ConsensusRound,
     phase: GlobalPhase,
     subject: BlockSubject,
     execution_commitment: ExecutionCommitment,
@@ -833,6 +849,8 @@ impl ExecutionCommitment {
 pub struct Vote {
     /// Round in which the vote was issued.
     pub round: ConsensusRound,
+    /// Immutable round in which the certified proposal body originated.
+    pub proposal_round: ConsensusRound,
     /// Prepare or Commit phase.
     pub phase: GlobalPhase,
     /// Exact proposal subject.
@@ -858,6 +876,7 @@ impl Vote {
         let payload = VoteSignaturePayload {
             protocol_version: PROTOCOL_VERSION,
             round: self.round,
+            proposal_round: self.proposal_round,
             phase: self.phase,
             subject: self.subject,
             execution_commitment: self.execution_commitment,
@@ -871,6 +890,7 @@ impl Vote {
     /// responsibility and must use [`Self::signature_preimage`].
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
+        validate_proposal_round(self.proposal_round, self.round, self.phase, context)?;
         validate_validator_index(self.signer, context)?;
         self.execution_commitment.validate()?;
         require_signature(&self.signature)
@@ -889,6 +909,8 @@ pub struct VoteSignaturePayload {
     pub protocol_version: u16,
     /// Exact round being voted in.
     pub round: ConsensusRound,
+    /// Immutable proposal-body origin authenticated by the vote.
+    pub proposal_round: ConsensusRound,
     /// Prepare or Commit phase.
     pub phase: GlobalPhase,
     /// Exact block and payload subject.
@@ -907,6 +929,8 @@ pub struct VoteSignaturePayload {
 pub struct QuorumCertificateRef {
     /// Certified round.
     pub round: ConsensusRound,
+    /// Immutable proposal-body origin authenticated by the certificate.
+    pub proposal_round: ConsensusRound,
     /// Certified phase.
     pub phase: GlobalPhase,
     /// Certified subject.
@@ -918,16 +942,16 @@ pub struct QuorumCertificateRef {
 impl QuorumCertificateRef {
     /// Return whether both references certify the same committed decision.
     ///
-    /// CommitQCs for one parent may be assembled in different views and from
-    /// different signer subsets. Their stable decision identity is the parent
-    /// height context, height, Commit phase, and subject; the view is not part
-    /// of that identity.
+    /// CommitQCs for one proposal may be assembled in different finality views
+    /// and from different signer subsets. Their stable decision identity binds
+    /// the immutable proposal origin while excluding only the finality view.
     #[must_use]
     pub fn same_commit_decision(self, other: Self) -> bool {
         self.phase == GlobalPhase::Commit
             && other.phase == GlobalPhase::Commit
             && self.round.context_id == other.round.context_id
             && self.round.height == other.round.height
+            && self.proposal_round == other.proposal_round
             && self.subject == other.subject
             && self.execution_commitment == other.execution_commitment
     }
@@ -943,6 +967,8 @@ impl QuorumCertificateRef {
 pub struct QuorumCertificate {
     /// Certified round.
     pub round: ConsensusRound,
+    /// Immutable proposal-body origin shared by every aggregated vote.
+    pub proposal_round: ConsensusRound,
     /// Certified phase.
     pub phase: GlobalPhase,
     /// Certified proposal subject.
@@ -961,6 +987,7 @@ impl QuorumCertificate {
     pub fn as_ref(&self) -> QuorumCertificateRef {
         QuorumCertificateRef {
             round: self.round,
+            proposal_round: self.proposal_round,
             phase: self.phase,
             subject: self.subject,
             execution_commitment: self.execution_commitment,
@@ -978,6 +1005,7 @@ impl QuorumCertificate {
     /// valid under `context`.
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
+        validate_proposal_round(self.proposal_round, self.round, self.phase, context)?;
         self.execution_commitment.validate()?;
         context
             .quorum
@@ -1002,6 +1030,7 @@ impl QuorumCertificate {
         }
         Ok(Vote {
             round: self.round,
+            proposal_round: self.proposal_round,
             phase: self.phase,
             subject: self.subject,
             execution_commitment: self.execution_commitment,
@@ -1277,6 +1306,10 @@ pub struct TimeoutJustification {
     /// Certificate authorizing the new view.
     pub timeout_certificate: TimeoutCertificate,
     /// Full highest PrepareQC selected from the timeout groups.
+    ///
+    /// First-release proposals require this to be absent: a timeout certificate
+    /// carrying prepared value authority installs and commits that exact origin
+    /// instead of authorizing another proposal origin.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub highest_prepare_qc: Option<QuorumCertificate>,
@@ -1602,14 +1635,13 @@ impl Proposal {
                     return Err(ValidationError::InvalidProposalJustification);
                 }
                 timeout.timeout_certificate.validate(context)?;
-                if timeout
-                    .timeout_certificate
-                    .highest_prepare_qc()
-                    .map(QuorumCertificate::as_ref)
+                let selected_highest = timeout.timeout_certificate.highest_prepare_qc();
+                if selected_highest.map(QuorumCertificate::as_ref)
                     != timeout
                         .highest_prepare_qc
                         .as_ref()
                         .map(QuorumCertificate::as_ref)
+                    || selected_highest.is_some()
                 {
                     return Err(ValidationError::InvalidProposalJustification);
                 }
@@ -1741,7 +1773,9 @@ pub struct CertifiedBodyRequest {
     pub round: ConsensusRound,
     /// Requested subject.
     pub subject: BlockSubject,
-    /// Certificate proving that validators should retain the body.
+    /// Certificate proving that validators should retain the body.  Its view
+    /// may be later than `round` when finality re-certifies the same locked
+    /// proposal origin.
     pub certificate: QuorumCertificate,
     /// Authenticated requester identity. Observers are allowed to fetch a
     /// certified body even though they are absent from the voting roster.
@@ -1766,7 +1800,8 @@ impl CertifiedBodyRequest {
     pub fn validate(&self, context: &HeightContext) -> Result<(), ValidationError> {
         validate_round(self.round, context)?;
         self.certificate.validate(context)?;
-        if self.certificate.round != self.round || self.certificate.subject != self.subject {
+        if self.certificate.proposal_round != self.round || self.certificate.subject != self.subject
+        {
             return Err(ValidationError::CertifiedBodyCertificateMismatch);
         }
         require_signature(&self.signature)
@@ -2143,6 +2178,488 @@ pub enum SumeragiV2BodyState {
     Applied,
 }
 
+/// Frozen election and dual-quorum inputs governing the active status height.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2HeightContextStatus {
+    /// Finalized validator-election epoch.
+    pub epoch: u64,
+    /// Last height governed by this epoch's frozen election snapshot.
+    pub epoch_end_height: Height,
+    /// Consensus mode which produced the voting-power snapshot.
+    pub mode: ConsensusMode,
+    /// Finalized seed used to select the view-zero leader.
+    pub epoch_seed: [u8; 32],
+    /// Number of voting validators in the frozen roster.
+    pub validator_count: u32,
+    /// Canonical count-and-power quorum derived from the frozen roster.
+    pub quorum: DualQuorum,
+}
+
+/// Power-aware summary of the latest authenticated durable CommitQC.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2CommitQcStatus {
+    /// Stable reference to the exact durable CommitQC.
+    pub certificate: QuorumCertificateRef,
+    /// Number of validators in the certificate's frozen roster.
+    pub validator_count: u32,
+    /// Number of distinct certificate signers.
+    pub signer_count: u32,
+    /// Canonical strict-supermajority signer threshold.
+    pub min_signers: u32,
+    /// Voting power represented by the certificate signers.
+    pub signed_power: u64,
+    /// Total voting power in the certificate's frozen roster.
+    pub total_power: u64,
+}
+
+/// Reducer generation owning volatile Sumeragi v2 consumer state.
+///
+/// The generation advances whenever a transition, such as timeout-certificate
+/// installation, replaces vote pools or asynchronous completion ownership.
+pub type SumeragiV2Generation = u64;
+
+/// Partial dual-quorum state for one exact voting round and proposal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2VoteQuorumStatus {
+    /// Exact height-context round whose vote pool is summarized.
+    pub round: ConsensusRound,
+    /// Immutable proposal-body origin authenticated by every vote in the pool.
+    pub proposal_round: ConsensusRound,
+    /// Exact proposal subject accepted into the pool.
+    pub subject: BlockSubject,
+    /// Deterministic execution result authenticated by the votes.
+    pub execution_commitment: ExecutionCommitment,
+    /// Number of distinct authenticated voting validators in the pool.
+    pub signer_count: u32,
+    /// Voting power represented by those validators.
+    pub signed_power: u64,
+    /// Required number of distinct voting validators.
+    pub min_signers: u32,
+    /// Total voting power in the frozen height roster.
+    pub total_power: u64,
+}
+
+/// Partial timeout quorum state for one exact round.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2TimeoutQuorumStatus {
+    /// Exact round whose timeout votes are summarized.
+    pub round: ConsensusRound,
+    /// Number of distinct authenticated voting validators in the pool.
+    pub signer_count: u32,
+    /// Voting power represented by those validators.
+    pub signed_power: u64,
+    /// Required number of distinct voting validators.
+    pub min_signers: u32,
+    /// Total voting power in the frozen height roster.
+    pub total_power: u64,
+    /// Whether the partial pool has produced a verified timeout certificate.
+    pub certificate_formed: bool,
+}
+
+/// Durable protocol intent retained for fair outbound service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "kind",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2OutboundIntentKind {
+    /// Leader proposal intent.
+    Proposal,
+    /// Prepare vote intent.
+    PrepareVote,
+    /// Commit vote intent.
+    CommitVote,
+    /// Formed PrepareQC intent.
+    PrepareQc,
+    /// Formed CommitQC intent.
+    CommitQc,
+    /// Timeout vote intent.
+    TimeoutVote,
+    /// Formed timeout-certificate intent.
+    TimeoutCertificate,
+}
+
+/// Current lifecycle stage of a durable outbound intent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "stage",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2OutboundIntentStage {
+    /// The intent is fenced behind a safety-WAL append.
+    PendingPersistence,
+    /// Durable state is waiting for a local signature.
+    PendingSignature,
+    /// A signed intent is owned by a reserved outbound queue.
+    Queued,
+    /// The intent has been broadcast and remains eligible for retransmission.
+    Sent,
+}
+
+/// Exact durable outbound intent visible to liveness diagnostics.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2OutboundIntentStatus {
+    /// Protocol role of the retained intent.
+    pub kind: SumeragiV2OutboundIntentKind,
+    /// Exact round to which the intent belongs.
+    pub round: ConsensusRound,
+    /// Immutable proposal-body origin for proposal-authenticating intents.
+    /// Timeout votes and timeout certificates carry `None`.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub proposal_round: Option<ConsensusRound>,
+    /// Proposal subject, when the intent authenticates one.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub subject: Option<BlockSubject>,
+    /// Execution result, when the intent authenticates one.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub execution_commitment: Option<ExecutionCommitment>,
+    /// Current durable-delivery stage.
+    pub stage: SumeragiV2OutboundIntentStage,
+}
+
+/// State of one terminating local-work stage.
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "stage",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2LocalWorkStage {
+    /// No work is required for the active height.
+    #[default]
+    Idle,
+    /// Work is durably scheduled but has not begun local execution.
+    Queued,
+    /// The local operation is executing.
+    Running,
+    /// The stage completed for the active proposal or decision.
+    Complete,
+}
+
+/// Local body, validation, application, and handoff pipeline.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2WorkStatus {
+    /// Local candidate construction or proposal-admission work.
+    pub candidate: SumeragiV2LocalWorkStage,
+    /// Certified-body fetch or reconstruction work.
+    pub body_recovery: SumeragiV2LocalWorkStage,
+    /// Durable body-store work.
+    pub body_store: SumeragiV2LocalWorkStage,
+    /// Deterministic candidate-validation work.
+    pub validation: SumeragiV2LocalWorkStage,
+    /// Durable decision application work.
+    pub application: SumeragiV2LocalWorkStage,
+    /// Activation of the successor height after application.
+    pub successor_height: SumeragiV2LocalWorkStage,
+}
+
+/// Bounded queue contributing to Sumeragi v2 progress.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "queue",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2QueueKind {
+    /// Authenticated semantic-admission/equivocation table.
+    Ingress,
+    /// Adapter lane for ordinary protocol traffic.
+    DeferredNormal,
+    /// Adapter lane reserved for progress-relevant protocol traffic.
+    DeferredProgress,
+    /// Adapter lane reserved for asynchronous completions.
+    DeferredCompletion,
+    /// Serialized runtime lane for ordinary protocol traffic.
+    RuntimeNormal,
+    /// Serialized runtime lane reserved for progress-relevant traffic.
+    RuntimeProgress,
+    /// Serialized runtime lane reserved for asynchronous completions.
+    RuntimeCompletion,
+    /// Effect-executor completion queue.
+    EffectCompletion,
+    /// Bounded transport-to-runner network ingress.
+    NetworkIngress,
+    /// Reducer-to-effect dispatch suffix retained for pending-work capacity.
+    ///
+    /// This reserved FIFO runs before another reducer transition. Capacity
+    /// retries are therefore not scheduler-skip debt.
+    EffectDispatch,
+}
+
+/// Occupancy and fairness state for one bounded local queue.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2QueueStatus {
+    /// Queue being summarized.
+    pub queue: SumeragiV2QueueKind,
+    /// Number of currently owned items.
+    pub depth: u32,
+    /// Maximum number of owned items.
+    pub capacity: u32,
+    /// Age of the oldest owned item, in local monotonic milliseconds.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub oldest_age_ms: Option<u64>,
+    /// Saturating count of eligible dispatches skipped by the oldest item.
+    pub service_debt: u64,
+}
+
+/// Reducer transition retained for diagnostic transition age.
+///
+/// A transition resets `no_progress_age_ms` only when it advances the bounded
+/// height-wide semantic high-water. Timeout traffic and reconstruction of an
+/// already observed partial vote pool remain visible here without refreshing
+/// that clock, so repeated view churn cannot mask a stall.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "transition",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2ProgressTransition {
+    /// A leader proposal entered the reducer.
+    ProposalAdmitted,
+    /// The exact proposal body became locally available.
+    BodyAvailable,
+    /// The exact proposal body became durable.
+    BodyStored,
+    /// Deterministic candidate validation completed.
+    BodyValidated,
+    /// An authenticated Prepare vote increased an exact partial pool.
+    PrepareVoteAdmitted,
+    /// An authenticated Commit vote increased an exact partial pool.
+    CommitVoteAdmitted,
+    /// An authenticated timeout vote increased an exact partial pool.
+    TimeoutVoteAdmitted,
+    /// A Prepare dual quorum formed or arrived.
+    PrepareQuorum,
+    /// A PrepareQC lock became durable.
+    LockInstalled,
+    /// A Commit dual quorum formed or arrived.
+    CommitQuorum,
+    /// A timeout certificate installed a successor view.
+    TimeoutCertificateInstalled,
+    /// The exact CommitQC decision became durable.
+    DecisionPersisted,
+    /// The decided block was applied locally.
+    Applied,
+    /// This height became active after its predecessor applied, its live
+    /// clocks were armed, and authenticated ingress opened.
+    SuccessorHeightActivated,
+    /// WAL recovery reconstructed a pending progress path.
+    RecoveryReplayed,
+}
+
+/// Last tracked reducer transition and its local age.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2ProgressTransitionStatus {
+    /// Reducer generation which emitted the transition.
+    pub generation: SumeragiV2Generation,
+    /// Exact round active at the transition.
+    pub round: ConsensusRound,
+    /// Semantic reducer event retained for diagnostics.
+    pub transition: SumeragiV2ProgressTransition,
+    /// Local monotonic milliseconds elapsed since the transition.
+    pub age_ms: u64,
+}
+
+/// Classified cause of an active no-progress interval.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "blocker",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2LivenessBlocker {
+    /// The current view has not admitted its expected proposal.
+    MissingProposal,
+    /// A certified or locked proposal body is unavailable locally.
+    BodyUnavailable,
+    /// The exact Prepare pool lacks count or voting-power quorum.
+    PrepareQuorumMissing,
+    /// The exact Commit pool lacks count or voting-power quorum.
+    CommitQuorumMissing,
+    /// Timeout votes have not produced the required timeout certificate.
+    TimeoutCertificateMissing,
+    /// Reserved local work is not reducing its service debt.
+    SchedulerStarvation,
+    /// A durable decision is waiting for terminating local application work.
+    ApplicationPending,
+    /// The reducer is waiting for safety-WAL persistence or consensus signing.
+    LocalControlPending,
+}
+
+/// Closed reducer reason for safely ignoring an input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(
+    tag = "reason",
+    content = "details",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum SumeragiV2IgnoreReason {
+    /// Input belongs to another height.
+    WrongHeight,
+    /// Input was tagged for a different current view.
+    WrongView,
+    /// Completion belongs to an old local generation.
+    StaleGeneration,
+    /// The reducer is waiting for persistence or signing.
+    Busy,
+    /// The message or completion has already been handled.
+    Duplicate,
+    /// No outstanding body operation matches the completion.
+    NoMatchingWork,
+    /// The node is an observer and cannot vote or time out.
+    Observer,
+    /// A durable timeout intent closed the view to new votes.
+    ViewClosed,
+    /// A finalized decision makes the input irrelevant.
+    AlreadyDecided,
+    /// WAL replay awaits its one authorized resumption event.
+    RecoveryPending,
+    /// The input's round or safe-value rank cannot affect local state.
+    IrrelevantView,
+    /// A durable lock makes the proposal's subject unsafe to prepare.
+    UnsafeProposal,
+}
+
+/// Per-height counter for one closed input-ignore reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2IgnoreCount {
+    /// Reason whose occurrences are counted.
+    pub reason: SumeragiV2IgnoreReason,
+    /// Number of occurrences at the active height.
+    pub count: u64,
+}
+
+/// Authoritative progress diagnostics for the active Sumeragi v2 height.
+///
+/// Local ages and queue measurements are observation-only: they are never
+/// inputs to protocol transitions, wire fingerprints, or deterministic state.
+/// A lagging node may report a later-view CommitQC intent or
+/// Commit-quorum/decision transition for this exact active height; all other
+/// diagnostics remain bounded by the status snapshot's current view.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiV2LivenessStatus {
+    /// Reducer generation which owns all reported volatile state.
+    pub generation: SumeragiV2Generation,
+    /// Partial Prepare pools keyed by exact round, subject, and execution result.
+    pub prepare_quorums: Vec<SumeragiV2VoteQuorumStatus>,
+    /// Partial Commit pools keyed by exact round, subject, and execution result.
+    pub commit_quorums: Vec<SumeragiV2VoteQuorumStatus>,
+    /// Partial timeout pools keyed by exact round.
+    pub timeout_quorums: Vec<SumeragiV2TimeoutQuorumStatus>,
+    /// Durable progress-relevant intents owned by outbound service.
+    pub outbound_intents: Vec<SumeragiV2OutboundIntentStatus>,
+    /// Current local terminating-work stages.
+    pub work: SumeragiV2WorkStatus,
+    /// Bounded queue occupancy and service debt.
+    pub queues: Vec<SumeragiV2QueueStatus>,
+    /// Most recent tracked reducer transition.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_progress: Option<SumeragiV2ProgressTransitionStatus>,
+    /// Local monotonic milliseconds without meaningful height progress.
+    pub no_progress_age_ms: u64,
+    /// Classified delay cause after the watchdog threshold is crossed.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub blocker: Option<SumeragiV2LivenessBlocker>,
+    /// Per-height counters for every observed reducer ignore reason.
+    pub ignore_counts: Vec<SumeragiV2IgnoreCount>,
+}
+
 /// Compact Norito payload returned by the Sumeragi v2 status endpoint.
 #[derive(Clone, Debug, PartialEq, Eq, Decode, Encode, IntoSchema)]
 #[cfg_attr(
@@ -2195,6 +2712,14 @@ pub struct SumeragiV2Status {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub last_committed_subject: Option<BlockSubject>,
+    /// Frozen election context governing the active height.
+    pub height_context: SumeragiV2HeightContextStatus,
+    /// Latest authenticated durable CommitQC summary, when its frozen roster is available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub last_commit_qc: Option<SumeragiV2CommitQcStatus>,
+    /// Authoritative progress and no-progress diagnostics for the active height.
+    pub liveness: SumeragiV2LivenessStatus,
 }
 
 impl SumeragiV2Status {
@@ -2224,6 +2749,30 @@ impl SumeragiV2Status {
         }
         if self.pending_persistence_id == Some(0) {
             return Err(Error::ZeroPersistenceId);
+        }
+        if self.height_context.epoch_end_height < self.height {
+            return Err(Error::EpochEndsBeforeHeight);
+        }
+        if self.height_context.validator_count == 0
+            || u64::from(self.height_context.validator_count)
+                > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+        {
+            return Err(Error::InvalidValidatorCount);
+        }
+        if self.leader >= self.height_context.validator_count {
+            return Err(Error::LeaderOutOfRange);
+        }
+        if DualQuorum::count_threshold(self.height_context.validator_count)
+            != Some(self.height_context.quorum.min_signers)
+        {
+            return Err(Error::InvalidHeightContextQuorum);
+        }
+        let validator_count = u64::from(self.height_context.validator_count);
+        if self.height_context.quorum.total_power < validator_count
+            || (self.height_context.mode == ConsensusMode::Permissioned
+                && self.height_context.quorum.total_power != validator_count)
+        {
+            return Err(Error::InvalidHeightContextQuorum);
         }
 
         let phase_body_is_valid = matches!(
@@ -2259,14 +2808,64 @@ impl SumeragiV2Status {
         }
 
         if self.phase == SumeragiV2StatusPhase::PendingApply {
-            if self.last_committed_height != self.height || self.last_committed_subject.is_none() {
+            if self.last_committed_height != self.height
+                || self.last_committed_subject.is_none()
+                || self.last_commit_qc.is_none()
+            {
                 return Err(Error::PendingApplyCommitMismatch);
             }
         } else if self.last_committed_height >= self.height {
             return Err(Error::CommittedHeightNotBehindActiveHeight);
         }
-        if self.last_committed_height == 0 && self.last_committed_subject.is_some() {
+        if self.last_committed_height == 0
+            && (self.last_committed_subject.is_some() || self.last_commit_qc.is_some())
+        {
             return Err(Error::GenesisCommitCarriesSubject);
+        }
+        if self.last_committed_subject.is_some() != self.last_commit_qc.is_some() {
+            return Err(Error::CommitFrontierAuthenticationMismatch);
+        }
+        if let Some(summary) = &self.last_commit_qc {
+            let subject = self
+                .last_committed_subject
+                .ok_or(Error::CommitFrontierAuthenticationMismatch)?;
+            if summary.certificate.phase != GlobalPhase::Commit
+                || summary.certificate.round.height != self.last_committed_height
+                || summary.certificate.proposal_round.context_id
+                    != summary.certificate.round.context_id
+                || summary.certificate.proposal_round.height != summary.certificate.round.height
+                || summary.certificate.proposal_round.view > summary.certificate.round.view
+                || summary.certificate.subject != subject
+                || summary.certificate.execution_commitment.validate().is_err()
+            {
+                return Err(Error::CommitSummaryCertificateMismatch);
+            }
+            if self.last_committed_height == self.height
+                && summary.certificate.round.context_id != self.height_context_id
+            {
+                return Err(Error::CommitSummaryCertificateMismatch);
+            }
+            let canonical_min_signers = DualQuorum::count_threshold(summary.validator_count);
+            if summary.validator_count == 0
+                || u64::from(summary.validator_count)
+                    > u64::try_from(MAX_VALIDATORS_PER_HEIGHT).unwrap_or(u64::MAX)
+                || canonical_min_signers != Some(summary.min_signers)
+                || summary.signer_count < summary.min_signers
+                || summary.signer_count > summary.validator_count
+                || summary.total_power < u64::from(summary.validator_count)
+                || summary.signed_power < u64::from(summary.signer_count)
+                || summary.signed_power > summary.total_power
+                || u128::from(summary.signed_power) * 3 <= u128::from(summary.total_power) * 2
+            {
+                return Err(Error::InvalidCommitSummaryQuorum);
+            }
+            if summary.certificate.round.context_id == self.height_context_id
+                && (summary.validator_count != self.height_context.validator_count
+                    || summary.min_signers != self.height_context.quorum.min_signers
+                    || summary.total_power != self.height_context.quorum.total_power)
+            {
+                return Err(Error::CommitSummaryContextMismatch);
+            }
         }
 
         let validate_prepare = |certificate: &QuorumCertificateRef| {
@@ -2278,6 +2877,9 @@ impl SumeragiV2Status {
             }
             if certificate.phase != GlobalPhase::Prepare {
                 return Err(Error::CertificatePhaseMismatch);
+            }
+            if certificate.proposal_round != certificate.round {
+                return Err(Error::InvalidProposalRound);
             }
             if certificate.round.view > self.view {
                 return Err(Error::CertificateFromFutureView);
@@ -2321,6 +2923,175 @@ impl SumeragiV2Status {
             }
         }
 
+        if self.liveness.prepare_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
+            || self.liveness.commit_quorums.len() > MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT
+            || self.liveness.timeout_quorums.len() > MAX_VALIDATORS_PER_HEIGHT
+            || self.liveness.outbound_intents.len() > 7
+            || self.liveness.queues.len() > 10
+            || self.liveness.ignore_counts.len() > MAX_LIVENESS_IGNORE_REASONS
+        {
+            return Err(Error::LivenessCollectionTooLarge);
+        }
+
+        let validate_round_binding = |round: ConsensusRound| {
+            if round.context_id != self.height_context_id || round.height != self.height {
+                return Err(Error::LivenessRoundMismatch);
+            }
+            Ok(())
+        };
+        let validate_nonfuture_round = |round: ConsensusRound| {
+            validate_round_binding(round)?;
+            if round.view > self.view {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            Ok(())
+        };
+        let validate_partial_quorum =
+            |signer_count: u32, signed_power: u64, min_signers: u32, total_power: u64| {
+                if min_signers != self.height_context.quorum.min_signers
+                    || total_power != self.height_context.quorum.total_power
+                    || signer_count > self.height_context.validator_count
+                    || signed_power < u64::from(signer_count)
+                    || signed_power > total_power
+                    || (self.height_context.mode == ConsensusMode::Permissioned
+                        && signed_power != u64::from(signer_count))
+                {
+                    return Err(Error::InvalidLivenessQuorum);
+                }
+                Ok(())
+            };
+        let validate_vote_quorum = |quorum: &SumeragiV2VoteQuorumStatus, phase: GlobalPhase| {
+            validate_nonfuture_round(quorum.round)?;
+            validate_round_binding(quorum.proposal_round)?;
+            if quorum.proposal_round.view > quorum.round.view
+                || (phase == GlobalPhase::Prepare && quorum.proposal_round != quorum.round)
+            {
+                return Err(Error::InvalidProposalRound);
+            }
+            quorum
+                .execution_commitment
+                .validate()
+                .map_err(|_| Error::InvalidLivenessExecutionCommitment)?;
+            validate_partial_quorum(
+                quorum.signer_count,
+                quorum.signed_power,
+                quorum.min_signers,
+                quorum.total_power,
+            )
+        };
+        for quorum in &self.liveness.prepare_quorums {
+            validate_vote_quorum(quorum, GlobalPhase::Prepare)?;
+        }
+        for quorum in &self.liveness.commit_quorums {
+            validate_vote_quorum(quorum, GlobalPhase::Commit)?;
+        }
+        for quorum in &self.liveness.timeout_quorums {
+            validate_nonfuture_round(quorum.round)?;
+            validate_partial_quorum(
+                quorum.signer_count,
+                quorum.signed_power,
+                quorum.min_signers,
+                quorum.total_power,
+            )?;
+            if quorum.certificate_formed
+                && (quorum.signer_count < quorum.min_signers
+                    || u128::from(quorum.signed_power) * 3 <= u128::from(quorum.total_power) * 2)
+            {
+                return Err(Error::InvalidLivenessQuorum);
+            }
+        }
+        for intent in &self.liveness.outbound_intents {
+            validate_round_binding(intent.round)?;
+            if intent.kind != SumeragiV2OutboundIntentKind::CommitQc
+                && intent.round.view > self.view
+            {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            let carries_execution = matches!(
+                intent.kind,
+                SumeragiV2OutboundIntentKind::PrepareVote
+                    | SumeragiV2OutboundIntentKind::CommitVote
+                    | SumeragiV2OutboundIntentKind::PrepareQc
+                    | SumeragiV2OutboundIntentKind::CommitQc
+            );
+            let shape_is_valid = match intent.kind {
+                SumeragiV2OutboundIntentKind::Proposal => {
+                    intent.proposal_round.is_some()
+                        && intent.subject.is_some()
+                        && intent.execution_commitment.is_none()
+                }
+                SumeragiV2OutboundIntentKind::TimeoutVote
+                | SumeragiV2OutboundIntentKind::TimeoutCertificate => {
+                    intent.proposal_round.is_none()
+                        && intent.subject.is_none()
+                        && intent.execution_commitment.is_none()
+                }
+                _ => {
+                    carries_execution
+                        && intent.proposal_round.is_some()
+                        && intent.subject.is_some()
+                        && intent.execution_commitment.is_some()
+                }
+            };
+            if !shape_is_valid {
+                return Err(Error::InvalidOutboundIntentShape);
+            }
+            if let Some(proposal_round) = intent.proposal_round {
+                validate_round_binding(proposal_round)?;
+                if proposal_round.view > intent.round.view
+                    || (matches!(
+                        intent.kind,
+                        SumeragiV2OutboundIntentKind::Proposal
+                            | SumeragiV2OutboundIntentKind::PrepareVote
+                            | SumeragiV2OutboundIntentKind::PrepareQc
+                    ) && proposal_round != intent.round)
+                {
+                    return Err(Error::InvalidProposalRound);
+                }
+            }
+            if let Some(commitment) = intent.execution_commitment {
+                commitment
+                    .validate()
+                    .map_err(|_| Error::InvalidLivenessExecutionCommitment)?;
+            }
+        }
+
+        let mut queue_kinds = BTreeSet::new();
+        for queue in &self.liveness.queues {
+            if queue.capacity == 0
+                || queue.depth > queue.capacity
+                || (queue.depth == 0 && queue.oldest_age_ms.is_some())
+                || (queue.depth != 0 && queue.oldest_age_ms.is_none())
+                || !queue_kinds.insert(queue.queue)
+            {
+                return Err(Error::InvalidLivenessQueue);
+            }
+        }
+        let mut ignore_reasons = BTreeSet::new();
+        if self
+            .liveness
+            .ignore_counts
+            .iter()
+            .any(|entry| !ignore_reasons.insert(entry.reason))
+        {
+            return Err(Error::DuplicateLivenessIgnoreReason);
+        }
+        if let Some(progress) = self.liveness.last_progress {
+            validate_round_binding(progress.round)?;
+            if progress.round.view > self.view
+                && !matches!(
+                    progress.transition,
+                    SumeragiV2ProgressTransition::CommitQuorum
+                        | SumeragiV2ProgressTransition::DecisionPersisted
+                )
+            {
+                return Err(Error::LivenessRoundFromFutureView);
+            }
+            if progress.generation > self.liveness.generation {
+                return Err(Error::LivenessGenerationFromFuture);
+            }
+        }
+
         Ok(())
     }
 }
@@ -2339,6 +3110,14 @@ pub enum SumeragiV2StatusValidationError {
     ZeroHeight,
     /// WAL operation identifiers are non-zero.
     ZeroPersistenceId,
+    /// The compact height context's epoch does not cover the active height.
+    EpochEndsBeforeHeight,
+    /// The compact height context declared an empty or oversized validator roster.
+    InvalidValidatorCount,
+    /// The expected leader does not index the frozen validator roster.
+    LeaderOutOfRange,
+    /// The compact height context's dual quorum is not structurally canonical.
+    InvalidHeightContextQuorum,
     /// The reducer phase cannot emit the reported body state.
     PhaseBodyMismatch,
     /// Commit collection requires a persisted PrepareQC lock.
@@ -2351,6 +3130,14 @@ pub enum SumeragiV2StatusValidationError {
     CommittedHeightNotBehindActiveHeight,
     /// The pre-genesis commit frontier carried a block subject.
     GenesisCommitCarriesSubject,
+    /// The committed subject and authenticated CommitQC summary were not present together.
+    CommitFrontierAuthenticationMismatch,
+    /// The CommitQC summary did not certify the reported committed subject and height.
+    CommitSummaryCertificateMismatch,
+    /// The CommitQC summary did not satisfy its frozen dual quorum.
+    InvalidCommitSummaryQuorum,
+    /// A CommitQC for the active context reported different frozen quorum inputs.
+    CommitSummaryContextMismatch,
     /// A QC or TC reference was bound to another height context.
     CertificateContextMismatch,
     /// A QC or TC reference was bound to another height.
@@ -2359,6 +3146,8 @@ pub enum SumeragiV2StatusValidationError {
     CertificatePhaseMismatch,
     /// A QC reference came from a view above the current view.
     CertificateFromFutureView,
+    /// A vote-pool or certificate reference carried an invalid proposal origin.
+    InvalidProposalRound,
     /// A persisted lock was present without a highest PrepareQC.
     LockedCertificateWithoutHighest,
     /// The persisted lock was above the reported highest PrepareQC.
@@ -2369,6 +3158,24 @@ pub enum SumeragiV2StatusValidationError {
     TimeoutNotBeforeCurrentView,
     /// A timeout certificate reported a PrepareQC from above its timed-out view.
     TimeoutCarriesFuturePrepare,
+    /// A liveness status collection exceeded its fixed protocol bound.
+    LivenessCollectionTooLarge,
+    /// A liveness diagnostic was bound to another height or context.
+    LivenessRoundMismatch,
+    /// A non-finality liveness diagnostic was bound to a view above the current view.
+    LivenessRoundFromFutureView,
+    /// A partial liveness quorum disagreed with the frozen height context.
+    InvalidLivenessQuorum,
+    /// A liveness diagnostic carried a malformed execution commitment.
+    InvalidLivenessExecutionCommitment,
+    /// An outbound intent's subject fields disagreed with its protocol kind.
+    InvalidOutboundIntentShape,
+    /// A queue diagnostic declared invalid occupancy, age, or duplicate identity.
+    InvalidLivenessQueue,
+    /// An ignore reason appeared more than once in the per-height counters.
+    DuplicateLivenessIgnoreReason,
+    /// A progress record referred to a reducer generation not yet installed.
+    LivenessGenerationFromFuture,
 }
 
 impl fmt::Display for SumeragiV2StatusValidationError {
@@ -2382,6 +3189,18 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::ZeroHeight => f.write_str("Sumeragi status height must be positive"),
             Error::ZeroPersistenceId => {
                 f.write_str("Sumeragi status persistence identifier must be non-zero")
+            }
+            Error::EpochEndsBeforeHeight => {
+                f.write_str("Sumeragi status epoch end must cover the active height")
+            }
+            Error::InvalidValidatorCount => f.write_str(
+                "Sumeragi status validator count is empty or exceeds the protocol bound",
+            ),
+            Error::LeaderOutOfRange => {
+                f.write_str("Sumeragi status leader does not index the frozen validator roster")
+            }
+            Error::InvalidHeightContextQuorum => {
+                f.write_str("Sumeragi status height-context quorum is not canonical")
             }
             Error::PhaseBodyMismatch => {
                 f.write_str("Sumeragi status phase and body state are inconsistent")
@@ -2399,8 +3218,20 @@ impl fmt::Display for SumeragiV2StatusValidationError {
                 "non-decided Sumeragi status must have a committed height below the active height",
             ),
             Error::GenesisCommitCarriesSubject => {
-                f.write_str("pre-genesis commit frontier cannot carry a subject")
+                f.write_str("pre-genesis commit frontier cannot carry a subject or CommitQC")
             }
+            Error::CommitFrontierAuthenticationMismatch => {
+                f.write_str("Sumeragi status committed subject and CommitQC must be paired")
+            }
+            Error::CommitSummaryCertificateMismatch => {
+                f.write_str("Sumeragi status CommitQC does not certify the committed frontier")
+            }
+            Error::InvalidCommitSummaryQuorum => {
+                f.write_str("Sumeragi status CommitQC summary does not satisfy its frozen quorum")
+            }
+            Error::CommitSummaryContextMismatch => f.write_str(
+                "Sumeragi status CommitQC quorum differs from the active height context",
+            ),
             Error::CertificateContextMismatch => {
                 f.write_str("Sumeragi status certificate context does not match the active context")
             }
@@ -2412,6 +3243,9 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             }
             Error::CertificateFromFutureView => {
                 f.write_str("Sumeragi status QC reference is from a future view")
+            }
+            Error::InvalidProposalRound => {
+                f.write_str("Sumeragi status carries an invalid proposal origin round")
             }
             Error::LockedCertificateWithoutHighest => {
                 f.write_str("Sumeragi status lock requires a highest PrepareQC")
@@ -2428,6 +3262,33 @@ impl fmt::Display for SumeragiV2StatusValidationError {
             Error::TimeoutCarriesFuturePrepare => f.write_str(
                 "Sumeragi status timeout certificate carries a PrepareQC from a future view",
             ),
+            Error::LivenessCollectionTooLarge => {
+                f.write_str("Sumeragi liveness status exceeds a fixed collection bound")
+            }
+            Error::LivenessRoundMismatch => {
+                f.write_str("Sumeragi liveness status round does not match the active height")
+            }
+            Error::LivenessRoundFromFutureView => {
+                f.write_str("Sumeragi non-finality liveness round is from a future view")
+            }
+            Error::InvalidLivenessQuorum => {
+                f.write_str("Sumeragi liveness status quorum is not structurally valid")
+            }
+            Error::InvalidLivenessExecutionCommitment => {
+                f.write_str("Sumeragi liveness status contains an invalid execution commitment")
+            }
+            Error::InvalidOutboundIntentShape => {
+                f.write_str("Sumeragi liveness outbound intent has inconsistent subject fields")
+            }
+            Error::InvalidLivenessQueue => {
+                f.write_str("Sumeragi liveness queue occupancy or identity is invalid")
+            }
+            Error::DuplicateLivenessIgnoreReason => {
+                f.write_str("Sumeragi liveness status repeats an ignore reason")
+            }
+            Error::LivenessGenerationFromFuture => {
+                f.write_str("Sumeragi liveness progress record is from a future generation")
+            }
         }
     }
 }
@@ -2585,8 +3446,11 @@ pub enum ValidationError {
     InvalidChunkLength,
     /// A payload chunk does not carry a sender signature.
     MissingChunkSignature,
-    /// A certified body request's QC does not certify its requested subject and round.
+    /// A certified body request's QC does not certify its requested subject
+    /// at the same height or a later finality view.
     CertifiedBodyCertificateMismatch,
+    /// A vote or certificate carries an invalid proposal-body origin round.
+    InvalidProposalRound,
     /// Certified body bytes do not match the manifest payload hash.
     CertifiedBodyHashMismatch,
     /// A certified response does not answer the exact outstanding request.
@@ -2732,6 +3596,9 @@ impl fmt::Display for ValidationError {
             Self::CertifiedBodyCertificateMismatch => {
                 f.write_str("certified body request does not match its certificate")
             }
+            Self::InvalidProposalRound => {
+                f.write_str("proposal body origin is incompatible with the certified round")
+            }
             Self::CertifiedBodyHashMismatch => {
                 f.write_str("certified body bytes do not match the manifest payload hash")
             }
@@ -2849,6 +3716,21 @@ fn validate_round(round: ConsensusRound, context: &HeightContext) -> Result<(), 
     context.validate()?;
     if round.context_id != context.id() || round.height != context.height {
         return Err(ValidationError::WrongHeightContext);
+    }
+    Ok(())
+}
+
+fn validate_proposal_round(
+    proposal_round: ConsensusRound,
+    certified_round: ConsensusRound,
+    phase: GlobalPhase,
+    context: &HeightContext,
+) -> Result<(), ValidationError> {
+    validate_round(proposal_round, context)?;
+    if proposal_round.view > certified_round.view
+        || (phase == GlobalPhase::Prepare && proposal_round != certified_round)
+    {
+        return Err(ValidationError::InvalidProposalRound);
     }
     Ok(())
 }
@@ -3069,8 +3951,10 @@ mod tests {
         phase: GlobalPhase,
         signers: Vec<ValidatorIndex>,
     ) -> QuorumCertificate {
+        let round = round(context, view);
         QuorumCertificate {
-            round: round(context, view),
+            round,
+            proposal_round: round,
             phase,
             subject: subject(u8::try_from(view + 1).expect("small fixture view")),
             execution_commitment: execution_commitment(
@@ -3134,14 +4018,16 @@ mod tests {
 
         let mut invalid_parent_execution = context(&[1, 1, 1, 1]);
         invalid_parent_execution.height = 2;
+        let invalid_parent_round = ConsensusRound {
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"invalid parent execution context",
+            ))),
+            height: 1,
+            view: 0,
+        };
         invalid_parent_execution.parent_commit_qc = Some(QuorumCertificate {
-            round: ConsensusRound {
-                context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
-                    b"invalid parent execution context",
-                ))),
-                height: 1,
-                view: 0,
-            },
+            round: invalid_parent_round,
+            proposal_round: invalid_parent_round,
             phase: GlobalPhase::Commit,
             subject: subject(0x61),
             execution_commitment: ExecutionCommitment {
@@ -3215,9 +4101,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xad, 0x99, 0x8b, 0x5a, 0x9f, 0x19, 0xea, 0x89, 0xdf, 0xb4, 0x3c, 0xdc, 0x9d, 0xdd,
-                0xb3, 0xf5, 0x10, 0x91, 0x64, 0xc0, 0xb4, 0x97, 0xa2, 0xfb, 0x8e, 0x67, 0x26, 0x81,
-                0xea, 0x7e, 0x21, 0x9b,
+                0x78, 0xf2, 0x68, 0x02, 0x2b, 0x41, 0x63, 0x1a, 0xf9, 0xda, 0x37, 0x76, 0xdb, 0xd7,
+                0xaf, 0x17, 0x2e, 0xca, 0xa2, 0x9f, 0x6f, 0x1c, 0x25, 0xce, 0x20, 0x75, 0x83, 0x9e,
+                0x0d, 0x93, 0x3a, 0x97,
             ],
             "intentional identity-projection changes require updating this golden"
         );
@@ -3241,9 +4127,9 @@ mod tests {
         assert_eq!(
             *context.id().0.as_ref(),
             [
-                0xfa, 0xc2, 0x0e, 0xa9, 0xbb, 0xf7, 0xba, 0xe7, 0x7e, 0xee, 0x55, 0xec, 0xbe, 0x68,
-                0x98, 0x95, 0xf9, 0x8f, 0x35, 0x0b, 0xcb, 0x9b, 0x05, 0x8d, 0x99, 0xce, 0x05, 0x07,
-                0x78, 0x6a, 0xa9, 0x55,
+                0xbf, 0xc3, 0x88, 0xf2, 0x21, 0xe5, 0x10, 0x01, 0x85, 0x76, 0xe9, 0x58, 0xff, 0x45,
+                0x59, 0x1d, 0xff, 0xfb, 0x89, 0xe4, 0xa0, 0xaa, 0xcf, 0x41, 0xbc, 0x3a, 0x45, 0xbb,
+                0x28, 0xf3, 0x57, 0x55,
             ],
             "intentional transition-identity changes require updating this golden"
         );
@@ -3263,6 +4149,7 @@ mod tests {
         let parent_subject = subject(0x44);
         left.parent_commit_qc = Some(QuorumCertificate {
             round: parent_round,
+            proposal_round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x44),
@@ -3275,6 +4162,7 @@ mod tests {
                 view: parent_round.view + 1,
                 ..parent_round
             },
+            proposal_round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x44),
@@ -3320,6 +4208,81 @@ mod tests {
         assert_eq!(
             oversized_parent.validate(),
             Err(ValidationError::SignatureTooLarge)
+        );
+    }
+
+    #[test]
+    fn height_context_identity_authenticates_the_parent_proposal_origin() {
+        let mut original = context(&[1, 1, 1, 1]);
+        original.height = 2;
+        let parent_round = ConsensusRound {
+            context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                b"parent proposal-origin context",
+            ))),
+            height: 1,
+            view: 5,
+        };
+        original.parent_commit_qc = Some(QuorumCertificate {
+            round: parent_round,
+            proposal_round: ConsensusRound {
+                view: 2,
+                ..parent_round
+            },
+            phase: GlobalPhase::Commit,
+            subject: subject(0x47),
+            execution_commitment: execution_commitment(0x47),
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![0x47; 48],
+        });
+        original.validate().expect("valid historical parent origin");
+
+        let mut different_origin = original.clone();
+        different_origin
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate")
+            .proposal_round
+            .view = 3;
+        different_origin
+            .validate()
+            .expect("second valid historical parent origin");
+        assert_ne!(original.id(), different_origin.id());
+
+        let mut cross_context_origin = original.clone();
+        cross_context_origin
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate")
+            .proposal_round
+            .context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign proposal-origin context",
+        )));
+        assert_eq!(
+            cross_context_origin.validate(),
+            Err(ValidationError::InvalidParentCommit)
+        );
+
+        let mut wrong_height_origin = original.clone();
+        wrong_height_origin
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate")
+            .proposal_round
+            .height = 2;
+        assert_eq!(
+            wrong_height_origin.validate(),
+            Err(ValidationError::InvalidParentCommit)
+        );
+
+        let mut future_origin = original;
+        let parent = future_origin
+            .parent_commit_qc
+            .as_mut()
+            .expect("parent certificate");
+        parent.proposal_round.view = parent.round.view + 1;
+        assert_eq!(
+            future_origin.validate(),
+            Err(ValidationError::InvalidParentCommit)
         );
     }
 
@@ -3508,6 +4471,7 @@ mod tests {
             ConsensusMessageV2Payload::Proposal(proposal),
             ConsensusMessageV2Payload::Vote(Vote {
                 round: manifest.round,
+                proposal_round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
                 execution_commitment: prepare.execution_commitment,
@@ -3689,7 +4653,17 @@ mod tests {
             body_state: SumeragiV2BodyState::Validated,
             pending_persistence_id: Some(17),
             last_committed_height: context.height - 1,
-            last_committed_subject: Some(prepare.subject),
+            last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: 4,
+                quorum: context.quorum,
+            },
+            last_commit_qc: None,
+            liveness: SumeragiV2LivenessStatus::default(),
         };
 
         let encoded = status.encode();
@@ -3712,6 +4686,49 @@ mod tests {
                 .map(|view| equal.leader(view))
                 .collect::<BTreeSet<_>>(),
             BTreeSet::from([0, 1, 2, 3])
+        );
+    }
+
+    #[test]
+    fn timeout_proposal_rejects_a_selected_prepare_origin() {
+        let context = context(&[1, 1, 1, 1]);
+        let payload_manifest = manifest(&context);
+        let timeout_round = round(&context, 0);
+        let mut proposal = Proposal {
+            round: payload_manifest.round,
+            proposer: context.leader(payload_manifest.round.view),
+            subject: payload_manifest.subject,
+            manifest: payload_manifest,
+            justification: ProposalJustification::Timeout(TimeoutJustification {
+                timeout_certificate: TimeoutCertificate {
+                    round: timeout_round,
+                    groups: vec![TimeoutVoteGroup {
+                        highest_prepare_qc: None,
+                        signers: vec![0, 1, 2],
+                        aggregate_signature: vec![0x41; 48],
+                    }],
+                },
+                highest_prepare_qc: None,
+            }),
+            signature: vec![0x42; 48],
+        };
+        assert_eq!(proposal.validate(&context), Ok(()));
+
+        let highest_prepare = qc(&context, 0, GlobalPhase::Prepare, vec![0, 1, 2]);
+        proposal.justification = ProposalJustification::Timeout(TimeoutJustification {
+            timeout_certificate: TimeoutCertificate {
+                round: timeout_round,
+                groups: vec![TimeoutVoteGroup {
+                    highest_prepare_qc: Some(highest_prepare.clone()),
+                    signers: vec![0, 1, 2],
+                    aggregate_signature: vec![0x43; 48],
+                }],
+            },
+            highest_prepare_qc: Some(highest_prepare),
+        });
+        assert_eq!(
+            proposal.validate(&context),
+            Err(ValidationError::InvalidProposalJustification)
         );
     }
 
@@ -3746,6 +4763,7 @@ mod tests {
 
         let vote = Vote {
             round: proposal_round,
+            proposal_round,
             phase: GlobalPhase::Prepare,
             subject: proposal.subject,
             execution_commitment: execution_commitment(0x33),
@@ -3753,6 +4771,41 @@ mod tests {
             signature: vec![0x33; 48],
         };
         assert_eq!(vote.validate(&context), Ok(()));
+        let mut prepare_with_other_origin = vote.clone();
+        prepare_with_other_origin.proposal_round.view = prepare_with_other_origin
+            .proposal_round
+            .view
+            .checked_add(1)
+            .expect("fixture view increment");
+        assert_eq!(
+            prepare_with_other_origin.validate(&context),
+            Err(ValidationError::InvalidProposalRound)
+        );
+        let mut commit_with_future_origin = vote.clone();
+        commit_with_future_origin.phase = GlobalPhase::Commit;
+        commit_with_future_origin.proposal_round.view = commit_with_future_origin
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture view increment");
+        assert_eq!(
+            commit_with_future_origin.validate(&context),
+            Err(ValidationError::InvalidProposalRound)
+        );
+        let mut cross_context_origin = vote.clone();
+        cross_context_origin.proposal_round.context_id = HeightContextId(
+            HashOf::from_untyped_unchecked(Hash::new(b"foreign proposal origin context")),
+        );
+        assert_eq!(
+            cross_context_origin.validate(&context),
+            Err(ValidationError::WrongHeightContext)
+        );
+        let mut cross_height_origin = vote.clone();
+        cross_height_origin.proposal_round.height = context.height + 1;
+        assert_eq!(
+            cross_height_origin.validate(&context),
+            Err(ValidationError::WrongHeightContext)
+        );
         assert!(
             vote.signature_preimage()
                 .starts_with(b"iroha:sumeragi:v2:vote")
@@ -3807,6 +4860,7 @@ mod tests {
         };
         context.parent_commit_qc = Some(QuorumCertificate {
             round: parent_round,
+            proposal_round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x70),
@@ -3818,6 +4872,7 @@ mod tests {
         payload_manifest.round = proposal_round;
         let carried = QuorumCertificate {
             round: parent_round,
+            proposal_round: parent_round,
             phase: GlobalPhase::Commit,
             subject: parent_subject,
             execution_commitment: execution_commitment(0x70),
@@ -3916,6 +4971,7 @@ mod tests {
             subject: manifest.subject,
             certificate: QuorumCertificate {
                 round: manifest.round,
+                proposal_round: manifest.round,
                 phase: GlobalPhase::Prepare,
                 subject: manifest.subject,
                 execution_commitment: execution_commitment(9),
@@ -3926,6 +4982,36 @@ mod tests {
             signature: vec![0x66; 48],
         };
         assert_eq!(request.validate(&context), Ok(()));
+        let mut later_finality_request = request.clone();
+        later_finality_request.certificate.phase = GlobalPhase::Commit;
+        later_finality_request.certificate.round.view = later_finality_request
+            .certificate
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture finality view increment");
+        assert_eq!(later_finality_request.validate(&context), Ok(()));
+        let mut mismatched_request_origin = later_finality_request.clone();
+        mismatched_request_origin.round.view = mismatched_request_origin
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture request-origin view increment");
+        assert_eq!(
+            mismatched_request_origin.validate(&context),
+            Err(ValidationError::CertifiedBodyCertificateMismatch)
+        );
+        let mut body_after_finality = later_finality_request.clone();
+        body_after_finality.round.view = body_after_finality
+            .certificate
+            .round
+            .view
+            .checked_add(1)
+            .expect("fixture body view increment");
+        assert_eq!(
+            body_after_finality.validate(&context),
+            Err(ValidationError::CertifiedBodyCertificateMismatch)
+        );
         let observer_request = CertifiedBodyRequest {
             requester: peer(99),
             ..request.clone()
@@ -3941,6 +5027,18 @@ mod tests {
         assert_eq!(response.validate(&context), Ok(()));
         assert_eq!(
             response.validate_against(&context, &request, &context.roster[0].validator),
+            Ok(())
+        );
+        let later_finality_response = CertifiedBodyResponse {
+            request_hash: HashOf::new(&later_finality_request),
+            ..response.clone()
+        };
+        assert_eq!(
+            later_finality_response.validate_against(
+                &context,
+                &later_finality_request,
+                &context.roster[0].validator,
+            ),
             Ok(())
         );
         assert_eq!(
@@ -4068,6 +5166,17 @@ mod tests {
             pending_persistence_id: None,
             last_committed_height: 0,
             last_committed_subject: None,
+            height_context: SumeragiV2HeightContextStatus {
+                epoch: context.epoch,
+                epoch_end_height: context.epoch_end_height,
+                mode: context.mode,
+                epoch_seed: context.leader_seed,
+                validator_count: u32::try_from(context.roster.len())
+                    .expect("test roster fits status count"),
+                quorum: context.quorum,
+            },
+            last_commit_qc: None,
+            liveness: SumeragiV2LivenessStatus::default(),
         }
     }
 
@@ -4117,8 +5226,441 @@ mod tests {
             Err(Error::PendingApplyCommitMismatch)
         );
         pending_apply.last_committed_height = pending_apply.height;
-        pending_apply.last_committed_subject = Some(subject(90));
+        let committed = qc(
+            &context,
+            pending_apply.view,
+            GlobalPhase::Commit,
+            vec![0, 1, 2],
+        );
+        pending_apply.last_committed_subject = Some(committed.subject);
+        pending_apply.last_commit_qc = Some(SumeragiV2CommitQcStatus {
+            certificate: committed.as_ref(),
+            validator_count: 4,
+            signer_count: 3,
+            min_signers: 3,
+            signed_power: 3,
+            total_power: 4,
+        });
         assert_eq!(pending_apply.validate(), Ok(()));
+
+        let mut invalid_commit_origin = pending_apply.clone();
+        let invalid_certificate = &mut invalid_commit_origin
+            .last_commit_qc
+            .as_mut()
+            .expect("commit summary")
+            .certificate;
+        invalid_certificate.proposal_round.view = invalid_certificate.round.view + 1;
+        assert_eq!(
+            invalid_commit_origin.validate(),
+            Err(Error::CommitSummaryCertificateMismatch)
+        );
+
+        let mut invalid_context = status(&context);
+        invalid_context.height_context.epoch_end_height = invalid_context.height - 1;
+        assert_eq!(
+            invalid_context.validate(),
+            Err(Error::EpochEndsBeforeHeight)
+        );
+
+        let mut invalid_leader = status(&context);
+        invalid_leader.leader = invalid_leader.height_context.validator_count;
+        assert_eq!(invalid_leader.validate(), Err(Error::LeaderOutOfRange));
+
+        let mut invalid_quorum = status(&context);
+        invalid_quorum.height_context.quorum.min_signers -= 1;
+        assert_eq!(
+            invalid_quorum.validate(),
+            Err(Error::InvalidHeightContextQuorum)
+        );
+
+        let mut invalid_commit_summary = pending_apply.clone();
+        invalid_commit_summary
+            .last_commit_qc
+            .as_mut()
+            .expect("commit summary")
+            .signed_power = 2;
+        assert_eq!(
+            invalid_commit_summary.validate(),
+            Err(Error::InvalidCommitSummaryQuorum)
+        );
+
+        let mut impossible_signer_power = pending_apply;
+        let impossible_summary = impossible_signer_power
+            .last_commit_qc
+            .as_mut()
+            .expect("commit summary");
+        impossible_summary.signer_count = 4;
+        impossible_summary.signed_power = 3;
+        assert_eq!(
+            impossible_signer_power.validate(),
+            Err(Error::InvalidCommitSummaryQuorum),
+            "each authenticated signer must contribute at least one unit of voting power"
+        );
+
+        let mut one_sided_commit = status(&context);
+        one_sided_commit.height = 2;
+        one_sided_commit.last_committed_height = 1;
+        one_sided_commit.last_committed_subject = Some(subject(91));
+        assert_eq!(
+            one_sided_commit.validate(),
+            Err(Error::CommitFrontierAuthenticationMismatch)
+        );
+    }
+
+    #[test]
+    fn status_validation_checks_liveness_rounds_quorums_and_queue_ownership() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut baseline = status(&context);
+        let active_round = round(&context, 2);
+        baseline.liveness = SumeragiV2LivenessStatus {
+            generation: 4,
+            prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: active_round,
+                proposal_round: active_round,
+                subject: subject(41),
+                execution_commitment: execution_commitment(42),
+                signer_count: 2,
+                signed_power: 2,
+                min_signers: 3,
+                total_power: 4,
+            }],
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::Proposal,
+                round: active_round,
+                proposal_round: Some(active_round),
+                subject: Some(subject(41)),
+                execution_commitment: None,
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            queues: vec![SumeragiV2QueueStatus {
+                queue: SumeragiV2QueueKind::RuntimeProgress,
+                depth: 1,
+                capacity: 4,
+                oldest_age_ms: Some(7),
+                service_debt: 2,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 4,
+                round: active_round,
+                transition: SumeragiV2ProgressTransition::PrepareVoteAdmitted,
+                age_ms: 7,
+            }),
+            ..SumeragiV2LivenessStatus::default()
+        };
+        assert_eq!(baseline.validate(), Ok(()));
+
+        let mut future_round = baseline.clone();
+        future_round.liveness.prepare_quorums[0].round.view = future_round.view + 1;
+        assert_eq!(
+            future_round.validate(),
+            Err(Error::LivenessRoundFromFutureView)
+        );
+
+        let mut wrong_origin = baseline.clone();
+        wrong_origin.liveness.prepare_quorums[0].proposal_round.view -= 1;
+        assert_eq!(wrong_origin.validate(), Err(Error::InvalidProposalRound));
+
+        let mut wrong_quorum = baseline.clone();
+        wrong_quorum.liveness.prepare_quorums[0].total_power = 5;
+        assert_eq!(wrong_quorum.validate(), Err(Error::InvalidLivenessQuorum));
+
+        let mut invalid_queue = baseline.clone();
+        invalid_queue.liveness.queues[0].depth = 0;
+        assert_eq!(invalid_queue.validate(), Err(Error::InvalidLivenessQueue));
+
+        let mut every_queue_kind = baseline.clone();
+        every_queue_kind.liveness.queues = [
+            SumeragiV2QueueKind::Ingress,
+            SumeragiV2QueueKind::DeferredNormal,
+            SumeragiV2QueueKind::DeferredProgress,
+            SumeragiV2QueueKind::DeferredCompletion,
+            SumeragiV2QueueKind::RuntimeNormal,
+            SumeragiV2QueueKind::RuntimeProgress,
+            SumeragiV2QueueKind::RuntimeCompletion,
+            SumeragiV2QueueKind::EffectCompletion,
+            SumeragiV2QueueKind::NetworkIngress,
+            SumeragiV2QueueKind::EffectDispatch,
+        ]
+        .into_iter()
+        .map(|queue| SumeragiV2QueueStatus {
+            queue,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        })
+        .collect();
+        assert_eq!(every_queue_kind.validate(), Ok(()));
+
+        let mut too_many_queues = every_queue_kind;
+        too_many_queues.liveness.queues.push(SumeragiV2QueueStatus {
+            queue: SumeragiV2QueueKind::NetworkIngress,
+            depth: 0,
+            capacity: 1,
+            oldest_age_ms: None,
+            service_debt: 0,
+        });
+        assert_eq!(
+            too_many_queues.validate(),
+            Err(Error::LivenessCollectionTooLarge)
+        );
+
+        let mut invalid_intent = baseline.clone();
+        invalid_intent.liveness.outbound_intents[0].execution_commitment =
+            Some(execution_commitment(42));
+        assert_eq!(
+            invalid_intent.validate(),
+            Err(Error::InvalidOutboundIntentShape)
+        );
+
+        let mut missing_intent_origin = baseline.clone();
+        missing_intent_origin.liveness.outbound_intents[0].proposal_round = None;
+        assert_eq!(
+            missing_intent_origin.validate(),
+            Err(Error::InvalidOutboundIntentShape)
+        );
+
+        let mut mismatched_prepare_origin = baseline.clone();
+        mismatched_prepare_origin.liveness.outbound_intents[0]
+            .proposal_round
+            .as_mut()
+            .expect("proposal origin")
+            .view -= 1;
+        assert_eq!(
+            mismatched_prepare_origin.validate(),
+            Err(Error::InvalidProposalRound)
+        );
+
+        let mut cross_context_intent_origin = baseline.clone();
+        cross_context_intent_origin.liveness.outbound_intents[0]
+            .proposal_round
+            .as_mut()
+            .expect("proposal origin")
+            .context_id = HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+            b"foreign outbound-intent origin",
+        )));
+        assert_eq!(
+            cross_context_intent_origin.validate(),
+            Err(Error::LivenessRoundMismatch)
+        );
+
+        let mut timeout_with_origin = baseline.clone();
+        let intent = &mut timeout_with_origin.liveness.outbound_intents[0];
+        intent.kind = SumeragiV2OutboundIntentKind::TimeoutVote;
+        intent.subject = None;
+        assert_eq!(
+            timeout_with_origin.validate(),
+            Err(Error::InvalidOutboundIntentShape)
+        );
+
+        let mut historical_commit_origin = baseline.clone();
+        let intent = &mut historical_commit_origin.liveness.outbound_intents[0];
+        intent.kind = SumeragiV2OutboundIntentKind::CommitVote;
+        intent
+            .proposal_round
+            .as_mut()
+            .expect("proposal origin")
+            .view -= 1;
+        intent.execution_commitment = Some(execution_commitment(42));
+        assert_eq!(historical_commit_origin.validate(), Ok(()));
+
+        let mut future_commit_origin = historical_commit_origin;
+        future_commit_origin.liveness.outbound_intents[0]
+            .proposal_round
+            .as_mut()
+            .expect("proposal origin")
+            .view = active_round.view + 1;
+        assert_eq!(
+            future_commit_origin.validate(),
+            Err(Error::InvalidProposalRound)
+        );
+
+        let mut future_generation = baseline;
+        future_generation
+            .liveness
+            .last_progress
+            .as_mut()
+            .expect("progress record")
+            .generation += 1;
+        assert_eq!(
+            future_generation.validate(),
+            Err(Error::LivenessGenerationFromFuture)
+        );
+    }
+
+    #[test]
+    fn status_validation_accepts_all_ignore_reasons_and_rejects_a_thirteenth_entry() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut exact_bound = status(&context);
+        exact_bound.liveness.ignore_counts = [
+            SumeragiV2IgnoreReason::WrongHeight,
+            SumeragiV2IgnoreReason::WrongView,
+            SumeragiV2IgnoreReason::StaleGeneration,
+            SumeragiV2IgnoreReason::Busy,
+            SumeragiV2IgnoreReason::Duplicate,
+            SumeragiV2IgnoreReason::NoMatchingWork,
+            SumeragiV2IgnoreReason::Observer,
+            SumeragiV2IgnoreReason::ViewClosed,
+            SumeragiV2IgnoreReason::AlreadyDecided,
+            SumeragiV2IgnoreReason::RecoveryPending,
+            SumeragiV2IgnoreReason::IrrelevantView,
+            SumeragiV2IgnoreReason::UnsafeProposal,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, reason)| SumeragiV2IgnoreCount {
+            reason,
+            count: u64::try_from(index + 1).expect("ignore reason count fits u64"),
+        })
+        .collect();
+
+        assert_eq!(exact_bound.liveness.ignore_counts.len(), 12);
+        assert_eq!(exact_bound.validate(), Ok(()));
+
+        let mut oversized = exact_bound;
+        oversized
+            .liveness
+            .ignore_counts
+            .push(SumeragiV2IgnoreCount {
+                reason: SumeragiV2IgnoreReason::UnsafeProposal,
+                count: 13,
+            });
+        assert_eq!(oversized.validate(), Err(Error::LivenessCollectionTooLarge));
+    }
+
+    #[test]
+    fn status_validation_accepts_later_view_active_height_finality_evidence() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let context = context(&[1, 1, 1, 1]);
+        let mut lagging = status(&context);
+        let later_commit = qc(
+            &context,
+            lagging.view + 1,
+            GlobalPhase::Commit,
+            vec![0, 1, 2],
+        );
+        lagging.phase = SumeragiV2StatusPhase::PendingApply;
+        lagging.body_state = SumeragiV2BodyState::PendingApply;
+        lagging.last_committed_height = lagging.height;
+        lagging.last_committed_subject = Some(later_commit.subject);
+        lagging.last_commit_qc = Some(SumeragiV2CommitQcStatus {
+            certificate: later_commit.as_ref(),
+            validator_count: 4,
+            signer_count: 3,
+            min_signers: 3,
+            signed_power: 3,
+            total_power: 4,
+        });
+        lagging.liveness = SumeragiV2LivenessStatus {
+            generation: 8,
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitQc,
+                round: later_commit.round,
+                proposal_round: Some(later_commit.proposal_round),
+                subject: Some(later_commit.subject),
+                execution_commitment: Some(later_commit.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 8,
+                round: later_commit.round,
+                transition: SumeragiV2ProgressTransition::DecisionPersisted,
+                age_ms: 1,
+            }),
+            ..SumeragiV2LivenessStatus::default()
+        };
+
+        assert_eq!(lagging.validate(), Ok(()));
+
+        lagging
+            .liveness
+            .last_progress
+            .as_mut()
+            .expect("progress record")
+            .transition = SumeragiV2ProgressTransition::CommitQuorum;
+        assert_eq!(lagging.validate(), Ok(()));
+
+        let mut wrong_height_finality = lagging.clone();
+        wrong_height_finality.liveness.outbound_intents[0]
+            .round
+            .height += 1;
+        assert_eq!(
+            wrong_height_finality.validate(),
+            Err(Error::LivenessRoundMismatch)
+        );
+
+        for kind in [
+            SumeragiV2OutboundIntentKind::Proposal,
+            SumeragiV2OutboundIntentKind::PrepareVote,
+            SumeragiV2OutboundIntentKind::CommitVote,
+            SumeragiV2OutboundIntentKind::PrepareQc,
+            SumeragiV2OutboundIntentKind::TimeoutVote,
+            SumeragiV2OutboundIntentKind::TimeoutCertificate,
+        ] {
+            let mut future_nonfinality_intent = lagging.clone();
+            future_nonfinality_intent.liveness.outbound_intents[0].kind = kind;
+            assert_eq!(
+                future_nonfinality_intent.validate(),
+                Err(Error::LivenessRoundFromFutureView)
+            );
+        }
+
+        for transition in [
+            SumeragiV2ProgressTransition::ProposalAdmitted,
+            SumeragiV2ProgressTransition::BodyAvailable,
+            SumeragiV2ProgressTransition::BodyStored,
+            SumeragiV2ProgressTransition::BodyValidated,
+            SumeragiV2ProgressTransition::PrepareVoteAdmitted,
+            SumeragiV2ProgressTransition::CommitVoteAdmitted,
+            SumeragiV2ProgressTransition::TimeoutVoteAdmitted,
+            SumeragiV2ProgressTransition::PrepareQuorum,
+            SumeragiV2ProgressTransition::LockInstalled,
+            SumeragiV2ProgressTransition::TimeoutCertificateInstalled,
+            SumeragiV2ProgressTransition::Applied,
+            SumeragiV2ProgressTransition::SuccessorHeightActivated,
+            SumeragiV2ProgressTransition::RecoveryReplayed,
+        ] {
+            let mut future_nonfinality_progress = lagging.clone();
+            future_nonfinality_progress
+                .liveness
+                .last_progress
+                .as_mut()
+                .expect("progress record")
+                .transition = transition;
+            assert_eq!(
+                future_nonfinality_progress.validate(),
+                Err(Error::LivenessRoundFromFutureView)
+            );
+        }
+    }
+
+    #[test]
+    fn status_validation_bounds_current_commit_groups_plus_historical_lock() {
+        use SumeragiV2StatusValidationError as Error;
+
+        let powers = vec![1; MAX_VALIDATORS_PER_HEIGHT];
+        let context = context(&powers);
+        let mut snapshot = status(&context);
+        let quorum = SumeragiV2VoteQuorumStatus {
+            round: round(&context, snapshot.view),
+            proposal_round: round(&context, snapshot.view),
+            subject: subject(71),
+            execution_commitment: execution_commitment(72),
+            signer_count: 1,
+            signed_power: 1,
+            min_signers: context.quorum.min_signers,
+            total_power: context.quorum.total_power,
+        };
+        snapshot.liveness.commit_quorums = vec![quorum; MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT];
+        assert_eq!(snapshot.validate(), Ok(()));
+
+        snapshot.liveness.commit_quorums.push(quorum);
+        assert_eq!(snapshot.validate(), Err(Error::LivenessCollectionTooLarge));
     }
 
     #[test]
@@ -4176,8 +5718,19 @@ mod tests {
         );
 
         let mut future = with_certificates.clone();
-        future.highest_prepare_qc.as_mut().unwrap().round.view = future.view + 1;
+        let future_certificate = future.highest_prepare_qc.as_mut().unwrap();
+        future_certificate.round.view = future.view + 1;
+        future_certificate.proposal_round = future_certificate.round;
         assert_eq!(future.validate(), Err(Error::CertificateFromFutureView));
+
+        let mut wrong_origin = with_certificates.clone();
+        wrong_origin
+            .highest_prepare_qc
+            .as_mut()
+            .unwrap()
+            .proposal_round
+            .view -= 1;
+        assert_eq!(wrong_origin.validate(), Err(Error::InvalidProposalRound));
 
         let mut timeout_not_past = baseline;
         timeout_not_past.last_timeout_certificate = Some(TimeoutCertificateRef {

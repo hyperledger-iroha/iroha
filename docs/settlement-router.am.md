@@ -47,7 +47,7 @@ buffer_horizon_hours = 72     # Horizon (hours) represented by the XOR buffer
 በየውሂብ ቦታ ቋት መለያ ውስጥ የሌይን ዲበ ውሂብ ሽቦዎች፡-
 - `settlement.buffer_account` - መጠባበቂያውን የያዘ መለያ (ለምሳሌ `buffer::cbdc_treasury`)።
 - `settlement.buffer_asset` — ለዋና ክፍል (በተለምዶ `xor#sora`) የተከፈለ የንብረት ትርጉም።
-- `settlement.buffer_capacity_micro` - በማይክሮ-XOR (አስርዮሽ ሕብረቁምፊ) ውስጥ የተዋቀረ አቅም።
+- `settlement.buffer_capacity` - በማይክሮ-XOR (አስርዮሽ ሕብረቁምፊ) ውስጥ የተዋቀረ አቅም።
 
 የሜታዳታ አለመኖር ለዚያ መስመር ቋት ፎቶ ማንሳትን ያሰናክላል (ቴሌሜትሪ ወደ ዜሮ አቅም/ሁኔታ ይመለሳል)።## የመቀየሪያ ቧንቧ
 1. **ጥቅስ፡** `SettlementEngine::quote` የተዋቀረውን የኤፒሲሎን + የመተጣጠፍ ህዳግ እና የፀጉር መቆንጠጫ ደረጃን ወደ TWAP ጥቅሶች ይተገብራል፣ `SettlementReceipt` በ `xor_due` እና `xor_after_haircut` እና በፕላስ ይደውሉ `source_id`.【crates/settlement_router/src/price.rs:1】【crates/settlement_router/src/haircut.rs:1】

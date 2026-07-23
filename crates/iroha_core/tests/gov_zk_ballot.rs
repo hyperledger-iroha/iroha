@@ -109,7 +109,7 @@ fn assert_instruction_error_contains(err: &InstructionExecutionError, expected: 
 fn zk_ballot_records_and_dedupes() {
     // Build minimal state/transaction
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     // Leader keypair not needed in this simplified setup
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
@@ -283,7 +283,7 @@ fn zk_ballot_rejects_missing_lock_hints_when_bond_required() {
 #[test]
 fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -358,7 +358,7 @@ fn zk_ballot_accepts_direction_hint_without_lock_hints_when_bond_disabled() {
 #[test]
 fn zk_ballot_accepts_commit_nullifier_hint() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -449,7 +449,7 @@ fn zk_ballot_accepts_commit_nullifier_hint() {
 #[test]
 fn zk_ballot_rejects_invalid_proof() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -532,7 +532,7 @@ fn zk_ballot_rejects_invalid_proof() {
 #[test]
 fn zk_ballot_rejects_owner_mismatch_without_recording() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -624,7 +624,7 @@ fn zk_ballot_rejects_owner_mismatch_without_recording() {
 #[test]
 fn zk_ballot_rejects_malformed_public_inputs() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -701,7 +701,7 @@ fn zk_ballot_rejects_malformed_public_inputs() {
 #[test]
 fn zk_ballot_rejects_non_object_public_inputs() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -778,7 +778,7 @@ fn zk_ballot_rejects_non_object_public_inputs() {
 #[test]
 fn zk_ballot_rejects_public_input_aliases() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     state.zk.max_verify_calls_per_tx = 0;
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
@@ -876,7 +876,7 @@ fn zk_ballot_rejects_public_input_aliases() {
 #[test]
 fn zk_ballot_accepts_null_public_input_hints() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -950,7 +950,7 @@ fn zk_ballot_accepts_null_public_input_hints() {
 #[test]
 fn zk_ballot_rejects_owner_non_string() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
@@ -1027,7 +1027,7 @@ fn zk_ballot_rejects_owner_non_string() {
 #[test]
 fn zk_ballot_rejects_when_vk_commitment_mismatched() {
     let mut state = new_state();
-    state.gov.min_bond_amount = 0;
+    state.gov.min_bond_amount = 0_u64.into();
     let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();

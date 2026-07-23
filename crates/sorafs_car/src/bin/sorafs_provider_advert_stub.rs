@@ -17,7 +17,7 @@ use sorafs_manifest::{
     AdvertEndpoint, AvailabilityTier, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ProviderAdvertBuildError,
     ProviderAdvertV1, ProviderCapabilityRangeV1, REFRESH_RECOMMENDATION_SECS, RendezvousTopic,
-    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol,
+    SignatureAlgorithm, StreamBudgetV1, TransportHintV1, TransportProtocol, deal::XorQuantity,
     provider_advert::ProviderCapabilitySoranetPqV1,
 };
 
@@ -56,7 +56,7 @@ fn run() -> Result<(), String> {
                     }
                     "--provider-id" => opts.provider_id = Some(parse_hex_fixed::<32>(value)?),
                     "--stake-pool-id" => opts.stake_pool_id = Some(parse_hex_fixed::<32>(value)?),
-                    "--stake-amount" => opts.stake_amount = Some(parse_u128(value)?),
+                    "--stake-amount" => opts.stake_amount = Some(parse_xor_quantity(value)?),
                     "--availability" => opts.availability = Some(parse_availability(value)?),
                     "--max-latency-ms" => opts.max_latency_ms = Some(parse_u32(value)?),
                     "--max-streams" => opts.max_streams = Some(parse_u16(value)?),
@@ -223,7 +223,7 @@ fn usage() -> &'static str {
      [--chunker-profile=namespace.name@semver | --profile-id=id] \
      --provider-id=hex32 \
      --stake-pool-id=hex32 \
-     --stake-amount=number \
+     --stake-amount=canonical_xor_quantity \
      --availability=hot|warm|cold \
      --max-latency-ms=value \
      --max-streams=value \
@@ -305,6 +305,7 @@ fn build_advert(opts: &EmitOptions) -> Result<ProviderAdvertV1, String> {
         .ok_or_else(|| "missing required option: --stake-pool-id".to_string())?;
     let stake_amount = opts
         .stake_amount
+        .clone()
         .ok_or_else(|| "missing required option: --stake-amount".to_string())?;
     let availability = opts
         .availability
@@ -722,7 +723,7 @@ struct EmitOptions {
     profile_handle: Option<String>,
     provider_id: Option<[u8; 32]>,
     stake_pool_id: Option<[u8; 32]>,
-    stake_amount: Option<u128>,
+    stake_amount: Option<XorQuantity>,
     availability: Option<AvailabilityTier>,
     max_latency_ms: Option<u32>,
     max_streams: Option<u16>,
@@ -1113,14 +1114,16 @@ fn parse_u64(value: &str) -> Result<u64, String> {
     }
 }
 
-fn parse_u128(value: &str) -> Result<u128, String> {
-    if let Some(stripped) = value.strip_prefix("0x") {
-        require_canonical_hex_unsigned(stripped, "u128")?;
-        u128::from_str_radix(stripped, 16).map_err(|err| err.to_string())
-    } else {
-        require_canonical_unsigned_decimal(value, "u128")?;
-        value.parse::<u128>().map_err(|err| err.to_string())
+fn parse_xor_quantity(value: &str) -> Result<XorQuantity, String> {
+    let quantity = value
+        .parse::<XorQuantity>()
+        .map_err(|err| format!("invalid XOR quantity `{value}`: {err}"))?;
+    if quantity.to_string() != value {
+        return Err(format!(
+            "XOR quantity `{value}` must use the canonical decimal spelling"
+        ));
     }
+    Ok(quantity)
 }
 
 fn parse_u32(value: &str) -> Result<u32, String> {
@@ -1576,9 +1579,20 @@ mod tests {
         assert_eq!(parse_u64("0x0").expect("canonical hex zero"), 0);
         assert_eq!(parse_u64("0xff").expect("canonical lowercase hex"), 255);
         assert_eq!(
-            parse_u128("123456789").expect("canonical u128"),
-            123_456_789
+            parse_xor_quantity("0.000000001")
+                .expect("canonical sub-micro XOR quantity")
+                .to_string(),
+            "0.000000001"
         );
+        assert_eq!(
+            parse_xor_quantity("340282366920938463463374607431768211456")
+                .expect("canonical XOR quantity wider than u128")
+                .to_string(),
+            "340282366920938463463374607431768211456"
+        );
+        for value in ["", "01", "1.0", "+1", "-1", " 1", "1 ", "0x1"] {
+            parse_xor_quantity(value).expect_err("noncanonical XOR quantity must fail");
+        }
         assert_eq!(parse_u32("42").expect("canonical u32"), 42);
         assert_eq!(parse_u16("7").expect("canonical u16"), 7);
         assert_eq!(parse_u8("15").expect("canonical u8"), 15);
@@ -1746,7 +1760,10 @@ mod tests {
             profile_handle: Some("sorafs.sf1@1.0.0".into()),
             provider_id: Some([0x11; 32]),
             stake_pool_id: Some([0x22; 32]),
-            stake_amount: Some(1_000_000),
+            stake_amount: Some(
+                XorQuantity::try_from_micro(1_000_000)
+                    .expect("test micro-XOR amount is representable"),
+            ),
             availability: Some(AvailabilityTier::Hot),
             max_latency_ms: Some(500),
             max_streams: Some(5),
@@ -1791,7 +1808,10 @@ mod tests {
             profile_handle: Some("sorafs.sf1@1.0.0".into()),
             provider_id: Some([0x11; 32]),
             stake_pool_id: Some([0x22; 32]),
-            stake_amount: Some(1_000_000),
+            stake_amount: Some(
+                XorQuantity::try_from_micro(1_000_000)
+                    .expect("test micro-XOR amount is representable"),
+            ),
             availability: Some(AvailabilityTier::Hot),
             max_latency_ms: Some(500),
             max_streams: Some(5),

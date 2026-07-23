@@ -27,6 +27,7 @@ pub mod gateway_fixture;
 pub mod governance;
 pub mod hedging;
 pub mod hosts;
+#[cfg(feature = "pqc")]
 pub mod hybrid_envelope;
 pub mod manifest_capabilities;
 pub mod orderbook;
@@ -211,7 +212,7 @@ pub use deal::{
     MAX_DEAL_CLIENT_ACCOUNT_BYTES, MAX_DEAL_METADATA_ENTRIES, MAX_DEAL_METADATA_KEY_BYTES,
     MAX_DEAL_METADATA_VALUE_BYTES, MAX_DEAL_PROFILE_HANDLE_BYTES,
     MAX_DEAL_SETTLEMENT_AUDIT_NOTES_BYTES, MICRO_XOR_PER_XOR, MicropaymentPolicyError,
-    MicropaymentPolicyV1, XorAmount, derive_micropayment_hint,
+    MicropaymentPolicyV1, XOR_QUANTITY_SCALE, XorQuantity, derive_micropayment_hint,
 };
 pub use gateway::{
     GatewayAuthorizationError, GatewayAuthorizationRecord, GatewayAuthorizationVerifier,
@@ -278,7 +279,7 @@ pub use hedging::{
     build_billing_statement_v1, decode_billing_line_item_v1, decode_billing_statement_v1,
     decode_hedging_price_feed_v1, decode_hedging_reference_price_decision_v1,
     derive_reference_price_decision_v1, reference_price_decision_id_v1,
-    validate_billing_statement_transition, xor_to_usd_micros,
+    validate_billing_statement_transition, xor_to_usd,
 };
 pub use hosts::{DirectCarLocator, HostMappingInput, HostMappingSummary};
 pub use manifest_capabilities::{
@@ -371,7 +372,7 @@ pub use pricing::signed::{
 pub use pricing::{
     BondPolicyError, BondPolicyV1, CreditPolicyError, CreditPolicyV1, MAX_PRICING_NONCE_SAMPLES,
     MAX_PRICING_NOTES_LEN, MAX_PRICING_TIER_ID_LEN, MAX_PRICING_TIERS, MicropaymentDecision,
-    PRICING_MANIFEST_VERSION_V1, PricingCalculationError, PricingManifestError, PricingManifestV1,
+    PRICING_MANIFEST_VERSION_V1, PricingManifestError, PricingManifestV1,
     PricingMicropaymentEvaluationError, PricingMicropaymentPolicyError,
     PricingMicropaymentPolicyV1, PricingNonceJsonError, PricingTierError, PricingTierV1,
 };

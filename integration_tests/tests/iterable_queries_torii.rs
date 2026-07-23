@@ -66,14 +66,17 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
     // Submit two transactions so the first fetch-size=1 page has a real
     // continuation even if genesis is not included in the block-header query.
     for name in ["blkcheck_a", "blkcheck_b"] {
-        client.submit_blocking(Register::asset_definition({
-            let __asset_definition_id = AssetDefinitionId::new(
-                DomainId::try_new("wonderland", "universal")?,
-                name.parse()?,
-            );
-            AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
-        }))?;
+        client.submit_blocking(
+            Register::asset_definition({
+                let __asset_definition_id = AssetDefinitionId::new(
+                    DomainId::try_new("wonderland", "universal")?,
+                    name.parse()?,
+                );
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
     }
     rt.block_on(async { network.ensure_blocks(3).await })?;
     let headers = retry_block_headers(&client)?;
@@ -172,22 +175,28 @@ fn find_block_headers_descending() -> Result<()> {
 
     // Submit a couple of extra transactions so we have more than one header
     // even if the block builder batches them together.
-    client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal")?,
-            "blkcheck2".parse()?,
-        );
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }))?;
-    client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id = AssetDefinitionId::new(
-            DomainId::try_new("wonderland", "universal")?,
-            "blkcheck3".parse()?,
-        );
-        AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
-    }))?;
+    client.submit_blocking(
+        Register::asset_definition({
+            let __asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "blkcheck2".parse()?,
+            );
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    client.submit_blocking(
+        Register::asset_definition({
+            let __asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "blkcheck3".parse()?,
+            );
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     rt.block_on(async { network.ensure_blocks(3).await })?;
 
     let headers = retry_block_headers(&client)?;
@@ -243,7 +252,10 @@ fn find_triggers_includes_registered() -> Result<()> {
             TimeEventFilter::new(ExecutionTime::PreCommit),
         ),
     );
-    client.submit_blocking(Register::trigger(trig))?;
+    client.submit_blocking(
+        Register::trigger(trig),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
 
     // Query triggers and ensure the registered one is present
@@ -287,9 +299,10 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
         authority: ALICE_ID.clone(),
     };
     let expected_permission: iroha::data_model::permission::Permission = permission.clone().into();
-    if let Err(err) =
-        client.submit_blocking(Grant::account_permission(permission, ALICE_ID.clone()))
-    {
+    if let Err(err) = client.submit_blocking(
+        Grant::account_permission(permission, ALICE_ID.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    ) {
         if !is_permission_grant_repetition(&err, &expected_permission) {
             return Err(err);
         }
@@ -306,7 +319,10 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
         ),
     );
-    client.submit_blocking(Register::trigger(trig))?;
+    client.submit_blocking(
+        Register::trigger(trig),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
 
     // Query active trigger IDs and ensure the one we registered is present.
@@ -352,7 +368,10 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
             ExecuteTriggerEventFilter::new().for_trigger(trig_id.clone()),
         ),
     );
-    client.submit_blocking(Register::trigger(trig))?;
+    client.submit_blocking(
+        Register::trigger(trig),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     rt.block_on(async { network.ensure_blocks(2).await })?;
 
     // Sanity: trigger id is present among active trigger IDs
@@ -360,7 +379,10 @@ fn burn_trigger_repetitions_removes_from_active_ids() -> Result<()> {
     assert!(ids.iter().any(|id| id == &trig_id));
 
     // Burn 1 repetition -> reaches zero, core prunes trigger immediately in the burn executor
-    client.submit_blocking(Burn::trigger_repetitions(1, trig_id.clone()))?;
+    client.submit_blocking(
+        Burn::trigger_repetitions(1, trig_id.clone()),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     rt.block_on(async { network.ensure_blocks(3).await })?;
 
     // Poll until the trigger is removed from the active set; on slower environments
@@ -408,7 +430,10 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         ),
     );
     client
-        .submit_blocking(Register::trigger(trig))
+        .submit_blocking(
+            Register::trigger(trig),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err(format!(
             "register trigger; torii={torii}, env_dir={}",
             env_dir.display()
@@ -421,7 +446,10 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
 
     // Burn to zero
     client
-        .submit_blocking(Burn::trigger_repetitions(1, trig_id.clone()))
+        .submit_blocking(
+            Burn::trigger_repetitions(1, trig_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .wrap_err(format!(
             "burn trigger repetitions; torii={torii}, env_dir={}",
             env_dir.display()
@@ -460,9 +488,10 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
 
     // Attempt to execute; expect rejection referencing FindError::Trigger(trig_id)
     let err = client
-        .submit_blocking(Instruction::into_instruction_box(Box::new(
-            ExecuteTrigger::new(trig_id.clone()),
-        )))
+        .submit_blocking(
+            Instruction::into_instruction_box(Box::new(ExecuteTrigger::new(trig_id.clone()))),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
         .expect_err("execute should be rejected for depleted trigger");
     // Inspect deepest cause for FindError::Trigger
     let downcasted = err

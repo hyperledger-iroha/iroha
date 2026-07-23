@@ -68,10 +68,14 @@ fn make_transaction(
     key_pair: &KeyPair,
     metadata: Metadata,
 ) -> AcceptedTransaction<'static> {
-    let tx = TransactionBuilder::new(chain_id.clone(), authority.clone())
-        .with_instructions([Log::new(Level::INFO, "noop".to_string())])
-        .with_metadata(metadata)
-        .sign(key_pair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "noop".to_string())])
+    .with_metadata(metadata)
+    .sign(key_pair.private_key());
     AcceptedTransaction::new_unchecked(Cow::Owned(tx))
 }
 

@@ -3,7 +3,6 @@
 
 package org.hyperledger.iroha.sdk.offline
 
-import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.Base64
@@ -14,7 +13,7 @@ import org.hyperledger.iroha.sdk.crypto.IrohaHash
  * Strict first-release model for one finalized platform device attestation.
  *
  * This mirrors `OfflineDeviceAttestationRegistration` exactly and exposes only the canonical
- * Kagemusha model. Native attestation acquisition uses bridge ABI 19;
+ * Kagemusha model. Native attestation acquisition uses bridge ABI 21;
  * the on-chain registration format marker remains version 1.
  */
 class DeviceAttestationRegistration(
@@ -29,7 +28,7 @@ class DeviceAttestationRegistration(
     val iosEnvironment: String?,
     val androidPackageName: String?,
     androidSigningCertificateSha256: ByteArray?,
-    publicKey: ByteArray,
+    val publicKey: KagemushaDevicePublicKeyV2,
     val assertionScheme: String,
     val assertionKeyAlgorithm: String,
     assertionPublicKey: ByteArray,
@@ -45,7 +44,6 @@ class DeviceAttestationRegistration(
     val expiresAtMs: Long,
 ) {
     private val _androidSigningCertificateSha256 = androidSigningCertificateSha256?.copyOf()
-    private val _publicKey = publicKey.copyOf()
     private val _assertionPublicKey = assertionPublicKey.copyOf()
     private val _attestationReport = attestationReport.copyOf()
     private val _recentBlockHash = recentBlockHash.copyOf()
@@ -56,7 +54,6 @@ class DeviceAttestationRegistration(
 
     val androidSigningCertificateSha256: ByteArray?
         get() = _androidSigningCertificateSha256?.copyOf()
-    val publicKey: ByteArray get() = _publicKey.copyOf()
     val assertionPublicKey: ByteArray get() = _assertionPublicKey.copyOf()
     val challengeHash: ByteArray get() = _challengeHash.copyOf()
     val attestationReportHash: ByteArray get() = _attestationReportHash.copyOf()
@@ -122,10 +119,12 @@ class DeviceAttestationRegistration(
     fun canonicalChallengeHash(): ByteArray =
         OfflineDeviceAttestationCodec.canonicalChallengeHash(this)
 
+    /** Canonical Iroha Hash/registration ID of the exact framed Norito registration archive. */
+    fun canonicalRegistrationHash(): ByteArray = IrohaHash.prehash(noritoEncoded())
+
     private fun requireCore() {
         require(version == REGISTRATION_VERSION) { "registration version must be exactly 1" }
         require(oneUse) { "device attestation authority must be one-use" }
-        require(_publicKey.size == 32) { "public_key must be exactly 32 bytes" }
         OfflineDeviceAttestationCodec.validateAccountId(accountId)
         assetDefinitionId?.let(AssetDefinitionIdEncoder::parseAddressBytes)
         require(recentBlockHeight > 0) { "recent_block_height must be positive" }
@@ -137,7 +136,7 @@ class DeviceAttestationRegistration(
     }
 
     private fun requirePlatformProfile() {
-        requireP256PublicKey(_assertionPublicKey)
+        KagemushaP256Codec.requireUncompressedPublicKey(_assertionPublicKey)
         when (platform) {
             ANDROID_KEYMINT_PLATFORM -> {
                 require(
@@ -203,7 +202,7 @@ class DeviceAttestationRegistration(
             iosEnvironment == other.iosEnvironment &&
             androidPackageName == other.androidPackageName &&
             nullableBytesEqual(_androidSigningCertificateSha256, other._androidSigningCertificateSha256) &&
-            _publicKey.contentEquals(other._publicKey) &&
+            publicKey == other.publicKey &&
             assertionScheme == other.assertionScheme &&
             assertionKeyAlgorithm == other.assertionKeyAlgorithm &&
             _assertionPublicKey.contentEquals(other._assertionPublicKey) &&
@@ -231,6 +230,7 @@ class DeviceAttestationRegistration(
             iosBundleId,
             iosEnvironment,
             androidPackageName,
+            publicKey,
             assertionScheme,
             assertionKeyAlgorithm,
             assertionUsageCountLimit,
@@ -242,7 +242,6 @@ class DeviceAttestationRegistration(
         }
         for (value in listOfNotNull(
             _androidSigningCertificateSha256,
-            _publicKey,
             _assertionPublicKey,
             _challengeHash,
             _attestationReportHash,
@@ -258,7 +257,7 @@ class DeviceAttestationRegistration(
 
     companion object {
         /** Sole native bridge ABI supported by the first-release client. */
-        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 19
+        const val REQUIRED_NATIVE_BRIDGE_ABI_VERSION: Int = 21
         /** Sole on-chain registration format marker. */
         const val REGISTRATION_VERSION: Int = 1
         const val ANDROID_KEYMINT_PLATFORM: String = "android-keymint"
@@ -275,12 +274,6 @@ class DeviceAttestationRegistration(
 
         private const val MAX_REPORT_BYTES = 64 * 1024
         private const val MAX_EVIDENCE_BYTES = 128 * 1024
-        private val P256_FIELD_PRIME =
-            BigInteger("FFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF", 16)
-        private val P256_B =
-            BigInteger("5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B", 16)
-        private val TWO = BigInteger.valueOf(2L)
-        private val THREE = BigInteger.valueOf(3L)
         private val EVIDENCE_PREFIX_BYTES =
             DEVICE_ATTESTATION_EVIDENCE_PREFIX.toByteArray(StandardCharsets.UTF_8)
 
@@ -298,7 +291,7 @@ class DeviceAttestationRegistration(
             assetDefinitionId: String?,
             androidPackageName: String,
             androidSigningCertificateSha256: ByteArray,
-            publicKey: ByteArray,
+            publicKey: KagemushaDevicePublicKeyV2,
             recentBlockHeight: Long,
             recentBlockHash: ByteArray,
             expiresAtMs: Long,
@@ -309,7 +302,7 @@ class DeviceAttestationRegistration(
             assetDefinitionId,
             androidPackageName,
             androidSigningCertificateSha256,
-            publicKey,
+            publicKey.sec1Bytes(),
             recentBlockHeight,
             recentBlockHash,
             expiresAtMs,
@@ -319,23 +312,6 @@ class DeviceAttestationRegistration(
             require(value.size == 32 && (value[31].toInt() and 1) == 1) {
                 "$field must be a canonical 32-byte Iroha hash"
             }
-        }
-
-        private fun requireP256PublicKey(value: ByteArray) {
-            require(value.size == 65 && value[0].toInt() == 0x04) {
-                "assertion_public_key must be an uncompressed P-256 SEC1 point"
-            }
-            val x = BigInteger(1, value.copyOfRange(1, 33))
-            val y = BigInteger(1, value.copyOfRange(33, 65))
-            require(x < P256_FIELD_PRIME && y < P256_FIELD_PRIME) {
-                "assertion_public_key coordinates exceed P-256 field"
-            }
-            val lhs = y.modPow(TWO, P256_FIELD_PRIME)
-            val rhs = x.modPow(THREE, P256_FIELD_PRIME)
-                .subtract(THREE.multiply(x))
-                .add(P256_B)
-                .mod(P256_FIELD_PRIME)
-            require(lhs == rhs) { "assertion_public_key is not a valid P-256 point" }
         }
 
         private fun evidenceEnvelope(reportHash: ByteArray): ByteArray =

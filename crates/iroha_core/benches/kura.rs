@@ -2,9 +2,9 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::all)]
 #![allow(clippy::disallowed_types)]
-use std::fs;
+use std::{fs, sync::Arc};
 #[cfg(feature = "bench")]
-use std::{num::NonZeroUsize, sync::Arc, time::Duration};
+use std::{num::NonZeroUsize, time::Duration};
 
 #[cfg(feature = "bench")]
 use criterion::BatchSize;
@@ -19,6 +19,7 @@ use iroha_config::{
 #[allow(clippy::disallowed_types)]
 use iroha_core::{
     block::*,
+    governance::manifest::LaneManifestRegistry,
     kura::BlockStore,
     prelude::*,
     query::store::LiveQueryStore,
@@ -143,12 +144,14 @@ fn store_signed_complete_wire_finality_for_eviction_bench(
                 .canonical_proposal_wire_hash()
                 .expect("hash canonical eviction-benchmark proposal wire"),
         };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: block.header().view_change_index(),
+        };
         let mut commit_qc = QuorumCertificate {
-            round: ConsensusRound {
-                context_id: context.id(),
-                height,
-                view: block.header().view_change_index(),
-            },
+            round,
+            proposal_round: round,
             phase: GlobalPhase::Commit,
             subject,
             execution_commitment,
@@ -279,12 +282,19 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     let (kura, _) = iroha_core::kura::Kura::new(&cfg, &LaneConfig::default()).unwrap();
     // Use a lightweight, test-friendly handle that doesn't require a running Tokio runtime
     let query_handle = LiveQueryStore::start_test();
-    let state = Box::new(State::new(
-        World::new(),
-        kura,
-        query_handle,
-        #[cfg(feature = "telemetry")]
-        <_>::default(),
+    let state = Box::new(
+        State::try_new(
+            World::new(),
+            kura,
+            query_handle,
+            #[cfg(feature = "telemetry")]
+            <_>::default(),
+        )
+        .expect("benchmark State startup must validate"),
+    );
+    let nexus = state.nexus_snapshot();
+    state.install_lane_manifests(&Arc::new(
+        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
     ));
 
     let (alice_id, alice_keypair) = gen_account_in("test");
@@ -295,9 +305,13 @@ fn measure_block_size_for_n_executors(n_executors: u32) {
     );
     let alice_xor_id = AssetId::new(xor_id, alice_id.clone());
     let transfer = Transfer::asset_quantity(alice_xor_id, 10_u32, bob_id);
-    let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
-        .with_instructions([transfer])
-        .sign(alice_keypair.private_key());
+    let tx = TransactionBuilder::new(
+        chain_id.clone(),
+        alice_id.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([transfer])
+    .sign(alice_keypair.private_key());
     let (max_clock_drift, tx_limits) = {
         let state_view = state.world.view();
         let params = state_view.parameters();

@@ -25,6 +25,10 @@ pub mod isi {
     fn is_idempotent_alias_permission(permission: &Permission) -> bool {
         iroha_executor_data_model::permission::account::CanManageAccountAlias::try_from(permission)
             .is_ok()
+            || iroha_executor_data_model::permission::account::CanDelegateAccountAliasResolution::try_from(
+                permission,
+            )
+            .is_ok()
             || iroha_executor_data_model::permission::account::CanResolveAccountAlias::try_from(
                 permission,
             )
@@ -102,7 +106,7 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
     ) -> Result<AccountAlias, Error> {
-        state_transaction
+        let alias = state_transaction
             .world
             .account(account_id)
             .map_err(Error::from)?
@@ -112,7 +116,19 @@ pub mod isi {
                 invalid_account_recovery(format!(
                     "account `{account_id}` must have a stable alias to use social recovery"
                 ))
-            })
+            })?;
+        let resolved = crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            &alias,
+            state_transaction.block_unix_timestamp_ms(),
+        );
+        if resolved.as_ref() != Some(account_id) {
+            return Err(invalid_account_recovery(format!(
+                "account `{account_id}` does not have a strictly active alias binding"
+            )));
+        }
+        Ok(alias)
     }
 
     fn validate_recovery_policy(policy: &AccountRecoveryPolicy) -> Result<(), Error> {
@@ -125,16 +141,17 @@ pub mod isi {
         state_transaction: &StateTransaction<'_, '_>,
         alias: &AccountAlias,
     ) -> Result<AccountId, Error> {
-        state_transaction
-            .world
-            .account_aliases
-            .get(alias)
-            .cloned()
-            .ok_or_else(|| {
-                invalid_account_recovery(format!(
-                    "account alias `{alias:?}` does not resolve to an active account"
-                ))
-            })
+        crate::sns::resolve_active_account_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            alias,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .ok_or_else(|| {
+            invalid_account_recovery(format!(
+                "account alias `{alias:?}` does not resolve to a strictly active account"
+            ))
+        })
     }
 
     fn current_account_is_recovery_guardian(
@@ -144,33 +161,20 @@ pub mod isi {
         policy.contains_guardian(authority)
     }
 
-    fn ensure_recovery_request_targets_current_lineage(
+    pub(super) fn ensure_recovery_request_targets_current_lineage(
         state_transaction: &StateTransaction<'_, '_>,
         request: &AccountRecoveryRequest,
         current_account: &AccountId,
     ) -> Result<(), Error> {
-        let record = state_transaction
-            .world
-            .account_rekey_records
-            .get(&request.alias)
-            .ok_or_else(|| {
-                invalid_account_recovery(format!(
-                    "account recovery alias `{:#?}` no longer has a continuity record",
-                    request.alias
-                ))
-            })?;
-
-        if &record.active_account_id != current_account {
-            return Err(invalid_account_recovery(format!(
-                "account recovery alias `{:#?}` no longer points to the expected active account",
-                request.alias
-            )));
-        }
-
-        if record.active_account_id != request.active_account_id_at_proposal
-            && !record
-                .previous_account_ids
-                .contains(&request.active_account_id_at_proposal)
+        if crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            &state_transaction.world,
+            &state_transaction.nexus.dataspace_catalog,
+            &request.alias,
+            &request.active_account_id_at_proposal,
+            state_transaction.block_unix_timestamp_ms(),
+        )
+        .as_ref()
+            != Some(current_account)
         {
             return Err(invalid_account_recovery(format!(
                 "account recovery request for `{:#?}` no longer matches the active alias lineage",
@@ -251,6 +255,15 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if key.as_ref() == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{key}` is reserved for native contract deployment state"
+                    )
+                    .into(),
+                ));
+            }
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(&key) {
                 let ttl_only_update = validate_multisig_spec_ttl_update(
                     state_transaction,
@@ -304,6 +317,17 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+            if self.key().as_ref()
+                == iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+            {
+                return Err(Error::InvariantViolation(
+                    format!(
+                        "account metadata key `{}` is reserved for native contract deployment state",
+                        self.key()
+                    )
+                    .into(),
+                ));
+            }
             if crate::smartcontracts::isi::multisig::is_reserved_multisig_metadata_key(self.key()) {
                 return Err(Error::InvariantViolation(
                     format!(
@@ -558,7 +582,8 @@ pub mod isi {
             let request = state_transaction
                 .world
                 .account_recovery_requests
-                .get_mut(&alias)
+                .get(&alias)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_account_recovery(format!(
                         "account recovery request for `{alias:?}` does not exist"
@@ -569,6 +594,16 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
+            ensure_recovery_request_targets_current_lineage(
+                state_transaction,
+                &request,
+                &current_account,
+            )?;
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .expect("recovery request was verified immediately before mutation");
             request.approve(authority);
             let updated_request = request.clone();
             state_transaction
@@ -608,7 +643,8 @@ pub mod isi {
             let request = state_transaction
                 .world
                 .account_recovery_requests
-                .get_mut(&alias)
+                .get(&alias)
+                .cloned()
                 .ok_or_else(|| {
                     invalid_account_recovery(format!(
                         "account recovery request for `{alias:?}` does not exist"
@@ -619,6 +655,11 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
+            ensure_recovery_request_targets_current_lineage(
+                state_transaction,
+                &request,
+                &current_account,
+            )?;
 
             let owner_can_cancel = authority == &current_account;
             let guardian_quorum_can_cancel =
@@ -630,6 +671,11 @@ pub mod isi {
                 )));
             }
 
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .expect("recovery request was verified immediately before mutation");
             request.cancel();
             let cancelled = request.clone();
             state_transaction
@@ -1076,10 +1122,47 @@ pub mod query {
         Account {
             id: account_id.clone(),
             metadata: details.metadata.clone(),
-            label: details.label.clone(),
+            // Generic account queries do not carry an alias-resolution grant into this
+            // projection. Keep aliases behind the dedicated, permission-checked queries.
+            label: None,
             uaid: details.uaid,
             opaque_ids: details.opaque_ids.clone(),
         }
+    }
+
+    fn latest_ledger_time_ms(state_ro: &impl StateReadOnly) -> u64 {
+        state_ro.latest_block().map_or(0, |block| {
+            u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+        })
+    }
+
+    fn strict_recovery_account(
+        state_ro: &impl StateReadOnly,
+        alias: &AccountAlias,
+    ) -> Result<AccountId, Error> {
+        crate::sns::resolve_active_account_alias(
+            state_ro.world(),
+            &state_ro.nexus().dataspace_catalog,
+            alias,
+            latest_ledger_time_ms(state_ro),
+        )
+        .ok_or(Error::NotFound)
+    }
+
+    fn recovery_request_matches_current_lineage(
+        state_ro: &impl StateReadOnly,
+        request: &AccountRecoveryRequest,
+        current_account: &AccountId,
+    ) -> bool {
+        crate::sns::resolve_active_account_id_rekey_lineage_for_alias(
+            state_ro.world(),
+            &state_ro.nexus().dataspace_catalog,
+            &request.alias,
+            &request.active_account_id_at_proposal,
+            latest_ledger_time_ms(state_ro),
+        )
+        .as_ref()
+            == Some(current_account)
     }
 
     #[cfg(test)]
@@ -1172,9 +1255,11 @@ pub mod query {
         owner: &AccountId,
         label: &AccountAlias,
     ) {
-        let selector = crate::sns::selector_for_account_alias(
-            label,
+        let selector = crate::sns::active_account_alias_selector(
+            state_transaction.world(),
             &state_transaction.nexus.dataspace_catalog,
+            label,
+            state_transaction.block_unix_timestamp_ms(),
         )
         .expect("selector");
         let address =
@@ -1189,6 +1274,40 @@ pub mod query {
             2_000,
             3_000,
             Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    #[cfg(test)]
+    fn seed_dynamic_dataspace_name_lease(
+        state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+        owner: &AccountId,
+        alias: &str,
+        dataspace: iroha_data_model::nexus::DataSpaceId,
+    ) {
+        let selector = crate::sns::selector_for_dataspace_alias(alias).expect("selector");
+        let address = iroha_data_model::account::AccountAddress::from_account_id(owner)
+            .expect("account address");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            crate::sns::SNS_DATASPACE_ID_METADATA_KEY
+                .parse()
+                .expect("dataspace metadata key"),
+            iroha_primitives::json::Json::new(dataspace.as_u64()),
+        );
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            1_000,
+            2_000,
+            3_000,
+            metadata,
         );
         state_transaction.world.smart_contract_state.insert(
             crate::sns::record_storage_key(&selector),
@@ -1223,25 +1342,12 @@ pub mod query {
         matches!(field, "id" | "account" | "account_id")
     }
 
-    fn account_field_is_domain(field: &str) -> bool {
-        matches!(field, "domain" | "id.domain" | "account.domain")
-    }
-
     fn parse_account_id_value(value: &Value) -> Option<AccountId> {
         match value {
             Value::String(raw) => AccountId::parse_encoded(raw)
                 .ok()
                 .map(|parsed| parsed.into_account_id())
                 .or_else(|| raw.parse::<PublicKey>().ok().map(AccountId::new)),
-            _ => None,
-        }
-    }
-
-    fn parse_account_domain_value(value: &Value) -> Option<DomainId> {
-        match value {
-            Value::String(raw) => DomainId::parse_fully_qualified(raw)
-                .ok()
-                .or_else(|| DomainId::try_new(raw, "universal").ok()),
             _ => None,
         }
     }
@@ -1284,39 +1390,6 @@ pub mod query {
                 .values
                 .iter()
                 .filter_map(parse_account_id_value)
-                .collect::<BTreeSet<_>>();
-            intersect_account_id_candidates(&mut candidates, next);
-        }
-
-        candidates.map(Arc::new)
-    }
-
-    fn account_predicate_candidate_domain_ids(
-        world: &impl WorldReadOnly,
-        predicate: &PredicateJson,
-    ) -> Option<Arc<BTreeSet<AccountId>>> {
-        let mut candidates: Option<BTreeSet<AccountId>> = None;
-
-        for cond in &predicate.equals {
-            if !account_field_is_domain(&cond.field) {
-                continue;
-            }
-            let next = parse_account_domain_value(&cond.value)
-                .into_iter()
-                .flat_map(|domain| world.account_subjects_in_domain(&domain))
-                .collect::<BTreeSet<_>>();
-            intersect_account_id_candidates(&mut candidates, next);
-        }
-
-        for cond in &predicate.r#in {
-            if !account_field_is_domain(&cond.field) {
-                continue;
-            }
-            let next = cond
-                .values
-                .iter()
-                .filter_map(parse_account_domain_value)
-                .flat_map(|domain| world.account_subjects_in_domain(&domain))
                 .collect::<BTreeSet<_>>();
             intersect_account_id_candidates(&mut candidates, next);
         }
@@ -1415,7 +1488,7 @@ pub mod query {
     /// Fields consumed here are stripped from the JSON fallback so synthetic account-domain
     /// aliases are not re-evaluated against the plain `Account` JSON shape.
     fn predicate_matches_account_aliases(
-        world: &impl WorldReadOnly,
+        _world: &impl WorldReadOnly,
         predicate: &PredicateJson,
         account_id: &AccountId,
         account_value: &AccountValue,
@@ -1430,14 +1503,6 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(&cond.field) => {
-                    let Some(domain) = parse_account_domain_value(&cond.value) else {
-                        return AccountPredicateMatch::Mismatched;
-                    };
-                    if !world.account_has_alias_domain(account_id, &domain) {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.equals.push(cond.clone()),
             }
         }
@@ -1450,16 +1515,6 @@ pub mod query {
                     }
                 }
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(&cond.field) => {
-                    if !cond
-                        .values
-                        .iter()
-                        .filter_map(parse_account_domain_value)
-                        .any(|domain| world.account_has_alias_domain(account_id, &domain))
-                    {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.r#in.push(cond.clone()),
             }
         }
@@ -1468,14 +1523,6 @@ pub mod query {
             match account_alias_value(account_id, account_value, field) {
                 Some(Some(_)) => {}
                 Some(None) => return AccountPredicateMatch::Mismatched,
-                None if account_field_is_domain(field) => {
-                    let Ok(domains) = world.account_domains(account_id) else {
-                        return AccountPredicateMatch::Mismatched;
-                    };
-                    if domains.is_empty() {
-                        return AccountPredicateMatch::Mismatched;
-                    }
-                }
                 None => remaining.exists.push(field.clone()),
             }
         }
@@ -1600,9 +1647,7 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                predicate_json
-                    .as_ref()
-                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+                None,
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -1778,9 +1823,7 @@ pub mod query {
                 predicate_json
                     .as_ref()
                     .and_then(account_predicate_candidate_ids),
-                predicate_json
-                    .as_ref()
-                    .and_then(|predicate| account_predicate_candidate_domain_ids(world, predicate)),
+                None,
             );
             let id_only_predicate = predicate_json.as_ref().is_some_and(predicate_is_id_only);
 
@@ -1834,28 +1877,16 @@ pub mod query {
         #[metrics(+"find_account_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<Account, Error> {
             let world = state_ro.world();
-            let account_id = if let Some(record) = world.account_rekey_records().get(self.alias()) {
-                record.active_account_id.clone()
-            } else if let Some(account_id) = world.account_aliases().get(self.alias()) {
-                account_id.clone()
-            } else {
-                let mut matched_account_id: Option<AccountId> = None;
-                for (account_id, value) in world.accounts().iter() {
-                    if value.as_ref().label() != Some(self.alias()) {
-                        continue;
-                    }
-                    if let Some(existing) = matched_account_id.as_ref()
-                        && existing != account_id
-                    {
-                        return Err(Error::Conversion(format!(
-                            "account alias `{:?}` is bound to multiple accounts: {existing} and {account_id}",
-                            self.alias()
-                        )));
-                    }
-                    matched_account_id = Some(account_id.clone());
-                }
-                matched_account_id.ok_or(Error::NotFound)?
-            };
+            let now_ms = state_ro.latest_block().map_or(0, |block| {
+                u64::try_from(block.header().creation_time().as_millis()).unwrap_or(u64::MAX)
+            });
+            let account_id = crate::sns::resolve_active_account_alias(
+                world,
+                &state_ro.nexus().dataspace_catalog,
+                self.alias(),
+                now_ms,
+            )
+            .ok_or(Error::NotFound)?;
 
             let (account_id, account_value) = world
                 .accounts()
@@ -1880,14 +1911,17 @@ pub mod query {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(|dataspace| {
-                    state_ro
-                        .nexus()
-                        .dataspace_catalog
-                        .by_alias(dataspace)
-                        .map(|entry| entry.id)
-                        .ok_or_else(|| {
-                            Error::Conversion(format!("unknown dataspace alias: {dataspace}"))
-                        })
+                    crate::sns::resolve_active_dataspace_id_by_alias(
+                        state_ro.world(),
+                        &state_ro.nexus().dataspace_catalog,
+                        dataspace,
+                        now_ms,
+                    )
+                    .map_err(|error| {
+                        Error::Conversion(format!(
+                            "invalid account alias dataspace filter `{dataspace}`: {error}"
+                        ))
+                    })
                 })
                 .transpose()?;
             let domain_filter = self
@@ -1914,60 +1948,78 @@ pub mod query {
                 .get(account_id)
                 .cloned()
                 .unwrap_or_default();
-            labels
-                .into_iter()
-                .filter(|label| {
-                    !dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
-                        && !domain_filter
-                            .as_ref()
-                            .is_some_and(|domain| label.domain.as_ref() != Some(domain))
-                })
-                .map(|label| {
-                    let alias = label
-                        .to_literal(&state_ro.nexus().dataspace_catalog)
+            let mut records = Vec::with_capacity(labels.len());
+            for label in labels {
+                if dataspace_filter.is_some_and(|dataspace| label.dataspace != dataspace)
+                    || domain_filter
+                        .as_ref()
+                        .is_some_and(|domain| label.domain.as_ref() != Some(domain))
+                {
+                    continue;
+                }
+                let alias = crate::sns::active_account_alias_literal(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias binding: {err}"))
+                })?;
+                if crate::sns::resolve_active_account_alias(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .as_ref()
+                    != Some(account_id)
+                {
+                    continue;
+                }
+                let dataspace = crate::sns::resolve_active_dataspace_alias_by_id(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    label.dataspace,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias dataspace: {err}"))
+                })?;
+                let selector = crate::sns::active_account_alias_selector(
+                    state_ro.world(),
+                    &state_ro.nexus().dataspace_catalog,
+                    &label,
+                    now_ms,
+                )
+                .map_err(|err| {
+                    Error::Conversion(format!("invalid account alias selector: {err}"))
+                })?;
+                let record =
+                    crate::sns::get_name_record_by_selector(state_ro.world(), &selector, now_ms)
                         .map_err(|err| {
-                            Error::Conversion(format!("invalid account alias binding: {err}"))
+                            Error::Conversion(format!("invalid account alias lease record: {err}"))
                         })?;
-                    let dataspace = state_ro
-                        .nexus()
-                        .dataspace_catalog
-                        .by_id(label.dataspace)
-                        .ok_or_else(|| {
-                            Error::Conversion(
-                                "account alias dataspace is missing from the catalog".to_owned(),
-                            )
-                        })?
-                        .alias
-                        .clone();
-                    let record = crate::sns::get_name_record(
-                        state_ro.world(),
-                        &state_ro.nexus().dataspace_catalog,
-                        crate::sns::SnsNamespace::AccountAlias,
-                        &alias,
-                        now_ms,
-                    )
-                    .map_err(|err| {
-                        Error::Conversion(format!("invalid account alias lease record: {err}"))
-                    })?;
-                    Ok(AccountAliasBindingRecord {
-                        account_id: account_id.clone(),
-                        alias,
-                        dataspace,
-                        domain: label.domain.as_ref().map(ToString::to_string),
-                        is_primary: account.as_ref().label() == Some(&label),
-                        status: record.status,
-                        lease_expiry_ms: Some(record.expires_at_ms),
-                        grace_until_ms: Some(record.grace_expires_at_ms),
-                        bound_at_ms: record.registered_at_ms,
-                    })
-                })
-                .collect()
+                records.push(AccountAliasBindingRecord {
+                    account_id: account_id.clone(),
+                    alias,
+                    dataspace,
+                    domain: label.domain.as_ref().map(ToString::to_string),
+                    is_primary: account.as_ref().label() == Some(&label),
+                    status: record.status,
+                    lease_expiry_ms: Some(record.expires_at_ms),
+                    grace_until_ms: Some(record.grace_expires_at_ms),
+                    bound_at_ms: record.registered_at_ms,
+                });
+            }
+            Ok(records)
         }
     }
 
     impl ValidSingularQuery for FindAccountRecoveryPolicyByAlias {
         #[metrics(+"find_account_recovery_policy_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryPolicy, Error> {
+            strict_recovery_account(state_ro, self.alias())?;
             state_ro
                 .world()
                 .account_recovery_policies()
@@ -1980,12 +2032,17 @@ pub mod query {
     impl ValidSingularQuery for FindAccountRecoveryRequestByAlias {
         #[metrics(+"find_account_recovery_request_by_alias")]
         fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryRequest, Error> {
-            state_ro
+            let current_account = strict_recovery_account(state_ro, self.alias())?;
+            let request = state_ro
                 .world()
                 .account_recovery_requests()
                 .get(self.alias())
                 .cloned()
-                .ok_or(Error::NotFound)
+                .ok_or(Error::NotFound)?;
+            if !recovery_request_matches_current_lineage(state_ro, &request, &current_account) {
+                return Err(Error::NotFound);
+            }
+            Ok(request)
         }
     }
 
@@ -1999,6 +2056,7 @@ pub mod query {
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
 
+        use super::super::isi::ensure_recovery_request_targets_current_lineage;
         use super::*;
         use crate::{
             block::ValidBlock,
@@ -2078,6 +2136,54 @@ pub mod query {
                 )),
                 iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
             )
+        }
+
+        #[test]
+        fn generic_account_metadata_instructions_cannot_mutate_contract_deploy_nonce() {
+            let state = new_state_with_authority();
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+            let key: Name = iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY
+                .parse()
+                .expect("reserved deployment nonce key");
+
+            let error = SetKeyValue::account(ALICE_ID.clone(), key.clone(), Json::new(7_u64))
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic metadata write must not forge the deployment nonce");
+            assert!(
+                error
+                    .to_string()
+                    .contains("native contract deployment state")
+            );
+            assert!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("authority account")
+                    .metadata()
+                    .get(&key)
+                    .is_none()
+            );
+
+            stx.world
+                .account_mut(&ALICE_ID)
+                .expect("authority account")
+                .insert(key.clone(), Json::new(7_u64));
+            let error = RemoveKeyValue::account(ALICE_ID.clone(), key.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .expect_err("generic metadata removal must not reset the deployment nonce");
+            assert!(
+                error
+                    .to_string()
+                    .contains("native contract deployment state")
+            );
+            assert!(
+                stx.world
+                    .account(&ALICE_ID)
+                    .expect("authority account")
+                    .metadata()
+                    .get(&key)
+                    .is_some()
+            );
         }
 
         fn register_labeled_account(
@@ -2402,6 +2508,77 @@ pub mod query {
             .execute(&guardian_id, &mut stx)
             .expect_err("finalized request must not be replayable");
             assert_smart_contract_error_contains(err, "is not pending");
+        }
+
+        #[test]
+        fn recovery_lineage_accepts_only_explicit_account_id_rekey_suffix() {
+            use iroha_data_model::account::rekey::AccountRekeyRecord;
+
+            let state = new_state_with_authority();
+            let active = checked_account_id();
+            let retired = checked_account_id();
+            let alias = root_alias("typed-recovery-lineage");
+            let replacement = checked_keypair();
+            let mut block = state.block(new_block_header(1, 50));
+            let mut stx = block.transaction();
+            register_labeled_account(&mut stx, &ALICE_ID, &active, &alias);
+            seed_account_alias_lease(&mut stx, &active, &alias);
+
+            let canonical = AccountRekeyRecord::new(alias.clone(), retired.clone())
+                .repoint_for_account_id_rekey(active.clone())
+                .expect("canonical account-id rekey fixture");
+            stx.world
+                .account_rekey_records
+                .insert(alias.clone(), canonical.clone());
+            let request = AccountRecoveryRequest::new(
+                alias.clone(),
+                retired.clone(),
+                AccountController::single(replacement.public_key().clone()),
+                active.clone(),
+                60,
+            );
+
+            ensure_recovery_request_targets_current_lineage(&stx, &request, &active)
+                .expect("explicit retired account-id rekey must preserve recovery continuity");
+            assert!(recovery_request_matches_current_lineage(
+                &stx, &request, &active
+            ));
+
+            stx.world.account_rekey_records.insert(
+                alias.clone(),
+                AccountRekeyRecord::new(alias.clone(), retired.clone())
+                    .reassign_alias_to_account(active.clone())
+                    .expect("alias reassignment fixture"),
+            );
+            assert!(
+                ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
+                "ordinary alias reassignment must not preserve a prior owner's recovery request"
+            );
+            assert!(!recovery_request_matches_current_lineage(
+                &stx, &request, &active
+            ));
+
+            let mut legacy = canonical;
+            legacy.transition_provenance.clear();
+            stx.world
+                .account_rekey_records
+                .insert(alias.clone(), legacy);
+            assert!(
+                ensure_recovery_request_targets_current_lineage(&stx, &request, &active).is_err(),
+                "legacy unspecified history must remain non-authorizing"
+            );
+
+            let current_request = AccountRecoveryRequest::new(
+                alias.clone(),
+                active.clone(),
+                AccountController::single(checked_keypair().public_key().clone()),
+                active.clone(),
+                60,
+            );
+            assert!(
+                recovery_request_matches_current_lineage(&stx, &current_request, &active),
+                "the exact currently active account remains its own recovery lineage"
+            );
         }
 
         #[test]
@@ -3345,6 +3522,38 @@ pub mod query {
             assert_eq!(aliases[0].dataspace, "centralbank");
             assert_eq!(aliases[0].domain.as_deref(), Some("banka"));
             assert!(aliases[0].is_primary);
+        }
+
+        #[test]
+        fn find_aliases_by_account_id_resolves_dynamic_only_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            let state = State::new(world, kura, query_handle);
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace = iroha_data_model::nexus::DataSpaceId::new(42);
+            seed_dynamic_dataspace_name_lease(&mut stx, &ALICE_ID, "paynet", dataspace);
+            let alias = AccountAlias::domainless("merchant".parse().expect("label"), dataspace);
+            seed_account_alias_lease(&mut stx, &ALICE_ID, &alias);
+            stx.world
+                .insert_account_alias_binding(alias, ALICE_ID.clone());
+
+            stx.apply();
+            state_block.commit().unwrap();
+
+            let aliases =
+                FindAliasesByAccountId::new(ALICE_ID.clone(), Some("paynet".to_owned()), None)
+                    .execute(&state.view())
+                    .expect("dynamic-only dataspace filter should resolve");
+            assert_eq!(aliases.len(), 1);
+            assert_eq!(aliases[0].alias, "merchant@paynet");
+            assert_eq!(aliases[0].dataspace, "paynet");
+            assert_eq!(aliases[0].domain, None);
+            assert!(!aliases[0].is_primary);
         }
 
         #[test]

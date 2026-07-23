@@ -87,9 +87,13 @@ fn sample_transaction(instruction_count: usize) -> SignedTransaction {
         .map(sample_instruction_box)
         .collect::<Vec<_>>();
 
-    TransactionBuilder::new(chain, authority)
-        .with_instructions(instructions)
-        .sign(&private_key)
+    TransactionBuilder::new(
+        chain,
+        authority,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions(instructions)
+    .sign(&private_key)
 }
 
 fn sample_block(transaction_count: usize, instruction_count: usize) -> SignedBlock {

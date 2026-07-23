@@ -10,9 +10,15 @@ use iroha_data_model::{
         CommitCertificateResponse, ConsensusMessageV2, ConsensusMessageV2Payload, ConsensusMode,
         ConsensusRound, DataAvailabilityLayout, DualQuorum, ExecutionCommitment, GlobalPhase,
         HeightContext, PROTOCOL_VERSION, PayloadChunk, PayloadEncoding, PayloadManifest, Proposal,
-        ProposalJustification, QuorumCertificate, SumeragiV2BodyState, SumeragiV2Status,
-        SumeragiV2StatusPhase, TimeoutCertificate, TimeoutJustification, TimeoutVote,
-        TimeoutVoteGroup, ValidatorPower, Vote,
+        ProposalJustification, QuorumCertificate, SumeragiV2BodyState,
+        SumeragiV2HeightContextStatus, SumeragiV2IgnoreCount, SumeragiV2IgnoreReason,
+        SumeragiV2LivenessBlocker, SumeragiV2LivenessStatus, SumeragiV2LocalWorkStage,
+        SumeragiV2OutboundIntentKind, SumeragiV2OutboundIntentStage,
+        SumeragiV2OutboundIntentStatus, SumeragiV2ProgressTransition,
+        SumeragiV2ProgressTransitionStatus, SumeragiV2QueueKind, SumeragiV2QueueStatus,
+        SumeragiV2Status, SumeragiV2StatusPhase, SumeragiV2TimeoutQuorumStatus,
+        SumeragiV2VoteQuorumStatus, SumeragiV2WorkStatus, TimeoutCertificate, TimeoutJustification,
+        TimeoutVote, TimeoutVoteGroup, ValidatorPower, Vote,
     },
     peer::PeerId,
 };
@@ -92,6 +98,7 @@ fn execution_commitment(seed: u8) -> ExecutionCommitment {
 fn qc(context: &HeightContext, view: u64, phase: GlobalPhase) -> QuorumCertificate {
     QuorumCertificate {
         round: round(context, view),
+        proposal_round: round(context, view),
         phase,
         subject: subject(u8::try_from(view + 1).expect("small fixture view")),
         execution_commitment: execution_commitment(
@@ -167,9 +174,10 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         "vote",
         ConsensusMessageV2Payload::Vote(Vote {
             round: manifest.round,
+            proposal_round: manifest.round,
             phase: GlobalPhase::Prepare,
             subject: manifest.subject,
-            execution_commitment: execution_commitment(9),
+            execution_commitment: prepare.execution_commitment,
             signer: 0,
             signature: vec![1],
         }),
@@ -229,9 +237,15 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         signature: vec![0x81; 48],
     };
     assert_eq!(commit_request.validate(&context), Ok(()));
+    let mut delayed_commit = prepare.clone();
+    delayed_commit.round = round(&context, 9);
+    delayed_commit.phase = GlobalPhase::Commit;
+    assert_eq!(delayed_commit.validate(&context), Ok(()));
+    assert_eq!(delayed_commit.proposal_round.view, 1);
+    assert_eq!(delayed_commit.round.view, 9);
     let commit_response = CommitCertificateResponse {
         request_hash: HashOf::new(&commit_request),
-        certificate: qc(&context, 9, GlobalPhase::Commit),
+        certificate: delayed_commit.clone(),
         responder: peer(100),
         signature: vec![0x82; 48],
     };
@@ -242,6 +256,22 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
     insert_message(
         "commit_certificate_request",
         ConsensusMessageV2Payload::CommitCertificateRequest(commit_request.clone()),
+    );
+    insert_message(
+        "commit_vote_later_view",
+        ConsensusMessageV2Payload::Vote(Vote {
+            round: delayed_commit.round,
+            proposal_round: delayed_commit.proposal_round,
+            phase: GlobalPhase::Commit,
+            subject: delayed_commit.subject,
+            execution_commitment: delayed_commit.execution_commitment,
+            signer: 0,
+            signature: vec![0x7A],
+        }),
+    );
+    insert_message(
+        "commit_quorum_certificate_later_view",
+        ConsensusMessageV2Payload::QuorumCertificate(delayed_commit),
     );
     insert_message(
         "commit_certificate_response",
@@ -266,6 +296,87 @@ fn shared_sdk_accept_fixtures_are_exact_current_rust_encodings() {
         pending_persistence_id: Some(17),
         last_committed_height: 0,
         last_committed_subject: None,
+        height_context: SumeragiV2HeightContextStatus {
+            epoch: context.epoch,
+            epoch_end_height: context.epoch_end_height,
+            mode: context.mode,
+            epoch_seed: context.leader_seed,
+            validator_count: 4,
+            quorum: context.quorum,
+        },
+        last_commit_qc: None,
+        liveness: SumeragiV2LivenessStatus {
+            generation: 3,
+            prepare_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: prepare.round,
+                proposal_round: prepare.proposal_round,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer_count: 2,
+                signed_power: 2,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+            }],
+            commit_quorums: vec![SumeragiV2VoteQuorumStatus {
+                round: round(&context, 3),
+                proposal_round: prepare.proposal_round,
+                subject: prepare.subject,
+                execution_commitment: prepare.execution_commitment,
+                signer_count: 1,
+                signed_power: 1,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+            }],
+            timeout_quorums: vec![SumeragiV2TimeoutQuorumStatus {
+                round: timeout.round,
+                signer_count: 3,
+                signed_power: 3,
+                min_signers: context.quorum.min_signers,
+                total_power: context.quorum.total_power,
+                certificate_formed: true,
+            }],
+            outbound_intents: vec![SumeragiV2OutboundIntentStatus {
+                kind: SumeragiV2OutboundIntentKind::CommitVote,
+                round: round(&context, 3),
+                proposal_round: Some(prepare.proposal_round),
+                subject: Some(prepare.subject),
+                execution_commitment: Some(prepare.execution_commitment),
+                stage: SumeragiV2OutboundIntentStage::Sent,
+            }],
+            work: SumeragiV2WorkStatus {
+                candidate: SumeragiV2LocalWorkStage::Complete,
+                body_recovery: SumeragiV2LocalWorkStage::Complete,
+                body_store: SumeragiV2LocalWorkStage::Complete,
+                validation: SumeragiV2LocalWorkStage::Complete,
+                application: SumeragiV2LocalWorkStage::Idle,
+                successor_height: SumeragiV2LocalWorkStage::Idle,
+            },
+            queues: vec![SumeragiV2QueueStatus {
+                queue: SumeragiV2QueueKind::EffectDispatch,
+                depth: 1,
+                capacity: 4,
+                oldest_age_ms: Some(17),
+                service_debt: 2,
+            }],
+            last_progress: Some(SumeragiV2ProgressTransitionStatus {
+                generation: 3,
+                round: prepare.round,
+                transition: SumeragiV2ProgressTransition::LockInstalled,
+                age_ms: 19,
+            }),
+            no_progress_age_ms: 19,
+            blocker: Some(SumeragiV2LivenessBlocker::LocalControlPending),
+            ignore_counts: vec![
+                SumeragiV2IgnoreCount {
+                    reason: SumeragiV2IgnoreReason::Duplicate,
+                    count: 2,
+                },
+                SumeragiV2IgnoreCount {
+                    reason: SumeragiV2IgnoreReason::IrrelevantView,
+                    count: 1,
+                },
+            ],
+        },
     };
     status
         .validate()

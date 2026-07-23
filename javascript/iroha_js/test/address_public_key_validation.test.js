@@ -8,9 +8,10 @@ import {
   AccountAddressError,
   AccountAddressErrorCode,
 } from "../src/address.js";
+import { AccountAddress as DistAccountAddress } from "../dist/address.js";
 
 const VALID_KEY = Buffer.from(
-  "B935AAF1F4E44B3DB79E5E5A9BA4569E6F3E2310C219F3DDD56D3277828D5480",
+  "68F4B6017D0F876A55C80A82B8388A54AAD264D367269E2DE8BE079C935B5F96",
   "hex",
 );
 const SMALL_ORDER_KEY = Buffer.from(
@@ -22,6 +23,10 @@ const NON_CANONICAL_IDENTITY = Buffer.from(
   "hex",
 );
 const INVALID_COMPRESSED_KEY = Buffer.alloc(32, 0x02);
+const MIXED_TORSION_KEY = Buffer.from(
+  "6AEBC0B955CE4A2F1344029986B775E6EA5C40F93F1112B86EC51678EB9DC0FB",
+  "hex",
+);
 
 test("fromAccount enforces curve-specific public key length", () => {
   const shortKey = VALID_KEY.subarray(1);
@@ -59,6 +64,17 @@ test("fromAccount rejects small-order ed25519 public keys", () => {
       error.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
       /small-order/i.test(error.message),
   );
+});
+
+test("fromAccount rejects mixed-torsion ed25519 public keys in src and dist", () => {
+  for (const Address of [AccountAddress, DistAccountAddress]) {
+    assert.throws(
+      () => Address.fromAccount({ publicKey: MIXED_TORSION_KEY }),
+      (error) =>
+        error?.code === AccountAddressErrorCode.INVALID_PUBLIC_KEY &&
+        /prime-order ed25519 subgroup/i.test(error.message),
+    );
+  }
 });
 
 test("fromCanonicalBytes rejects non-canonical ed25519 encodings", () => {
