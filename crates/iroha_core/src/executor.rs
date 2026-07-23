@@ -593,11 +593,14 @@ fn decode_executor_bytes(value: json::Value, context: &str) -> Result<Vec<u8>, j
         json::Value::Array(arr) => {
             let mut out = Vec::with_capacity(arr.len());
             for v in arr {
-                let byte = v.as_u64().ok_or_else(|| json::Error::InvalidField {
-                    field: context.into(),
-                    message: "expected byte (u64)".into(),
-                })?;
-                out.push((byte & 0xFF) as u8);
+                let byte = v
+                    .as_u64()
+                    .and_then(|byte| u8::try_from(byte).ok())
+                    .ok_or_else(|| json::Error::InvalidField {
+                        field: context.into(),
+                        message: "expected byte in range 0..=255".into(),
+                    })?;
+                out.push(byte);
             }
             Ok(out)
         }
@@ -5583,8 +5586,9 @@ impl Executor {
         state_transaction.last_tx_gas_used =
             state_transaction.last_tx_gas_used.saturating_add(gas_used);
         let artifacts = artifacts?;
-        crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+        let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_groups(
             &artifacts.queued_instructions_by_authority(),
+            &artifacts.queued_instructions_with_authority(),
             state_transaction,
             runtime_origin,
         )
@@ -5594,6 +5598,13 @@ impl Executor {
                 "validation-fee policy resolution failed during deployed contract execution: {other:?}"
             )),
         })?;
+        if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
+            return Ok(ContractInvocationOutcome {
+                gas_used,
+                executed_instructions: Vec::new(),
+                next_nft_sequence,
+            });
+        }
         if let Some(pending) = lifecycle_transition {
             code::validate_contract_lifecycle_completion(
                 &state_transaction.world,
@@ -11183,6 +11194,30 @@ mod tests {
     use ivm::instruction;
     use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
+
+    #[test]
+    fn executor_byte_array_accepts_maximum_byte() {
+        let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX))]);
+
+        let decoded = decode_executor_bytes(value, "norito").expect("decode byte array");
+
+        assert_eq!(decoded, vec![u8::MAX]);
+    }
+
+    #[test]
+    fn executor_byte_array_rejects_byte_overflow() {
+        let value = json::Value::Array(vec![json::Value::from(u64::from(u8::MAX) + 1)]);
+
+        let error = decode_executor_bytes(value, "norito").expect_err("reject byte overflow");
+
+        match error {
+            json::Error::InvalidField { field, message } => {
+                assert_eq!(field, "norito");
+                assert_eq!(message, "expected byte in range 0..=255");
+            }
+            other => panic!("unexpected error: {other}"),
+        }
+    }
 
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("executor fixture key generation should succeed")

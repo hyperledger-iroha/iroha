@@ -10,6 +10,7 @@ public final class ConnectEnvelopeCodecTest {
   private ConnectEnvelopeCodecTest() {}
 
   public static void main(final String[] args) throws Exception {
+    directionTagsRejectValuesThatOnlyMatchAfterByteTruncation();
     decodeLiveSignRequestRawFixture();
     encodeAndDecodeSignResultOkEnvelope();
     encodeSignResultOkRejectsConfusableAlgorithms();
@@ -20,6 +21,16 @@ public final class ConnectEnvelopeCodecTest {
     envelopeDecodeRejectsHighBitUint64Sequence();
     frameDecodeRejectsHighBitUint64Sequence();
     System.out.println("[IrohaAndroid] ConnectEnvelopeCodecTest passed.");
+  }
+
+  private static void directionTagsRejectValuesThatOnlyMatchAfterByteTruncation()
+      throws Exception {
+    assert ConnectDirection.fromTag(0) == ConnectDirection.APP_TO_WALLET;
+    assert ConnectDirection.fromTag(1) == ConnectDirection.WALLET_TO_APP;
+
+    for (final int tag : new int[] {-256, -255, 256, 257}) {
+      expectThrows(IllegalArgumentException.class, () -> ConnectDirection.fromTag(tag));
+    }
   }
 
   private static void decodeLiveSignRequestRawFixture() throws Exception {

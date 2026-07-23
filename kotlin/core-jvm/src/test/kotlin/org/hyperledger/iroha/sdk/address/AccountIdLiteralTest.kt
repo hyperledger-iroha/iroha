@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.address
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 
 class AccountIdLiteralTest {
     @Test
@@ -47,7 +48,7 @@ class AccountIdLiteralTest {
 
     @Test
     fun rejectsMalformedAndHexLiterals() {
-        val address = AccountAddress.fromAccount(ByteArray(32) { 0x44.toByte() }, "ed25519")
+        val address = AccountAddress.fromAccount(TestEd25519Keys.publicKey(0x44), "ed25519")
         val malformed = "malformed-i105"
         val malformedError = assertFailsWith<IllegalArgumentException> {
             requireCanonicalI105Address(malformed, "accountId")
@@ -91,6 +92,6 @@ class AccountIdLiteralTest {
     }
 
     private fun sampleI105(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 }

@@ -141,7 +141,7 @@ impl OfflineRecipientRegistrationLineage {
         request
             .validate_at(verified_at_ms)
             .map_err(|error| format!("recipient request validation failed: {error}"))?;
-        if self.selector.chain_id != request.chain_id
+        if self.selector.chain_id != *request.chain_id()
             || self.selector.recipient != *request.recipient()
             || self.selector.receiver_device_id != request.receiver_device_id()
             || self.selector.asset != *request.asset()
@@ -191,7 +191,7 @@ impl OfflineRecipientRegistrationLineage {
             );
         }
         let mut verifier =
-            BridgeFinalityVerifier::with_context(request.chain_id.clone(), trusted_context);
+            BridgeFinalityVerifier::with_context(request.chain_id().clone(), trusted_context);
         for proof in &self.finality_chain[trusted_index..] {
             verifier
                 .verify(proof)
@@ -337,7 +337,7 @@ impl OfflineRecipientReceiveOfferV2 {
         else {
             return Err("portable receiver offer contains an ambiguous receiver tuple".into());
         };
-        if self.lineage.selector.chain_id != self.request.chain_id
+        if self.lineage.selector.chain_id != *self.request.chain_id()
             || self.lineage.selector.recipient != *self.request.recipient()
             || self.lineage.selector.receiver_device_id != self.request.receiver_device_id()
             || self.lineage.selector.asset != *self.request.asset()

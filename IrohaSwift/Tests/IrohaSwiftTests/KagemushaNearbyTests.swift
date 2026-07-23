@@ -44,6 +44,17 @@ final class KagemushaNearbyTests: XCTestCase {
         ))
     }
 
+    func testTimeoutNanosecondsSaturatesOnOverflow() {
+        XCTAssertEqual(
+            KagemushaNearbyTransportPolicy.timeoutNanoseconds(seconds: 1),
+            1_000_000_000
+        )
+        XCTAssertEqual(
+            KagemushaNearbyTransportPolicy.timeoutNanoseconds(seconds: UInt64.max),
+            UInt64.max
+        )
+    }
+
     func testNearbyEnvelopeRoundTripsEveryTypedMessage() throws {
         let offer = try KagemushaPeerTransportTestFixtures.receiveRequest()
         let request = try offer.project().request

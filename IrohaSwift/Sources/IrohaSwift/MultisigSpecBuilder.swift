@@ -131,9 +131,7 @@ public extension MultisigSpecPayload {
         let effective = min(requested, cap)
         let wasCapped = requested > cap
 
-        let nowMs = now.timeIntervalSince1970 > 0
-            ? UInt64(now.timeIntervalSince1970 * 1_000)
-            : 0
+        let nowMs = clampedUnixEpochMilliseconds(now)
         let (expiresAtMs, overflow) = nowMs.addingReportingOverflow(effective)
 
         return MultisigProposalTtlPreview(
@@ -156,6 +154,17 @@ public extension MultisigSpecPayload {
         }
         return previewProposalExpiry(requestedTtlMs: requestedTtlMs, now: now)
     }
+}
+
+private func clampedUnixEpochMilliseconds(_ date: Date) -> UInt64 {
+    let seconds = date.timeIntervalSince1970
+    guard !seconds.isNaN, seconds > 0 else { return 0 }
+    guard seconds.isFinite else { return UInt64.max }
+    let milliseconds = seconds * 1_000
+    guard milliseconds.isFinite, milliseconds < Double(UInt64.max) else {
+        return UInt64.max
+    }
+    return UInt64(exactly: milliseconds.rounded(.towardZero)) ?? UInt64.max
 }
 
 /// Builder for multisig registration specifications used by the IOS4 roadmap task.

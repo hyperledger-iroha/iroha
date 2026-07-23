@@ -13090,7 +13090,7 @@ mod offline_kagemusha_readiness_tests {
     }
 
     #[test]
-    fn readiness_projects_exact_abi20_five_role_registry_and_artifact_set() {
+    fn readiness_projects_exact_abi21_five_role_registry_and_artifact_set() {
         let transfer = projected_verifier("transfer", "transfer-circuit", 0x11, 0x21);
         let topup = projected_verifier("topup", "topup-circuit", 0x12, 0x22);
         let unshield = projected_verifier("unshield", "unshield-circuit", 0x13, 0x23);

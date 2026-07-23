@@ -26,6 +26,7 @@ public final class NoritoTests {
     testHeaderRejectsInvalidFieldBitsetFlags();
     testSchemaHashCanonicalPath();
     testEncodeDecodeUInt();
+    testLengthRangeValidation();
     testEncodeDecodeString();
     testTransparentAdapterDelegatesWithoutFieldFrame();
     testEncodeDecodeSequence();
@@ -125,6 +126,54 @@ public final class NoritoTests {
     ByteBuffer buffer = ByteBuffer.wrap(encoded);
     long decoded = NoritoCodec.decode(buffer, adapter, "iroha.test.Value");
     assert decoded == 42L : "ByteBuffer decode mismatch";
+  }
+
+  private static void testLengthRangeValidation() {
+    assert new NoritoDecoder(fixedLength(0L), 0).readLength(false) == 0L;
+    assert new NoritoDecoder(fixedLength(4L), 0).readLength(false) == 4L;
+    assert new NoritoDecoder(fixedLength(Integer.MAX_VALUE), 0).readLength(false)
+        == Integer.MAX_VALUE;
+    expectIllegal(
+        () -> new NoritoDecoder(fixedLength(0x1_0000_0004L), 0).readLength(false),
+        "fixed length above Integer.MAX_VALUE");
+    expectIllegal(
+        () ->
+            new NoritoDecoder(
+                    new byte[] {4, 0, 0, 0, 0, 0, 0, (byte) 0x80}, 0)
+                .readLength(false),
+        "fixed high-bit length");
+
+    assert new NoritoDecoder(new byte[] {0}, 0).readLength(true) == 0L;
+    assert new NoritoDecoder(new byte[] {4}, 0).readLength(true) == 4L;
+    assert new NoritoDecoder(
+                new byte[] {(byte) 0xFF, (byte) 0xFF, (byte) 0xFF, (byte) 0xFF, 0x07}, 0)
+            .readLength(true)
+        == Integer.MAX_VALUE;
+    expectIllegal(
+        () ->
+            new NoritoDecoder(
+                    new byte[] {(byte) 0x84, (byte) 0x80, (byte) 0x80, (byte) 0x80, 0x10},
+                    0)
+                .readLength(true),
+        "compact length above Integer.MAX_VALUE");
+
+    final byte[] forged = {4, 0, 0, 0, 0, 0, 0, (byte) 0x80, 1, 2, 3, 4};
+    expectIllegal(
+        () -> NoritoAdapters.rawByteVecAdapter().decode(new NoritoDecoder(forged, 0)),
+        "raw byte vector high-bit length alias");
+    final byte[] canonical =
+        ByteBuffer.allocate(Long.BYTES + 4)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .putLong(4L)
+            .put(new byte[] {1, 2, 3, 4})
+            .array();
+    assert Arrays.equals(
+        NoritoAdapters.rawByteVecAdapter().decode(new NoritoDecoder(canonical, 0)),
+        new byte[] {1, 2, 3, 4});
+  }
+
+  private static byte[] fixedLength(final long value) {
+    return ByteBuffer.allocate(Long.BYTES).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
   }
 
   private static byte[] fill(int seed, int length) {

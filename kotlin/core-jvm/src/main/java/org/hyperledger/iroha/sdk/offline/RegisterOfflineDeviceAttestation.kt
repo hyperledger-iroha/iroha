@@ -20,7 +20,7 @@ class RegisterOfflineDeviceAttestation(
     val registration: DeviceAttestationRegistration,
     val creationTimeMs: Long,
     val timeToLiveMs: Long? = null,
-    val nonce: Int? = null,
+    val nonce: Long? = null,
     val feePayment: FeePaymentIntent,
     metadata: Map<String, JsonValue> = emptyMap(),
 ) {
@@ -45,7 +45,6 @@ class RegisterOfflineDeviceAttestation(
                 "transaction lifetime must not outlive the device attestation"
             }
         }
-        if (nonce != null) require(nonce > 0) { "nonce must be positive when present" }
         // Reuse the canonical payload model's I105 and metadata validation immediately.
         transactionPayload()
     }

@@ -1065,15 +1065,14 @@ function normalizeFixedBytes(value, name, length = 32) {
       );
     }
     return value.map((byte, index) => {
-      const numeric = Number(byte);
-      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
           ValidationErrorCode.VALUE_OUT_OF_RANGE,
           `${name}[${index}] must be an integer between 0 and 255`,
           `${name}[${index}]`,
         );
       }
-      return numeric;
+      return byte;
     });
   }
 
@@ -1121,15 +1120,14 @@ function normalizeByteArray(value, name) {
       fail(ValidationErrorCode.INVALID_STRING, `${name} must be a non-empty byte array`, name);
     }
     return value.map((byte, index) => {
-      const numeric = Number(byte);
-      if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+      if (!Number.isInteger(byte) || byte < 0 || byte > 0xff) {
         fail(
           ValidationErrorCode.VALUE_OUT_OF_RANGE,
           `${name}[${index}] must be an integer between 0 and 255`,
           `${name}[${index}]`,
         );
       }
-      return numeric;
+      return byte;
     });
   }
   if (Buffer.isBuffer(value)) {

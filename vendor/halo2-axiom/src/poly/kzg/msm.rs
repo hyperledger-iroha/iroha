@@ -2,7 +2,7 @@ use std::fmt::Debug;
 
 use super::commitment::ParamsKZG;
 use crate::{
-    arithmetic::{best_multiexp, parallelize, CurveAffine},
+    arithmetic::{CurveAffine, best_multiexp, parallelize},
     poly::commitment::MSM,
 };
 use group::{Curve, Group};

@@ -177,7 +177,8 @@ public final class DefaultOkHttpWiringTests {
           GatewayProvider.builder()
               .setName("alpha")
               .setProviderIdHex("aa".repeat(32))
-              .setGatewayPublicKeyHex("bb".repeat(32))
+              .setGatewayPublicKeyHex(
+                  "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
               .setBaseUrl("https://providers.example")
               .setStreamTokenBase64(Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))
               .build();

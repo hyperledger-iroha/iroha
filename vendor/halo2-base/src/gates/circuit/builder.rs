@@ -114,7 +114,8 @@ impl<F: ScalarField> BaseCircuitBuilder<F> {
 
     /// Deep clone of `self`, where the underlying object of shared references in [SharedCopyConstraintManager] and [LookupAnyManager] are cloned.
     pub fn deep_clone(&self) -> Self {
-        let cm: CopyConstraintManager<F> = self.core.copy_manager.lock().unwrap().clone();
+        let mut cm: CopyConstraintManager<F> = self.core.copy_manager.lock().unwrap().clone();
+        cm.reset_physical_assignments();
         let cm_ref = Arc::new(Mutex::new(cm));
         let mut clone = self.clone().use_copy_manager(cm_ref.clone());
         for lm in &mut clone.lookup_manager {

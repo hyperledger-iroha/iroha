@@ -3,10 +3,26 @@ import Foundation
 @testable import IrohaSwift
 
 enum KagemushaPeerTransportTestFixtures {
+    static func receiveOfferArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_receive_offer_v2.hex")
+    }
+
+    static func recipientRequestArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_payment_request_v2.hex")
+    }
+
+    static func recipientRegistrationLineageArchive() throws -> Data {
+        try rustFixtureData("offline_recipient_registration_lineage_v2.hex")
+    }
+
+    static func publisherCheckpointEnvelope() throws -> Data {
+        try rustFixtureData("offline_recipient_checkpoint_envelope.hex")
+    }
+
     static func receiveRequest(seed: UInt8 = 0x41) throws
         -> KagemushaRecipientReceiveOfferV2
     {
-        let exact = try rustFixtureData("offline_recipient_receive_offer_v2.hex")
+        let exact = try receiveOfferArchive()
         if seed == 0x41 {
             return try KagemushaRecipientReceiveOfferV2(noritoArchive: exact)
         }

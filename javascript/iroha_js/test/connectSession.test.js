@@ -99,3 +99,18 @@ test("generateConnectSid rejects invalid byte arrays", () => {
       error instanceof TypeError && /appPublicKey\[0\] must be a byte/.test(error.message),
   );
 });
+
+test("generateConnectSid rejects coercible non-byte array entries", () => {
+  const chainId = "test-chain";
+  const nonce = new Array(16).fill(1);
+
+  for (const entry of ["1", true, null]) {
+    const appPublicKey = new Array(32).fill(0);
+    appPublicKey[0] = entry;
+    assert.throws(
+      () => generateConnectSid({ chainId, appPublicKey, nonce }),
+      (error) =>
+        error instanceof TypeError && /appPublicKey\[0\] must be a byte/.test(error.message),
+    );
+  }
+});

@@ -47,7 +47,10 @@ export class ConnectQueueJournal {
       retentionMs: options.ttlMs ?? options.retentionMs ?? this.#config.retentionMs,
       receivedAtMs: options.receivedAtMs,
     });
-    const nowMs = options.nowMs ?? record.receivedAtMs ?? currentTimestamp();
+    const nowMs = normalizeNonNegative(
+      options.nowMs ?? record.receivedAtMs ?? currentTimestamp(),
+      "nowMs",
+    );
     return this.#runLocked(() => this.#store.append(record, nowMs));
   }
 
@@ -55,18 +58,25 @@ export class ConnectQueueJournal {
     await this.#ready;
     const canonical = normalizeDirection(direction);
     return this.#runLocked(() =>
-      this.#store.records(canonical, options.nowMs ?? currentTimestamp()),
+      this.#store.records(
+        canonical,
+        normalizeNonNegative(options.nowMs ?? currentTimestamp(), "nowMs"),
+      ),
     );
   }
 
   async popOldest(direction, count = 1, options = {}) {
     await this.#ready;
-    if (!Number.isInteger(count) || count <= 0) {
+    if (!Number.isSafeInteger(count) || count <= 0) {
       throw new ConnectJournalError("pop count must be a positive integer");
     }
     const canonical = normalizeDirection(direction);
     return this.#runLocked(() =>
-      this.#store.popOldest(canonical, count, options.nowMs ?? currentTimestamp()),
+      this.#store.popOldest(
+        canonical,
+        count,
+        normalizeNonNegative(options.nowMs ?? currentTimestamp(), "nowMs"),
+      ),
     );
   }
 
@@ -335,11 +345,15 @@ function normalizeByteArray(value, name) {
     throw new ConnectJournalError(`${name} must not be empty`);
   }
   const normalized = bytes.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 0xff) {
+    if (
+      typeof entry !== "number"
+      || !Number.isInteger(entry)
+      || entry < 0
+      || entry > 0xff
+    ) {
       throw new ConnectJournalError(`${name}[${index}] must be a byte`);
     }
-    return numeric;
+    return entry;
   });
   return new Uint8Array(normalized);
 }
@@ -441,16 +455,29 @@ function normalizeDirection(direction) {
 }
 
 function normalizePositive(value, name) {
-  const number = Number(value);
   if (
-    !Number.isFinite(number) ||
-    !Number.isInteger(number) ||
-    !Number.isSafeInteger(number) ||
-    number <= 0
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
   ) {
     throw new ConnectJournalError(`${name} must be a positive integer`);
   }
-  return number;
+  return value;
+}
+
+function normalizeNonNegative(value, name) {
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    throw new ConnectJournalError(`${name} must be a non-negative integer`);
+  }
+  return value;
 }
 
 function requestToPromise(request) {

@@ -1,7 +1,6 @@
 package org.hyperledger.iroha.android.governance;
 
 import java.math.BigInteger;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import org.hyperledger.iroha.android.address.AccountAddress;
@@ -12,6 +11,7 @@ import org.hyperledger.iroha.android.model.instructions.FinalizeReferendumInstru
 import org.hyperledger.iroha.android.model.instructions.GovernanceInstructionUtils;
 import org.hyperledger.iroha.android.model.instructions.PersistCouncilForEpochInstruction;
 import org.hyperledger.iroha.android.model.instructions.ProposeDeployContractInstruction;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 
 /** Regression tests covering the governance instruction builders. */
 public final class GovernanceInstructionBuilderTests {
@@ -303,9 +303,7 @@ public final class GovernanceInstructionBuilderTests {
 
   private static String sampleI105(final int fill) {
     try {
-      final byte[] publicKey = new byte[32];
-      Arrays.fill(publicKey, (byte) fill);
-      return AccountAddress.fromAccount(publicKey, "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
           .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final Exception ex) {
       throw new IllegalStateException("failed to build canonical account fixture", ex);

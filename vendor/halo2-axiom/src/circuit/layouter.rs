@@ -3,6 +3,7 @@
 use std::cmp;
 use std::collections::HashSet;
 use std::fmt;
+use std::marker::PhantomData;
 
 use ff::Field;
 
@@ -112,7 +113,7 @@ pub trait RegionLayouter<F: Field>: fmt::Debug + SyncDeps {
 
     /// Returns the value of the instance column's cell at absolute location `row`.
     fn instance_value(&mut self, instance: Column<Instance>, row: usize)
-        -> Result<Value<F>, Error>;
+    -> Result<Value<F>, Error>;
 
     /// Assign a fixed value
     fn assign_fixed(
@@ -192,7 +193,6 @@ impl PartialOrd for RegionColumn {
     }
 }
 
-/*
 impl RegionShape {
     /// Create a new `RegionShape` for a region at `region_index`.
     pub fn new(region_index: RegionIndex) -> Self {
@@ -233,21 +233,22 @@ impl<F: Field> RegionLayouter<F> for RegionShape {
     }
 
     fn assign_advice<'v>(
-        &'v mut self,
-        //_: &'v (dyn Fn() -> String + 'v),
+        &mut self,
         column: Column<Advice>,
         offset: usize,
-        _to: Value<Assigned<F>>, // &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
-    ) -> Result<AssignedCell<&Assigned<F>, F>, Error> {
+        _to: Value<Assigned<F>>,
+    ) -> AssignedCell<&'v Assigned<F>, F> {
         self.columns.insert(Column::<Any>::from(column).into());
         self.row_count = cmp::max(self.row_count, offset + 1);
 
-        Ok(Cell {
-            region_index: self.region_index,
-            row_offset: offset,
-            column: column.into(),
-        });
-        todo!()
+        AssignedCell {
+            value: Value::unknown(),
+            cell: Cell {
+                row_offset: offset,
+                column: column.into(),
+            },
+            _marker: PhantomData,
+        }
     }
 
     fn assign_advice_from_constant<'v>(
@@ -258,7 +259,9 @@ impl<F: Field> RegionLayouter<F> for RegionShape {
         constant: Assigned<F>,
     ) -> Result<Cell, Error> {
         // The rest is identical to witnessing an advice cell.
-        self.assign_advice(column, offset, Value::known(constant))
+        Ok(self
+            .assign_advice(column, offset, Value::known(constant))
+            .cell())
     }
 
     fn assign_advice_from_instance<'v>(
@@ -274,7 +277,6 @@ impl<F: Field> RegionLayouter<F> for RegionShape {
 
         Ok((
             Cell {
-                region_index: self.region_index,
                 row_offset: offset,
                 column: advice.into(),
             },
@@ -290,21 +292,14 @@ impl<F: Field> RegionLayouter<F> for RegionShape {
         Ok(Value::unknown())
     }
 
-    fn assign_fixed<'v>(
-        &'v mut self,
-        _: &'v (dyn Fn() -> String + 'v),
-        column: Column<Fixed>,
-        offset: usize,
-        _to: &'v mut (dyn FnMut() -> Value<Assigned<F>> + 'v),
-    ) -> Result<Cell, Error> {
+    fn assign_fixed(&mut self, column: Column<Fixed>, offset: usize, _to: Assigned<F>) -> Cell {
         self.columns.insert(Column::<Any>::from(column).into());
         self.row_count = cmp::max(self.row_count, offset + 1);
 
-        Ok(Cell {
-            region_index: self.region_index,
+        Cell {
             row_offset: offset,
             column: column.into(),
-        })
+        }
     }
 
     fn name_column<'v>(
@@ -320,18 +315,15 @@ impl<F: Field> RegionLayouter<F> for RegionShape {
         Ok(())
     }
 
-    fn constrain_equal(&mut self, _left: Cell, _right: Cell) -> Result<(), Error> {
+    fn constrain_equal(&mut self, _left: Cell, _right: Cell) {
         // Equality constraints don't affect the region shape.
-        Ok(())
     }
 
     fn get_challenge(&self, _: Challenge) -> Value<F> {
         Value::unknown()
     }
 
-    fn next_phase(&mut self) -> Result<(), Error> {
+    fn next_phase(&mut self) {
         // Region shapes don't care about phases.
-        Ok(())
     }
 }
-*/

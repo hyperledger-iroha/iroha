@@ -7,6 +7,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import org.hyperledger.iroha.android.address.PublicKeyCodec;
 
 /** Minimal JSON parser for RAM-LFE program-policy, execute, and verify payloads. */
 public final class RamLfeJsonParser {
@@ -29,15 +30,16 @@ public final class RamLfeJsonParser {
                   "ram-lfe program policy list.items[" + i + "].program_id"),
               requiredExactString(
                   item.get("owner"), "ram-lfe program policy list.items[" + i + "].owner"),
-              Boolean.TRUE.equals(item.get("active")),
-              requiredExactString(
+              asBoolean(
+                  item.get("active"), "ram-lfe program policy list.items[" + i + "].active"),
+              requiredPublicKeyLiteral(
                   item.get("resolver_public_key"),
                   "ram-lfe program policy list.items[" + i + "].resolver_public_key"),
-              optionalString(item.get("output_opening_public_key")) == null
-                  ? requiredExactString(
+              !item.containsKey("output_opening_public_key")
+                  ? requiredPublicKeyLiteral(
                       item.get("resolver_public_key"),
                       "ram-lfe program policy list.items[" + i + "].resolver_public_key")
-                  : requiredExactString(
+                  : requiredPublicKeyLiteral(
                       item.get("output_opening_public_key"),
                       "ram-lfe program policy list.items[" + i + "].output_opening_public_key"),
               requiredExactLowercaseString(
@@ -64,7 +66,8 @@ public final class RamLfeJsonParser {
                       "ram-lfe program policy list.items["
                           + i
                           + "].input_encryption_public_parameters_decoded"),
-              optionalString(item.get("note")),
+              optionalString(
+                  item.get("note"), "ram-lfe program policy list.items[" + i + "].note"),
               item.get("proof_verifier") == null
                   ? null
                   : parseProofVerifier(
@@ -111,7 +114,7 @@ public final class RamLfeJsonParser {
         expectObject(
             parse(payload, "ram-lfe receipt verify response"), "ram-lfe receipt verify response");
     return new RamLfeReceiptVerifyResponse(
-        Boolean.TRUE.equals(root.get("valid")),
+        asBoolean(root.get("valid"), "ram-lfe receipt verify response.valid"),
         requiredExactString(
             root.get("program_id"), "ram-lfe receipt verify response.program_id"),
         requiredExactLowercaseString(
@@ -128,7 +131,7 @@ public final class RamLfeJsonParser {
                 root.get("output_hash_matches"),
                 "ram-lfe receipt verify response.output_hash_matches")
             : null,
-        optionalString(root.get("error")));
+        optionalString(root.get("error"), "ram-lfe receipt verify response.error"));
   }
 
   private static Object parse(final byte[] payload, final String context) {
@@ -162,7 +165,7 @@ public final class RamLfeJsonParser {
   }
 
   private static String requiredString(final Object value, final String path) {
-    final String string = optionalString(value);
+    final String string = optionalString(value, path);
     if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
@@ -170,7 +173,7 @@ public final class RamLfeJsonParser {
   }
 
   private static String requiredExactString(final Object value, final String path) {
-    final String string = optionalString(value);
+    final String string = optionalString(value, path);
     if (string == null || string.trim().isEmpty()) {
       throw new IllegalStateException(path + " must be a non-empty string");
     }
@@ -184,6 +187,14 @@ public final class RamLfeJsonParser {
     final String string = requiredExactString(value, path);
     if (!string.toLowerCase(Locale.ROOT).equals(string)) {
       throw new IllegalStateException(path + " must be an exact lowercase string");
+    }
+    return string;
+  }
+
+  private static String requiredPublicKeyLiteral(final Object value, final String path) {
+    final String string = requiredExactString(value, path);
+    if (PublicKeyCodec.decodePublicKeyLiteral(string) == null) {
+      throw new IllegalStateException(path + " must be a valid public key literal");
     }
     return string;
   }
@@ -202,11 +213,14 @@ public final class RamLfeJsonParser {
     return canonicalizeExactHex(value, path);
   }
 
-  private static String optionalString(final Object value) {
+  private static String optionalString(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    return value instanceof String string ? string : String.valueOf(value);
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    return string;
   }
 
   private static long asLong(final Object value, final String path) {
@@ -227,6 +241,13 @@ public final class RamLfeJsonParser {
       return null;
     }
     return asLong(value, path);
+  }
+
+  private static boolean asBoolean(final Object value, final String path) {
+    if (!(value instanceof Boolean bool)) {
+      throw new IllegalStateException(path + " must be a boolean");
+    }
+    return bool;
   }
 
   private static Boolean asOptionalBoolean(final Object value, final String path) {

@@ -4,11 +4,11 @@ use std::marker::PhantomData;
 use std::ops::MulAssign;
 
 use super::{
-    construct_intermediate_sets, ChallengeU, ChallengeV, ChallengeY, Commitment, RotationSet,
+    ChallengeU, ChallengeV, ChallengeY, Commitment, RotationSet, construct_intermediate_sets,
 };
 use crate::arithmetic::{
-    eval_polynomial, evaluate_vanishing_polynomial, kate_division, lagrange_interpolate,
-    parallelize, powers, CurveAffine,
+    CurveAffine, eval_polynomial, evaluate_vanishing_polynomial, kate_division,
+    lagrange_interpolate, parallelize, powers,
 };
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::{Blind, ParamsProver, Prover};

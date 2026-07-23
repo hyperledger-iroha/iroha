@@ -5,6 +5,13 @@ import {
   normalizeAssetDefinitionId,
   normalizeI105AccountId,
 } from "./normalizers.js";
+import { AccountAddress } from "./address.js";
+import { parseCanonicalContractAddress } from "./contractAddress.js";
+import {
+  encodeAccountIdNoritoValue,
+  encodeAssetDefinitionIdNoritoValue,
+  encodeNumericNoritoValue,
+} from "./norito.js";
 import { verifyEd25519Strict } from "./ed25519Strict.js";
 import { KotodamaQuantity, NumericV1, NumericV1Error } from "./numericV1.js";
 
@@ -21,6 +28,9 @@ export const VALIDATION_FEE_CHARGING_MODE =
   "PER_QUALIFYING_TRANSFER_INSTRUCTION";
 export const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS =
   "TREASURY_PAYOUT";
+export const VALIDATION_FEE_TREASURY_PAYOUT_ENTRYPOINT =
+  "autonomous_validation_fee_tick";
+export const VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT = 4;
 
 const NORITO_COMPACT_LEN_FLAG = 0x02;
 const UINT64_MASK = 0xffff_ffff_ffff_ffffn;
@@ -36,6 +46,8 @@ const MAX_VALIDATION_FEE_SIGNATURES = 256;
 const MAX_VALIDATION_FEE_STRING_CODE_UNITS = 1024;
 const MAX_VALIDATION_FEE_STRING_BYTES = 4096;
 const MAX_VALIDATION_FEE_BYTE_SOURCE_LENGTH = 64;
+const CONTRACT_SUBJECT_HASH_TO_POINT_TAG =
+  "iroha:contract-subject:hash-to-point:v1:";
 
 export class ValidationFeePolicyError extends Error {
   constructor(code, message) {
@@ -109,6 +121,9 @@ function snapshotPolicy(value) {
   const exemptionClasses = Array.isArray(policy.exemption_classes)
     ? Object.freeze([...policy.exemption_classes])
     : policy.exemption_classes;
+  const treasuryPayoutBinding = snapshotTreasuryPayoutBinding(
+    policy.treasury_payout_binding,
+  );
   return Object.freeze({
     schema_version: policy.schema_version,
     network_id: policy.network_id,
@@ -133,6 +148,100 @@ function snapshotPolicy(value) {
         : policy.expires_after_height,
     governance_keyset_id: policy.governance_keyset_id,
     exemption_classes: exemptionClasses,
+    treasury_payout_binding: treasuryPayoutBinding,
+  });
+}
+
+function snapshotTreasuryPayoutBinding(value) {
+  if (value === null || value === undefined) return null;
+  const binding = normalizeObject(value, "policy.treasury_payout_binding");
+  if (!Array.isArray(binding.recipients)) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout recipients must be an array",
+    );
+  }
+  if (
+    binding.recipients.length !==
+    VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT
+  ) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout must bind exactly four recipients",
+    );
+  }
+  const recipients = binding.recipients.map((value, index) => {
+    const recipient = normalizeObject(
+      value,
+      `policy.treasury_payout_binding.recipients[${index}]`,
+    );
+    return Object.freeze({
+      account_id: canonicalAccountId(
+        recipient.account_id,
+        `policy.treasury_payout_binding.recipients[${index}].account_id`,
+      ),
+      share: canonicalQuantity(
+        recipient.share,
+        `policy.treasury_payout_binding.recipients[${index}].share`,
+      ),
+    });
+  });
+  const contractAddress = nonEmptyTrimmedString(
+    binding.contract_address,
+    "policy.treasury_payout_binding.contract_address",
+  );
+  try {
+    parseCanonicalContractAddress(
+      contractAddress,
+      "policy.treasury_payout_binding.contract_address",
+    );
+  } catch {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout contract address must be canonical",
+    );
+  }
+  return Object.freeze({
+    contract_address: contractAddress,
+    code_hash: bytesToHex(
+      bytes32(
+        binding.code_hash,
+        "policy.treasury_payout_binding.code_hash",
+      ),
+    ),
+    entrypoint: canonicalName(
+      binding.entrypoint,
+      "policy.treasury_payout_binding.entrypoint",
+    ),
+    treasury_account_id: canonicalAccountId(
+      binding.treasury_account_id,
+      "policy.treasury_payout_binding.treasury_account_id",
+    ),
+    sbd_asset_id: canonicalAssetDefinitionId(
+      binding.sbd_asset_id,
+      "policy.treasury_payout_binding.sbd_asset_id",
+    ),
+    xor_asset_id: canonicalAssetDefinitionId(
+      binding.xor_asset_id,
+      "policy.treasury_payout_binding.xor_asset_id",
+    ),
+    pool_vault_account_id: canonicalAccountId(
+      binding.pool_vault_account_id,
+      "policy.treasury_payout_binding.pool_vault_account_id",
+    ),
+    batch_sbd: canonicalQuantity(
+      binding.batch_sbd,
+      "policy.treasury_payout_binding.batch_sbd",
+    ),
+    min_xor_out: canonicalQuantity(
+      binding.min_xor_out,
+      "policy.treasury_payout_binding.min_xor_out",
+    ),
+    max_xor_out: canonicalQuantity(
+      binding.max_xor_out,
+      "policy.treasury_payout_binding.max_xor_out",
+    ),
+    recipients: Object.freeze(recipients),
   });
 }
 
@@ -788,6 +897,7 @@ function validatePolicyBody(policy, context) {
     "policy.governance_keyset_id",
   );
   validateExemptionClasses(policy.exemption_classes);
+  validateTreasuryPayoutBinding(policy, canonicalTreasuryAccountId);
 
   const effectiveFromHeight = toU64(
     policy.effective_from_height,
@@ -941,6 +1051,105 @@ function validateExemptionClasses(value) {
   }
 }
 
+function validateTreasuryPayoutBinding(policy, policyTreasuryAccountId) {
+  const enabled = policy.exemption_classes.includes(
+    VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS,
+  );
+  const binding = policy.treasury_payout_binding;
+  if (!enabled && binding === null) return;
+  if (!enabled || binding === null) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      enabled
+        ? "validation fee TREASURY_PAYOUT exemption requires an exact typed binding"
+        : "validation fee treasury payout binding requires the TREASURY_PAYOUT exemption",
+    );
+  }
+  if (bytes(binding.code_hash, "policy.treasury_payout_binding.code_hash").every((byte) => byte === 0)) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout code hash must be non-zero",
+    );
+  }
+  if (binding.entrypoint !== VALIDATION_FEE_TREASURY_PAYOUT_ENTRYPOINT) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      `validation fee treasury payout entrypoint must be ${VALIDATION_FEE_TREASURY_PAYOUT_ENTRYPOINT}`,
+    );
+  }
+  if (
+    binding.treasury_account_id !== policyTreasuryAccountId ||
+    contractSubjectAccountId(binding.contract_address) !== policyTreasuryAccountId
+  ) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout contract subject must equal the policy treasury",
+    );
+  }
+  if (binding.sbd_asset_id !== policy.ds_asset_id) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout SBD asset must equal the policy fee asset",
+    );
+  }
+  if (binding.sbd_asset_id === binding.xor_asset_id) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout SBD and XOR assets must differ",
+    );
+  }
+  if (binding.treasury_account_id === binding.pool_vault_account_id) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout treasury and pool vault must differ",
+    );
+  }
+  const batch = numericParts(binding.batch_sbd);
+  const minimum = numericParts(binding.min_xor_out);
+  const maximum = numericParts(binding.max_xor_out);
+  if (batch.mantissa <= 0n || batch.scale > policy.ds_scale) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout batch is invalid for the policy asset scale",
+    );
+  }
+  if (minimum.mantissa <= 0n || compareNumericParts(minimum, maximum) > 0) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout XOR output bounds are invalid",
+    );
+  }
+  const accounts = new Set();
+  const shares = [];
+  for (const recipient of binding.recipients) {
+    if (
+      recipient.account_id === binding.treasury_account_id ||
+      recipient.account_id === binding.pool_vault_account_id ||
+      accounts.has(recipient.account_id)
+    ) {
+      fail(
+        "INVALID_TREASURY_PAYOUT_BINDING",
+        "validation fee treasury payout recipients must be unique and differ from treasury and vault",
+      );
+    }
+    accounts.add(recipient.account_id);
+    const share = numericParts(recipient.share);
+    if (share.mantissa <= 0n) {
+      fail(
+        "INVALID_TREASURY_PAYOUT_BINDING",
+        "validation fee treasury payout shares must be positive",
+      );
+    }
+    shares.push(share);
+  }
+  if (!numericPartsSumEqualsOne(shares)) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      "validation fee treasury payout shares must sum exactly to one",
+    );
+  }
+}
+
 function encodeValidationFeePolicyBare(policy) {
   return concatBytes(
     encodeField(encodeU16(policy.schema_version, "policy.schema_version")),
@@ -972,6 +1181,101 @@ function encodeValidationFeePolicyBare(policy) {
     ),
     encodeField(encodeString(policy.governance_keyset_id)),
     encodeField(encodeStringVec(policy.exemption_classes)),
+    encodeField(
+      encodeOptionalTreasuryPayoutBinding(policy.treasury_payout_binding),
+    ),
+  );
+}
+
+function encodeOptionalTreasuryPayoutBinding(value) {
+  return value === null
+    ? Uint8Array.of(0)
+    : concatBytes(
+        Uint8Array.of(1),
+        encodeField(encodeTreasuryPayoutBindingBare(value)),
+      );
+}
+
+function encodeTreasuryPayoutBindingBare(binding) {
+  return concatBytes(
+    encodeField(encodeString(binding.contract_address)),
+    encodeArray32Field(
+      binding.code_hash,
+      "policy.treasury_payout_binding.code_hash",
+    ),
+    encodeField(encodeString(binding.entrypoint)),
+    encodeField(
+      encodeAccountIdNoritoValue(
+        binding.treasury_account_id,
+        "policy.treasury_payout_binding.treasury_account_id",
+      ),
+    ),
+    encodeField(
+      encodeAssetDefinitionIdNoritoValue(
+        binding.sbd_asset_id,
+        "policy.treasury_payout_binding.sbd_asset_id",
+      ),
+    ),
+    encodeField(
+      encodeAssetDefinitionIdNoritoValue(
+        binding.xor_asset_id,
+        "policy.treasury_payout_binding.xor_asset_id",
+      ),
+    ),
+    encodeField(
+      encodeAccountIdNoritoValue(
+        binding.pool_vault_account_id,
+        "policy.treasury_payout_binding.pool_vault_account_id",
+      ),
+    ),
+    encodeField(
+      encodeQuantity(
+        binding.batch_sbd,
+        "policy.treasury_payout_binding.batch_sbd",
+      ),
+    ),
+    encodeField(
+      encodeQuantity(
+        binding.min_xor_out,
+        "policy.treasury_payout_binding.min_xor_out",
+      ),
+    ),
+    encodeField(
+      encodeQuantity(
+        binding.max_xor_out,
+        "policy.treasury_payout_binding.max_xor_out",
+      ),
+    ),
+    encodeTreasuryPayoutRecipients(binding.recipients),
+  );
+}
+
+function encodeTreasuryPayoutRecipients(recipients) {
+  return encodeField(
+    concatBytes(
+      encodeU64(
+        recipients.length,
+        "policy.treasury_payout_binding.recipients.length",
+      ),
+      ...recipients.map((recipient, index) =>
+        encodeField(
+          concatBytes(
+            encodeField(
+              encodeAccountIdNoritoValue(
+                recipient.account_id,
+                `policy.treasury_payout_binding.recipients[${index}].account_id`,
+              ),
+            ),
+            encodeField(
+              encodeNumericNoritoValue(
+                recipient.share,
+                `policy.treasury_payout_binding.recipients[${index}].share`,
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
   );
 }
 
@@ -1159,6 +1463,121 @@ function nonEmptyTrimmedString(value, label) {
     fail("INPUT_TOO_LARGE", `${label} is too large`);
   }
   return value;
+}
+
+function canonicalName(value, label) {
+  const name = nonEmptyTrimmedString(value, label);
+  if (/[@#$\s]/u.test(name) || name.normalize("NFC") !== name) {
+    fail("INVALID_TREASURY_PAYOUT_BINDING", `${label} must be a canonical Name`);
+  }
+  return name;
+}
+
+function canonicalAccountId(value, label) {
+  const literal = nonEmptyTrimmedString(value, label);
+  let canonical;
+  try {
+    canonical = normalizeI105AccountId(literal, label);
+  } catch {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      `${label} must be a canonical I105 account id`,
+    );
+  }
+  if (canonical !== literal) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      `${label} must be a canonical I105 account id`,
+    );
+  }
+  return canonical;
+}
+
+function canonicalAssetDefinitionId(value, label) {
+  const literal = nonEmptyTrimmedString(value, label);
+  let canonical;
+  try {
+    canonical = normalizeAssetDefinitionId(literal, label);
+  } catch {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      `${label} must be a canonical asset definition id`,
+    );
+  }
+  if (canonical !== literal) {
+    fail(
+      "INVALID_TREASURY_PAYOUT_BINDING",
+      `${label} must be a canonical asset definition id`,
+    );
+  }
+  return canonical;
+}
+
+function numericParts(value) {
+  const numeric = NumericV1.decodeQuantityJson(value);
+  return { mantissa: numeric.mantissa, scale: numeric.scale };
+}
+
+function compareNumericParts(left, right) {
+  const scale = Math.max(left.scale, right.scale);
+  const leftMantissa = left.mantissa * 10n ** BigInt(scale - left.scale);
+  const rightMantissa = right.mantissa * 10n ** BigInt(scale - right.scale);
+  return leftMantissa < rightMantissa ? -1 : leftMantissa > rightMantissa ? 1 : 0;
+}
+
+function numericPartsSumEqualsOne(values) {
+  const scale = values.reduce(
+    (maximum, value) => Math.max(maximum, value.scale),
+    0,
+  );
+  const sum = values.reduce(
+    (total, value) =>
+      total + value.mantissa * 10n ** BigInt(scale - value.scale),
+    0n,
+  );
+  return sum === 10n ** BigInt(scale);
+}
+
+function contractSubjectAccountId(contractAddress) {
+  const parsed = parseCanonicalContractAddress(
+    contractAddress,
+    "policy.treasury_payout_binding.contract_address",
+  );
+  const chainDiscriminant = contractAddressChainDiscriminant(parsed.hrp);
+  for (let counter = 0; counter <= 0xffff_ffff; counter += 1) {
+    const counterBytes = new Uint8Array(4);
+    new DataView(counterBytes.buffer).setUint32(0, counter, false);
+    const candidate = irohaHash(
+      concatBytes(
+        textEncoder.encode(CONTRACT_SUBJECT_HASH_TO_POINT_TAG),
+        textEncoder.encode(contractAddress),
+        counterBytes,
+      ),
+    );
+    try {
+      ed25519.ExtendedPoint.fromHex(candidate, false);
+      return AccountAddress.fromAccount({
+        publicKey: candidate,
+        algorithm: "ed25519",
+      }).toI105(chainDiscriminant);
+    } catch {
+      // Retry exactly as the ledger does until the bytes decode as an Ed25519 point.
+    }
+  }
+  fail(
+    "INVALID_TREASURY_PAYOUT_BINDING",
+    "validation fee treasury payout contract subject derivation was exhausted",
+  );
+}
+
+function contractAddressChainDiscriminant(hrp) {
+  if (hrp === "sorac") return 753n;
+  if (hrp === "tairac") return 369n;
+  if (/^c[0-9a-f]+$/u.test(hrp)) return BigInt(`0x${hrp.slice(1)}`);
+  fail(
+    "INVALID_TREASURY_PAYOUT_BINDING",
+    "validation fee treasury payout contract address has an unsupported chain prefix",
+  );
 }
 
 function canonicalQuantity(value, label) {

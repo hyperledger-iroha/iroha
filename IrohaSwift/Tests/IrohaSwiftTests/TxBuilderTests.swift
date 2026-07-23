@@ -2194,6 +2194,38 @@ final class TxBuilderTests: XCTestCase {
     }
 
     @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitAndWaitAsyncDoesNotTreatCommittedAsSuccess() async throws {
+        try requireEd25519Encoder()
+        PipelineURLProtocol.reset()
+        PipelineURLProtocol.configure(statuses: ["Committed"])
+        let sdk = try makePipelineSDK()
+        let keypair = try makeFixtureKeypair()
+        let request = TransferRequest(chainId: Self.fixtureChainId,
+                                      authority: AccountId.make(publicKey: keypair.publicKey),
+                                      assetDefinitionId: Self.fixtureAssetDefinition,
+                                      quantity: "1",
+                                      destination: AccountId.make(publicKey: keypair.publicKey),
+                                      description: nil,
+                                      feePayment: .authority(chargeLimits: [], gasLimit: nil),
+                                      ttlMs: 60)
+        let options = PipelineStatusPollOptions(pollInterval: 0,
+                                                timeout: 0.1,
+                                                maxAttempts: 2)
+        do {
+            _ = try await sdk.submitAndWait(transfer: request, keypair: keypair, pollOptions: options)
+            XCTFail("Expected Committed-only status stream to time out")
+        } catch let error as PipelineStatusError {
+            if case .timeout = error {
+                // expected
+            } else {
+                XCTFail("Unexpected error: \(error)")
+            }
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
     func testSubmitAndWaitAsyncFailureThrows() async throws {
         try requireEd25519Encoder()
         PipelineURLProtocol.reset()

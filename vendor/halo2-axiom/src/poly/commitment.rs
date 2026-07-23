@@ -1,7 +1,7 @@
 use super::{
+    Coeff, LagrangeCoeff, Polynomial,
     query::{ProverQuery, VerifierQuery},
     strategy::Guard,
-    Coeff, LagrangeCoeff, Polynomial,
 };
 use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead, TranscriptWrite};
@@ -23,11 +23,7 @@ pub trait CommitmentScheme {
     type Curve: CurveAffine<ScalarExt = Self::Scalar>;
 
     /// Constant prover parameters
-    type ParamsProver: for<'params> ParamsProver<
-        'params,
-        Self::Curve,
-        ParamsVerifier = Self::ParamsVerifier,
-    >;
+    type ParamsProver: for<'params> ParamsProver<'params, Self::Curve, ParamsVerifier = Self::ParamsVerifier>;
 
     /// Constant verifier parameters
     type ParamsVerifier: for<'params> ParamsVerifier<'params, Self::Curve>;
@@ -85,7 +81,7 @@ pub trait ParamsProver<'params, C: CurveAffine>: Params<'params, C> {
     /// slice of coefficients. The commitment may be blinded by the blinding
     /// factor `r`.
     fn commit(&self, poly: &Polynomial<C::ScalarExt, Coeff>, r: Blind<C::ScalarExt>)
-        -> C::CurveExt;
+    -> C::CurveExt;
 
     /// Getter for g generators
     fn get_g(&self) -> &[C];

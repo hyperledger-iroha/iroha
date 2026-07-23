@@ -90,15 +90,17 @@ public final class GatewayFetchSummary {
         SorafsInputValidator.requireCanonicalChunkerHandle(
             requireString(root, "chunker_handle"), "chunker_handle");
     builder.clientId = optionalString(root, "client_id");
-    builder.chunkCount = requireLong(root, "chunk_count");
-    builder.contentLength = requireLong(root, "content_length");
-    builder.assembledBytes = requireLong(root, "assembled_bytes");
+    builder.chunkCount = requireNonNegativeLong(root, "chunk_count");
+    builder.contentLength = requireNonNegativeLong(root, "content_length");
+    builder.assembledBytes = requireNonNegativeLong(root, "assembled_bytes");
     builder.anonymityPolicy = requireString(root, "anonymity_policy");
     builder.anonymityStatus = requireString(root, "anonymity_status");
     builder.anonymityReason = optionalString(root, "anonymity_reason");
-    builder.anonymitySoranetSelected = requireLong(root, "anonymity_soranet_selected");
-    builder.anonymityPqSelected = requireLong(root, "anonymity_pq_selected");
-    builder.anonymityClassicalSelected = requireLong(root, "anonymity_classical_selected");
+    builder.anonymitySoranetSelected =
+        requireNonNegativeLong(root, "anonymity_soranet_selected");
+    builder.anonymityPqSelected = requireNonNegativeLong(root, "anonymity_pq_selected");
+    builder.anonymityClassicalSelected =
+        requireNonNegativeLong(root, "anonymity_classical_selected");
     builder.anonymityClassicalRatio = requireDouble(root, "anonymity_classical_ratio");
     builder.anonymityPqRatio = requireDouble(root, "anonymity_pq_ratio");
     builder.anonymityCandidateRatio = requireDouble(root, "anonymity_candidate_ratio");
@@ -127,8 +129,8 @@ public final class GatewayFetchSummary {
       reports.add(
           new ProviderReport(
               requireString(map, "provider"),
-              requireLong(map, "successes"),
-              requireLong(map, "failures"),
+              requireNonNegativeLong(map, "successes"),
+              requireNonNegativeLong(map, "failures"),
               requireBoolean(map, "disabled")));
     }
     return Collections.unmodifiableList(reports);
@@ -146,7 +148,7 @@ public final class GatewayFetchSummary {
           new ChunkReceipt(
               requireInt(map, "chunk_index"),
               requireString(map, "provider"),
-              requireLong(map, "attempts")));
+              requireNonNegativeLong(map, "attempts")));
     }
     return Collections.unmodifiableList(receipts);
   }
@@ -188,6 +190,15 @@ public final class GatewayFetchSummary {
       throw new SorafsStorageException("Expected int range for `" + key + "`");
     }
     return (int) value;
+  }
+
+  private static long requireNonNegativeLong(
+      final Map<String, Object> map, final String key) {
+    final long value = requireLong(map, key);
+    if (value < 0) {
+      throw new SorafsStorageException("Expected non-negative integer for `" + key + "`");
+    }
+    return value;
   }
 
   private static double requireDouble(final Map<String, Object> map, final String key) {

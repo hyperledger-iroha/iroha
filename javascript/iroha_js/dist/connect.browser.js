@@ -124,7 +124,15 @@ function toUint8Array(value, name) {
     return new Uint8Array(value);
   }
   if (Array.isArray(value)) {
-    return Uint8Array.from(value);
+    const bytes = new Uint8Array(value.length);
+    for (let index = 0; index < value.length; index += 1) {
+      const entry = value[index];
+      if (!Number.isInteger(entry) || entry < 0 || entry > 0xff) {
+        throw new TypeError(`${name}[${index}] must be a byte`);
+      }
+      bytes[index] = entry;
+    }
+    return bytes;
   }
   if (typeof value === "string") {
     const trimmed = value.trim();

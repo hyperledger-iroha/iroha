@@ -17,6 +17,7 @@ import org.hyperledger.iroha.android.client.JsonEncoder;
 import org.hyperledger.iroha.android.client.JsonParser;
 import org.hyperledger.iroha.android.model.FeePaymentIntent;
 import org.hyperledger.iroha.android.model.TransactionPayload;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.util.HashLiteral;
 import org.hyperledger.iroha.norito.NoritoHeader;
 import org.junit.Test;
@@ -371,7 +372,7 @@ public final class AliasSetupModelsTests {
             },
             FeePaymentIntent.authority(Collections.emptyList()),
             40_000,
-            7,
+            7L,
             Collections.emptyMap());
     assert parsed.body().chainId().equals(payload.chainId());
     assert parsed.body().authority().equals(payload.authority());
@@ -907,9 +908,7 @@ public final class AliasSetupModelsTests {
   }
 
   private static String account(final int fill) throws Exception {
-    final byte[] key = new byte[32];
-    Arrays.fill(key, (byte) fill);
-    return AccountAddress.fromAccount(key, "ed25519")
+    return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
   }
 

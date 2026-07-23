@@ -49,6 +49,7 @@ MAX_STAGE_LINE_BYTES = 512
 MAX_STAGE_DRAIN_BYTES = 64 * 1024
 MAX_RECORDED_STAGE_EVENTS = 1024
 PROCESS_TERMINATION_TIMEOUT_SECONDS = 10.0
+MEMORY_BOUNDED_RELEASE_CODEGEN_UNITS = "256"
 PS = next(
     (candidate for candidate in ("/bin/ps", "/usr/bin/ps") if Path(candidate).exists()),
     "ps",
@@ -242,8 +243,12 @@ def process_tree_rss_bytes(root_pid: int) -> tuple[int, list[int]]:
             f"with status {completed.returncode}"
         )
     rows = parse_ps_rows(completed.stdout)
-    pids = owned_process_ids(root_pid, rows)
     rss_by_pid = {pid: rss for pid, _, _, rss in rows}
+    # `owned_process_ids` deliberately includes the requested root so callers
+    # can reason about a live leader.  Do not retain that synthetic identifier
+    # after the leader has exited: probing a recycled process-group identifier
+    # can target an unrelated group or fail with EPERM on macOS.
+    pids = [pid for pid in owned_process_ids(root_pid, rows) if pid in rss_by_pid]
     return sum(rss_by_pid.get(pid, 0) for pid in pids), pids
 
 
@@ -407,10 +412,15 @@ def soft_stop_bytes(
         margin = min(BYTES_PER_GIB, max(16 * 1024 * 1024, hard_limit_bytes // 16))
     else:
         # Darwin exposes RLIMIT_AS as an alias of its unenforceable RLIMIT_RSS
-        # and rejects finite values with EINVAL.  Leave a larger sampling and
+        # and rejects finite values with EINVAL. Leave a larger sampling and
         # process-group termination margin when supervision is the only limit.
+        # Three GiB at the reviewed 16-GiB ceiling is still three times the
+        # kernel-backed margin and sits on top of the independent host-memory
+        # reserve. A four-GiB margin incorrectly rejected the partitioned
+        # release data-model compiler at just over 12 GiB even with more than
+        # 100 GiB of host memory available, before Kagemusha generation began.
         margin = min(
-            4 * BYTES_PER_GIB,
+            3 * BYTES_PER_GIB,
             max(64 * 1024 * 1024, hard_limit_bytes // 4),
         )
     return max(1, hard_limit_bytes - margin)
@@ -455,27 +465,58 @@ def _process_group_exists(process_group_id: int) -> bool:
     return True
 
 
+def _signal_owned_process_group(process_group_id: int, signal_number: int) -> None:
+    """Signal the owned group, falling back to its exact sampled members.
+
+    Some macOS sandbox profiles permit signalling child PIDs but reject a
+    process-group signal when one Cargo descendant has a more restrictive
+    execution profile.  The fallback remains scoped to PIDs observed in the
+    freshly sampled descendant/group set; it never scans or signals by name.
+    """
+
+    try:
+        os.killpg(process_group_id, signal_number)
+        return
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        pass
+
+    try:
+        _, pids = process_tree_rss_bytes(process_group_id)
+    except RuntimeError:
+        pids = []
+    for pid in pids:
+        try:
+            os.kill(pid, signal_number)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            # A later liveness sample and the SIGKILL phase still fail closed
+            # if any exact owned member survives.
+            continue
+
+
 def terminate_owned_process_group(process: subprocess.Popen[bytes]) -> None:
     """Terminate only the process group created for ``process``."""
 
     process_group_id = int(process.pid)
     if process_group_id <= 0:
         raise RuntimeError("guarded process has no valid owned process group")
-    try:
-        os.killpg(process_group_id, signal.SIGTERM)
-    except ProcessLookupError:
-        process.wait()
-        return
+    _signal_owned_process_group(process_group_id, signal.SIGTERM)
     try:
         process.wait(timeout=PROCESS_TERMINATION_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:
         pass
-    if not _process_group_exists(process_group_id):
-        return
     try:
-        os.killpg(process_group_id, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+        _, residual_pids = process_tree_rss_bytes(process_group_id)
+    except RuntimeError:
+        if not _process_group_exists(process_group_id):
+            return
+    else:
+        if not residual_pids:
+            return
+    _signal_owned_process_group(process_group_id, signal.SIGKILL)
     try:
         process.wait(timeout=PROCESS_TERMINATION_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired:  # pragma: no cover - unkillable OS process.
@@ -627,6 +668,19 @@ def run_guarded_command(
             environment[GUARD_FD_ENV] = str(write_fd)
             environment.setdefault("RAYON_NUM_THREADS", "1")
             environment.setdefault("CARGO_BUILD_JOBS", "1")
+            # Release rustc can otherwise cross the Darwin supervisor's
+            # sampled soft stop while optimizing the broad Iroha data model,
+            # before Kagemusha generation even begins. More, smaller codegen
+            # units preserve release optimization semantics while bounding
+            # the compiler's resident working set.
+            environment.setdefault(
+                "CARGO_PROFILE_RELEASE_CODEGEN_UNITS",
+                MEMORY_BOUNDED_RELEASE_CODEGEN_UNITS,
+            )
+            environment.setdefault(
+                "CARGO_PROFILE_RELEASE_BUILD_OVERRIDE_CODEGEN_UNITS",
+                MEMORY_BOUNDED_RELEASE_CODEGEN_UNITS,
+            )
             preexec = (
                 (lambda: _limit_address_space(hard_limit))
                 if kernel_limit_enforced
@@ -696,7 +750,7 @@ def run_guarded_command(
                     final_footprint = process_tree_footprint_bytes(final_pids)
                     max_rss = max(max_rss, final_rss)
                     max_footprint = max(max_footprint, final_footprint)
-                    if _process_group_exists(process.pid):
+                    if final_pids:
                         termination_reason = "residual_owned_process_group"
                         terminate_owned_process_group(process)
         except BaseException:

@@ -29,7 +29,7 @@ case "$1" in
   *)
     ACCOUNT_NAME="$1"
     ;;
-fi
+esac
 
 OUTPUT_DIR="${OUTPUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)/Configs}"
 

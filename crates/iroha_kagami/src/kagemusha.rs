@@ -1046,7 +1046,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_report_inventory_is_the_canonical_eight_role_abi20_order() {
+    fn v4_report_inventory_is_the_canonical_eight_role_abi21_order() {
         assert_eq!(
             REPORT_ARTIFACT_PURPOSES_V4,
             [

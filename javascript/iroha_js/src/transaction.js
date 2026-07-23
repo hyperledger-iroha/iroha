@@ -13,7 +13,6 @@ import {
 } from "./ivmArtifact.js";
 import {
   ToriiClient,
-  extractPipelineStatusKind,
   getTrustedValidationFeeVerificationContext,
 } from "./toriiClient.js";
 import { noritoDecodeInstruction } from "./norito.js";
@@ -2193,7 +2192,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
             ? {}
             : { scope: opts.transactionStatusScope }),
           ...(signal === undefined ? {} : { signal }),
-          successStatuses: ["Committed", "Applied"],
         },
         "submitIvmProvedContractCall transaction status options",
       )
@@ -2581,7 +2579,6 @@ export async function submitIvmProvedContractCall(client, input, options = {}) {
         ...(transactionPollOptions.signal === undefined
           ? {}
           : { signal: transactionPollOptions.signal }),
-        successStatuses: ["Committed", "Applied"],
       })
     : null;
 
@@ -5340,7 +5337,7 @@ export function buildRemoveSmartContractBytesTransaction({
 }
 
 /**
- * Submit a signed transaction and optionally wait for a terminal status.
+ * Submit a signed transaction and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
  * @param {{ waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number }} [options]
@@ -5365,35 +5362,12 @@ export async function submitSignedTransaction(
     return { hash: hashHex, submission };
   }
 
-  const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const deadline = Date.now() + timeoutMs;
-
-  let status;
-  while (Date.now() <= deadline) {
-    const statusOptions = {
-      allowShortHash: true,
-    };
-    if (options.scope !== undefined && options.scope !== null) {
-      statusOptions.scope = options.scope;
-    }
-    status = await client.getTransactionStatus(hashHex, statusOptions);
-    if (isTerminalStatus(status)) {
-      return { hash: hashHex, submission, status };
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await delay(pollIntervalMs);
-  }
-
-  const error = new Error("timed out waiting for transaction status");
-  error.hash = hashHex;
-  error.submission = submission;
-  error.status = status;
-  throw error;
+  const status = await waitForAuthoritativeApplied(client, hashHex, options);
+  return { hash: hashHex, submission, status };
 }
 
 /**
- * Submit a raw transaction entrypoint payload and optionally wait for a terminal status.
+ * Submit a raw transaction entrypoint payload and optionally wait for authoritative Applied finality.
  * @param {ToriiClient} client
  * @param {ArrayBufferView | ArrayBuffer | Buffer} transactionEntrypoint
  * @param {{ hashHex: string, waitForCommit?: boolean, pollIntervalMs?: number, timeoutMs?: number, scope?: "local" | "auto" | "global" }} options
@@ -5423,72 +5397,19 @@ export async function submitTransactionEntrypoint(
     return { hash: hashHex.toLowerCase(), submission };
   }
 
-  const pollIntervalMs = options.pollIntervalMs ?? 500;
-  const timeoutMs = options.timeoutMs ?? 30_000;
-  const deadline = Date.now() + timeoutMs;
-
-  let status;
-  while (Date.now() <= deadline) {
-    const statusOptions = {
-      allowShortHash: true,
-    };
-    if (options.scope !== undefined && options.scope !== null) {
-      statusOptions.scope = options.scope;
-    }
-    status = await client.getTransactionStatus(hashHex, statusOptions);
-    if (isTerminalStatus(status)) {
-      return { hash: hashHex.toLowerCase(), submission, status };
-    }
-    // eslint-disable-next-line no-await-in-loop
-    await delay(pollIntervalMs);
-  }
-
-  throw new Error("timed out waiting for transaction status");
+  const status = await waitForAuthoritativeApplied(client, hashHex, options);
+  return { hash: hashHex.toLowerCase(), submission, status };
 }
 
-function isTerminalStatus(status) {
-  if (!status || typeof status !== "object") {
-    return false;
-  }
-  const pipelineKind = extractPipelineStatusKind(status);
-  if (pipelineKind !== null) {
-    return isExactTerminalStatusKind(pipelineKind);
-  }
-  const labels = [];
-  const collect = (value) => {
-    if (!value || typeof value !== "object") {
-      return;
-    }
-    if (typeof value.status === "string") {
-      labels.push(value.status);
-    } else if (value.status && typeof value.status === "object") {
-      collect(value.status);
-    }
-    if (typeof value.kind === "string") {
-      labels.push(value.kind);
-    }
-    if (typeof value.type === "string") {
-      labels.push(value.type);
-    }
+async function waitForAuthoritativeApplied(client, hashHex, options) {
+  const pollOptions = {
+    intervalMs: options.pollIntervalMs ?? 500,
+    timeoutMs: options.timeoutMs ?? 30_000,
   };
-  collect(status);
-  if (labels.length === 0) {
-    return false;
+  if (options.scope !== undefined && options.scope !== null) {
+    pollOptions.scope = options.scope;
   }
-  return labels.some(isExactTerminalStatusKind);
-}
-
-function isExactTerminalStatusKind(label) {
-  switch (label.toLowerCase()) {
-    case "committed":
-    case "applied":
-    case "rejected":
-    case "expired":
-    case "failed":
-      return true;
-    default:
-      return false;
-  }
+  return client.waitForTransactionStatusTyped(hashHex, pollOptions);
 }
 
 function toBuffer(value, context = "signedTransaction") {
@@ -5502,10 +5423,4 @@ function toBuffer(value, context = "signedTransaction") {
     return Buffer.from(new Uint8Array(value));
   }
   throw new TypeError(`${context} must be a Buffer or ArrayBuffer view`);
-}
-
-function delay(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }

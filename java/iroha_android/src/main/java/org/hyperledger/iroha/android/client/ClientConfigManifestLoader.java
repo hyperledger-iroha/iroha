@@ -87,12 +87,19 @@ public final class ClientConfigManifestLoader {
     final Map<String, Object> torii = expectObject(root.get("torii"), "torii");
     final String baseUri = requireString(torii, "base_uri");
     builder.setBaseUri(parseUri(baseUri, "torii.base_uri"));
-    final String gateway = optionalString(torii.get("sorafs_gateway_uri"));
-    if (gateway != null && !gateway.isEmpty()) {
+    final String gateway =
+        optionalString(torii.get("sorafs_gateway_uri"), "torii.sorafs_gateway_uri");
+    if (gateway != null) {
+      if (gateway.isEmpty()) {
+        throw new IllegalStateException("torii.sorafs_gateway_uri must be a non-empty string");
+      }
       builder.setSorafsGatewayUri(parseUri(gateway, "torii.sorafs_gateway_uri"));
     }
-    final Long timeoutMs = optionalLong(torii.get("timeout_ms"));
-    if (timeoutMs != null && timeoutMs >= 0) {
+    final Long timeoutMs = optionalLong(torii.get("timeout_ms"), "torii.timeout_ms");
+    if (timeoutMs != null) {
+      if (timeoutMs < 0) {
+        throw new IllegalStateException("torii.timeout_ms must be >= 0");
+      }
       builder.setRequestTimeout(Duration.ofMillis(timeoutMs));
     }
     final Map<String, Object> headers =
@@ -100,10 +107,9 @@ public final class ClientConfigManifestLoader {
     if (headers != null) {
       for (final Map.Entry<String, Object> entry : headers.entrySet()) {
         final String name = Objects.requireNonNull(entry.getKey(), "header name");
-        final String value = optionalString(entry.getValue());
-        if (value != null) {
-          builder.putDefaultHeader(name, value);
-        }
+        final String value =
+            requireStringValue(entry.getValue(), "torii.default_headers." + name);
+        builder.putDefaultHeader(name, value);
       }
     }
   }
@@ -114,37 +120,53 @@ public final class ClientConfigManifestLoader {
       return;
     }
     final RetryPolicy.Builder policy = RetryPolicy.builder();
-    final Integer attempts = optionalInt(retry.get("max_attempts"));
-    if (attempts != null && attempts >= 1) {
+    final Integer attempts = optionalInt(retry.get("max_attempts"), "retry.max_attempts");
+    if (attempts != null) {
+      if (attempts < 1) {
+        throw new IllegalStateException("retry.max_attempts must be >= 1");
+      }
       policy.setMaxAttempts(attempts);
     }
-    final Long baseDelayMs = optionalLong(retry.get("base_delay_ms"));
-    if (baseDelayMs != null && baseDelayMs >= 0) {
+    final Long baseDelayMs = optionalLong(retry.get("base_delay_ms"), "retry.base_delay_ms");
+    if (baseDelayMs != null) {
+      if (baseDelayMs < 0) {
+        throw new IllegalStateException("retry.base_delay_ms must be >= 0");
+      }
       policy.setBaseDelay(Duration.ofMillis(baseDelayMs));
     }
-    final Long maxDelayMs = optionalLong(retry.get("max_delay_ms"));
-    if (maxDelayMs != null && maxDelayMs >= 0) {
+    final Long maxDelayMs = optionalLong(retry.get("max_delay_ms"), "retry.max_delay_ms");
+    if (maxDelayMs != null) {
+      if (maxDelayMs < 0) {
+        throw new IllegalStateException("retry.max_delay_ms must be >= 0");
+      }
       policy.setMaxDelay(Duration.ofMillis(maxDelayMs));
     }
-    final Boolean retryServer = optionalBoolean(retry.get("retry_on_server_error"));
+    final Boolean retryServer =
+        optionalBoolean(retry.get("retry_on_server_error"), "retry.retry_on_server_error");
     if (retryServer != null) {
       policy.setRetryOnServerError(retryServer);
     }
-    final Boolean retryTooMany = optionalBoolean(retry.get("retry_on_too_many_requests"));
+    final Boolean retryTooMany =
+        optionalBoolean(
+            retry.get("retry_on_too_many_requests"), "retry.retry_on_too_many_requests");
     if (retryTooMany != null) {
       policy.setRetryOnTooManyRequests(retryTooMany);
     }
-    final Boolean retryNetwork = optionalBoolean(retry.get("retry_on_network_error"));
+    final Boolean retryNetwork =
+        optionalBoolean(retry.get("retry_on_network_error"), "retry.retry_on_network_error");
     if (retryNetwork != null) {
       policy.setRetryOnNetworkError(retryNetwork);
     }
     final List<Object> codes = optionalArray(retry.get("retry_status_codes"), "retry.retry_status_codes");
     if (codes != null) {
-      for (final Object value : codes) {
-        final Integer status = optionalInt(value);
-        if (status != null) {
-          policy.addRetryStatusCode(status);
+      for (int index = 0; index < codes.size(); index++) {
+        final Integer status =
+            optionalInt(codes.get(index), "retry.retry_status_codes[" + index + "]");
+        if (status == null) {
+          throw new IllegalStateException(
+              "retry.retry_status_codes[" + index + "] must be an integer");
         }
+        policy.addRetryStatusCode(status);
       }
     }
     builder.setRetryPolicy(policy.build());
@@ -159,7 +181,7 @@ public final class ClientConfigManifestLoader {
     if (pending == null) {
       return;
     }
-    final String kind = optionalString(pending.get("kind"));
+    final String kind = optionalString(pending.get("kind"), "pending_queue.kind");
     if (kind == null || "memory".equalsIgnoreCase(kind)) {
       builder.setPendingQueue(null);
       return;
@@ -181,7 +203,7 @@ public final class ClientConfigManifestLoader {
       builder.setTelemetryOptions(TelemetryOptions.disabled());
       return;
     }
-    final Boolean enabledFlag = optionalBoolean(telemetry.get("enabled"));
+    final Boolean enabledFlag = optionalBoolean(telemetry.get("enabled"), "telemetry.enabled");
     final boolean enabled = enabledFlag == null || enabledFlag;
     final TelemetryOptions.Builder telemetryBuilder = TelemetryOptions.builder().setEnabled(enabled);
     if (enabled) {
@@ -196,7 +218,8 @@ public final class ClientConfigManifestLoader {
       telemetryBuilder.setTelemetryRedaction(TelemetryOptions.Redaction.disabled());
     }
     builder.setTelemetryOptions(telemetryBuilder.build());
-    final String exporterName = optionalString(telemetry.get("exporter_name"));
+    final String exporterName =
+        optionalString(telemetry.get("exporter_name"), "telemetry.exporter_name");
     if (exporterName != null) {
       builder.setTelemetryExporterName(exporterName);
     }
@@ -204,8 +227,10 @@ public final class ClientConfigManifestLoader {
 
   private static TelemetryOptions.Redaction parseRedaction(final Map<String, Object> redaction) {
     final TelemetryOptions.Redaction.Builder builder = TelemetryOptions.Redaction.builder();
-    final String saltB64 = optionalString(redaction.get("salt_b64"));
-    final String saltHex = optionalString(redaction.get("salt_hex"));
+    final String saltB64 =
+        optionalString(redaction.get("salt_b64"), "telemetry.redaction.salt_b64");
+    final String saltHex =
+        optionalString(redaction.get("salt_hex"), "telemetry.redaction.salt_hex");
     if (saltB64 != null && !saltB64.isEmpty()) {
       builder.setSalt(Base64.getDecoder().decode(saltB64));
     } else if (saltHex != null && !saltHex.trim().isEmpty()) {
@@ -213,13 +238,15 @@ public final class ClientConfigManifestLoader {
     }
     final String saltVersion = requireString(redaction, "salt_version");
     builder.setSaltVersion(saltVersion);
-    final String rotation = optionalString(redaction.get("rotation_id"));
+    final String rotation =
+        optionalString(redaction.get("rotation_id"), "telemetry.redaction.rotation_id");
     if (rotation != null && !rotation.isEmpty()) {
       builder.setRotationId(rotation);
     } else {
       builder.setRotationId(saltVersion);
     }
-    final String algorithm = optionalString(redaction.get("algorithm"));
+    final String algorithm =
+        optionalString(redaction.get("algorithm"), "telemetry.redaction.algorithm");
     if (algorithm != null && !algorithm.isEmpty()) {
       builder.setAlgorithm(algorithm);
     }
@@ -306,65 +333,76 @@ public final class ClientConfigManifestLoader {
     if (value == null) {
       throw new IllegalStateException("Missing required field: " + key);
     }
-    final String normalized = optionalString(value);
-    if (normalized == null || normalized.isEmpty()) {
+    final String normalized = requireStringValue(value, key);
+    if (normalized.isEmpty()) {
       throw new IllegalStateException("Field " + key + " must be a non-empty string");
     }
     return normalized;
   }
 
-  private static String optionalString(final Object value) {
+  private static String requireStringValue(final Object value, final String path) {
+    if (!(value instanceof String string)) {
+      throw new IllegalStateException(path + " must be a string");
+    }
+    return string;
+  }
+
+  private static String optionalString(final Object value, final String path) {
     if (value == null) {
       return null;
     }
-    if (value instanceof String string) {
-      return string;
-    }
-    return String.valueOf(value);
+    return requireStringValue(value, path);
   }
 
-  private static Integer optionalInt(final Object value) {
+  private static Integer optionalInt(final Object value, final String path) {
     if (value == null) {
       return null;
     }
     if (value instanceof Number number) {
-      final long longValue = JsonNumbers.asLong(number, "integer value");
+      final long longValue = JsonNumbers.asLong(number, path);
       if (longValue < Integer.MIN_VALUE || longValue > Integer.MAX_VALUE) {
         throw new IllegalStateException("Integer value out of range: " + value);
       }
       return (int) longValue;
     }
-    final String normalized = optionalString(value);
-    if (normalized == null) {
-      return null;
+    if (!(value instanceof String normalized)) {
+      throw new IllegalStateException(path + " must be an integer or decimal integer string");
     }
-    return Integer.parseInt(normalized);
+    try {
+      return Integer.parseInt(normalized);
+    } catch (final NumberFormatException ex) {
+      throw new IllegalStateException(
+          path + " must be an integer or decimal integer string", ex);
+    }
   }
 
-  private static Long optionalLong(final Object value) {
+  private static Long optionalLong(final Object value, final String path) {
     if (value == null) {
       return null;
     }
     if (value instanceof Number number) {
-      return JsonNumbers.asLong(number, "long value");
+      return JsonNumbers.asLong(number, path);
     }
-    final String normalized = optionalString(value);
-    if (normalized == null || normalized.isEmpty()) {
-      return null;
+    if (!(value instanceof String normalized)) {
+      throw new IllegalStateException(path + " must be an integer or decimal integer string");
     }
-    return Long.parseLong(normalized);
+    try {
+      return Long.parseLong(normalized);
+    } catch (final NumberFormatException ex) {
+      throw new IllegalStateException(
+          path + " must be an integer or decimal integer string", ex);
+    }
   }
 
-  private static Boolean optionalBoolean(final Object value) {
+  private static Boolean optionalBoolean(final Object value, final String path) {
     if (value == null) {
       return null;
     }
     if (value instanceof Boolean bool) {
       return bool;
     }
-    final String normalized = optionalString(value);
-    if (normalized == null) {
-      return null;
+    if (!(value instanceof String normalized)) {
+      throw new IllegalStateException(path + " must be a boolean or boolean string");
     }
     final String lower = normalized.trim().toLowerCase(Locale.ROOT);
     if ("true".equals(lower) || "1".equals(lower) || "yes".equals(lower)) {
@@ -373,7 +411,7 @@ public final class ClientConfigManifestLoader {
     if ("false".equals(lower) || "0".equals(lower) || "no".equals(lower)) {
       return false;
     }
-    throw new IllegalStateException("Unsupported boolean value: " + value);
+    throw new IllegalStateException("Unsupported boolean value for " + path + ": " + value);
   }
 
   private static URI parseUri(final String value, final String field) {

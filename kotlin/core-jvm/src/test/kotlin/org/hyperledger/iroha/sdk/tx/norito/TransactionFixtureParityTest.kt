@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.tx.norito
 import java.nio.file.Files
 import java.util.Base64
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.crypto.IrohaHash
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
@@ -174,7 +175,7 @@ class TransactionFixtureParityTest {
                 "${fixture.name}: TTL mismatch",
             )
             assertEquals(
-                fixture.nonce?.toInt(),
+                fixture.nonce,
                 payload.nonce,
                 "${fixture.name}: nonce mismatch",
             )
@@ -308,7 +309,7 @@ class TransactionFixtureParityTest {
     fun `signed transaction decoder round-trips multisig signatures`() {
         val payload = AndroidFixtureSupport.loadPayloadFixtures().first().materializePayload(adapter)
         val payloadBytes = adapter.encodeTransaction(payload)
-        val memberPublicKey = ByteArray(32) { (0x41 + it).toByte() }
+        val memberPublicKey = TestEd25519Keys.publicKey(0x41)
         val memberSignature = ByteArray(64) { ((0x80 + it) and 0xFF).toByte() }
         val multisigSignature = MultisigSignature.fromCurveId(0x01, memberPublicKey, memberSignature)
         val signed = SignedTransaction.builder()
@@ -529,7 +530,7 @@ class TransactionFixtureParityTest {
     }
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     private data class SignedParts(

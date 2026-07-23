@@ -9,10 +9,10 @@ import org.hyperledger.iroha.sdk.address.algorithmForCurveId
 import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
-import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.ContractInvocation
 import org.hyperledger.iroha.sdk.core.model.Executable
 import org.hyperledger.iroha.sdk.core.model.ExecutableBatchItem
+import org.hyperledger.iroha.sdk.core.model.FeePaymentIntent
 import org.hyperledger.iroha.sdk.core.model.InstructionBox
 import org.hyperledger.iroha.sdk.core.model.JsonValue
 import org.hyperledger.iroha.sdk.core.model.TransactionPayload
@@ -22,6 +22,7 @@ import org.hyperledger.iroha.sdk.norito.NoritoCodec
 import org.hyperledger.iroha.sdk.norito.NoritoDecoder
 import org.hyperledger.iroha.sdk.norito.NoritoHeader
 import org.hyperledger.iroha.sdk.norito.TypeAdapter
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import org.hyperledger.iroha.sdk.tx.MultisigSignature
 import org.hyperledger.iroha.sdk.tx.MultisigSignatures
 import org.hyperledger.iroha.sdk.tx.SignedTransaction
@@ -68,7 +69,7 @@ class NoritoJavaCodecAdapterParityTest {
 
     @Test
     fun `codec encodes account id authority as struct`() {
-        val publicKey = ByteArray(32) { 0x3A.toByte() }
+        val publicKey = TestEd25519Keys.publicKey(0x3A)
         val authority = AccountAddress
             .fromAccount(publicKey, "ed25519")
             .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
@@ -105,8 +106,8 @@ class NoritoJavaCodecAdapterParityTest {
 
     @Test
     fun `codec encodes multisig authority and signatures`() {
-        val memberKeyA = ByteArray(32) { 0x11.toByte() }
-        val memberKeyB = ByteArray(32) { 0x22.toByte() }
+        val memberKeyA = TestEd25519Keys.publicKey(0x11)
+        val memberKeyB = TestEd25519Keys.publicKey(0x22)
         val memberA = MultisigMemberPayload(0x01, 1, memberKeyA)
         val memberB = MultisigMemberPayload(0x01, 2, memberKeyB)
         val policy = MultisigPolicyPayload.of(1, 2, listOf(memberA, memberB))
@@ -122,8 +123,8 @@ class NoritoJavaCodecAdapterParityTest {
             executable = Executable.ivm(byteArrayOf(0x0A, 0x0B)),
         )
         val encodedPayload = adapter.encodeTransaction(payload)
-        val sigA = MultisigSignature.fromCurveId(0x01, fill(0x11, 32), fill(0x22, 64))
-        val sigBKeyLiteral = encodePublicKeyMultihash(0x01, fill(0x33, 32))
+        val sigA = MultisigSignature.fromCurveId(0x01, TestEd25519Keys.publicKey(0x11), fill(0x22, 64))
+        val sigBKeyLiteral = encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(0x33))
         val sigB = MultisigSignature.fromPublicKeyLiteral(sigBKeyLiteral, fill(0x44, 64))
         val signed = SignedTransaction(encodedPayload, fill(0x44, 64), fill(0x55, 32), adapter.schemaName())
             .toBuilder()
@@ -534,7 +535,7 @@ class NoritoJavaCodecAdapterParityTest {
     private fun fill(value: Int, length: Int): ByteArray = ByteArray(length) { value.toByte() }
 
     private fun sampleAuthority(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 
     companion object {

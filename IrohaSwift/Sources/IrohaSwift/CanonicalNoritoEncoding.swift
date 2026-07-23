@@ -650,6 +650,67 @@ public enum CanonicalNorito {
         return writer.data
     }
 
+    /// Encode a canonical decimal as the bare compact-Norito `Numeric` payload.
+    ///
+    /// This is the payload embedded by typed `Numeric` and `Quantity` fields
+    /// when the enclosing Norito header advertises `COMPACT_LEN`.
+    public static func encodeCompactNumeric(
+        _ value: String,
+        requireNonNegative: Bool = false
+    ) throws -> Data {
+        do {
+            if requireNonNegative {
+                _ = try KotodamaNumericV1Codec.decodeQuantityJSON(value)
+            } else {
+                _ = try KotodamaNumericV1Codec.decodeDecimalJSON(value)
+            }
+        } catch {
+            throw CanonicalNoritoError.invalidNumeric(value)
+        }
+        let numeric = try parseNumeric(value)
+        let mantissaBytes = try numeric.mantissaBytes(maxBytes: maxBigIntBytes)
+        var bigintWriter = CompactNoritoWriter()
+        bigintWriter.writeUInt32LE(UInt32(mantissaBytes.count))
+        bigintWriter.writeBytes(mantissaBytes)
+
+        var writer = CompactNoritoWriter()
+        writer.writeField(bigintWriter.data)
+        writer.writeField(CompactNorito.encodeUInt32(numeric.scale))
+        return writer.data
+    }
+
+    /// Encode a canonical I105 account literal as a bare compact-Norito
+    /// `AccountId` payload.
+    public static func encodeCompactAccountId(_ value: String) throws -> Data {
+        let canonical = try canonicalizeEncodedAccountId(value)
+        guard canonical == value else {
+            throw CanonicalNoritoError.invalidAccountId(value)
+        }
+        let address = try AccountAddress.parseEncoded(
+            canonical,
+            expectedPrefix: defaultNetworkPrefix
+        )
+        return try address.compactNoritoAccountControllerPayload()
+    }
+
+    /// Encode a canonical asset-definition address as a bare compact-Norito
+    /// `AssetDefinitionId` payload.
+    public static func encodeCompactAssetDefinitionId(_ value: String) throws -> Data {
+        guard let bytes = AssetDefinitionAddressCodec.uuidBytes(value) else {
+            throw CanonicalNoritoError.invalidAssetId(value)
+        }
+        return encodeCompactByteElementArray(bytes)
+    }
+
+    private static func encodeCompactByteElementArray(_ bytes: Data) -> Data {
+        var writer = CompactNoritoWriter()
+        for byte in bytes {
+            writer.writeLength(1)
+            writer.writeUInt8(byte)
+        }
+        return writer.data
+    }
+
     static func parseNumeric(_ value: String) throws -> CanonicalNumericComponents {
         do {
             return try CanonicalNumericComponents(

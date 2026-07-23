@@ -17,6 +17,7 @@ import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateRequest;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionCreateResponse;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionListParams;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionListResponse;
+import org.hyperledger.iroha.android.subscriptions.SubscriptionJsonParser;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanCreateRequest;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanCreateResponse;
 import org.hyperledger.iroha.android.subscriptions.SubscriptionPlanListParams;
@@ -46,6 +47,8 @@ public final class SubscriptionToriiClientTests {
 
   public static void main(final String[] args) {
     listPlansParsesResponse();
+    responseNumbersRejectUnsignedAndOverflowValues();
+    responseIdentifiersRejectNonStringValues();
     createPlanBuildsBody();
     createPlanRejectsInsecureTransportForPrivateKeyBody();
     planJsonBuilderParses();
@@ -61,6 +64,64 @@ public final class SubscriptionToriiClientTests {
     configBuildsSubscriptionToriiClientDefault();
     transportBuildsSubscriptionToriiClient();
     System.out.println("[IrohaAndroid] SubscriptionToriiClientTests passed.");
+  }
+
+  private static void responseNumbersRejectUnsignedAndOverflowValues() {
+    assert SubscriptionJsonParser.parsePlanList(
+                "{\"total\":null,\"items\":[]}".getBytes(StandardCharsets.UTF_8))
+            .total()
+        == 0L : "null bounded-count total must retain the item-count fallback";
+    for (final String total : new String[] {"-1", "9223372036854775808"}) {
+      expectInvalidResponse(
+          () ->
+              SubscriptionJsonParser.parsePlanList(
+                  ("{\"total\":" + total + ",\"items\":[]}")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "invalid plan-list total must be rejected");
+      expectInvalidResponse(
+          () ->
+              SubscriptionJsonParser.parseSubscriptionList(
+                  ("{\"total\":" + total + ",\"items\":[]}")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "invalid subscription-list total must be rejected");
+      expectInvalidResponse(
+          () ->
+              SubscriptionJsonParser.parseSubscriptionCreateResponse(
+                  ("{"
+                          + "\"ok\":true,"
+                          + "\"subscription_id\":\"sub-1$subscriptions\","
+                          + "\"billing_trigger_id\":\"sub-1$subscriptions#billing\","
+                          + "\"usage_trigger_id\":null,"
+                          + "\"first_charge_ms\":"
+                          + total
+                          + ",\"tx_hash_hex\":\"00\"}")
+                      .getBytes(StandardCharsets.UTF_8)),
+          "invalid first-charge timestamp must be rejected");
+    }
+  }
+
+  private static void responseIdentifiersRejectNonStringValues() {
+    expectInvalidResponse(
+        () ->
+            SubscriptionJsonParser.parsePlanCreateResponse(
+                "{\"ok\":true,\"plan_id\":7,\"tx_hash_hex\":\"00\"}"
+                    .getBytes(StandardCharsets.UTF_8)),
+        "numeric plan identifier must be rejected");
+    expectInvalidResponse(
+        () ->
+            SubscriptionJsonParser.parseActionResponse(
+                "{\"ok\":true,\"subscription_id\":false,\"tx_hash_hex\":\"00\"}"
+                    .getBytes(StandardCharsets.UTF_8)),
+        "boolean subscription identifier must be rejected");
+  }
+
+  private static void expectInvalidResponse(final Runnable action, final String message) {
+    try {
+      action.run();
+    } catch (final IllegalStateException expected) {
+      return;
+    }
+    throw new AssertionError(message);
   }
 
   private static void listPlansParsesResponse() {

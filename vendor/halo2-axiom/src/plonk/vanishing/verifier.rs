@@ -6,10 +6,10 @@ use crate::{
     arithmetic::CurveAffine,
     plonk::{Error, VerifyingKey},
     poly::{
-        commitment::{Params, MSM},
         VerifierQuery,
+        commitment::{MSM, Params},
     },
-    transcript::{read_n_points, EncodedChallenge, TranscriptRead},
+    transcript::{EncodedChallenge, TranscriptRead, read_n_points},
 };
 
 use super::super::{ChallengeX, ChallengeY};

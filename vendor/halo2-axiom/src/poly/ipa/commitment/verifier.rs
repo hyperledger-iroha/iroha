@@ -3,7 +3,7 @@ use group::ff::{BatchInvert, Field};
 use super::ParamsIPA;
 use crate::{arithmetic::CurveAffine, poly::ipa::strategy::GuardIPA};
 use crate::{
-    poly::{commitment::MSM, ipa::msm::MSMIPA, Error},
+    poly::{Error, commitment::MSM, ipa::msm::MSMIPA},
     transcript::{EncodedChallenge, TranscriptRead},
 };
 

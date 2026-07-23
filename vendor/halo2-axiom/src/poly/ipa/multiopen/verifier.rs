@@ -2,14 +2,14 @@ use std::fmt::Debug;
 
 use ff::Field;
 
-use super::{construct_intermediate_sets, ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4};
-use crate::arithmetic::{eval_polynomial, lagrange_interpolate, CurveAffine};
-use crate::poly::commitment::{Params, Verifier, MSM};
+use super::{ChallengeX1, ChallengeX2, ChallengeX3, ChallengeX4, construct_intermediate_sets};
+use crate::arithmetic::{CurveAffine, eval_polynomial, lagrange_interpolate};
+use crate::poly::Error;
+use crate::poly::commitment::{MSM, Params, Verifier};
 use crate::poly::ipa::commitment::{IPACommitmentScheme, ParamsIPA, ParamsVerifierIPA};
 use crate::poly::ipa::msm::MSMIPA;
 use crate::poly::ipa::strategy::GuardIPA;
 use crate::poly::query::{CommitmentReference, VerifierQuery};
-use crate::poly::Error;
 use crate::transcript::{EncodedChallenge, TranscriptRead};
 
 /// IPA multi-open verifier

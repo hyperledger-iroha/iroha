@@ -21,6 +21,7 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.client.queue.PendingTransactionQueue
 import org.hyperledger.iroha.sdk.crypto.export.KeyExportBundle
@@ -909,9 +910,10 @@ class HttpClientTransport(
                 if (statusCode != 200 && statusCode != 202 && statusCode != 204 && statusCode != 404) { future.completeExceptionally(buildPipelineStatusHttpException(hashHex, clientResponse)); return@whenComplete }
                 val payload = parsePipelineStatusPayload(clientResponse.body)
                 val nextAttempts = attemptsSoFar + 1
-                val statusKind = if (payload == null) Optional.empty() else PipelineStatusExtractor.extractStatusKind(payload)
-                val statusLiteral = statusKind.orElse(null)
-                val isSuccess = statusLiteral != null && options.successStatuses.contains(statusLiteral)
+                val statusLiteral =
+                    if (payload == null) null
+                    else PipelineStatusExtractor.requireAuthoritativeStatus(payload, hashHex)
+                val isSuccess = statusLiteral == "Applied"
                 val isFailure = statusLiteral != null && options.failureStatuses.contains(statusLiteral)
                 emitPipelineStatusTelemetry(request, hashHex, statusLiteral, isSuccess, isFailure, nextAttempts)
                 if (options.observer != null) { try { options.observer.onStatus(statusLiteral ?: "", payload ?: emptyMap(), nextAttempts) } catch (observerError: RuntimeException) { future.completeExceptionally(observerError); return@whenComplete } }
@@ -1309,7 +1311,8 @@ class HttpClientTransport(
         @JvmStatic internal fun buildVpnQuoteCreatePayload(exitClass: String?, meteringPublicKeyHex: String): Map<String, Any> {
             val payload = LinkedHashMap<String, Any>()
             payload["exit_class"] = normalizeOptionalNonBlank(exitClass, "exitClass") ?: ""
-            payload["metering_public_key_hex"] = normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex")
+            payload["metering_public_key_hex"] =
+                normalizeEd25519PublicKeyHex(meteringPublicKeyHex, "meteringPublicKeyHex")
             return payload
         }
 
@@ -1332,7 +1335,8 @@ class HttpClientTransport(
             payload["exit_class"] = normalizeOptionalNonBlank(exitClass, "exitClass") ?: ""
             payload["quote_id"] = normalizeHex32(quoteId, "quoteId")
             payload["payment_tx_hash"] = normalizeHex32(paymentTxHash, "paymentTxHash")
-            payload["metering_public_key_hex"] = normalizeHex32(meteringPublicKeyHex, "meteringPublicKeyHex")
+            payload["metering_public_key_hex"] =
+                normalizeEd25519PublicKeyHex(meteringPublicKeyHex, "meteringPublicKeyHex")
             return payload
         }
 
@@ -1379,7 +1383,10 @@ class HttpClientTransport(
                 payload["multisig_account_alias"] = normalizeNonBlank(accountAlias!!, "multisigAccountAlias")
             }
             payload["signer_account_id"] = normalizeNonBlank(request.signerAccountId, "signerAccountId")
-            if (request.publicKeyHex != null) payload["public_key_hex"] = normalizeHex32(request.publicKeyHex, "publicKeyHex")
+            if (request.publicKeyHex != null) {
+                payload["public_key_hex"] =
+                    normalizeEd25519PublicKeyHex(request.publicKeyHex, "publicKeyHex")
+            }
             if (request.signatureB64 != null) payload["signature_b64"] = normalizeRequiredExactBase64Payload(request.signatureB64, "signatureB64")
             if (request.creationTimeMs != null) {
                 require(request.creationTimeMs >= 0) { "creationTimeMs must be non-negative" }
@@ -1668,6 +1675,18 @@ class HttpClientTransport(
             )
         }
         @JvmStatic internal fun normalizeHex32(value: String, field: String): String { val normalized = normalizeEvenLengthHex(value, field); require(normalized.length == 64) { "$field must contain 64 hex characters" }; return normalized }
+        @JvmStatic internal fun normalizeEd25519PublicKeyHex(value: String, field: String): String {
+            val normalized = normalizeHex32(value, field)
+            val publicKey = ByteArray(Ed25519PublicKeyAdmission.PUBLIC_KEY_LENGTH) { index ->
+                val offset = index * 2
+                ((Character.digit(normalized[offset], 16) shl 4) or
+                    Character.digit(normalized[offset + 1], 16)).toByte()
+            }
+            require(Ed25519PublicKeyAdmission.isValid(publicKey)) {
+                "$field must encode a canonical prime-order Ed25519 public key"
+            }
+            return normalized
+        }
         @JvmStatic internal fun normalizeOptionalHex32(value: String?, field: String): String? = if (value == null || value.trim().isEmpty()) null else normalizeHex32(value, field)
 
         @JvmStatic internal fun normalizePositiveU32(value: Long, field: String): Long {

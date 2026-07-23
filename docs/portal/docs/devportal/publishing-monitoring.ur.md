@@ -55,6 +55,8 @@ portal، Try it، bindings اور DNS کی صحت کو evidence bundle parse ک�
 
 ضروری knobs اور متعدد bindings کے ساتھ config مثال:
 
+> `samplePath=/v1/...` → probe `+ /proxy` → `/proxy/v1/...`
+
 ```json
 {
   "portal": {
@@ -70,7 +72,7 @@ portal، Try it، bindings اور DNS کی صحت کو evidence bundle parse ک�
   },
   "tryIt": {
     "proxyUrl": "https://tryit-preview.sora",
-    "samplePath": "/proxy/v1/accounts/<i105-account-id>/assets?limit=1",
+    "samplePath": "/v1/accounts/<i105-account-id>/assets?limit=1",
     "method": "GET",
     "timeoutMs": 7000,
     "token": "${TRYIT_BEARER}",

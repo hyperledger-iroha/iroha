@@ -2,13 +2,13 @@
 
 use super::circuit::{Any, Column};
 use crate::{
+    SerdeFormat,
     arithmetic::CurveAffine,
     helpers::{
-        polynomial_slice_byte_length, read_polynomial_vec, write_polynomial_slice,
-        SerdeCurveAffine, SerdePrimeField,
+        SerdeCurveAffine, SerdePrimeField, polynomial_slice_byte_length, read_polynomial_vec,
+        write_polynomial_slice,
     },
     poly::{Coeff, LagrangeCoeff, Polynomial},
-    SerdeFormat,
 };
 
 pub(crate) mod keygen;

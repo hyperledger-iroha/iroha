@@ -53,7 +53,14 @@ const toriiClient = {
     };
   },
   async waitForTransactionStatus(hashHex) {
-    return { hash: hashHex, status: "Committed" };
+    return {
+      hash: hashHex,
+      status: { kind: "Applied", block_height: 1 },
+      summary: "Applied",
+      diagnostics: [],
+      scope: "global",
+      resolved_from: "state",
+    };
   },
 };
 

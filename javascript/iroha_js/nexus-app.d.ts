@@ -163,8 +163,6 @@ export interface NexusWaitFinalizeOptions extends NexusFinalizeBaseOptions {
   maxAttempts?: number | null;
   scope?: "local" | "auto" | "global";
   /** At most 32 raw entries are consumed before duplicate removal. */
-  successStatuses?: NexusStatusIterable;
-  /** At most 32 raw entries are consumed before duplicate removal. */
   failureStatuses?: NexusStatusIterable;
   onStatus?: (
     status: string | null,
@@ -180,7 +178,6 @@ export interface NexusNoWaitFinalizeOptions extends NexusFinalizeBaseOptions {
   timeoutMs?: never;
   maxAttempts?: never;
   scope?: never;
-  successStatuses?: never;
   failureStatuses?: never;
   onStatus?: never;
   signal?: never;

@@ -2,7 +2,11 @@
 
 use base64::Engine as _;
 use iroha_data_model::account::{AccountId, ParsedAccountId};
-use iroha_torii_shared::connect::{ConnectControlV1, FrameKind, decode_connect_frame_bare};
+use iroha_torii_shared::connect::{
+    ConnectControlV1, FrameKind, decode_connect_frame_bare, encode_connect_frame_bare,
+};
+
+const ANDROID_ACCOUNT_ID: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
 
 #[test]
 fn decodes_android_approve_frame_fixture() {
@@ -11,6 +15,11 @@ fn decodes_android_approve_frame_fixture() {
         .collect::<String>();
     let bytes = hex::decode(hex).expect("fixture hex should decode");
     let frame = decode_connect_frame_bare(&bytes).expect("android approve frame should decode");
+    assert_eq!(
+        encode_connect_frame_bare(&frame).expect("decoded frame should re-encode"),
+        bytes,
+        "Rust must preserve the Android-emitted wire bytes",
+    );
 
     assert_eq!(frame.seq, 1);
     assert_eq!(frame.sid, [0xCDu8; 32]);
@@ -28,10 +37,7 @@ fn decodes_android_approve_frame_fixture() {
             sig_wallet,
         }) => {
             assert_eq!(wallet_pk, [0x07u8; 32]);
-            assert_eq!(
-                account_id,
-                "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB"
-            );
+            assert_eq!(account_id, ANDROID_ACCOUNT_ID);
             let parsed = AccountId::parse_encoded(&account_id)
                 .map(ParsedAccountId::into_account_id)
                 .expect("fixture account id should be encoded account literal");

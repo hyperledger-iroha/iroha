@@ -2,6 +2,7 @@ package org.hyperledger.iroha.android.client;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.nio.charset.StandardCharsets;
 
 public final class JsonParserTests {
 
@@ -10,6 +11,8 @@ public final class JsonParserTests {
   public static void main(final String[] args) {
     parsesNumbers();
     checkedLongCoercionIsExactAndBounded();
+    contractResponseRejectsInvalidRustUnsignedNumbers();
+    contractResponseRejectsNonStringTextAndBase64Fields();
     rejectsLeadingZeros();
     preservesDecimalAndExponentTokensExactly();
     oversizedIntegerTokensRemainAvailableForBigIntegerConsumers();
@@ -38,6 +41,60 @@ public final class JsonParserTests {
     assertThrows(
         () -> JsonNumbers.asLongAllowingIntegralFloat(JsonParser.parse("1.5"), "height"),
         "expected non-integral decimal rejection");
+  }
+
+  private static void contractResponseRejectsInvalidRustUnsignedNumbers() {
+    for (final String creationTimeMs : new String[] {"-1", "9223372036854775808"}) {
+      assertThrows(
+          () ->
+              ContractJsonParser.parseCallResponse(
+                  contractCallResponse(creationTimeMs, "1").getBytes(StandardCharsets.UTF_8)),
+          "invalid contract creation time must be rejected");
+    }
+    for (final String gasUsed : new String[] {"-1", "9223372036854775808"}) {
+      assertThrows(
+          () ->
+              ContractJsonParser.parseCallResponse(
+                  contractCallResponse("1", gasUsed).getBytes(StandardCharsets.UTF_8)),
+          "invalid contract gas usage must be rejected");
+    }
+  }
+
+  private static void contractResponseRejectsNonStringTextAndBase64Fields() {
+    final String valid = contractCallResponse("1", "1");
+    for (final String payload :
+        new String[] {
+          valid.replaceFirst("\"ok\":true", "\"ok\":\"true\""),
+          valid.replaceFirst("\"dataspace\":\"router\"", "\"dataspace\":7"),
+          valid.replace(
+              "\"operation_receipt\":", "\"entrypoint\":7,\"operation_receipt\":"),
+          valid.replace(
+              "\"operation_receipt\":",
+              "\"signing_message_b64\":7,\"operation_receipt\":"),
+        }) {
+      assertThrows(
+          () -> ContractJsonParser.parseCallResponse(payload.getBytes(StandardCharsets.UTF_8)),
+          "non-string contract response field must be rejected");
+    }
+  }
+
+  private static String contractCallResponse(
+      final String creationTimeMs, final String gasUsed) {
+    return "{"
+        + "\"ok\":true,\"submitted\":true,\"dataspace\":\"router\","
+        + "\"code_hash_hex\":\""
+        + "11".repeat(32)
+        + "\",\"abi_hash_hex\":\""
+        + "22".repeat(32)
+        + "\",\"creation_time_ms\":"
+        + creationTimeMs
+        + ",\"operation_receipt\":{"
+        + "\"operation_kind\":\"contract_call\",\"status\":\"queued\","
+        + "\"transport\":\"torii\",\"dataspace\":\"router\",\"gas_used\":"
+        + gasUsed
+        + ",\"payload_digest_hex\":\""
+        + "33".repeat(32)
+        + "\"}}";
   }
 
   private static void parsesNumbers() {

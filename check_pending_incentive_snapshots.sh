@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 set -euo pipefail
 
 usage() {
@@ -32,13 +32,13 @@ while [ "$#" -gt 0 ]; do
     --relay)
       [ "$#" -ge 2 ] || { echo "missing value for --relay" >&2; usage; exit 2; }
       FILTER_RELAY="${2##0x}"
-      FILTER_RELAY="${FILTER_RELAY,,}"
+      FILTER_RELAY="$(printf '%s' "${FILTER_RELAY}" | tr '[:upper:]' '[:lower:]')"
       shift 2
       ;;
     --relay=*)
       FILTER_RELAY="${1#--relay=}"
       FILTER_RELAY="${FILTER_RELAY##0x}"
-      FILTER_RELAY="${FILTER_RELAY,,}"
+      FILTER_RELAY="$(printf '%s' "${FILTER_RELAY}" | tr '[:upper:]' '[:lower:]')"
       shift
       ;;
     --details)

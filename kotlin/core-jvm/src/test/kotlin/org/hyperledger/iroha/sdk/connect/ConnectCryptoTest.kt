@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -79,6 +80,6 @@ class ConnectCryptoTest {
     }
 
     private fun sampleI105(fill: Int): String = AccountAddress
-        .fromAccount(ByteArray(32) { fill.toByte() }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(fill), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 }

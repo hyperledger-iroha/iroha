@@ -118,15 +118,18 @@ test('monitorPortal allows insecure baseUrl when explicitly enabled', async () =
 test('monitorTryIt surfaces probe failures', async () => {
   const config = {
     proxyUrl: 'https://tryit.sora',
-    samplePath: '/proxy/status',
+    samplePath: '/status',
   };
+  let captured;
   const result = await monitorTryIt(config, {
-    runProbeImpl: async () => {
+    runProbeImpl: async (options) => {
+      captured = options;
       throw new Error('probe failed');
     },
   });
   assert.equal(result.ok, false);
   assert.match(result.error, /probe failed/);
+  assert.equal(captured.samplePath, '/status');
 });
 
 test('monitorBinding wraps successful verification', async () => {

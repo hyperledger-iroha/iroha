@@ -25,7 +25,7 @@ use iroha_data_model::{
         VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
         ValidationFeeGovernanceKeysetV1, ValidationFeeMultisigMarkerV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -35,6 +35,7 @@ use ivm::state_value::{
     StateValueRecordV1, StateValueSchemaV1, state_value_schema_hash_v1,
 };
 use mv::storage::StorageReadOnly;
+use sha2::{Digest as _, Sha256};
 
 use crate::{
     state::{StateTransaction, WorldReadOnly},
@@ -194,7 +195,19 @@ enum ValidationFeeAdmissionError {
         instruction_index: usize,
         entry_index: Option<usize>,
     },
+    TreasuryPayoutRuntimeBindingMismatch {
+        reason: &'static str,
+    },
+    TreasuryPayoutEffectPlanMismatch {
+        reason: &'static str,
+    },
+    TreasuryPayoutArithmeticFailure,
     UnsupportedNativeFeeAssetMovement {
+        context_index: usize,
+        instruction_index: usize,
+        instruction_wire_id: &'static str,
+    },
+    InvalidKagemushaOfflineConversion {
         context_index: usize,
         instruction_index: usize,
         instruction_wire_id: &'static str,
@@ -465,6 +478,18 @@ impl fmt::Display for ValidationFeeAdmissionError {
                 "opaque deferred executable derived a policy fee-asset transfer at {instruction_index}{} for execution authority {execution_account_id}; concrete principal and fee effects must be signed instructions",
                 format_entry_index(*entry_index)
             ),
+            Self::TreasuryPayoutRuntimeBindingMismatch { reason } => write!(
+                f,
+                "TREASURY_PAYOUT runtime does not match the active signed binding: {reason}"
+            ),
+            Self::TreasuryPayoutEffectPlanMismatch { reason } => write!(
+                f,
+                "TREASURY_PAYOUT effect plan does not match the active signed binding: {reason}"
+            ),
+            Self::TreasuryPayoutArithmeticFailure => write!(
+                f,
+                "TREASURY_PAYOUT output/share arithmetic is not exactly representable"
+            ),
             Self::UnsupportedNativeFeeAssetMovement {
                 context_index,
                 instruction_index,
@@ -472,6 +497,14 @@ impl fmt::Display for ValidationFeeAdmissionError {
             } => write!(
                 f,
                 "native instruction `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} can move the policy DS outside an explicit asset transfer; this path is disabled while the validation-fee policy is active"
+            ),
+            Self::InvalidKagemushaOfflineConversion {
+                context_index,
+                instruction_index,
+                instruction_wire_id,
+            } => write!(
+                f,
+                "Kagemusha offline-cash conversion `{instruction_wire_id}` at instruction {instruction_index} in execution context {context_index} does not have a valid payer/recipient-signed public effect binding"
             ),
             Self::UnclassifiedNativeInstruction {
                 context_index,
@@ -840,6 +873,14 @@ pub(crate) struct OpaqueDeferredRuntimeOrigin<'a> {
     code_bytes: &'a [u8],
 }
 
+/// Whether validated opaque effects should be atomically applied or discarded
+/// as the bound payout's legitimate empty/insufficient-credit no-op.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OpaqueDeferredValidationOutcome {
+    Apply,
+    NoOp,
+}
+
 impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
     pub(crate) fn new(
         runtime_context: &'a crate::executor::ContractRuntimeExecutionContext,
@@ -854,13 +895,14 @@ impl<'a> OpaqueDeferredRuntimeOrigin<'a> {
 
 pub(crate) fn enforce_opaque_deferred_instruction_groups(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
+    ordered_instructions: &[(AccountId, InstructionBox)],
     state_transaction: &mut StateTransaction<'_, '_>,
     runtime_origin: Option<OpaqueDeferredRuntimeOrigin<'_>>,
-) -> Result<(), TransactionRejectionReason> {
+) -> Result<OpaqueDeferredValidationOutcome, TransactionRejectionReason> {
     let Some(policy) = active_policy(state_transaction)? else {
-        return Ok(());
+        return Ok(OpaqueDeferredValidationOutcome::Apply);
     };
-    let treasury_payout_authority = verified_opaque_treasury_payout_authority(
+    let treasury_payout_binding = verified_opaque_treasury_payout_binding(
         &policy,
         state_transaction,
         runtime_origin.as_ref(),
@@ -869,7 +911,9 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
     enforce_opaque_deferred_policy(
         instruction_groups,
         &policy,
-        treasury_payout_authority.as_ref(),
+        treasury_payout_binding
+            .as_ref()
+            .map(|binding| &binding.treasury_account_id),
     )
     .map_err(admission_rejection)?;
 
@@ -914,31 +958,27 @@ pub(crate) fn enforce_opaque_deferred_instruction_groups(
         .map_err(admission_rejection)?;
     }
 
-    let payout_minor_units = opaque_treasury_payout_debit_minor_units(
-        instruction_groups,
-        &policy,
-        treasury_payout_authority.as_ref(),
-    )
-    .map_err(admission_rejection)?;
-    if payout_minor_units > 0 {
-        let requested = quantity_from_policy_minor_units(payout_minor_units, policy.ds_scale)
+    if let Some(binding) = treasury_payout_binding.as_ref() {
+        if ordered_instructions.is_empty() && instruction_groups.is_empty() {
+            return Ok(OpaqueDeferredValidationOutcome::NoOp);
+        }
+        validate_treasury_payout_effect_plan(instruction_groups, ordered_instructions, binding)
             .map_err(admission_rejection)?;
-        let treasury_account_id = treasury_payout_authority.ok_or_else(|| {
-            admission_rejection(ValidationFeeAdmissionError::InsufficientCreditBalance {
-                available: Quantity::zero(),
-                requested: requested.clone(),
-            })
-        })?;
-        let credit = ValidationFeeCredit::from_policy_minor_units(
-            treasury_account_id,
+        let credit = ValidationFeeCredit {
+            treasury_account_id: binding.treasury_account_id.clone(),
             fee_asset_definition_id,
-            policy.ds_scale,
-            payout_minor_units,
-        )
-        .map_err(admission_rejection)?;
-        consume_validation_fee_credit(state_transaction, &credit).map_err(admission_rejection)?;
+            asset_scale: policy.ds_scale,
+            amount: binding.batch_sbd.clone(),
+        };
+        match consume_validation_fee_credit(state_transaction, &credit) {
+            Ok(()) => {}
+            Err(ValidationFeeAdmissionError::InsufficientCreditBalance { .. }) => {
+                return Ok(OpaqueDeferredValidationOutcome::NoOp);
+            }
+            Err(error) => return Err(admission_rejection(error)),
+        }
     }
-    Ok(())
+    Ok(OpaqueDeferredValidationOutcome::Apply)
 }
 
 fn enforce_opaque_deferred_policy(
@@ -965,42 +1005,133 @@ fn enforce_opaque_deferred_policy(
     Ok(())
 }
 
-fn opaque_treasury_payout_debit_minor_units(
+fn validate_treasury_payout_effect_plan(
     instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
-    policy: &ValidationFeePolicyV1,
-    treasury_payout_authority: Option<&AccountId>,
-) -> Result<u64, ValidationFeeAdmissionError> {
-    let Some(treasury) = treasury_payout_authority else {
-        return Ok(0);
+    ordered_instructions: &[(AccountId, InstructionBox)],
+    binding: &ValidationFeeTreasuryPayoutBindingV1,
+) -> Result<(), ValidationFeeAdmissionError> {
+    let mismatch =
+        |reason| ValidationFeeAdmissionError::TreasuryPayoutEffectPlanMismatch { reason };
+    if instruction_groups.len() != 1 {
+        return Err(mismatch(
+            "the runtime must emit exactly one authority group",
+        ));
+    }
+    let Some(instructions) = instruction_groups.get(&binding.treasury_account_id) else {
+        return Err(mismatch(
+            "the sole authority group must be the bound treasury",
+        ));
     };
-    let fee_asset_definition_id = policy_fee_asset_definition_id(policy)?;
-    let Some(instructions) = instruction_groups.get(treasury) else {
-        return Ok(0);
-    };
+    if instructions.len() != 6 || ordered_instructions.len() != 6 {
+        return Err(mismatch(
+            "the atomic payout must contain exactly six instructions",
+        ));
+    }
+    if ordered_instructions
+        .iter()
+        .any(|(authority, _)| authority != &binding.treasury_account_id)
+    {
+        return Err(mismatch(
+            "every ordered effect must retain the bound treasury runtime authority",
+        ));
+    }
+    if !ordered_instructions
+        .iter()
+        .map(|(_, instruction)| instruction)
+        .eq(instructions.iter())
+    {
+        return Err(mismatch(
+            "grouped effects do not preserve the canonical global queue order",
+        ));
+    }
     let mut collection = TransferCollection {
         contexts: vec![TransferExecutionContext {
-            execution_account_id: treasury.clone(),
+            execution_account_id: binding.treasury_account_id.clone(),
             requires_multisig_fee_marker: false,
         }],
         transfers: Vec::new(),
         multisig_fee_markers: Vec::new(),
     };
-    collect_instruction_asset_transfers(
-        instructions,
-        0,
-        &fee_asset_definition_id,
-        &mut collection,
-    )?;
-    let fee_asset_transfers =
-        collect_fee_asset_transfers(&collection.transfers, policy, &fee_asset_definition_id)?;
-    fee_asset_transfers
-        .iter()
-        .filter(|transfer| transfer.context_index == 0 && transfer.source_account_id == *treasury)
-        .try_fold(0_u64, |total, transfer| {
-            total
-                .checked_add(transfer.amount_minor_units)
-                .ok_or(ValidationFeeAdmissionError::RequiredFeeOverflow)
-        })
+    collect_instruction_asset_transfers(instructions, 0, &binding.sbd_asset_id, &mut collection)?;
+    if collection.transfers.len() != 6 {
+        return Err(mismatch(
+            "every instruction must be one direct non-batched asset transfer",
+        ));
+    }
+    for (index, transfer) in collection.transfers.iter().enumerate() {
+        if transfer.context_index != 0
+            || transfer.instruction_index != index
+            || transfer.entry_index.is_some()
+        {
+            return Err(mismatch(
+                "transfers must retain the canonical direct instruction order",
+            ));
+        }
+    }
+
+    let sbd_leg = &collection.transfers[0];
+    if sbd_leg.asset_definition_id != binding.sbd_asset_id
+        || sbd_leg.source_account_id != binding.treasury_account_id
+        || sbd_leg.destination_account_id != binding.pool_vault_account_id
+        || sbd_leg.amount != *binding.batch_sbd.as_numeric()
+    {
+        return Err(mismatch(
+            "instruction 0 must be the exact bound SBD treasury-to-vault batch",
+        ));
+    }
+
+    let xor_return = &collection.transfers[1];
+    if xor_return.asset_definition_id != binding.xor_asset_id
+        || xor_return.source_account_id != binding.pool_vault_account_id
+        || xor_return.destination_account_id != binding.treasury_account_id
+    {
+        return Err(mismatch(
+            "instruction 1 must return XOR from the bound vault to the treasury",
+        ));
+    }
+    let amount_out = Quantity::from_canonical_numeric(xor_return.amount.clone())
+        .map_err(|_| mismatch("the XOR output must be a non-negative canonical quantity"))?;
+    if amount_out < binding.min_xor_out || amount_out > binding.max_xor_out {
+        return Err(mismatch(
+            "the XOR output is outside the signed slippage bounds",
+        ));
+    }
+
+    let recipients = binding.recipients.as_slice();
+    let payout0 = amount_out
+        .try_mul_decimal(&recipients[0].share)
+        .map_err(|_| ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)?;
+    let payout1 = amount_out
+        .try_mul_decimal(&recipients[1].share)
+        .map_err(|_| ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)?;
+    let payout2 = amount_out
+        .try_mul_decimal(&recipients[2].share)
+        .map_err(|_| ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)?;
+    let payout3 = amount_out
+        .checked_sub(&payout0)
+        .and_then(|remaining| remaining.checked_sub(&payout1))
+        .and_then(|remaining| remaining.checked_sub(&payout2))
+        .map_err(|_| ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)?;
+    let expected_payouts = [payout0, payout1, payout2, payout3];
+
+    for (offset, (recipient, expected_amount)) in
+        recipients.iter().zip(expected_payouts.iter()).enumerate()
+    {
+        if expected_amount.is_zero() {
+            return Err(mismatch("every bound validator payout must be non-zero"));
+        }
+        let transfer = &collection.transfers[offset + 2];
+        if transfer.asset_definition_id != binding.xor_asset_id
+            || transfer.source_account_id != binding.treasury_account_id
+            || transfer.destination_account_id != recipient.account_id
+            || transfer.amount != *expected_amount.as_numeric()
+        {
+            return Err(mismatch(
+                "instructions 2 through 5 must match the ordered validator shares exactly",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn reject_opaque_fee_asset_effects(
@@ -1262,7 +1393,6 @@ fn enforce_deferred_policy_with_credit(
             context_index,
             context,
             policy,
-            &treasury,
             &transfer_collection.multisig_fee_markers,
             &fee_asset_transfers,
         )?;
@@ -1347,9 +1477,14 @@ fn validate_treasury_payout_contract_subject(
         return Ok(());
     }
     let treasury = policy_treasury_account_id(policy)?;
-    let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+    let binding = policy.treasury_payout_binding.as_ref().ok_or(
+        ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            reason: "the active signed policy has no typed payout binding",
+        },
+    )?;
+    let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
         state_transaction,
-        &treasury,
+        &binding.contract_address,
     ) else {
         return Err(
             ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
@@ -1357,41 +1492,106 @@ fn validate_treasury_payout_contract_subject(
             },
         );
     };
-    if record.contract_subject != treasury {
+    if record.contract_address != binding.contract_address
+        || record.contract_subject != treasury
+        || binding.treasury_account_id != treasury
+    {
         return Err(
-            ValidationFeeAdmissionError::TreasuryPayoutRequiresActiveContractSubject {
-                treasury_account_id: treasury.to_string(),
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "contract address or immutable subject differs from the signed binding",
+            },
+        );
+    }
+    if <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) != binding.code_hash {
+        return Err(
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "deployed code hash differs from the signed binding",
+            },
+        );
+    }
+    let entrypoint = binding.entrypoint.as_ref();
+    if !record
+        .manifest
+        .entrypoints
+        .as_ref()
+        .is_some_and(|entrypoints| entrypoints.iter().any(|item| item.name == entrypoint))
+    {
+        return Err(
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "the signed entrypoint is absent from the deployed manifest",
+            },
+        );
+    }
+    let sbd_credit = ValidationFeeCredit {
+        treasury_account_id: binding.treasury_account_id.clone(),
+        fee_asset_definition_id: binding.sbd_asset_id.clone(),
+        asset_scale: policy.ds_scale,
+        amount: binding.batch_sbd.clone(),
+    };
+    validation_fee_credit_asset_spec(state_transaction, &sbd_credit)?;
+    let xor_definition = state_transaction
+        .world
+        .asset_definition(&binding.xor_asset_id)
+        .map_err(
+            |_| ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "the bound XOR asset definition is missing",
+            },
+        )?;
+    if xor_definition
+        .spec()
+        .check(binding.min_xor_out.as_numeric())
+        .is_err()
+        || xor_definition
+            .spec()
+            .check(binding.max_xor_out.as_numeric())
+            .is_err()
+    {
+        return Err(
+            ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+                reason: "the signed XOR bounds do not satisfy the bound asset numeric specification",
             },
         );
     }
     Ok(())
 }
 
-fn verified_opaque_treasury_payout_authority(
+fn verified_opaque_treasury_payout_binding(
     policy: &ValidationFeePolicyV1,
     state_transaction: &StateTransaction<'_, '_>,
     runtime_origin: Option<&OpaqueDeferredRuntimeOrigin<'_>>,
-) -> Result<Option<AccountId>, ValidationFeeAdmissionError> {
+) -> Result<Option<ValidationFeeTreasuryPayoutBindingV1>, ValidationFeeAdmissionError> {
     if !treasury_payout_exemption_enabled(policy) {
         return Ok(None);
     }
-    let treasury = policy_treasury_account_id(policy)?;
+    let binding = policy.treasury_payout_binding.as_ref().ok_or(
+        ValidationFeeAdmissionError::TreasuryPayoutRuntimeBindingMismatch {
+            reason: "the active signed policy has no typed payout binding",
+        },
+    )?;
     let Some(origin) = runtime_origin else {
         return Ok(None);
     };
-    if origin.runtime_context.contract_subject != treasury {
+    if origin.runtime_context.contract_address != binding.contract_address
+        || origin.runtime_context.contract_subject != binding.treasury_account_id
+        || origin.runtime_context.entrypoint != binding.entrypoint.as_ref()
+        || <[u8; 32]>::from(Sha256::digest(origin.code_bytes)) != binding.code_hash
+    {
         return Ok(None);
     }
     let Some(record) = crate::smartcontracts::code::fetch_bound_contract_record(
         state_transaction,
-        &origin.runtime_context.contract_address,
+        &binding.contract_address,
     ) else {
         return Ok(None);
     };
-    if record.contract_subject != treasury || record.code_bytes.as_slice() != origin.code_bytes {
+    if record.contract_address != binding.contract_address
+        || record.contract_subject != binding.treasury_account_id
+        || <[u8; 32]>::from(Sha256::digest(&record.code_bytes)) != binding.code_hash
+        || record.code_bytes.as_slice() != origin.code_bytes
+    {
         return Ok(None);
     }
-    Ok(Some(treasury))
+    Ok(Some(binding.clone()))
 }
 
 fn policy_is_active_or_unexpired(
@@ -1873,7 +2073,6 @@ fn enforce_policy_with_credit(
             context_index,
             context,
             policy,
-            &treasury,
             &transfer_collection.multisig_fee_markers,
             &fee_asset_transfers,
         )?;
@@ -1913,7 +2112,6 @@ fn multisig_marker_coordinate_for_context(
     context_index: usize,
     context: &TransferExecutionContext,
     policy: &ValidationFeePolicyV1,
-    treasury: &AccountId,
     markers: &[MultisigFeeMarkerSummary],
     fee_asset_transfers: &[FeeAssetTransferSummary],
 ) -> Result<Option<FeeInstructionCoordinate>, ValidationFeeAdmissionError> {
@@ -1928,13 +2126,9 @@ fn multisig_marker_coordinate_for_context(
         return Err(ValidationFeeAdmissionError::UnexpectedMultisigFeeMarker { context_index });
     }
 
-    let treasury_payout_exemption_enabled = treasury_payout_exemption_enabled(policy);
     let has_fee_asset_effect = fee_asset_transfers
         .iter()
-        .filter(|transfer| transfer.context_index == context_index)
-        .any(|transfer| {
-            !(&transfer.source_account_id == treasury && treasury_payout_exemption_enabled)
-        });
+        .any(|transfer| transfer.context_index == context_index);
     if !has_fee_asset_effect {
         if context_markers.is_empty() {
             return Ok(None);
@@ -2020,8 +2214,6 @@ fn enforce_context_policy(
 ) -> Result<ValidatedContextFee, ValidationFeeAdmissionError> {
     let mut qualifying_transfer_count = 0usize;
     let mut uncoordinated_fee_candidates = Vec::new();
-    let treasury_payout_exemption_enabled = treasury_payout_exemption_enabled(policy);
-
     if let Some(fee_coordinate) = fee_coordinate {
         let fee_transfer = validate_explicit_fee_coordinate(
             fee_coordinate,
@@ -2037,9 +2229,6 @@ fn enforce_context_policy(
             .iter()
             .filter(|transfer| transfer.context_index == context_index)
         {
-            if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
-                continue;
-            }
             if fee_coordinate.matches(transfer) {
                 continue;
             }
@@ -2074,9 +2263,6 @@ fn enforce_context_policy(
         .iter()
         .filter(|transfer| transfer.context_index == context_index)
     {
-        if &transfer.source_account_id == treasury && treasury_payout_exemption_enabled {
-            continue;
-        }
         if allow_implicit_context_fee
             && &transfer.source_account_id == execution_account_id
             && &transfer.destination_account_id == treasury
@@ -2103,9 +2289,6 @@ fn enforce_context_policy(
         let uncoordinated_fee_candidate_count = fee_asset_transfers
             .iter()
             .filter(|transfer| transfer.context_index == context_index)
-            .filter(|transfer| {
-                !(&transfer.source_account_id == treasury && treasury_payout_exemption_enabled)
-            })
             .filter(|transfer| {
                 &transfer.source_account_id == execution_account_id
                     && &transfer.destination_account_id == treasury
@@ -2506,6 +2689,8 @@ enum NativeInstructionDsEffectDisposition {
     ExplicitAssetTransfer,
     /// A multisig proposal whose signed nested instructions are collected recursively.
     RecursiveMultisigProposal,
+    /// A payer/recipient-signed conversion between a transparent balance and protocol escrow.
+    AuditedKagemushaOfflineConversion,
     /// Deferred execution is guarded again when the stored trigger/proposal is materialized.
     GuardedDeferredEffect,
     /// Audited not to change numeric asset balances or supply.
@@ -2650,6 +2835,35 @@ fn native_instruction_ds_effect_disposition(
         return NativeInstructionDsEffectDisposition::RejectKnownDsCapable(instruction_wire_id);
     }
 
+    // Kagemusha does not expose an arbitrary transparent account-to-account transfer. A top-up
+    // can only debit the payer authenticated inside the request and reserve the exact amount in
+    // protocol escrow; a redemption can only debit provenance-bound protocol escrow and credit
+    // the recipient authenticated inside the request. The offline peer-to-peer value transition
+    // is proof-bound and does not execute a ledger transfer instruction. Keep this distinct from
+    // `AuditedNoDsEffect`: the operations do change transparent balances, but they are closed
+    // custody conversions rather than qualifying `Transfer<Asset, Quantity, Account>` principal
+    // instructions under `PerQualifyingTransferInstruction`.
+    if let Some(top_up) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>(
+    ) {
+        return if top_up.request.asset.definition() == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        } else {
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+        };
+    }
+    if let Some(redeem) = instruction
+        .as_any()
+        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
+    ) {
+        return if &redeem.request.bundle.statement.asset == fee_asset_definition_id {
+            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion
+        } else {
+            NativeInstructionDsEffectDisposition::AuditedNoDsEffect
+        };
+    }
+
     // Repo and settlement paths with no policy-DS leg were audited above. Margin calls do not
     // move assets. Any policy-DS leg was already rejected.
     audited_no_ds_effect!(
@@ -2724,8 +2938,6 @@ fn native_instruction_ds_effect_disposition(
         iroha_data_model::isi::account_recovery::FinalizeAccountRecovery,
         iroha_data_model::isi::alias_setup::EnsureAlias,
         iroha_data_model::isi::alias_setup::RenewAliasLease,
-        iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
-        iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
         iroha_data_model::isi::social::ClaimTwitterFollowReward,
         iroha_data_model::isi::social::SendToTwitter,
         iroha_data_model::isi::social::CancelTwitterEscrow,
@@ -2903,6 +3115,44 @@ fn collect_instruction_asset_transfers(
                     collection,
                 )?;
             }
+            NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion => {
+                let (instruction_wire_id, valid_public_binding) = if let Some(top_up) = instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4>()
+                {
+                    (
+                        core::any::type_name::<
+                            iroha_data_model::isi::offline::TopUpKagemushaRecursiveV4,
+                        >(),
+                        top_up.request.validate_public_binding().is_ok(),
+                    )
+                } else if let Some(redeem) =
+                    instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4>(
+                        )
+                {
+                    (
+                        core::any::type_name::<
+                            iroha_data_model::isi::offline::RedeemKagemushaRecursiveV4,
+                        >(),
+                        redeem.request.validate_public_binding().is_ok(),
+                    )
+                } else {
+                    unreachable!(
+                        "audited Kagemusha conversion disposition must contain a V4 top-up or redemption"
+                    );
+                };
+                if !valid_public_binding {
+                    return Err(
+                        ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
+                            context_index,
+                            instruction_index,
+                            instruction_wire_id,
+                        },
+                    );
+                }
+            }
             NativeInstructionDsEffectDisposition::GuardedDeferredEffect
             | NativeInstructionDsEffectDisposition::AuditedNoDsEffect => {}
             NativeInstructionDsEffectDisposition::RejectKnownDsCapable(instruction_wire_id) => {
@@ -3041,10 +3291,35 @@ mod tests {
         events::execute_trigger::ExecuteTriggerEventFilter,
         isi::{
             InstructionBox, Transfer, TransferAssetBatchEntry,
+            offline::{RedeemKagemushaRecursiveV4, TopUpKagemushaRecursiveV4},
             repo::RepoMarginCallIsi,
             settlement::{SettlementLeg, SettlementPlan},
         },
+        offline::{
+            KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND, KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4,
+            KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4, KagemushaAndroidKeyMintHardwareAssertionV1,
+            KagemushaOnlineHardwareAssertionV1, KagemushaPastaCycleParityV1,
+            KagemushaPastaCycleProofEnvelopeV4, KagemushaRecursiveSpendArtifactBindingV4,
+            KagemushaRecursiveSpendBranchClaimV2, KagemushaRecursiveSpendBundleV4,
+            KagemushaRecursiveSpendOperationVectorV4, KagemushaRecursiveSpendProofV4,
+            KagemushaRecursiveSpendPublicStatementV4, KagemushaRecursiveSpendRedeemRequestV4,
+            KagemushaRecursiveSpendRedeemUnsignedV4, KagemushaRecursiveSpendRedemptionIntentV4,
+            KagemushaRecursiveSpendStateBoundaryV2, KagemushaRecursiveSpendTopUpAnchorRefV2,
+            KagemushaRecursiveSpendTopUpRequestV4, KagemushaRecursiveSpendTopUpUnsignedV4,
+            KagemushaRequestAuthorizationV2, KagemushaScaledAmountV2,
+            KagemushaSpendableNoteDescriptorV2, KagemushaUnshieldPublicInputsBindingV2,
+            kagemusha_confidential_amount_encoding_v2,
+            kagemusha_recursive_spend_verifier_key_id_v4,
+        },
         prelude::Register,
+        proof::{ProofAttachment, ProofBox, VerifyingKeyId},
         repo::{RepoCashLeg, RepoCollateralLeg, RepoGovernance},
         transaction::{
             Executable, IvmBytecode, IvmProved, TransactionBuilder, executable::ContractInvocation,
@@ -3059,7 +3334,7 @@ mod tests {
             VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
             VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeGovernanceKeyV1,
             ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicySignatureV1,
+            ValidationFeePolicySignatureV1, ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
@@ -3107,14 +3382,59 @@ mod tests {
             expires_after_height: Some(100),
             governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
+            treasury_payout_binding: None,
         }
     }
 
-    fn policy_with_treasury_payout_exemption(treasury: &AccountId) -> ValidationFeePolicyV1 {
-        let mut policy = policy(treasury);
+    fn xor_asset() -> AssetDefinitionId {
+        asset_definition("xor")
+    }
+
+    fn test_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+        iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &account(9),
+            42,
+            iroha_data_model::nexus::DataSpaceId::UNIVERSAL,
+        )
+        .expect("test contract address")
+    }
+
+    fn treasury_payout_binding(
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        code: &[u8],
+    ) -> ValidationFeeTreasuryPayoutBindingV1 {
+        let treasury = contract_address.subject_id();
+        ValidationFeeTreasuryPayoutBindingV1 {
+            contract_address,
+            code_hash: <[u8; 32]>::from(Sha256::digest(code)),
+            entrypoint: "autonomous_validation_fee_tick"
+                .parse()
+                .expect("payout entrypoint"),
+            treasury_account_id: treasury,
+            sbd_asset_id: fee_asset(),
+            xor_asset_id: xor_asset(),
+            pool_vault_account_id: account(2),
+            batch_sbd: Quantity::one(),
+            min_xor_out: Quantity::from(4_u64),
+            max_xor_out: Quantity::from(100_u64),
+            recipients: (3..=6)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: account(seed),
+                    share: "0.25".parse().expect("validator share"),
+                })
+                .collect(),
+        }
+    }
+
+    fn policy_with_treasury_payout_binding(
+        binding: ValidationFeeTreasuryPayoutBindingV1,
+    ) -> ValidationFeePolicyV1 {
+        let mut policy = policy(&binding.treasury_account_id);
         policy
             .exemption_classes
             .push(VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string());
+        policy.treasury_payout_binding = Some(binding);
         policy
     }
 
@@ -3200,7 +3520,7 @@ mod tests {
             abi_version: 1,
         };
         let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
-            name: "payout".to_owned(),
+            name: "autonomous_validation_fee_tick".to_owned(),
             kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
             params: Vec::new(),
             argument_schema: None,
@@ -3270,6 +3590,305 @@ mod tests {
             to.clone(),
         )
         .into()
+    }
+
+    fn canonical_treasury_payout_plan(
+        binding: &ValidationFeeTreasuryPayoutBindingV1,
+        xor_out: Quantity,
+    ) -> Vec<InstructionBox> {
+        let payout0 = xor_out
+            .try_mul_decimal(&binding.recipients[0].share)
+            .expect("first exact validator share");
+        let payout1 = xor_out
+            .try_mul_decimal(&binding.recipients[1].share)
+            .expect("second exact validator share");
+        let payout2 = xor_out
+            .try_mul_decimal(&binding.recipients[2].share)
+            .expect("third exact validator share");
+        let payout3 = xor_out
+            .checked_sub(&payout0)
+            .and_then(|remaining| remaining.checked_sub(&payout1))
+            .and_then(|remaining| remaining.checked_sub(&payout2))
+            .expect("deterministic final-validator remainder");
+        let payouts = [payout0, payout1, payout2, payout3];
+        let mut instructions = vec![
+            transfer(
+                &binding.treasury_account_id,
+                &binding.sbd_asset_id,
+                binding.batch_sbd.as_numeric().clone(),
+                &binding.pool_vault_account_id,
+            ),
+            transfer(
+                &binding.pool_vault_account_id,
+                &binding.xor_asset_id,
+                xor_out.as_numeric().clone(),
+                &binding.treasury_account_id,
+            ),
+        ];
+        instructions.extend(
+            binding
+                .recipients
+                .iter()
+                .zip(payouts)
+                .map(|(recipient, amount)| {
+                    transfer(
+                        &binding.treasury_account_id,
+                        &binding.xor_asset_id,
+                        amount.as_numeric().clone(),
+                        &recipient.account_id,
+                    )
+                }),
+        );
+        instructions
+    }
+
+    fn ordered_treasury_payout_plan(
+        binding: &ValidationFeeTreasuryPayoutBindingV1,
+        instructions: &[InstructionBox],
+    ) -> Vec<(AccountId, InstructionBox)> {
+        instructions
+            .iter()
+            .cloned()
+            .map(|instruction| (binding.treasury_account_id.clone(), instruction))
+            .collect()
+    }
+
+    fn assert_treasury_payout_plan_mismatch(
+        binding: &ValidationFeeTreasuryPayoutBindingV1,
+        groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
+        ordered: &[(AccountId, InstructionBox)],
+    ) {
+        assert!(matches!(
+            validate_treasury_payout_effect_plan(groups, ordered, binding),
+            Err(ValidationFeeAdmissionError::TreasuryPayoutEffectPlanMismatch { .. })
+                | Err(ValidationFeeAdmissionError::TreasuryPayoutArithmeticFailure)
+        ));
+    }
+
+    fn kagemusha_artifact_binding() -> KagemushaRecursiveSpendArtifactBindingV4 {
+        KagemushaRecursiveSpendArtifactBindingV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            generation: "validation-fee-kagemusha-v4".to_owned(),
+            manifest_sha256: [0xA1; 32],
+        }
+    }
+
+    fn kagemusha_authorization(
+        authority: AccountId,
+        asset_definition_id: AssetDefinitionId,
+        operation_id: [u8; 32],
+        payload_digest: [u8; 32],
+    ) -> KagemushaRequestAuthorizationV2 {
+        KagemushaRequestAuthorizationV2 {
+            authority,
+            device_id: "validation-fee-kagemusha-device".to_owned(),
+            asset_definition_id,
+            operation_id,
+            issued_at_ms: 1,
+            expires_at_ms: 2,
+            nonce: [0xA2; 32],
+            payload_digest,
+            registration_hash: [0xA3; 32],
+            hardware_assertion: KagemushaOnlineHardwareAssertionV1::AndroidKeyMint(
+                KagemushaAndroidKeyMintHardwareAssertionV1 {
+                    signature:
+                        iroha_data_model::offline::KagemushaDeviceSignatureV2::from_raw_bytes(
+                            &[1; 64],
+                        )
+                        .expect("canonical low-S fixture signature"),
+                },
+            ),
+        }
+    }
+
+    fn kagemusha_top_up_request(
+        asset_definition_id: &AssetDefinitionId,
+    ) -> KagemushaRecursiveSpendTopUpRequestV4 {
+        let payer = account(1);
+        let chain_id = ChainId::from("generic-testnet");
+        let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
+            .expect("positive top-up amount");
+        let operation_id = [0xA4; 32];
+        let mut shield_proof = ProofAttachment::new_ref(
+            KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into(),
+            ProofBox::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.to_owned(), vec![0xA5]),
+            VerifyingKeyId::new(
+                KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
+                "validation-fee-topup-shield",
+            ),
+        );
+        shield_proof.vk_commitment = Some([0xA6; 32]);
+        let unsigned = KagemushaRecursiveSpendTopUpUnsignedV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            asset: AssetId::new(asset_definition_id.clone(), payer.clone()),
+            amount,
+            current_note: KagemushaSpendableNoteDescriptorV2 {
+                chain_id,
+                asset: asset_definition_id.clone(),
+                note_commitment: [0xA7; 32],
+                spend_nullifier: [0xA8; 32],
+                amount,
+            },
+            shield_evidence: iroha_data_model::offline::KagemushaTopUpShieldEvidenceV2 {
+                initial_root: [0xA9; 32],
+                finalized_root: [0xAA; 32],
+                leaf_index: 0,
+                proof: shield_proof,
+            },
+            artifact_binding: kagemusha_artifact_binding(),
+            operation_id,
+        };
+        let payload_digest = unsigned.digest().expect("valid top-up payload");
+        unsigned
+            .into_request(kagemusha_authorization(
+                payer,
+                asset_definition_id.clone(),
+                operation_id,
+                payload_digest,
+            ))
+            .expect("valid top-up request")
+    }
+
+    fn kagemusha_redeem_request(
+        asset_definition_id: &AssetDefinitionId,
+    ) -> KagemushaRecursiveSpendRedeemRequestV4 {
+        let recipient = account(1);
+        let chain_id = ChainId::from("generic-testnet");
+        let amount = KagemushaScaledAmountV2::new(500, u32::from(TEST_VALIDATION_FEE_ASSET_SCALE))
+            .expect("positive redemption amount");
+        let operation_id = [0xB1; 32];
+        let topup_anchor_ref = KagemushaRecursiveSpendTopUpAnchorRefV2 {
+            topup_operation_id: [0xB2; 32],
+            anchor_digest: [0xB3; 32],
+        };
+        let branch_claim =
+            KagemushaRecursiveSpendBranchClaimV2::root(topup_anchor_ref.anchor_digest)
+                .expect("canonical root branch claim");
+        let note = KagemushaSpendableNoteDescriptorV2 {
+            chain_id: chain_id.clone(),
+            asset: asset_definition_id.clone(),
+            note_commitment: [0xB4; 32],
+            spend_nullifier: [0xB5; 32],
+            amount,
+        };
+        let binding = kagemusha_artifact_binding();
+        let verifier_key_id = kagemusha_recursive_spend_verifier_key_id_v4(
+            KagemushaPastaCycleParityV1::StepEq,
+            binding.manifest_sha256,
+        );
+        let statement = KagemushaRecursiveSpendPublicStatementV4 {
+            chain_id: chain_id.clone(),
+            asset: asset_definition_id.clone(),
+            asset_scale: u32::from(TEST_VALIDATION_FEE_ASSET_SCALE),
+            final_root: [0xB6; 32],
+            next_zero_leaf_index: 1,
+            topup_anchor_refs: vec![topup_anchor_ref.clone()],
+            proof_step_count: 1,
+            peer_hop_count: 0,
+            current_note: note.clone(),
+            branch_claims: vec![branch_claim.clone()],
+            transition: None,
+            artifact_binding: binding.clone(),
+            verifier_key_id: verifier_key_id.clone(),
+        };
+        let public_statement_digest = statement.digest().expect("valid public statement");
+        let mut state_limbs = vec![0; KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LIMBS_V2];
+        state_limbs[0] = KAGEMUSHA_RECURSIVE_SPEND_STATE_VECTOR_LAYOUT_VERSION_V2;
+        let mut operation_limbs = [0; KAGEMUSHA_RECURSIVE_SPEND_OPERATION_LIMBS_V4];
+        operation_limbs[0] = 1;
+        let bundle = KagemushaRecursiveSpendBundleV4 {
+            statement,
+            operation: KagemushaRecursiveSpendOperationVectorV4 {
+                limbs: operation_limbs,
+            },
+            recursive_proof: KagemushaRecursiveSpendProofV4 {
+                verifier_key_id,
+                public_statement_digest,
+                proof_envelope: KagemushaPastaCycleProofEnvelopeV4 {
+                    version: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_PROOF_ENVELOPE_VERSION_V4,
+                    proof_backend: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                    transcript_profile: KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4
+                        .to_owned(),
+                    step_eq_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4.to_owned(),
+                    step_ep_circuit_id: KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_CIRCUIT_ID_V4.to_owned(),
+                    artifact_generation: binding.generation.clone(),
+                    manifest_sha256: binding.manifest_sha256,
+                    step_eq_parameter_generation: "validation-fee-eq-params".to_owned(),
+                    step_ep_parameter_generation: "validation-fee-ep-params".to_owned(),
+                    step_eq_circuit_params_sha256: [0xB7; 32],
+                    step_ep_circuit_params_sha256: [0xB8; 32],
+                    step_eq_verifier_key_sha256: [0xB9; 32],
+                    step_ep_verifier_key_sha256: [0xBA; 32],
+                    state_boundary: KagemushaRecursiveSpendStateBoundaryV2::new(state_limbs)
+                        .expect("valid state boundary"),
+                    proof: ProofBox::new(
+                        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4.to_owned(),
+                        vec![0xBB],
+                    ),
+                },
+            },
+        };
+        let bundle_digest = bundle.digest().expect("valid recursive bundle");
+        let unshield_public_inputs = KagemushaUnshieldPublicInputsBindingV2 {
+            input_commitment_0: note.note_commitment,
+            input_commitment_1: [0; 32],
+            nullifier_0: note.spend_nullifier,
+            nullifier_1: [0; 32],
+            change_output_commitment: [0; 32],
+            root: [0xB6; 32],
+            public_amount: kagemusha_confidential_amount_encoding_v2(amount.atomic_units),
+            asset_tag: [0xBC; 32],
+            chain_tag: [0xBD; 32],
+        };
+        let redemption = KagemushaRecursiveSpendRedemptionIntentV4 {
+            chain_id,
+            asset: asset_definition_id.clone(),
+            input_note: note,
+            parent_branch_claims: vec![branch_claim],
+            parent_topup_anchor_refs: vec![topup_anchor_ref],
+            parent_proof_step_count: 1,
+            parent_peer_hop_count: 0,
+            parent_bundle_digest: bundle_digest,
+            input_root: [0xB6; 32],
+            recipient: recipient.clone(),
+            public_amount: amount,
+            change_output: None,
+            change_artifact_binding: None,
+            unshield_public_inputs_digest: unshield_public_inputs
+                .digest()
+                .expect("valid unshield public inputs"),
+            unshield_public_inputs,
+            operation_id,
+        };
+        let mut redeem_proof = ProofAttachment::new_ref(
+            KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.into(),
+            ProofBox::new(KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND.to_owned(), vec![0xBE]),
+            VerifyingKeyId::new(
+                KAGEMUSHA_CONFIDENTIAL_PROOF_BACKEND,
+                "validation-fee-unshield",
+            ),
+        );
+        redeem_proof.vk_commitment = Some([0xBF; 32]);
+        let unsigned = KagemushaRecursiveSpendRedeemUnsignedV4 {
+            version: KAGEMUSHA_RECURSIVE_SPEND_WIRE_VERSION_V4,
+            bundle,
+            recipient: recipient.clone(),
+            amount,
+            redeem_proof,
+            redemption,
+            offline_change: None,
+            block_height: 10,
+            operation_id,
+        };
+        let payload_digest = unsigned.digest().expect("valid redemption payload");
+        unsigned
+            .into_request(kagemusha_authorization(
+                recipient,
+                asset_definition_id.clone(),
+                operation_id,
+                payload_digest,
+            ))
+            .expect("valid redemption request")
     }
 
     fn repo_initiate(
@@ -3707,6 +4326,130 @@ mod tests {
     }
 
     #[test]
+    fn active_policy_admits_publicly_bound_kagemusha_fee_asset_conversions() {
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let top_up: InstructionBox =
+            TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
+        let redeem: InstructionBox =
+            RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
+
+        for instruction in [top_up, redeem] {
+            assert_eq!(
+                native_instruction_ds_effect_disposition(&instruction, &fee_asset),
+                NativeInstructionDsEffectDisposition::AuditedKagemushaOfflineConversion,
+            );
+            let collection = collect_asset_transfers(
+                &Executable::Instructions(vec![instruction.clone()].into()),
+                &account(1),
+                &fee_asset,
+            )
+            .expect("a publicly bound Kagemusha conversion must be classifiable");
+            assert!(
+                collection.transfers.is_empty(),
+                "closed transparent/escrow conversion is not an account-to-account Transfer ISI",
+            );
+            enforce_policy(&tx(1, vec![instruction], Metadata::default()), &policy)
+                .expect("Kagemusha conversion must remain usable for the policy fee asset");
+        }
+    }
+
+    #[test]
+    fn kagemusha_conversion_admission_rejects_redirected_public_bindings() {
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+
+        let mut top_up = kagemusha_top_up_request(&fee_asset);
+        top_up.authorization.authority = account(2);
+        assert_eq!(
+            enforce_policy(
+                &tx(
+                    1,
+                    vec![TopUpKagemushaRecursiveV4::new(top_up).into()],
+                    Metadata::default(),
+                ),
+                &policy,
+            ),
+            Err(
+                ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
+                    context_index: 0,
+                    instruction_index: 0,
+                    instruction_wire_id: core::any::type_name::<TopUpKagemushaRecursiveV4>(),
+                },
+            ),
+        );
+
+        let mut redeem = kagemusha_redeem_request(&fee_asset);
+        redeem.recipient = account(2);
+        assert_eq!(
+            enforce_policy(
+                &tx(
+                    1,
+                    vec![RedeemKagemushaRecursiveV4::new(redeem).into()],
+                    Metadata::default(),
+                ),
+                &policy,
+            ),
+            Err(
+                ValidationFeeAdmissionError::InvalidKagemushaOfflineConversion {
+                    context_index: 0,
+                    instruction_index: 0,
+                    instruction_wire_id: core::any::type_name::<RedeemKagemushaRecursiveV4>(),
+                },
+            ),
+        );
+    }
+
+    #[test]
+    fn kagemusha_conversion_does_not_exempt_adjacent_fee_asset_transfers() {
+        let user = account(1);
+        let recipient = account(2);
+        let treasury = account(3);
+        let policy = policy(&treasury);
+        let fee_asset = policy_fee_asset(&policy);
+        let top_up: InstructionBox =
+            TopUpKagemushaRecursiveV4::new(kagemusha_top_up_request(&fee_asset)).into();
+        let redeem: InstructionBox =
+            RedeemKagemushaRecursiveV4::new(kagemusha_redeem_request(&fee_asset)).into();
+        let principal = transfer(&user, &fee_asset, Numeric::new(1_u64, 0), &recipient);
+
+        for conversion in [top_up, redeem] {
+            assert_eq!(
+                enforce_policy(
+                    &tx(
+                        1,
+                        vec![conversion.clone(), principal.clone()],
+                        Metadata::default(),
+                    ),
+                    &policy,
+                ),
+                Err(ValidationFeeAdmissionError::MissingFee {
+                    required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+                }),
+                "an adjacent ordinary SBD transfer must still pay the exact validation fee",
+            );
+
+            let fee = transfer(
+                &user,
+                &fee_asset,
+                minor_units(TEST_VALIDATION_FEE_MINOR_UNITS),
+                &treasury,
+            );
+            enforce_policy(
+                &tx(
+                    1,
+                    vec![conversion, principal.clone(), fee],
+                    metadata_for_fee_instruction(&policy, 2),
+                ),
+                &policy,
+            )
+            .expect("the ordinary transfer remains admissible with its exact signed fee");
+        }
+    }
+
+    #[test]
     fn transfer_to_unregistered_account_is_rejected_as_hidden_fee_candidate() {
         let user = account(1);
         let recipient = account(2);
@@ -3792,7 +4535,7 @@ mod tests {
         assert_eq!(
             verify_signed_policy(signed_policy(invalid_policy, &[&first, &second]), &keyset),
             Err(ValidationFeeAdmissionError::InvalidPolicyInvariant(
-                "validation-fee policy amount must be 10 minor units"
+                "validation-fee policy amount must be 0.1"
             ))
         );
     }
@@ -4497,10 +5240,11 @@ mod tests {
 
     #[test]
     fn opaque_treasury_payout_exception_is_direct_source_and_authority_bound() {
-        let treasury = account(1);
+        let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
+        let treasury = binding.treasury_account_id.clone();
         let recipient = account(2);
-        let other = account(3);
-        let policy = policy_with_treasury_payout_exemption(&treasury);
+        let other = account(7);
+        let policy = policy_with_treasury_payout_binding(binding);
         let fee_asset = policy_fee_asset(&policy);
 
         let direct_payout = std::collections::BTreeMap::from([(
@@ -4575,6 +5319,158 @@ mod tests {
             enforce_opaque_deferred_policy(&nested_group, &policy, Some(&treasury)),
             Err(ValidationFeeAdmissionError::OpaqueDeferredFeeAssetTransfer { .. })
         ));
+    }
+
+    #[test]
+    fn treasury_payout_effect_plan_rejects_every_unsigned_substitution() {
+        let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
+        let treasury = binding.treasury_account_id.clone();
+        let canonical = canonical_treasury_payout_plan(&binding, Quantity::from(20_u64));
+        let canonical_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), canonical.clone())]);
+        let canonical_ordered = ordered_treasury_payout_plan(&binding, &canonical);
+        validate_treasury_payout_effect_plan(&canonical_groups, &canonical_ordered, &binding)
+            .expect("the exact six-transfer plan is accepted");
+
+        let mut missing = canonical.clone();
+        missing.pop();
+        let missing_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), missing.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &missing_groups,
+            &ordered_treasury_payout_plan(&binding, &missing),
+        );
+
+        let mut extra = canonical.clone();
+        extra.push(canonical[5].clone());
+        let extra_groups = std::collections::BTreeMap::from([(treasury.clone(), extra.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &extra_groups,
+            &ordered_treasury_payout_plan(&binding, &extra),
+        );
+
+        let mut reordered = canonical_ordered.clone();
+        reordered.swap(0, 1);
+        assert_treasury_payout_plan_mismatch(&binding, &canonical_groups, &reordered);
+
+        let mut wrong_batch = canonical.clone();
+        wrong_batch[0] = transfer(
+            &treasury,
+            &binding.sbd_asset_id,
+            Numeric::new(2_u64, 0),
+            &binding.pool_vault_account_id,
+        );
+        let wrong_batch_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_batch.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_batch_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_batch),
+        );
+
+        let mut wrong_sbd_asset = canonical.clone();
+        wrong_sbd_asset[0] = transfer(
+            &treasury,
+            &binding.xor_asset_id,
+            binding.batch_sbd.as_numeric().clone(),
+            &binding.pool_vault_account_id,
+        );
+        let wrong_sbd_asset_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_sbd_asset.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_sbd_asset_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_sbd_asset),
+        );
+
+        let mut wrong_vault = canonical.clone();
+        wrong_vault[1] = transfer(
+            &account(7),
+            &binding.xor_asset_id,
+            Numeric::new(20_u64, 0),
+            &treasury,
+        );
+        let wrong_vault_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_vault.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_vault_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_vault),
+        );
+
+        for outside_bound in [3_u64, 101_u64] {
+            let out_of_bounds =
+                canonical_treasury_payout_plan(&binding, Quantity::from(outside_bound));
+            let out_of_bounds_groups =
+                std::collections::BTreeMap::from([(treasury.clone(), out_of_bounds.clone())]);
+            assert_treasury_payout_plan_mismatch(
+                &binding,
+                &out_of_bounds_groups,
+                &ordered_treasury_payout_plan(&binding, &out_of_bounds),
+            );
+        }
+
+        let mut wrong_validator = canonical.clone();
+        wrong_validator[2] = transfer(
+            &treasury,
+            &binding.xor_asset_id,
+            Numeric::new(5_u64, 0),
+            &account(7),
+        );
+        let wrong_validator_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_validator.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_validator_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_validator),
+        );
+
+        let mut wrong_final_amount = canonical.clone();
+        wrong_final_amount[5] = transfer(
+            &treasury,
+            &binding.xor_asset_id,
+            Numeric::new(4_u64, 0),
+            &binding.recipients[3].account_id,
+        );
+        let wrong_final_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), wrong_final_amount.clone())]);
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_final_groups,
+            &ordered_treasury_payout_plan(&binding, &wrong_final_amount),
+        );
+
+        let mut changed_shares = binding.clone();
+        changed_shares.recipients[0].share = "0.20".parse().expect("changed share");
+        changed_shares.recipients[1].share = "0.30".parse().expect("changed share");
+        assert_treasury_payout_plan_mismatch(
+            &changed_shares,
+            &canonical_groups,
+            &canonical_ordered,
+        );
+
+        let other_authority = account(7);
+        let wrong_authority_groups =
+            std::collections::BTreeMap::from([(other_authority.clone(), canonical.clone())]);
+        let wrong_authority_ordered = canonical
+            .iter()
+            .cloned()
+            .map(|instruction| (other_authority.clone(), instruction))
+            .collect::<Vec<_>>();
+        assert_treasury_payout_plan_mismatch(
+            &binding,
+            &wrong_authority_groups,
+            &wrong_authority_ordered,
+        );
+
+        let mut split_groups =
+            std::collections::BTreeMap::from([(treasury.clone(), canonical[..5].to_vec())]);
+        split_groups.insert(other_authority.clone(), vec![canonical[5].clone()]);
+        let mut split_ordered = canonical_ordered;
+        split_ordered[5].0 = other_authority;
+        assert_treasury_payout_plan_mismatch(&binding, &split_groups, &split_ordered);
     }
 
     #[test]
@@ -4688,52 +5584,15 @@ mod tests {
     }
 
     #[test]
-    fn active_treasury_payout_policy_rejects_a_signable_treasury_account() {
-        use iroha_data_model::{block::BlockHeader, isi::SetParameter, parameter::Parameter};
-        use nonzero_ext::nonzero;
-
-        let treasury = account(3);
-        let policy = policy_with_treasury_payout_exemption(&treasury);
-        let governance = key_pair(44);
-        let keyset = governance_keyset(&[&governance], 1);
-        let registry = policy_registry(std::slice::from_ref(&policy));
-        let signed = signed_policy(policy, &[&governance]);
-        let state = crate::state::State::new_with_chain_for_testing(
-            crate::state::World::default(),
-            crate::kura::Kura::blank_kura_for_testing(),
-            crate::query::store::LiveQueryStore::start_test(),
-            "generic-testnet".parse().expect("chain id"),
-        );
-        {
-            let mut hashes = state.block_hashes.block();
-            hashes.push_for_tests(block_hash([7; 32]));
-            hashes.commit_for_tests();
-        }
-
-        let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut state_tx = block.transaction();
-        for custom in [
-            keyset.into_custom_parameter(),
-            registry.into_custom_parameter(),
-            signed.into_custom_parameter(),
-        ] {
-            crate::smartcontracts::Execute::execute(
-                SetParameter::new(Parameter::Custom(custom)),
-                &treasury,
-                &mut state_tx,
-            )
-            .expect("install active validation-fee policy");
-        }
-
-        let error = active_policy(&state_tx)
-            .expect_err("a signable account cannot back the signed treasury-payout class");
-        assert!(
-            matches!(error, TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(ref message)
-            ) if message.contains("TREASURY_PAYOUT")
-                && message.contains("active immutable non-signable contract subject")),
-            "unexpected signable-treasury rejection: {error:?}",
+    fn typed_treasury_payout_policy_cannot_name_a_signable_treasury() {
+        let mut policy = policy_with_treasury_payout_binding(treasury_payout_binding(
+            test_contract_address(),
+            b"bound-pool",
+        ));
+        policy.treasury_account_id = account(7).to_string();
+        assert_eq!(
+            policy.policy_invariant_error(),
+            Some("validation-fee treasury payout contract subject must equal the policy treasury")
         );
     }
 
@@ -4756,14 +5615,23 @@ mod tests {
         let fee_domain =
             Domain::new(DomainId::try_new("fees", "paynet").expect("fee-asset domain id"))
                 .build(&deployer);
-        let deployer_account = Account::new(deployer.clone()).build(&deployer);
+        let mut accounts = vec![Account::new(deployer.clone()).build(&deployer)];
+        accounts.extend((2..=7).map(|seed| Account::new(account(seed)).build(&deployer)));
         let fee_definition = AssetDefinition::new(
             fee_asset(),
             NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
         )
         .build(&deployer);
-        let world =
-            crate::state::World::with([domain, fee_domain], [deployer_account], [fee_definition]);
+        let xor_definition = AssetDefinition::new(
+            xor_asset(),
+            NumericSpec::fractional(u32::from(TEST_VALIDATION_FEE_ASSET_SCALE)),
+        )
+        .build(&deployer);
+        let world = crate::state::World::with(
+            [domain, fee_domain],
+            accounts,
+            [fee_definition, xor_definition],
+        );
         let state = crate::state::State::new_with_chain_for_testing(
             world,
             crate::kura::Kura::blank_kura_for_testing(),
@@ -4779,6 +5647,18 @@ mod tests {
         let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
+        let deployment_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        crate::smartcontracts::Execute::execute(
+            iroha_data_model::isi::Grant::account_permission(
+                deployment_permission,
+                deployer.clone(),
+            ),
+            &deployer,
+            &mut state_tx,
+        )
+        .expect("grant contract lifecycle authority");
         let (code, manifest) = minimal_bound_contract_artifact();
         let code_hash = crate::smartcontracts::code::register_code_bytes(
             &deployer,
@@ -4807,15 +5687,46 @@ mod tests {
         )
         .expect("activate contract instance");
 
-        let treasury = contract_address.subject_id();
-        let recipient = deployer.clone();
-        let policy = policy_with_treasury_payout_exemption(&treasury);
+        let binding = treasury_payout_binding(contract_address.clone(), &code);
+        let treasury = binding.treasury_account_id.clone();
+        crate::smartcontracts::Execute::execute(
+            Register::account(Account::new(treasury.clone())),
+            &deployer,
+            &mut state_tx,
+        )
+        .expect("register immutable contract subject account");
+        let policy = policy_with_treasury_payout_binding(binding.clone());
         let governance = key_pair(44);
         let keyset = governance_keyset(&[&governance], 1);
+        let mut wrong_code_binding = binding.clone();
+        wrong_code_binding.code_hash[0] ^= 0xff;
+        let wrong_code_policy = policy_with_treasury_payout_binding(wrong_code_binding);
+        let wrong_code_registry = policy_registry(std::slice::from_ref(&wrong_code_policy));
+        let wrong_code_signed = signed_policy(wrong_code_policy, &[&governance]);
+        for custom in [
+            keyset.into_custom_parameter(),
+            wrong_code_registry.into_custom_parameter(),
+            wrong_code_signed.into_custom_parameter(),
+        ] {
+            crate::smartcontracts::Execute::execute(
+                SetParameter::new(Parameter::Custom(custom)),
+                &deployer,
+                &mut state_tx,
+            )
+            .expect("install wrong-code validation-fee policy fixture");
+        }
+        let wrong_code_error = active_policy(&state_tx)
+            .expect_err("the signed binding cannot name another SHA-256 artifact");
+        assert!(
+            matches!(wrong_code_error, TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(ref message)
+            ) if message.contains("deployed code hash differs from the signed binding")),
+            "unexpected signed code-hash rejection: {wrong_code_error:?}",
+        );
+
         let registry = policy_registry(std::slice::from_ref(&policy));
         let signed = signed_policy(policy.clone(), &[&governance]);
         for custom in [
-            keyset.into_custom_parameter(),
             registry.into_custom_parameter(),
             signed.into_custom_parameter(),
         ] {
@@ -4834,17 +5745,55 @@ mod tests {
             contract_address: contract_address.clone(),
             contract_subject: treasury.clone(),
             contract_alias: None,
-            entrypoint: "payout".to_owned(),
+            entrypoint: binding.entrypoint.to_string(),
         };
-        let groups = std::collections::BTreeMap::from([(
-            treasury.clone(),
-            vec![transfer(
-                &treasury,
-                &policy_fee_asset(&policy),
-                minor_units(100),
-                &recipient,
-            )],
-        )]);
+        let instructions = canonical_treasury_payout_plan(&binding, Quantity::from(20_u64));
+        let ordered = ordered_treasury_payout_plan(&binding, &instructions);
+        let groups = std::collections::BTreeMap::from([(treasury.clone(), instructions.clone())]);
+        for rejected_origin in [
+            None,
+            Some(crate::executor::ContractRuntimeExecutionContext {
+                contract_address: runtime.contract_address.clone(),
+                contract_subject: runtime.contract_subject.clone(),
+                contract_alias: None,
+                entrypoint: "swap_quote_for_base".to_owned(),
+            }),
+            Some(crate::executor::ContractRuntimeExecutionContext {
+                contract_address: test_contract_address(),
+                contract_subject: test_contract_address().subject_id(),
+                contract_alias: None,
+                entrypoint: binding.entrypoint.to_string(),
+            }),
+        ] {
+            let origin = rejected_origin
+                .as_ref()
+                .map(|context| OpaqueDeferredRuntimeOrigin::new(context, &code));
+            let error = enforce_opaque_deferred_instruction_groups(
+                &groups,
+                &ordered,
+                &mut state_tx,
+                origin,
+            )
+            .expect_err(
+                "direct execution, a wrong entrypoint, and another address must not use credit",
+            );
+            assert!(
+                matches!(error, TransactionRejectionReason::Validation(
+                    ValidationFail::NotPermitted(ref message)
+                ) if message.contains("opaque deferred executable derived a policy fee-asset transfer")),
+                "unexpected unbound-runtime rejection: {error:?}",
+            );
+        }
+        assert_eq!(
+            enforce_opaque_deferred_instruction_groups(
+                &std::collections::BTreeMap::new(),
+                &[],
+                &mut state_tx,
+                Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
+            )
+            .expect("a bound pool may report no payout when no batch is available"),
+            OpaqueDeferredValidationOutcome::NoOp,
+        );
         let payout_credit = ValidationFeeCredit::from_policy_minor_units(
             treasury.clone(),
             policy_fee_asset(&policy),
@@ -5113,19 +6062,33 @@ mod tests {
                 Quantity::one(),
                 "a failed signed transaction must not create fee credit"
             );
-            enforce_opaque_deferred_instruction_groups(
-                &groups,
-                &mut failed_trigger_transaction,
-                Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
-            )
-            .expect("matching runtime may stage an exactly credited payout");
+            assert_eq!(
+                enforce_opaque_deferred_instruction_groups(
+                    &groups,
+                    &ordered,
+                    &mut failed_trigger_transaction,
+                    Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
+                )
+                .expect("matching runtime may stage an exactly credited payout"),
+                OpaqueDeferredValidationOutcome::Apply
+            );
             assert_eq!(
                 read_validation_fee_credit_balance(&failed_trigger_transaction, &payout_credit,)
                     .expect("read staged debit"),
                 Quantity::zero(),
                 "the validator stages the debit in the trigger subtransaction"
             );
-            // Simulate a later swap/instruction failure by dropping the trigger transaction.
+            failed_trigger_transaction
+                .world
+                .smart_contract_state
+                .insert(
+                    "ValidationFeeFinalLegRollbackSentinel"
+                        .parse()
+                        .expect("rollback sentinel key"),
+                    vec![1],
+                );
+            // Simulate failure of the sixth (final validator) transfer: dropping this
+            // subtransaction must roll back the pool-state artifact and native credit debit.
         }
 
         let mut successful_trigger_transaction = block.transaction();
@@ -5135,10 +6098,23 @@ mod tests {
             Quantity::one(),
             "a failed trigger subtransaction must roll its staged credit debit back"
         );
+        assert!(
+            successful_trigger_transaction
+                .world
+                .smart_contract_state
+                .get(
+                    &"ValidationFeeFinalLegRollbackSentinel"
+                        .parse::<Name>()
+                        .expect("rollback sentinel key")
+                )
+                .is_none(),
+            "a final-leg failure must roll back staged pool state as well as credit",
+        );
 
         let altered_code = [code.as_slice(), &[0_u8]].concat();
         let error = enforce_opaque_deferred_instruction_groups(
             &groups,
+            &ordered,
             &mut successful_trigger_transaction,
             Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &altered_code)),
         )
@@ -5151,14 +6127,15 @@ mod tests {
         );
 
         let wrong_runtime = crate::executor::ContractRuntimeExecutionContext {
-            contract_address,
+            contract_address: contract_address.clone(),
             contract_subject: deployer,
             contract_alias: None,
-            entrypoint: "payout".to_owned(),
+            entrypoint: binding.entrypoint.to_string(),
         };
         assert!(
             enforce_opaque_deferred_instruction_groups(
                 &groups,
+                &ordered,
                 &mut successful_trigger_transaction,
                 Some(OpaqueDeferredRuntimeOrigin::new(&wrong_runtime, &code)),
             )
@@ -5166,12 +6143,16 @@ mod tests {
             "a signable runtime authority must not inherit the contract-subject exception"
         );
 
-        enforce_opaque_deferred_instruction_groups(
-            &groups,
-            &mut successful_trigger_transaction,
-            Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
-        )
-        .expect("matching active contract runtime may make its direct treasury payout");
+        assert_eq!(
+            enforce_opaque_deferred_instruction_groups(
+                &groups,
+                &ordered,
+                &mut successful_trigger_transaction,
+                Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
+            )
+            .expect("matching active contract runtime may make its direct treasury payout"),
+            OpaqueDeferredValidationOutcome::Apply
+        );
         assert_eq!(
             read_validation_fee_credit_balance(&successful_trigger_transaction, &payout_credit)
                 .expect("read consumed validation-fee credit"),
@@ -5181,19 +6162,25 @@ mod tests {
         successful_trigger_transaction.apply();
 
         let mut exhausted_credit_transaction = block.transaction();
-        let error = enforce_opaque_deferred_instruction_groups(
-            &groups,
-            &mut exhausted_credit_transaction,
-            Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
-        )
-        .expect_err("treasury asset holdings without fee credit must not fund another payout");
-        assert!(
-            matches!(error, TransactionRejectionReason::Validation(
-                ValidationFail::NotPermitted(ref message)
-            ) if message.contains("exceeds validation-fee credit balance")
-                && message.contains("available 0")
-                && message.contains("requested 1")),
-            "unexpected exhausted-credit rejection: {error:?}"
+        assert_eq!(
+            enforce_opaque_deferred_instruction_groups(
+                &groups,
+                &ordered,
+                &mut exhausted_credit_transaction,
+                Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
+            )
+            .expect("insufficient reserved credit is a legitimate atomic no-op"),
+            OpaqueDeferredValidationOutcome::NoOp
+        );
+        assert_eq!(
+            enforce_opaque_deferred_instruction_groups(
+                &std::collections::BTreeMap::new(),
+                &[],
+                &mut exhausted_credit_transaction,
+                Some(OpaqueDeferredRuntimeOrigin::new(&runtime, &code)),
+            )
+            .expect("an empty bound tick is a legitimate no-op"),
+            OpaqueDeferredValidationOutcome::NoOp
         );
     }
 
@@ -5643,10 +6630,11 @@ mod tests {
     }
 
     #[test]
-    fn treasury_payout_is_exempt_when_signed_policy_lists_class() {
+    fn ordinary_sbd_transfer_from_bound_treasury_remains_fee_bearing() {
         let user = account(1);
-        let treasury = account(2);
-        let policy = policy_with_treasury_payout_exemption(&treasury);
+        let binding = treasury_payout_binding(test_contract_address(), b"bound-pool");
+        let treasury = binding.treasury_account_id.clone();
+        let policy = policy_with_treasury_payout_binding(binding);
         let fee_asset = policy_fee_asset(&policy);
 
         let treasury_payout = tx(
@@ -5659,7 +6647,13 @@ mod tests {
             )],
             Metadata::default(),
         );
-        enforce_policy(&treasury_payout, &policy).expect("treasury payout class is signed");
+        assert_eq!(
+            enforce_policy(&treasury_payout, &policy),
+            Err(ValidationFeeAdmissionError::MissingFee {
+                required_minor_units: TEST_VALIDATION_FEE_MINOR_UNITS,
+            }),
+            "the exemption is available only to the exact bound opaque runtime plan",
+        );
     }
 
     #[test]

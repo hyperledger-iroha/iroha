@@ -3,6 +3,7 @@ package org.hyperledger.iroha.sdk.client
 import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import org.hyperledger.iroha.sdk.address.AccountAddress
+import org.hyperledger.iroha.sdk.testing.TestEd25519Keys
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -100,6 +101,6 @@ class AccountAliasReadModelsTest {
     }
 
     private fun account(): String = AccountAddress
-        .fromAccount(ByteArray(32) { 0x22 }, "ed25519")
+        .fromAccount(TestEd25519Keys.publicKey(0x22), "ed25519")
         .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT)
 }

@@ -57,30 +57,51 @@ object ClientConfigManifestLoader {
     private fun applyTorii(manifestPath: Path, builder: ClientConfig.Builder, root: Map<String, Any?>) {
         val torii = expectObject(root["torii"], "torii")
         builder.setBaseUri(parseUri(requireString(torii, "base_uri"), "torii.base_uri"))
-        val gateway = optionalString(torii["sorafs_gateway_uri"])
-        if (!gateway.isNullOrEmpty()) builder.setSorafsGatewayUri(parseUri(gateway, "torii.sorafs_gateway_uri"))
-        val timeoutMs = optionalLong(torii["timeout_ms"])
-        if (timeoutMs != null && timeoutMs >= 0) builder.setRequestTimeout(Duration.ofMillis(timeoutMs))
+        val gateway = optionalString(torii["sorafs_gateway_uri"], "torii.sorafs_gateway_uri")
+        if (gateway != null) {
+            check(gateway.isNotEmpty()) { "torii.sorafs_gateway_uri must be a non-empty string" }
+            builder.setSorafsGatewayUri(parseUri(gateway, "torii.sorafs_gateway_uri"))
+        }
+        val timeoutMs = optionalLong(torii["timeout_ms"], "torii.timeout_ms")
+        if (timeoutMs != null) {
+            check(timeoutMs >= 0) { "torii.timeout_ms must be >= 0" }
+            builder.setRequestTimeout(Duration.ofMillis(timeoutMs))
+        }
         val headers = optionalObject(torii["default_headers"], "torii.default_headers")
-        headers?.forEach { (name, value) -> optionalString(value)?.let { builder.putDefaultHeader(name, it) } }
+        headers?.forEach { (name, value) ->
+            builder.putDefaultHeader(name, requireStringValue(value, "torii.default_headers.$name"))
+        }
     }
 
     private fun applyRetry(builder: ClientConfig.Builder, root: Map<String, Any?>) {
         val retry = optionalObject(root["retry"], "retry") ?: return
         val policy = RetryPolicy.builder()
-        optionalInt(retry["max_attempts"])?.takeIf { it >= 1 }?.let { policy.setMaxAttempts(it) }
-        optionalLong(retry["base_delay_ms"])?.takeIf { it >= 0 }?.let { policy.setBaseDelay(Duration.ofMillis(it)) }
-        optionalLong(retry["max_delay_ms"])?.takeIf { it >= 0 }?.let { policy.setMaxDelay(Duration.ofMillis(it)) }
-        optionalBoolean(retry["retry_on_server_error"])?.let { policy.setRetryOnServerError(it) }
-        optionalBoolean(retry["retry_on_too_many_requests"])?.let { policy.setRetryOnTooManyRequests(it) }
-        optionalBoolean(retry["retry_on_network_error"])?.let { policy.setRetryOnNetworkError(it) }
-        optionalArray(retry["retry_status_codes"], "retry.retry_status_codes")?.forEach { optionalInt(it)?.let { s -> policy.addRetryStatusCode(s) } }
+        optionalInt(retry["max_attempts"], "retry.max_attempts")?.let {
+            check(it >= 1) { "retry.max_attempts must be >= 1" }
+            policy.setMaxAttempts(it)
+        }
+        optionalLong(retry["base_delay_ms"], "retry.base_delay_ms")?.let {
+            check(it >= 0) { "retry.base_delay_ms must be >= 0" }
+            policy.setBaseDelay(Duration.ofMillis(it))
+        }
+        optionalLong(retry["max_delay_ms"], "retry.max_delay_ms")?.let {
+            check(it >= 0) { "retry.max_delay_ms must be >= 0" }
+            policy.setMaxDelay(Duration.ofMillis(it))
+        }
+        optionalBoolean(retry["retry_on_server_error"], "retry.retry_on_server_error")?.let { policy.setRetryOnServerError(it) }
+        optionalBoolean(retry["retry_on_too_many_requests"], "retry.retry_on_too_many_requests")?.let { policy.setRetryOnTooManyRequests(it) }
+        optionalBoolean(retry["retry_on_network_error"], "retry.retry_on_network_error")?.let { policy.setRetryOnNetworkError(it) }
+        optionalArray(retry["retry_status_codes"], "retry.retry_status_codes")?.forEachIndexed { index, value ->
+            val status = optionalInt(value, "retry.retry_status_codes[$index]")
+            check(status != null) { "retry.retry_status_codes[$index] must be an integer" }
+            policy.addRetryStatusCode(status)
+        }
         builder.setRetryPolicy(policy.build())
     }
 
     private fun applyPendingQueue(manifestPath: Path, builder: ClientConfig.Builder, root: Map<String, Any?>) {
         val pending = optionalObject(root["pending_queue"], "pending_queue") ?: return
-        val kind = optionalString(pending["kind"])
+        val kind = optionalString(pending["kind"], "pending_queue.kind")
         if (kind == null || "memory".equals(kind, ignoreCase = true)) { builder.setPendingQueue(null); return }
         if ("file".equals(kind, ignoreCase = true)) {
             val pathRaw = requireString(pending, "path")
@@ -92,7 +113,7 @@ object ClientConfigManifestLoader {
     private fun applyTelemetry(builder: ClientConfig.Builder, root: Map<String, Any?>) {
         val telemetry = optionalObject(root["telemetry"], "telemetry")
         if (telemetry == null) { builder.setTelemetryOptions(TelemetryOptions.disabled()); return }
-        val enabledFlag = optionalBoolean(telemetry["enabled"])
+        val enabledFlag = optionalBoolean(telemetry["enabled"], "telemetry.enabled")
         val enabled = enabledFlag == null || enabledFlag
         val telemetryBuilder = TelemetryOptions.builder().setEnabled(enabled)
         if (enabled) {
@@ -101,19 +122,19 @@ object ClientConfigManifestLoader {
             telemetryBuilder.setTelemetryRedaction(parseRedaction(redaction))
         } else { telemetryBuilder.setTelemetryRedaction(Redaction.disabled()) }
         builder.setTelemetryOptions(telemetryBuilder.build())
-        optionalString(telemetry["exporter_name"])?.let { builder.setTelemetryExporterName(it) }
+        optionalString(telemetry["exporter_name"], "telemetry.exporter_name")?.let { builder.setTelemetryExporterName(it) }
     }
 
     private fun parseRedaction(redaction: Map<String, Any?>): Redaction {
         val rb = Redaction.builder()
-        val saltB64 = optionalString(redaction["salt_b64"])
-        val saltHex = optionalString(redaction["salt_hex"])
+        val saltB64 = optionalString(redaction["salt_b64"], "telemetry.redaction.salt_b64")
+        val saltHex = optionalString(redaction["salt_hex"], "telemetry.redaction.salt_hex")
         if (!saltB64.isNullOrEmpty()) rb.setSalt(Base64.decode(saltB64))
         else if (!saltHex.isNullOrBlank()) rb.setSaltHex(saltHex.trim())
         rb.setSaltVersion(requireString(redaction, "salt_version"))
-        val rotation = optionalString(redaction["rotation_id"])
+        val rotation = optionalString(redaction["rotation_id"], "telemetry.redaction.rotation_id")
         rb.setRotationId(if (!rotation.isNullOrEmpty()) rotation else requireString(redaction, "salt_version"))
-        optionalString(redaction["algorithm"])?.takeIf { it.isNotEmpty() }?.let { rb.setAlgorithm(it) }
+        optionalString(redaction["algorithm"], "telemetry.redaction.algorithm")?.takeIf { it.isNotEmpty() }?.let { rb.setAlgorithm(it) }
         return rb.build()
     }
 
@@ -156,33 +177,46 @@ object ClientConfigManifestLoader {
     private fun requireString(obj: Map<String, Any?>, key: String): String {
         val value = obj[key]
         check(value != null) { "Missing required field: $key" }
-        val normalized = optionalString(value)
-        check(!normalized.isNullOrEmpty()) { "Field $key must be a non-empty string" }
+        val normalized = requireStringValue(value, key)
+        check(normalized.isNotEmpty()) { "Field $key must be a non-empty string" }
         return normalized
     }
 
-    private fun optionalString(value: Any?): String? = when (value) { null -> null; is String -> value; else -> value.toString() }
+    private fun requireStringValue(value: Any?, path: String): String {
+        check(value is String) { "$path must be a string" }
+        return value
+    }
 
-    private fun optionalInt(value: Any?): Int? {
+    private fun optionalString(value: Any?, path: String): String? =
+        if (value == null) null else requireStringValue(value, path)
+
+    private fun optionalInt(value: Any?, path: String): Int? {
         if (value == null) return null
         if (value is Number) {
-            return JsonNumbers.asInt(value, "integer value")
+            return JsonNumbers.asInt(value, path)
         }
-        return optionalString(value)?.toInt()
+        check(value is String) { "$path must be an integer or decimal integer string" }
+        return value.toIntOrNull()
+            ?: throw IllegalStateException("$path must be an integer or decimal integer string")
     }
 
-    private fun optionalLong(value: Any?): Long? {
+    private fun optionalLong(value: Any?, path: String): Long? {
         if (value == null) return null
-        if (value is Number) return JsonNumbers.asLong(value, "integer value")
-        val normalized = optionalString(value)
-        return if (normalized.isNullOrEmpty()) null else normalized.toLong()
+        if (value is Number) return JsonNumbers.asLong(value, path)
+        check(value is String) { "$path must be an integer or decimal integer string" }
+        return value.toLongOrNull()
+            ?: throw IllegalStateException("$path must be an integer or decimal integer string")
     }
 
-    private fun optionalBoolean(value: Any?): Boolean? {
+    private fun optionalBoolean(value: Any?, path: String): Boolean? {
         if (value == null) return null
         if (value is Boolean) return value
-        val lower = optionalString(value)?.trim()?.lowercase() ?: return null
-        return when (lower) { "true", "1", "yes" -> true; "false", "0", "no" -> false; else -> throw IllegalStateException("Unsupported boolean value: $value") }
+        check(value is String) { "$path must be a boolean or boolean string" }
+        return when (value.trim().lowercase()) {
+            "true", "1", "yes" -> true
+            "false", "0", "no" -> false
+            else -> throw IllegalStateException("Unsupported boolean value for $path: $value")
+        }
     }
 
     private fun parseUri(value: String, field: String): URI {

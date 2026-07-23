@@ -30,7 +30,9 @@ const UNAVAILABLE_NATIVE_BINDING = Object.freeze({
     throw new Error("Native binding required; test override is unavailable");
   },
 });
-const ACCOUNT_ID = "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB";
+const ACCOUNT_ID = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+const SEED_11_ED25519_PUBLIC_KEY_HEX =
+  "D04AB232742BB4AB3A1368BD4615E4E6D0224AB71A016BAF8520A332C9778737";
 const MULTISIG_SIGNER_ID =
   "sorauﾛ1P738ｷﾈｹｵﾙﾍﾉﾂUｿﾚｹﾑbﾄ1xYﾆｷvWzﾒkﾒ5ﾛﾘuE1ﾌsﾛXB6V1Y";
 
@@ -659,7 +661,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
   });
   const manifest = {
     seiyaku_name: "Ledger",
-    code_hash: "aa".repeat(32),
+    code_hash: `${"aa".repeat(31)}ab`,
     abi_hash: "bb".repeat(32),
     compiler_fingerprint: "kotodama_lang",
     features_bitmap: 42,
@@ -735,7 +737,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
       },
     ],
     provenance: {
-      signer: `ed0120${"11".repeat(32)}`,
+      signer: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
       signature: "22".repeat(64).toUpperCase(),
     },
   };
@@ -747,7 +749,7 @@ baseTest("contract manifest codec roundtrips every V1 descriptor field", () => {
   const decoded = noritoDecodeInstruction(encoded);
   assert.deepEqual(decoded.RegisterSmartContractCode.manifest, {
     ...manifest,
-    code_hash: "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA#0E5B",
+    code_hash: "hash:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB#3E38",
     abi_hash: "hash:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB#ABA2",
   });
 });
@@ -865,7 +867,7 @@ baseTest("contract manifest codec rejects noncanonical and retired layouts", () 
       encodeManifest({
         ...fixture.manifest,
         provenance: {
-          signer: `ed0120${"11".repeat(32)}`,
+          signer: `ed0120${SEED_11_ED25519_PUBLIC_KEY_HEX}`,
           signature: "00".repeat(64),
         },
       }),

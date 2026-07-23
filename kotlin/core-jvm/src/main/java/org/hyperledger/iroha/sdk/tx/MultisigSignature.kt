@@ -1,7 +1,9 @@
 package org.hyperledger.iroha.sdk.tx
 
+import org.hyperledger.iroha.sdk.address.compactPublicKeyPayload
 import org.hyperledger.iroha.sdk.address.decodePublicKeyLiteral
 import org.hyperledger.iroha.sdk.address.encodePublicKeyMultihash
+import org.hyperledger.iroha.sdk.crypto.Ed25519PublicKeyAdmission
 
 class MultisigSignature private constructor(
     @JvmField val curveId: Int,
@@ -18,6 +20,9 @@ class MultisigSignature private constructor(
         _publicKey = publicKey.copyOf()
         _signature = signature.copyOf()
         require(_publicKey.isNotEmpty()) { "publicKey must not be empty" }
+        require(curveId != 0x01 || Ed25519PublicKeyAdmission.isValid(_publicKey)) {
+            "invalid Ed25519 public key: expected a canonical point in the prime-order subgroup"
+        }
         require(_signature.isNotEmpty()) { "signature must not be empty" }
     }
 
@@ -27,12 +32,7 @@ class MultisigSignature private constructor(
 
     fun publicKeyMultihash(): String = encodePublicKeyMultihash(curveId, _publicKey)
 
-    fun publicKeyNoritoPayload(): ByteArray {
-        val payload = ByteArray(_publicKey.size + 1)
-        payload[0] = algorithmTag.toByte()
-        System.arraycopy(_publicKey, 0, payload, 1, _publicKey.size)
-        return payload
-    }
+    fun publicKeyNoritoPayload(): ByteArray = compactPublicKeyPayload(curveId, _publicKey)
 
     companion object {
         @JvmStatic

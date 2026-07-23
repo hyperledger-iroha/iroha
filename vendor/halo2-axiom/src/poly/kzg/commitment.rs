@@ -1,11 +1,11 @@
+use crate::SerdeFormat;
 use crate::arithmetic::{best_multiexp, g_to_lagrange, parallelize};
 use crate::helpers::SerdeCurveAffine;
 use crate::poly::commitment::{Blind, CommitmentScheme, Params, ParamsProver, ParamsVerifier};
 use crate::poly::{Coeff, LagrangeCoeff, Polynomial};
-use crate::SerdeFormat;
 
 use ff::{Field, PrimeField};
-use group::{prime::PrimeCurveAffine, Curve, Group};
+use group::{Curve, Group, prime::PrimeCurveAffine};
 use pairing::Engine;
 use rand_core::{OsRng, RngCore};
 use std::fmt::Debug;

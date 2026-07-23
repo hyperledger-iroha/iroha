@@ -311,6 +311,11 @@ public enum KagemushaNearbyTransportPolicy {
     public static func peerDisplayName(uuid: UUID = UUID()) -> String {
         "pk-\(uuid.uuidString.prefix(8).lowercased())"
     }
+
+    static func timeoutNanoseconds(seconds: UInt64) -> UInt64 {
+        let (nanoseconds, overflow) = seconds.multipliedReportingOverflow(by: 1_000_000_000)
+        return overflow ? UInt64.max : nanoseconds
+    }
 }
 
 /// Release gate for the live Nearby transport.
@@ -616,7 +621,11 @@ public final class KagemushaNearbyExchange: @unchecked Sendable {
 
     private func scheduleTimeout() {
         timeoutTask = Task { [weak self, timeoutSeconds] in
-            try? await Task.sleep(nanoseconds: timeoutSeconds * 1_000_000_000)
+            try? await Task.sleep(
+                nanoseconds: KagemushaNearbyTransportPolicy.timeoutNanoseconds(
+                    seconds: timeoutSeconds
+                )
+            )
             guard !Task.isCancelled else { return }
             self?.finish(.failure(KagemushaNearbyError.timedOut))
         }

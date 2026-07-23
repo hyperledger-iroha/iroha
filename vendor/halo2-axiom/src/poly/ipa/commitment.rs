@@ -3,7 +3,7 @@
 //!
 //! [halo]: https://eprint.iacr.org/2019/1021
 
-use crate::arithmetic::{best_multiexp, g_to_lagrange, parallelize, CurveAffine, CurveExt};
+use crate::arithmetic::{CurveAffine, CurveExt, best_multiexp, g_to_lagrange, parallelize};
 use crate::helpers::CurveRead;
 use crate::poly::commitment::{Blind, CommitmentScheme, Params, ParamsProver, ParamsVerifier};
 use crate::poly::ipa::msm::MSMIPA;
@@ -230,8 +230,8 @@ impl<'params, C: CurveAffine> ParamsProver<'params, C> for ParamsIPA<C> {
 #[cfg(test)]
 mod test {
     use crate::poly::commitment::ParamsProver;
-    use crate::poly::commitment::{Blind, Params, MSM};
-    use crate::poly::ipa::commitment::{create_proof, verify_proof, ParamsIPA};
+    use crate::poly::commitment::{Blind, MSM, Params};
+    use crate::poly::ipa::commitment::{ParamsIPA, create_proof, verify_proof};
     use crate::poly::ipa::msm::MSMIPA;
 
     use ff::Field;

@@ -101,8 +101,8 @@ test("verifySignedValidationFeePolicy verifies active registry and threshold sig
   );
   assert.equal(verified.policyHashHex, VALIDATION_FEE_POLICY_HASH_HEX);
   assert.equal(verified.policyVersion, 1n);
-  assert.equal(verified.validSignatureCount, 2);
-  assert.equal(verified.validSignatureWeight, 2n);
+  assert.equal(verified.validSignatureCount, 1);
+  assert.equal(verified.validSignatureWeight, 1n);
   assert.equal(verified.registry.registeredPolicyCount, 1);
   assert.equal(validationFeeQuantity(fixture.policy, 1), "0.1");
   assert.equal(validationFeeQuantity(fixture.policy, 3), "0.3");
@@ -113,9 +113,9 @@ test("verifySignedValidationFeePolicy honors weighted keyset thresholds", () => 
   fixture.verificationContext.governanceKeyset = {
     keyset_id: fixture.governanceKeyset.keyset_id,
     threshold: 3,
-    keys: fixture.governanceKeyset.public_keys_hex.map((public_key, index) => ({
+    keys: fixture.governanceKeyset.public_keys_hex.map((public_key) => ({
       public_key: `ed25519:ed0120${public_key}`,
-      weight: index === 0 ? 2 : 1,
+      weight: 3,
     })),
   };
   const verified = verifySignedValidationFeePolicy(
@@ -127,8 +127,12 @@ test("verifySignedValidationFeePolicy honors weighted keyset thresholds", () => 
 
 test("verifySignedValidationFeePolicy rejects tampered policy signatures", () => {
   const fixture = validationFeePolicyFixture();
-  fixture.signedPolicy.signatures[0].signature =
-    `00${fixture.signedPolicy.signatures[0].signature.slice(2)}`;
+  const tampered = Buffer.from(
+    fixture.signedPolicy.signatures[0].signature,
+    "hex",
+  );
+  tampered[32] ^= 0x01;
+  fixture.signedPolicy.signatures[0].signature = tampered.toString("hex");
   assert.throws(
     () =>
       verifySignedValidationFeePolicy(
@@ -234,16 +238,83 @@ test("verifySignedValidationFeePolicy returns an immutable policy snapshot", () 
   fixture.policy.fee = "99";
   fixture.policy.exemption_classes[0] = "MUTATED";
   fixture.policy.exemption_classes.push("MUTATED_AGAIN");
+  fixture.policy.treasury_payout_binding.recipients[0].share = "1";
   fixture.policyRegistry.active_policy_hash = "00".repeat(32);
   fixture.governanceKeyset.public_keys_hex[0] = "00".repeat(32);
 
-  assert.equal(verified.policy.network_id, "boi-testnet");
+  assert.equal(verified.policy.network_id, "generic-testnet");
   assert.equal(verified.policy.genesis_hash, "07".repeat(32));
   assert.equal(verified.policy.fee, "0.1");
   assert.deepEqual(verified.policy.exemption_classes, ["TREASURY_PAYOUT"]);
+  assert.equal(
+    verified.policy.treasury_payout_binding.recipients[0].share,
+    "0.25",
+  );
   assert.equal(verified.registry.activePolicyHashHex, VALIDATION_FEE_POLICY_HASH_HEX);
   assert.equal(Object.isFrozen(verified.policy), true);
   assert.equal(Object.isFrozen(verified.policy.exemption_classes), true);
+  assert.equal(Object.isFrozen(verified.policy.treasury_payout_binding), true);
+  assert.equal(
+    Object.isFrozen(verified.policy.treasury_payout_binding.recipients),
+    true,
+  );
+});
+
+test("verifySignedValidationFeePolicy rejects incomplete or altered treasury payout bindings", () => {
+  const cases = [
+    { policy: { treasury_payout_binding: null } },
+    { treasuryPayoutBinding: { code_hash: "00".repeat(32) } },
+    {
+      treasuryPayoutBinding: {
+        entrypoint: "different_validation_fee_tick",
+      },
+    },
+    {
+      treasuryPayoutBinding: {
+        treasury_account_id:
+          "sorauﾛ1Q2ﾜﾓ4bｳEDHﾏﾇｿSyFﾘk6bX74ﾙｦRﾙﾄM2GｻSｳｴpPヰｱ6HEY4T",
+      },
+    },
+    {
+      treasuryPayoutBinding: {
+        xor_asset_id: "55tBnqydRcQTDJmz6Z7wkjRr83XZ",
+      },
+    },
+    { treasuryPayoutBinding: { batch_sbd: "0" } },
+    {
+      treasuryPayoutBinding: { min_xor_out: "101", max_xor_out: "100" },
+    },
+    {
+      treasuryPayoutBinding: {
+        recipients: Array.from({ length: 4 }, () => ({
+          account_id:
+            "sorauﾛ1Q2ﾜﾓ4bｳEDHﾏﾇｿSyFﾘk6bX74ﾙｦRﾙﾄM2GｻSｳｴpPヰｱ6HEY4T",
+          share: "0.25",
+        })),
+      },
+    },
+    {
+      treasuryPayoutBinding: {
+        recipients: validationFeePolicyFixture().policy.treasury_payout_binding.recipients.map(
+          (recipient, index) => ({
+            ...recipient,
+            share: index === 3 ? "0.24" : recipient.share,
+          }),
+        ),
+      },
+    },
+  ];
+  for (const overrides of cases) {
+    const fixture = validationFeePolicyFixture(overrides);
+    assert.throws(
+      () =>
+        verifySignedValidationFeePolicy(
+          fixture.signedPolicy,
+          fixture.verificationContext,
+        ),
+      (error) => error?.code === "INVALID_TREASURY_PAYOUT_BINDING",
+    );
+  }
 });
 
 test("verifySignedValidationFeePolicy fixes the initial policy at scale 2 and an exact 0.1 fee", () => {
@@ -288,9 +359,14 @@ test("verifySignedValidationFeePolicy rejects malformed and insufficient keysets
   );
 
   const insufficientFixture = validationFeePolicyFixture();
-  insufficientFixture.signedPolicy.signatures = [
-    insufficientFixture.signedPolicy.signatures[0],
-  ];
+  insufficientFixture.verificationContext.governanceKeyset = {
+    keyset_id: insufficientFixture.governanceKeyset.keyset_id,
+    threshold: 2,
+    public_keys_hex: [
+      ...insufficientFixture.governanceKeyset.public_keys_hex,
+      "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+    ],
+  };
   assert.throws(
     () =>
       verifySignedValidationFeePolicy(
@@ -453,7 +529,7 @@ test("verifySignedValidationFeePolicy rejects mixed-torsion signatures accepted 
   const publicKey = Uint8Array.from(
     Buffer.from(fixture.signedPolicy.signatures[0].signer_public_key, "hex"),
   );
-  const privateKeySeed = new Uint8Array(32).fill(1);
+  const privateKeySeed = new Uint8Array(32).fill(77);
   assert.deepEqual(ed25519.getPublicKey(privateKeySeed), publicKey);
   const message = validationFeePolicyLedgerSignaturePayload(fixture.policy);
   const mixedSignature = mixedTorsionSignature(

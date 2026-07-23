@@ -18,6 +18,11 @@ pub enum FetchPlanError {
     InvalidDigest { digest: String, index: usize },
     #[error("invalid digest hex: {digest}")]
     InvalidDigestString { digest: String },
+    #[error("expected payload field `{field}` {reason}")]
+    InvalidExpectedPayloadField {
+        field: &'static str,
+        reason: &'static str,
+    },
     #[error("chunk fetch spec entry {index} invalid {field}: {reason}")]
     InvalidField {
         index: usize,
@@ -43,32 +48,72 @@ pub fn chunk_fetch_specs_from_json(value: &Value) -> Result<Vec<ChunkFetchSpec>,
 }
 
 /// Extracts an expected payload digest from a manifest JSON report, if present.
-pub fn expected_payload_digest_from_json(value: &Value) -> Option<[u8; 32]> {
-    let hex = value
-        .get("payload_digest_hex")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value
-                .get("manifest")
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("car_digest_hex"))
-                .and_then(Value::as_str)
+///
+/// # Errors
+///
+/// Returns an error when a digest field is present but is not a canonical
+/// 32-byte lowercase hexadecimal string.
+pub fn expected_payload_digest_from_json(
+    value: &Value,
+) -> Result<Option<[u8; 32]>, FetchPlanError> {
+    let (field, raw) = if let Some(raw) = value.get("payload_digest_hex") {
+        ("payload_digest_hex", raw)
+    } else if let Some(raw) = manifest_field(value, "car_digest_hex")? {
+        ("manifest.car_digest_hex", raw)
+    } else {
+        return Ok(None);
+    };
+
+    let hex = raw
+        .as_str()
+        .ok_or(FetchPlanError::InvalidExpectedPayloadField {
+            field,
+            reason: "must be a 64-character lowercase hexadecimal string",
         })?;
-    decode_digest_hex(hex).ok()
+    decode_digest_hex(hex)
+        .map(Some)
+        .map_err(|()| FetchPlanError::InvalidExpectedPayloadField {
+            field,
+            reason: "must be a 64-character lowercase hexadecimal string",
+        })
 }
 
 /// Extracts an expected payload length from a manifest JSON report, if present.
-pub fn expected_payload_len_from_json(value: &Value) -> Option<u64> {
-    value
-        .get("payload_len")
-        .and_then(Value::as_u64)
-        .or_else(|| {
-            value
-                .get("manifest")
-                .and_then(Value::as_object)
-                .and_then(|obj| obj.get("content_length"))
-                .and_then(Value::as_u64)
+///
+/// # Errors
+///
+/// Returns an error when a length field is present but is not an unsigned integer.
+pub fn expected_payload_len_from_json(value: &Value) -> Result<Option<u64>, FetchPlanError> {
+    let (field, raw) = if let Some(raw) = value.get("payload_len") {
+        ("payload_len", raw)
+    } else if let Some(raw) = manifest_field(value, "content_length")? {
+        ("manifest.content_length", raw)
+    } else {
+        return Ok(None);
+    };
+
+    raw.as_u64()
+        .map(Some)
+        .ok_or(FetchPlanError::InvalidExpectedPayloadField {
+            field,
+            reason: "must be an unsigned integer",
         })
+}
+
+fn manifest_field<'a>(
+    value: &'a Value,
+    field: &'static str,
+) -> Result<Option<&'a Value>, FetchPlanError> {
+    let Some(manifest) = value.get("manifest") else {
+        return Ok(None);
+    };
+    let object = manifest
+        .as_object()
+        .ok_or(FetchPlanError::InvalidExpectedPayloadField {
+            field: "manifest",
+            reason: "must be an object when present",
+        })?;
+    Ok(object.get(field))
 }
 
 /// Parses a 64-character hex digest string into a BLAKE3 digest array.
@@ -362,7 +407,9 @@ mod tests {
         });
         let specs = chunk_fetch_specs_from_json(&value).expect("parse specs");
         assert_eq!(specs.len(), 1);
-        let digest = expected_payload_digest_from_json(&value).expect("digest");
+        let digest = expected_payload_digest_from_json(&value)
+            .expect("parse digest")
+            .expect("digest");
         let encoded = digest
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -371,8 +418,133 @@ mod tests {
             encoded,
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
-        let len = expected_payload_len_from_json(&value).expect("len");
+        let len = expected_payload_len_from_json(&value)
+            .expect("parse length")
+            .expect("length");
         assert_eq!(len, 128);
+    }
+
+    #[test]
+    fn expected_payload_metadata_absent_returns_none() {
+        let value = norito::json!({ "chunk_fetch_specs": [] });
+
+        assert_eq!(
+            expected_payload_digest_from_json(&value).expect("parse absent digest"),
+            None
+        );
+        assert_eq!(
+            expected_payload_len_from_json(&value).expect("parse absent length"),
+            None
+        );
+    }
+
+    #[test]
+    fn expected_payload_metadata_uses_manifest_fallback() {
+        let value = norito::json!({
+            "manifest": {
+                "car_digest_hex": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                "content_length": 128
+            }
+        });
+
+        let digest = expected_payload_digest_from_json(&value)
+            .expect("parse fallback digest")
+            .expect("fallback digest");
+        assert_eq!(
+            digest_to_hex(&digest),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(
+            expected_payload_len_from_json(&value).expect("parse fallback length"),
+            Some(128)
+        );
+    }
+
+    #[test]
+    fn expected_payload_digest_rejects_malformed_present_field() {
+        for value in [
+            norito::json!({ "payload_digest_hex": "not-hex" }),
+            norito::json!({ "payload_digest_hex": 7 }),
+            norito::json!({ "payload_digest_hex": null }),
+        ] {
+            let err = expected_payload_digest_from_json(&value).unwrap_err();
+            assert!(matches!(
+                err,
+                FetchPlanError::InvalidExpectedPayloadField {
+                    field: "payload_digest_hex",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn expected_payload_len_rejects_malformed_present_field() {
+        let negative_len = -1_i64;
+        for value in [
+            norito::json!({ "payload_len": "128" }),
+            norito::json!({ "payload_len": negative_len }),
+            norito::json!({ "payload_len": null }),
+        ] {
+            let err = expected_payload_len_from_json(&value).unwrap_err();
+            assert!(matches!(
+                err,
+                FetchPlanError::InvalidExpectedPayloadField {
+                    field: "payload_len",
+                    ..
+                }
+            ));
+        }
+    }
+
+    #[test]
+    fn expected_payload_metadata_rejects_malformed_manifest_fallback() {
+        let digest = norito::json!({ "manifest": { "car_digest_hex": false } });
+        let digest_err = expected_payload_digest_from_json(&digest).unwrap_err();
+        assert!(matches!(
+            digest_err,
+            FetchPlanError::InvalidExpectedPayloadField {
+                field: "manifest.car_digest_hex",
+                ..
+            }
+        ));
+
+        let length = norito::json!({ "manifest": { "content_length": "128" } });
+        let length_err = expected_payload_len_from_json(&length).unwrap_err();
+        assert!(matches!(
+            length_err,
+            FetchPlanError::InvalidExpectedPayloadField {
+                field: "manifest.content_length",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn expected_payload_metadata_rejects_non_object_manifest() {
+        for value in [
+            norito::json!({ "manifest": null }),
+            norito::json!({ "manifest": "invalid" }),
+            norito::json!({ "manifest": [] }),
+        ] {
+            let digest_err = expected_payload_digest_from_json(&value).unwrap_err();
+            assert!(matches!(
+                digest_err,
+                FetchPlanError::InvalidExpectedPayloadField {
+                    field: "manifest",
+                    ..
+                }
+            ));
+
+            let length_err = expected_payload_len_from_json(&value).unwrap_err();
+            assert!(matches!(
+                length_err,
+                FetchPlanError::InvalidExpectedPayloadField {
+                    field: "manifest",
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

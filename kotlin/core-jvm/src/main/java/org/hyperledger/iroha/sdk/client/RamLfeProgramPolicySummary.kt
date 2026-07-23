@@ -13,4 +13,10 @@ class RamLfeProgramPolicySummary @JvmOverloads constructor(
     @JvmField val inputEncryptionPublicParametersDecoded: IdentifierBfvPublicParameters?,
     @JvmField val note: String?,
     @JvmField val proofVerifier: RamLfeProofVerifierMetadata? = null,
-)
+    @JvmField val outputOpeningPublicKey: String = resolverPublicKey,
+) {
+    init {
+        requirePublicKeyLiteral(resolverPublicKey, "resolverPublicKey")
+        requirePublicKeyLiteral(outputOpeningPublicKey, "outputOpeningPublicKey")
+    }
+}

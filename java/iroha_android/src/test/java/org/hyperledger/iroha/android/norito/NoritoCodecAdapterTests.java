@@ -10,6 +10,7 @@ import java.util.Map;
 import java.util.Optional;
 import org.hyperledger.iroha.android.client.MultisigProposeRequest;
 import org.hyperledger.iroha.android.address.AccountAddress;
+import org.hyperledger.iroha.android.testing.TestEd25519Keys;
 import org.hyperledger.iroha.android.address.PublicKeyCodec;
 import org.hyperledger.iroha.android.IrohaKeyManager;
 import org.hyperledger.iroha.android.KeyManagementException;
@@ -99,7 +100,7 @@ public final class NoritoCodecAdapterTests {
     assert Arrays.equals(instructions, decoded.executable().ivmBytes())
         : "Decoded payload should match original instructions";
     assert decoded.timeToLiveMs().orElseThrow() == 5_000L : "TTL must round-trip";
-    assert decoded.nonce().orElseThrow() == 42 : "Nonce must round-trip";
+    assert decoded.nonce().orElseThrow() == 42L : "Nonce must round-trip";
     assert JsonValue.string("unit-test").equals(decoded.metadata().get("purpose"))
         : "Metadata must round-trip";
     assertBarePayload(encoded);
@@ -139,8 +140,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static void javaCodecEncodesAccountIdAuthority() throws NoritoException {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, (byte) 0x3A);
+    final byte[] publicKey = TestEd25519Keys.publicKey(0x3A);
     final String i105;
     try {
       i105 =
@@ -178,10 +178,8 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static void javaCodecEncodesMultisigAuthority() throws NoritoException {
-    final byte[] memberKeyA = new byte[32];
-    final byte[] memberKeyB = new byte[32];
-    Arrays.fill(memberKeyA, (byte) 0x11);
-    Arrays.fill(memberKeyB, (byte) 0x22);
+    final byte[] memberKeyA = TestEd25519Keys.publicKey(0x11);
+    final byte[] memberKeyB = TestEd25519Keys.publicKey(0x22);
     final AccountAddress.MultisigMemberPayload memberA =
         AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKeyA);
     final AccountAddress.MultisigMemberPayload memberB =
@@ -253,7 +251,7 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static void javaCodecEncodesNativeMultisigProposeRequest() throws NoritoException {
-    final byte[] memberKey = fill(0x11, 32);
+    final byte[] memberKey = TestEd25519Keys.publicKey(0x11);
     final AccountAddress.MultisigMemberPayload member =
         AccountAddress.MultisigMemberPayload.of(0x01, 1, memberKey);
     final AccountAddress.MultisigPolicyPayload policy =
@@ -467,13 +465,13 @@ public final class NoritoCodecAdapterTests {
     final NoritoJavaCodecAdapter adapter = new NoritoJavaCodecAdapter();
     final byte[] encodedPayload = adapter.encodeTransaction(payload);
     final byte[] signature = new byte[64];
-    final byte[] publicKey = new byte[32];
+    final byte[] publicKey = TestEd25519Keys.publicKey(0x55);
     Arrays.fill(signature, (byte) 0x44);
-    Arrays.fill(publicKey, (byte) 0x55);
 
     final MultisigSignature sigA =
-        MultisigSignature.fromCurveId(0x01, fill(0x11, 32), fill(0x22, 64));
-    final String sigBKeyLiteral = PublicKeyCodec.encodePublicKeyMultihash(0x01, fill(0x33, 32));
+        MultisigSignature.fromCurveId(0x01, TestEd25519Keys.publicKey(0x11), fill(0x22, 64));
+    final String sigBKeyLiteral =
+        PublicKeyCodec.encodePublicKeyMultihash(0x01, TestEd25519Keys.publicKey(0x33));
     final MultisigSignature sigB =
         MultisigSignature.fromPublicKeyLiteral(sigBKeyLiteral, fill(0x44, 64));
     assert sigBKeyLiteral.equals(sigB.publicKeyMultihash())
@@ -1208,10 +1206,8 @@ public final class NoritoCodecAdapterTests {
   }
 
   private static String sampleAuthority(final byte fill) {
-    final byte[] publicKey = new byte[32];
-    Arrays.fill(publicKey, fill);
     try {
-      return AccountAddress.fromAccount(publicKey, "ed25519")
+      return AccountAddress.fromAccount(TestEd25519Keys.publicKey(fill & 0xff), "ed25519")
           .toI105(AccountAddress.DEFAULT_I105_DISCRIMINANT);
     } catch (final AccountAddress.AccountAddressException ex) {
       throw new IllegalStateException("Failed to build sample authority", ex);

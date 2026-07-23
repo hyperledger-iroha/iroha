@@ -9831,7 +9831,7 @@ pub struct State {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration (repo defaults, collateral policies).
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable startup-authenticated ABI-20 recursive release catalog.
+    /// Immutable startup-authenticated ABI-21 recursive release catalog.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Unified settlement engine for XOR quoting.
@@ -10074,7 +10074,7 @@ pub struct StateBlock<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this block.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this block.
+    /// Immutable ABI-21 recursive release catalog snapshot for this block.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this block.
@@ -10654,7 +10654,7 @@ pub struct StateTransaction<'block, 'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this transaction.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this transaction.
+    /// Immutable ABI-21 recursive release catalog snapshot for this transaction.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this transaction.
@@ -10970,7 +10970,7 @@ pub struct StateView<'state> {
     pub content: iroha_config::parameters::actual::Content,
     /// Settlement configuration snapshot for this view.
     pub settlement: iroha_config::parameters::actual::Settlement,
-    /// Immutable ABI-20 recursive release catalog snapshot for this view.
+    /// Immutable ABI-21 recursive release catalog snapshot for this view.
     pub kagemusha_release_catalog:
         Arc<crate::smartcontracts::isi::offline::KagemushaReleaseCatalogV4>,
     /// Settlement engine snapshot for this view.
@@ -17067,6 +17067,20 @@ impl World {
     /// Creates an empty `World`.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Insert a synthetic domain for tests and benchmark fixtures while keeping
+    /// the owner index consistent.
+    ///
+    /// Production registration must continue through the instruction executor.
+    pub fn insert_domain_for_testing(
+        &mut self,
+        domain_id: DomainId,
+        domain: Domain,
+    ) -> Option<Domain> {
+        let previous = self.domains.insert(domain_id, domain);
+        self.rebuild_domain_owner_index();
+        previous
     }
 
     fn validate_numeric_asset_invariants(&self) -> Result<(), String> {
@@ -58019,6 +58033,7 @@ impl StateTransaction<'_, '_> {
         let artifacts = artifacts?;
         crate::validation_fee::enforce_opaque_deferred_instruction_groups(
             &artifacts.queued_instructions_by_authority(),
+            &artifacts.queued_instructions_with_authority(),
             self,
             None,
         )
@@ -58125,6 +58140,11 @@ impl StateTransaction<'_, '_> {
                 )]);
                 crate::validation_fee::enforce_opaque_deferred_instruction_groups(
                     &instruction_groups,
+                    &instructions
+                        .iter()
+                        .cloned()
+                        .map(|instruction| (authority.clone(), instruction))
+                        .collect::<Vec<_>>(),
                     self,
                     None,
                 )?;
@@ -58160,6 +58180,11 @@ impl StateTransaction<'_, '_> {
                 )]);
                 crate::validation_fee::enforce_opaque_deferred_instruction_groups(
                     &instruction_groups,
+                    &explicit_instructions
+                        .iter()
+                        .cloned()
+                        .map(|instruction| (authority.clone(), instruction))
+                        .collect::<Vec<_>>(),
                     self,
                     None,
                 )?;
@@ -58440,15 +58465,27 @@ impl StateTransaction<'_, '_> {
                         summary.prepared_contract().artifact(),
                     )
                 });
-                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                    &artifacts.queued_instructions_by_authority(),
-                    self,
-                    runtime_origin,
-                )?;
-                let queued_instructions = artifacts.queued_instructions();
+                let validation_outcome =
+                    crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                        &artifacts.queued_instructions_by_authority(),
+                        &artifacts.queued_instructions_with_authority(),
+                        self,
+                        runtime_origin,
+                    )?;
+                let no_op = validation_outcome
+                    == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp;
+                let queued_instructions = if no_op {
+                    Vec::new()
+                } else {
+                    artifacts.queued_instructions()
+                };
                 let step = ExecutionStep(ConstVec::from(queued_instructions));
                 self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let queued = if no_op {
+                    Vec::new()
+                } else {
+                    artifacts.apply_to_transaction(self, authority)?
+                };
                 let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                 (Ok(cvs.into()), None)
             }
@@ -58683,15 +58720,27 @@ impl StateTransaction<'_, '_> {
                                     prepared_contract.artifact(),
                                 )
                             });
-                            crate::validation_fee::enforce_opaque_deferred_instruction_groups(
-                                &artifacts.queued_instructions_by_authority(),
-                                self,
-                                runtime_origin,
-                            )?;
-                            let queued_instructions = artifacts.queued_instructions();
+                            let validation_outcome =
+                                crate::validation_fee::enforce_opaque_deferred_instruction_groups(
+                                    &artifacts.queued_instructions_by_authority(),
+                                    &artifacts.queued_instructions_with_authority(),
+                                    self,
+                                    runtime_origin,
+                                )?;
+                            let no_op = validation_outcome
+                                == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp;
+                            let queued_instructions = if no_op {
+                                Vec::new()
+                            } else {
+                                artifacts.queued_instructions()
+                            };
                             let step = ExecutionStep(ConstVec::from(queued_instructions));
                             self.seed_time_trigger_call_hash(id, authority, &event, &step);
-                            let queued = artifacts.apply_to_transaction(self, authority)?;
+                            let queued = if no_op {
+                                Vec::new()
+                            } else {
+                                artifacts.apply_to_transaction(self, authority)?
+                            };
                             let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                             (Ok(cvs.into()), None)
                         }
@@ -61646,6 +61695,38 @@ mod tests {
     use crate::smartcontracts::ValidQuery;
     #[cfg(feature = "telemetry")]
     use crate::telemetry::StateTelemetry;
+
+    #[test]
+    fn insert_domain_for_testing_replaces_owner_index_without_empty_bucket() {
+        let domain_id = DomainId::try_new("fixture", "universal").expect("valid domain id");
+        let mut world = World::new();
+
+        assert!(
+            world
+                .insert_domain_for_testing(
+                    domain_id.clone(),
+                    Domain::new(domain_id.clone()).build(&ALICE_ID),
+                )
+                .is_none()
+        );
+        assert_eq!(
+            world.domains_by_owner.view().get(&ALICE_ID),
+            Some(&BTreeSet::from([domain_id.clone()]))
+        );
+
+        let previous = world
+            .insert_domain_for_testing(
+                domain_id.clone(),
+                Domain::new(domain_id.clone()).build(&BOB_ID),
+            )
+            .expect("existing fixture domain is replaced");
+        assert_eq!(previous.owned_by(), &*ALICE_ID);
+        assert!(world.domains_by_owner.view().get(&ALICE_ID).is_none());
+        assert_eq!(
+            world.domains_by_owner.view().get(&BOB_ID),
+            Some(&BTreeSet::from([domain_id]))
+        );
+    }
 
     #[test]
     fn trigger_batch_gas_budget_is_shared_across_items() {

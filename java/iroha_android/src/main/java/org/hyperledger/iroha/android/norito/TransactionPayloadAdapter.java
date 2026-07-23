@@ -121,7 +121,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
     encodeSizedField(encoder, UINT64_ADAPTER, value.creationTimeMs());
     encodeSizedField(encoder, EXECUTABLE_ADAPTER, value.executable());
     encodeSizedField(encoder, TTL_ADAPTER, value.timeToLiveMs());
-    encodeSizedField(encoder, NONCE_ADAPTER, value.nonce().map(Integer::longValue));
+    encodeSizedField(encoder, NONCE_ADAPTER, value.nonce());
     encodeSizedField(encoder, FEE_PAYMENT_ADAPTER, value.feePayment());
     encodeSizedField(encoder, METADATA_ADAPTER, value.metadata());
   }
@@ -147,7 +147,7 @@ final class TransactionPayloadAdapter implements TypeAdapter<TransactionPayload>
             .setFeePayment(feePayment)
             .setMetadata(metadata);
     ttl.ifPresent(builder::setTimeToLiveMs);
-    nonceRaw.ifPresent(value -> builder.setNonce(Math.toIntExact(value)));
+    nonceRaw.ifPresent(builder::setNonce);
     return builder.buildDecodedForCodec();
   }
 

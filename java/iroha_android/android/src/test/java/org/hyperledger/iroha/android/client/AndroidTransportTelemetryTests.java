@@ -50,7 +50,8 @@ public final class AndroidTransportTelemetryTests {
           GatewayProvider.builder()
               .setName("provider-a")
               .setProviderIdHex("01".repeat(32))
-              .setGatewayPublicKeyHex("02".repeat(32))
+              .setGatewayPublicKeyHex(
+                  "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
               .setBaseUrl("https://example.com/")
               .setStreamTokenBase64("c3R1Yg==")
               .build();

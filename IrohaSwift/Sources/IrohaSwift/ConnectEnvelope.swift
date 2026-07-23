@@ -154,7 +154,15 @@ public enum ConnectEnvelopePayload: Equatable, Sendable {
                 default:
                     throw ConnectEnvelopeError.invalidPayload
                 }
-                let reason = (controlDict["reason"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+                let reason: String?
+                if let rawReason = controlDict["reason"], !(rawReason is NSNull) {
+                    guard let parsed = rawReason as? String else {
+                        throw ConnectEnvelopeError.invalidPayload
+                    }
+                    reason = parsed.isEmpty ? nil : parsed
+                } else {
+                    reason = nil
+                }
                 let close = ConnectClose(role: role, code: code, reason: reason, retryable: retryable)
                 self = .controlClose(close)
             case "Reject":

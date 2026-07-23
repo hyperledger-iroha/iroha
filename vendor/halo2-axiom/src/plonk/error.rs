@@ -81,7 +81,7 @@ impl fmt::Display for Error {
                 "Column {:?} must be included in the permutation. Help: try applying `meta.enable_equalty` on the column",
                 column
             ),
-            Error::TableError(error) => write!(f, "{}", error)
+            Error::TableError(error) => write!(f, "{}", error),
         }
     }
 }

@@ -27,7 +27,7 @@ object AliasPlanApply {
         plan: AliasTransactionPlanV1,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload = buildTransactionPayload(
         request,
@@ -55,7 +55,7 @@ object AliasPlanApply {
         frameCodec: AliasEnsureInstructionFrameCodec,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
         metadata: Map<String, JsonValue> = emptyMap(),
     ): TransactionPayload {
         require(creationTimeMs >= 0) { "creationTimeMs must not be negative" }
@@ -91,7 +91,7 @@ object AliasPlanApply {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
         metadata: Map<String, JsonValue> = emptyMap(),
     ): CompletableFuture<ClientResponse> {
         val payload = buildTransactionPayload(
@@ -118,7 +118,7 @@ object AliasPlanApply {
         signer: Signer,
         feePayment: FeePaymentIntent,
         creationTimeMs: Long = System.currentTimeMillis(),
-        nonce: Int? = null,
+        nonce: Long? = null,
         metadata: Map<String, JsonValue> = emptyMap(),
     ): CompletableFuture<ClientResponse> = signAndSubmit(
         client,

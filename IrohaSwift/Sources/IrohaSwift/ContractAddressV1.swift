@@ -1,7 +1,26 @@
 import Foundation
 
-/// Internal parser for the canonical V1 contract-address wire literal.
-enum ContractAddressV1 {
+public enum ContractAddressV1Error: Error, LocalizedError, Equatable {
+    case invalidLiteral
+    case nativeAddressCodecUnavailable
+    case subjectDerivationExhausted
+
+    public var errorDescription: String? {
+        switch self {
+        case .invalidLiteral:
+            return "Contract address is not a canonical ABI V1 literal."
+        case .nativeAddressCodecUnavailable:
+            return "The native account-address codec required for contract subject derivation is unavailable."
+        case .subjectDerivationExhausted:
+            return "Contract subject hash-to-point retry counter was exhausted."
+        }
+    }
+}
+
+/// Parser for the canonical V1 contract-address wire literal.
+public enum ContractAddressV1 {
+    private static let subjectHashToPointTagV1 =
+        Data("iroha:contract-subject:hash-to-point:v1:".utf8)
     private static let bech32mConstant: UInt32 = 0x2bc8_30a3
     private static let charset = Array("qpzry9x8gf2tvdw0s3jn54khce6mua7l".utf8)
     private static let generators: [UInt32] = [
@@ -12,7 +31,7 @@ enum ContractAddressV1 {
         0x2a14_62b3,
     ]
 
-    static func isCanonical(_ literal: String) -> Bool {
+    public static func isCanonical(_ literal: String) -> Bool {
         let bytes = Array(literal.utf8)
         guard !bytes.isEmpty,
               bytes.count <= 90,
@@ -44,6 +63,53 @@ enum ContractAddressV1 {
             return false
         }
         return true
+    }
+
+    /// Derive the canonical non-signable account subject for an ABI V1 contract.
+    ///
+    /// The native account-address decoder performs the same strict prime-order
+    /// Ed25519 point admission as Rust `ContractAddress::subject_id()`. CryptoKit
+    /// construction alone is deliberately insufficient because it accepts
+    /// arbitrary 32-byte compressed-key material.
+    public static func subjectAccountId(
+        _ literal: String,
+        networkPrefix: UInt16 = AccountId.defaultNetworkPrefix
+    ) throws -> String {
+        guard isCanonical(literal) else {
+            throw ContractAddressV1Error.invalidLiteral
+        }
+        let bridge = NoritoNativeBridge.shared
+        guard bridge.isAccountAddressCodecAvailable else {
+            throw ContractAddressV1Error.nativeAddressCodecUnavailable
+        }
+
+        let address = Data(literal.utf8)
+        var counter: UInt32 = 0
+        while true {
+            var counterBE = counter.bigEndian
+            var payload = subjectHashToPointTagV1
+            payload.append(address)
+            withUnsafeBytes(of: &counterBE) { payload.append(contentsOf: $0) }
+            let candidate = IrohaHash.hash(payload)
+            let account = try AccountAddress.fromAccount(
+                publicKey: candidate,
+                algorithm: "ed25519"
+            )
+            do {
+                guard let rendered = try bridge.renderAccountAddress(
+                    canonicalBytes: account.canonicalBytes(),
+                    networkPrefix: networkPrefix
+                ) else {
+                    throw ContractAddressV1Error.nativeAddressCodecUnavailable
+                }
+                return rendered.i105
+            } catch AccountAddressError.invalidPublicKey {
+                if counter == UInt32.max {
+                    throw ContractAddressV1Error.subjectDerivationExhausted
+                }
+                counter += 1
+            }
+        }
     }
 
     private static func hrpExpand(_ hrp: [UInt8]) -> [UInt8] {

@@ -38,7 +38,7 @@ public enum ConnectDirection {
 
   public static ConnectDirection fromTag(final int tag) {
     for (final ConnectDirection direction : values()) {
-      if (direction.tag == (byte) tag) {
+      if (direction.tag == tag) {
         return direction;
       }
     }

@@ -83,7 +83,8 @@ public final class AndroidOkHttpClientRefactorTests {
                   GatewayProvider.builder()
                       .setName("provider-1")
                       .setProviderIdHex("01".repeat(32))
-                      .setGatewayPublicKeyHex("02".repeat(32))
+                      .setGatewayPublicKeyHex(
+                          "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
                       .setBaseUrl("https://provider.example")
                       .setStreamTokenBase64(
                           Base64.getEncoder().encodeToString("token".getBytes(StandardCharsets.UTF_8)))
@@ -201,7 +202,7 @@ public final class AndroidOkHttpClientRefactorTests {
     final TransactionPayload payload =
         TransactionPayload.builder()
             .setChainId(String.format("%08x", seed))
-            .setAuthority("sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB")
+            .setAuthority("sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE")
             .setCreationTimeMs(1_700_000_000_000L + (seed & 0xFF))
             .setInstructionBytes(new byte[] {seed, (byte) (seed + 1)})
             .setTimeToLiveMs(5_000L)

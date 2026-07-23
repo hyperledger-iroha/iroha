@@ -7,6 +7,18 @@ import kotlin.test.assertNotNull
 
 class ConnectEnvelopeCodecTest {
     @Test
+    fun directionTagsRejectValuesThatOnlyMatchAfterByteTruncation() {
+        assertEquals(ConnectDirection.APP_TO_WALLET, ConnectDirection.fromTag(0))
+        assertEquals(ConnectDirection.WALLET_TO_APP, ConnectDirection.fromTag(1))
+
+        for (tag in listOf(-256, -255, 256, 257)) {
+            assertFailsWith<IllegalArgumentException> {
+                ConnectDirection.fromTag(tag)
+            }
+        }
+    }
+
+    @Test
     fun signResultOkAcceptsExactEd25519Algorithm() {
         val signature = ByteArray(64) { it.toByte() }
 

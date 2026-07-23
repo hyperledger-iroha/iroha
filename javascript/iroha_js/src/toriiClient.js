@@ -97,8 +97,15 @@ const JSON_REQUEST_HEADERS = Object.freeze({
   Accept: APPLICATION_JSON,
 });
 
-const DEFAULT_SUCCESS_STATUSES = ["Approved", "Committed", "Applied"];
 const DEFAULT_FAILURE_STATUSES = ["Rejected", "Expired"];
+const AUTHORITATIVE_PIPELINE_STATUS_KINDS = new Set([
+  "Queued",
+  "Approved",
+  "Committed",
+  "Applied",
+  "Rejected",
+  "Expired",
+]);
 const DEFAULT_TX_STATUS_POLL_INTERVAL_MS = 1_000;
 const DEFAULT_TX_STATUS_TIMEOUT_MS = 30_000;
 const IVM_ARTIFACT_MAX_BASE64_LENGTH =
@@ -301,7 +308,6 @@ const TX_STATUS_POLL_OPTION_KEYS = new Set([
   "intervalMs",
   "timeoutMs",
   "maxAttempts",
-  "successStatuses",
   "failureStatuses",
   "onStatus",
 ]);
@@ -5436,7 +5442,6 @@ export class ToriiClient {
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
    *   scope?: "local" | "auto" | "global",
-   *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} [options]
@@ -5454,7 +5459,6 @@ export class ToriiClient {
       timeoutMs,
       maxAttempts,
       signal,
-      successSet,
       failureSet,
       onStatus,
       scope,
@@ -5480,6 +5484,11 @@ export class ToriiClient {
           normalizedHash,
           "waitForTransactionStatus response",
         );
+        assertAuthoritativePipelineTransactionStatus(
+          lastPayload,
+          normalizedHash,
+          "waitForTransactionStatus response",
+        );
       }
       const status = extractPipelineStatusKind(lastPayload);
       if (onStatus) {
@@ -5487,7 +5496,7 @@ export class ToriiClient {
       }
       throwIfAborted(signal);
       if (status !== null) {
-        if (successSet.has(status)) {
+        if (status === "Applied") {
           return lastPayload;
         }
         if (failureSet.has(status)) {
@@ -5541,7 +5550,6 @@ export class ToriiClient {
    *   intervalMs?: number,
    *   timeoutMs?: number | null,
    *   maxAttempts?: number | null,
-   *   successStatuses?: Iterable<string>,
    *   failureStatuses?: Iterable<string>,
    *   onStatus?: (status: string | null, payload: any, attempt: number) => (void | Promise<void>)
    * }} options
@@ -11979,7 +11987,6 @@ export class ToriiClient {
         intervalMs: DEFAULT_TX_STATUS_POLL_INTERVAL_MS,
         timeoutMs: DEFAULT_TX_STATUS_TIMEOUT_MS,
         maxAttempts: null,
-        successSet: normalizeStatusSet(undefined, DEFAULT_SUCCESS_STATUSES),
         failureSet: normalizeStatusSet(undefined, DEFAULT_FAILURE_STATUSES),
         onStatus: null,
         scope: undefined,
@@ -12034,13 +12041,23 @@ export class ToriiClient {
       }
       onStatus = record.onStatus;
     }
+    const failureSet = normalizeStatusSet(
+      record.failureStatuses,
+      DEFAULT_FAILURE_STATUSES,
+    );
+    if (failureSet.has("Applied")) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.failureStatuses cannot classify Applied as failure`,
+        `${context}.failureStatuses`,
+      );
+    }
     return {
       signal,
       intervalMs,
       timeoutMs,
       maxAttempts,
-      successSet: normalizeStatusSet(record.successStatuses, DEFAULT_SUCCESS_STATUSES),
-      failureSet: normalizeStatusSet(record.failureStatuses, DEFAULT_FAILURE_STATUSES),
+      failureSet,
       onStatus,
       scope,
     };
@@ -20412,15 +20429,14 @@ function toBuffer(value) {
 
 function normalizeByteArray(value, context) {
   const bytes = value.map((entry, index) => {
-    const numeric = Number(entry);
-    if (!Number.isInteger(numeric) || numeric < 0 || numeric > 255) {
+    if (!Number.isInteger(entry) || entry < 0 || entry > 255) {
       throw createValidationError(
         ValidationErrorCode.VALUE_OUT_OF_RANGE,
         `${context}[${index}] must be an integer between 0 and 255`,
         `${context}[${index}]`,
       );
     }
-    return numeric;
+    return entry;
   });
   return Buffer.from(bytes);
 }
@@ -28971,6 +28987,84 @@ function assertPipelineTransactionStatusMatchesHash(payload, expectedHash, conte
   return payload;
 }
 
+function assertAuthoritativePipelineTransactionStatus(
+  payload,
+  expectedHash,
+  context,
+) {
+  const record = ensureRecord(payload, context);
+  const observedHash = normalizeHex32String(record.hash, `${context}.hash`);
+  if (observedHash !== expectedHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_HEX,
+      `${context}.hash does not match requested transaction ${expectedHash}`,
+      `${context}.hash`,
+    );
+  }
+  if (record.scope !== "global") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.scope must be global`,
+      `${context}.scope`,
+    );
+  }
+  if (typeof record.summary !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.summary must be a string`,
+      `${context}.summary`,
+    );
+  }
+  const status = ensureRecord(record.status, `${context}.status`);
+  const kind = status.kind;
+  if (
+    typeof kind !== "string" ||
+    !AUTHORITATIVE_PIPELINE_STATUS_KINDS.has(kind)
+  ) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.status.kind is missing or unsupported`,
+      `${context}.status.kind`,
+    );
+  }
+  const resolvedFrom = record.resolved_from;
+  if (typeof resolvedFrom !== "string") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.resolved_from must be a string`,
+      `${context}.resolved_from`,
+    );
+  }
+  if (kind === "Applied") {
+    if (
+      resolvedFrom !== "state" ||
+      !Number.isSafeInteger(status.block_height) ||
+      status.block_height <= 0
+    ) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} Applied status must be state-resolved with a positive block height`,
+        `${context}.status`,
+      );
+    }
+  } else if (kind === "Rejected" || kind === "Expired") {
+    if (resolvedFrom !== "state") {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} terminal failure must be state-resolved`,
+        `${context}.resolved_from`,
+      );
+    }
+  } else if (!["queue", "cache", "state"].includes(resolvedFrom)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.resolved_from is unsupported`,
+      `${context}.resolved_from`,
+    );
+  }
+  return kind;
+}
+
 function normalizePipelinePreflight(payload, context = "pipeline preflight response") {
   const record = ensureRecord(payload ?? {}, context);
   const sumeragi = ensureRecord(record.sumeragi, `${context}.sumeragi`);
@@ -30154,7 +30248,7 @@ function decodeDaDigestTuple(value, expectedLength, name) {
   if (bytes.length !== expectedLength) {
     throw new TypeError(`${name} must contain ${expectedLength} entries`);
   }
-  const buffer = Buffer.from(bytes);
+  const buffer = normalizeByteArray(bytes, name);
   if (buffer.length !== expectedLength) {
     throw new TypeError(`${name} must decode to ${expectedLength} bytes`);
   }
