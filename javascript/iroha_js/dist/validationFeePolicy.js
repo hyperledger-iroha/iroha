@@ -1554,15 +1554,18 @@ function contractSubjectAccountId(contractAddress) {
         counterBytes,
       ),
     );
+    let accountAddress;
     try {
       ed25519.ExtendedPoint.fromHex(candidate, false);
-      return AccountAddress.fromAccount({
+      accountAddress = AccountAddress.fromAccount({
         publicKey: candidate,
         algorithm: "ed25519",
-      }).toI105(chainDiscriminant);
+      });
     } catch {
-      // Retry exactly as the ledger does until the bytes decode as an Ed25519 point.
+      // Retry exactly as the ledger does until the bytes form an accepted Ed25519 account key.
+      continue;
     }
+    return accountAddress.toI105(chainDiscriminant);
   }
   fail(
     "INVALID_TREASURY_PAYOUT_BINDING",
@@ -1573,7 +1576,16 @@ function contractSubjectAccountId(contractAddress) {
 function contractAddressChainDiscriminant(hrp) {
   if (hrp === "sorac") return 753n;
   if (hrp === "tairac") return 369n;
-  if (/^c[0-9a-f]+$/u.test(hrp)) return BigInt(`0x${hrp.slice(1)}`);
+  if (/^c[0-9a-f]+$/u.test(hrp)) {
+    const chainDiscriminant = BigInt(`0x${hrp.slice(1)}`);
+    if (chainDiscriminant > UINT16_MAX) {
+      fail(
+        "INVALID_TREASURY_PAYOUT_BINDING",
+        "validation fee treasury payout contract address chain discriminant must fit in u16",
+      );
+    }
+    return chainDiscriminant;
+  }
   fail(
     "INVALID_TREASURY_PAYOUT_BINDING",
     "validation fee treasury payout contract address has an unsupported chain prefix",

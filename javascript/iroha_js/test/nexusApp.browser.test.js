@@ -43,15 +43,34 @@ function mockResponse(status, body = "", headers = {}) {
   };
 }
 
-function authoritativeAppliedStatus(hash = HASH_HEX, blockHeight = 1) {
+function pipelineStatus(
+  kind,
+  {
+    hash = HASH_HEX,
+    blockHeight,
+    scope = "global",
+    resolvedFrom = "queue",
+  } = {},
+) {
   return {
     hash,
-    status: { kind: "Applied", block_height: blockHeight },
-    summary: "Applied",
+    status: {
+      kind,
+      ...(blockHeight === undefined ? {} : { block_height: blockHeight }),
+    },
+    summary: kind,
     diagnostics: [],
-    scope: "global",
-    resolved_from: "state",
+    scope,
+    resolved_from: resolvedFrom,
   };
+}
+
+function authoritativeAppliedStatus(hash = HASH_HEX, blockHeight = 1) {
+  return pipelineStatus("Applied", {
+    hash,
+    blockHeight,
+    resolvedFrom: "state",
+  });
 }
 
 test("browser Nexus runtime does not depend on a global Buffer shim", async () => {
@@ -152,7 +171,7 @@ test("browser Nexus defaults build, finalize, and submit the shared canonical tr
 test("browser Nexus classifies rejected and timed-out post-submit status waits", async () => {
   for (const [status, expectedCode] of [
     ["Rejected", "transaction_rejected"],
-    ["Pending", "status_wait_timeout"],
+    ["Queued", "status_wait_timeout"],
   ]) {
     const client = new NexusAppClient({
       chainId: fixture.transfer_input.chain_id,
@@ -165,7 +184,12 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
         if (init.method === "POST") return mockResponse(204);
         return mockResponse(
           200,
-          JSON.stringify({ status }),
+          JSON.stringify(
+            pipelineStatus(status, {
+              hash: fixture.expected.signed_transaction_hash_hex,
+              resolvedFrom: status === "Rejected" ? "state" : "queue",
+            }),
+          ),
           { "content-type": "application/json" },
         );
       },
@@ -178,6 +202,10 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
       ttlMs: fixture.transfer_input.ttl_ms,
       nonce: fixture.transfer_input.nonce,
       metadata: fixture.transfer_input.metadata,
+      feePayment: {
+        payer: fixture.transfer_input.fee_payment.payer,
+        chargeLimits: fixture.transfer_input.fee_payment.value.charge_limits,
+      },
     });
 
     await assert.rejects(
@@ -194,7 +222,7 @@ test("browser Nexus classifies rejected and timed-out post-submit status waits",
           error.signedTransactionHashHex,
           fixture.expected.signed_transaction_hash_hex,
         );
-        assert.equal(error.status?.status ?? error.status, status);
+        assert.equal(error.status?.status?.kind ?? error.status, status);
         return true;
       },
     );
@@ -464,10 +492,52 @@ test("browser Nexus cancels rejected Torii response streams", async () => {
   assert.equal(statusCancelled, 1);
 });
 
-test("browser Nexus Torii polling reaches nested terminal status without Node APIs", async () => {
+test("browser Nexus raw status reads allow only explicit diagnostic scopes", async () => {
+  const urls = [];
+  const client = new NexusAppClient({
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl(url) {
+      urls.push(url);
+      return mockResponse(404);
+    },
+  });
+
+  assert.equal(await client.toriiClient.getTransactionStatus(HASH_HEX), null);
+  assert.equal(
+    await client.toriiClient.getTransactionStatus(HASH_HEX, {
+      scope: undefined,
+    }),
+    null,
+  );
+  assert.equal(
+    await client.toriiClient.getTransactionStatus(HASH_HEX, { scope: "local" }),
+    null,
+  );
+  assert.deepEqual(urls, [
+    `https://torii.example/v1/pipeline/transactions/status?hash=${HASH_HEX}&scope=global`,
+    `https://torii.example/v1/pipeline/transactions/status?hash=${HASH_HEX}&scope=global`,
+    `https://torii.example/v1/pipeline/transactions/status?hash=${HASH_HEX}&scope=local`,
+  ]);
+  for (const scope of [null, "", "auto"]) {
+    await assert.rejects(
+      client.toriiClient.getTransactionStatus(HASH_HEX, { scope }),
+      /must be local or global/u,
+    );
+  }
+  for (const scope of [undefined, null, "global"]) {
+    await assert.rejects(
+      client.toriiClient.waitForTransactionStatus(HASH_HEX, { scope }),
+      /unsupported field scope/u,
+    );
+  }
+  assert.equal(urls.length, 3);
+});
+
+test("browser Nexus Torii polling retries cached Applied until state finality", async () => {
   const responses = [
-    { content: { status: "Pending" } },
-    { content: { status: { kind: "Committed" } } },
+    pipelineStatus("Queued"),
+    pipelineStatus("Committed", { resolvedFrom: "cache" }),
+    pipelineStatus("Applied", { blockHeight: 3, resolvedFrom: "cache" }),
     authoritativeAppliedStatus(HASH_HEX, 3),
   ];
   const urls = [];
@@ -485,15 +555,21 @@ test("browser Nexus Torii polling reaches nested terminal status without Node AP
   const observed = [];
   const result = await client.toriiClient.waitForTransactionStatus(HASH_HEX, {
     intervalMs: 0,
-    maxAttempts: 3,
+    maxAttempts: 4,
+    failureStatuses: ["Committed"],
     onStatus(status, _payload, attempt) {
       observed.push([status, attempt]);
     },
   });
 
   assert.deepEqual(result, authoritativeAppliedStatus(HASH_HEX, 3));
-  assert.deepEqual(observed, [["Pending", 1], ["Committed", 2], ["Applied", 3]]);
-  assert.equal(urls.length, 3);
+  assert.deepEqual(observed, [
+    ["Queued", 1],
+    ["Committed", 2],
+    ["Applied", 3],
+    ["Applied", 4],
+  ]);
+  assert.equal(urls.length, 4);
   for (const url of urls) {
     assert.equal(
       url,
@@ -502,11 +578,90 @@ test("browser Nexus Torii polling reaches nested terminal status without Node AP
   }
 });
 
+test("browser Nexus Torii polling retries cached failures until state resolution", async () => {
+  const responses = [
+    pipelineStatus("Rejected", { resolvedFrom: "cache" }),
+    pipelineStatus("Rejected", { resolvedFrom: "state" }),
+  ];
+  const observed = [];
+  const client = new NexusAppClient({
+    toriiBaseUrl: "https://torii.example",
+    async fetchImpl() {
+      return mockResponse(200, JSON.stringify(responses.shift()));
+    },
+  });
+
+  await assert.rejects(
+    client.toriiClient.waitForTransactionStatus(HASH_HEX, {
+      intervalMs: 0,
+      maxAttempts: 2,
+      failureStatuses: ["Committed"],
+      onStatus(status, _payload, attempt) {
+        observed.push([status, attempt]);
+      },
+    }),
+    /failure status Rejected/u,
+  );
+  assert.deepEqual(observed, [["Rejected", 1], ["Rejected", 2]]);
+});
+
+test("browser Nexus Torii polling fails closed on malformed finality envelopes", async () => {
+  for (const [payload, pattern] of [
+    [
+      pipelineStatus("Applied", {
+        hash: "cd".repeat(32),
+        blockHeight: 1,
+        resolvedFrom: "state",
+      }),
+      /hash must match/u,
+    ],
+    [
+      pipelineStatus("Applied", {
+        blockHeight: 1,
+        scope: "local",
+        resolvedFrom: "state",
+      }),
+      /scope must be global/u,
+    ],
+    [
+      pipelineStatus("Applied", {
+        blockHeight: 1,
+        resolvedFrom: "queue",
+      }),
+      /cache- or state-resolved/u,
+    ],
+    [
+      pipelineStatus("Applied", {
+        blockHeight: 0,
+        resolvedFrom: "state",
+      }),
+      /positive block height/u,
+    ],
+  ]) {
+    const client = new NexusAppClient({
+      toriiBaseUrl: "https://torii.example",
+      async fetchImpl() {
+        return mockResponse(200, JSON.stringify(payload));
+      },
+    });
+    await assert.rejects(
+      client.toriiClient.waitForTransactionStatus(HASH_HEX, {
+        intervalMs: 0,
+        maxAttempts: 1,
+      }),
+      pattern,
+    );
+  }
+});
+
 test("browser Nexus Torii polling fails closed on rejection and success override", async () => {
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
-      return mockResponse(200, JSON.stringify({ status: "Rejected" }));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Rejected", { resolvedFrom: "state" })),
+      );
     },
   });
   await assert.rejects(
@@ -538,7 +693,10 @@ test("browser Nexus counts duplicate raw statuses before any fetch", async () =>
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetchCalls += 1;
-      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
+      );
     },
   });
   for (const options of [
@@ -570,7 +728,10 @@ test("browser Nexus closes an infinite duplicate status iterator", async () => {
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetchCalls += 1;
-      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
+      );
     },
   });
 
@@ -626,7 +787,7 @@ test("browser Nexus polling uses intrinsic AbortSignal state and listeners", asy
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
-      return mockResponse(200, JSON.stringify({ status: "Pending" }));
+      return mockResponse(200, JSON.stringify(pipelineStatus("Queued")));
     },
   });
 
@@ -667,7 +828,10 @@ test("browser Nexus rejects AbortSignal impostors without invoking public access
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
-      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
+      );
     },
   });
 
@@ -800,7 +964,7 @@ test("browser Nexus hard-bounds stalled bodies, cancellation, and callbacks", as
     fetchImpl() {
       return mockResponse(
         200,
-        JSON.stringify({ status: "Pending" }),
+        JSON.stringify(pipelineStatus("Queued")),
         { "content-type": "application/json" },
       );
     },
@@ -829,7 +993,10 @@ test("browser Nexus does not invoke Fetch for an already-aborted direct status r
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
       fetches += 1;
-      return mockResponse(200, JSON.stringify({ status: "Committed" }));
+      return mockResponse(
+        200,
+        JSON.stringify(pipelineStatus("Committed", { resolvedFrom: "cache" })),
+      );
     },
   });
 
@@ -886,7 +1053,7 @@ test("browser Nexus preserves a null abort reason during polling", async () => {
   const client = new NexusAppClient({
     toriiBaseUrl: "https://torii.example",
     async fetchImpl() {
-      return mockResponse(200, JSON.stringify({ status: "Pending" }));
+      return mockResponse(200, JSON.stringify(pipelineStatus("Queued")));
     },
   });
   let caught = Symbol("not rejected");

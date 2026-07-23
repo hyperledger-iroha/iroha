@@ -161,8 +161,11 @@ export interface NexusWaitFinalizeOptions extends NexusFinalizeBaseOptions {
   intervalMs?: number;
   timeoutMs?: number | null;
   maxAttempts?: number | null;
-  scope?: "local" | "auto" | "global";
-  /** At most 32 raw entries are consumed before duplicate removal. */
+  /**
+   * Additional state-resolved failure labels. State-resolved `Rejected` and
+   * `Expired` always fail. At most 32 raw entries are consumed before duplicate
+   * removal.
+   */
   failureStatuses?: NexusStatusIterable;
   onStatus?: (
     status: string | null,
@@ -177,7 +180,6 @@ export interface NexusNoWaitFinalizeOptions extends NexusFinalizeBaseOptions {
   intervalMs?: never;
   timeoutMs?: never;
   maxAttempts?: never;
-  scope?: never;
   failureStatuses?: never;
   onStatus?: never;
   signal?: never;

@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { ed25519 } from "@noble/curves/ed25519";
 import { sha512 } from "@noble/hashes/sha512";
+import { encodeContractAddressBech32m } from "../src/contractAddress.js";
 import {
   encodeValidationFeePolicyNorito,
   validationFeePolicyHash,
@@ -315,6 +316,25 @@ test("verifySignedValidationFeePolicy rejects incomplete or altered treasury pay
       (error) => error?.code === "INVALID_TREASURY_PAYOUT_BINDING",
     );
   }
+});
+
+test("verifySignedValidationFeePolicy rejects contract HRPs outside the I105 u16 range", () => {
+  const payload = new Uint8Array(29);
+  payload[0] = 1;
+  const fixture = validationFeePolicyFixture({
+    treasuryPayoutBinding: {
+      contract_address: encodeContractAddressBech32m("c10000", payload),
+    },
+  });
+
+  assert.throws(
+    () =>
+      verifySignedValidationFeePolicy(
+        fixture.signedPolicy,
+        fixture.verificationContext,
+      ),
+    (error) => error?.code === "INVALID_TREASURY_PAYOUT_BINDING",
+  );
 });
 
 test("verifySignedValidationFeePolicy fixes the initial policy at scale 2 and an exact 0.1 fee", () => {
