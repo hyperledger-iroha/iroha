@@ -7814,6 +7814,13 @@ pub struct GovernanceProposalRecord {
     /// Proposal-time parliament draw snapshot used for JIT sortition approvals.
     #[norito(default)]
     pub parliament_snapshot: Option<GovernanceParliamentSnapshot>,
+    /// Deterministic referendum result retained for caller-independent enactment.
+    #[norito(default)]
+    pub finalization_evidence:
+        Option<iroha_data_model::governance::types::GovernanceFinalizationEvidence>,
+    /// Height at which the approved proposal payload was enacted.
+    #[norito(default)]
+    pub enacted_at_height: Option<u64>,
 }
 
 /// Proposal-time parliament draw snapshot.
@@ -7839,7 +7846,11 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
-            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
         }
     }
 
@@ -7852,7 +7863,11 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
-            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
         }
     }
 
@@ -7865,7 +7880,43 @@ impl GovernanceProposalRecord {
                 Some(payload)
             }
             iroha_data_model::governance::types::ProposalKind::DeployContract(_)
-            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_) => None,
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the validation-fee policy payload when present.
+    pub fn as_validation_fee_policy(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::ValidationFeePolicyProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(payload) => {
+                Some(payload)
+            }
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                None
+            }
+        }
+    }
+
+    /// Access the validation-fee payout lifecycle payload when present.
+    pub fn as_validation_fee_payout_lifecycle(
+        &self,
+    ) -> Option<&iroha_data_model::governance::types::ValidationFeePayoutLifecycleProposal> {
+        match &self.kind {
+            iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(
+                payload,
+            ) => Some(payload),
+            iroha_data_model::governance::types::ProposalKind::DeployContract(_)
+            | iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
+            | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+            | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_) => None,
         }
     }
 
@@ -7889,6 +7940,8 @@ pub enum GovernanceProposalStatus {
     Rejected,
     /// Proposal has been enacted and applied.
     Enacted,
+    /// Proposal was approved but its validation-fee predecessor was no longer current.
+    Superseded,
 }
 
 impl json::FastJsonWrite for GovernanceProposalStatus {
@@ -7898,6 +7951,7 @@ impl json::FastJsonWrite for GovernanceProposalStatus {
             GovernanceProposalStatus::Approved => "Approved",
             GovernanceProposalStatus::Rejected => "Rejected",
             GovernanceProposalStatus::Enacted => "Enacted",
+            GovernanceProposalStatus::Superseded => "Superseded",
         };
         json::write_json_string(label, out);
     }
@@ -7911,6 +7965,7 @@ impl json::JsonDeserialize for GovernanceProposalStatus {
             "Approved" => Ok(GovernanceProposalStatus::Approved),
             "Rejected" => Ok(GovernanceProposalStatus::Rejected),
             "Enacted" => Ok(GovernanceProposalStatus::Enacted),
+            "Superseded" => Ok(GovernanceProposalStatus::Superseded),
             other => Err(json::Error::UnknownField {
                 field: other.to_owned(),
             }),
@@ -8171,6 +8226,7 @@ fn handle_jury_stage(
                 GovernanceProposalStatus::Approved
                     | GovernanceProposalStatus::Rejected
                     | GovernanceProposalStatus::Enacted
+                    | GovernanceProposalStatus::Superseded
             ) {
                 if ctx.approvals.jury_ready() {
                     changed |= stage.mark_completed(ctx.now_h);
@@ -8201,7 +8257,10 @@ fn handle_enact_stage(
     let mut reject = false;
     if let Some(stage) = rec.pipeline.stage_mut(GovernanceStage::Enact) {
         if jury_ok && ctx.now_h >= stage.started_at && stage.is_pending() {
-            if matches!(rec.status, GovernanceProposalStatus::Enacted) {
+            if matches!(
+                rec.status,
+                GovernanceProposalStatus::Enacted | GovernanceProposalStatus::Superseded
+            ) {
                 let deadline_breached = stage.deadline.is_some_and(|deadline| ctx.now_h > deadline);
                 if deadline_breached {
                     changed |=
@@ -22468,6 +22527,13 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
     ) -> &mut StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord> {
         &mut self.governance_proposals
     }
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    /// Provides mutable access to on-chain parameters for direct test-state seeding.
+    pub fn parameters_mut_for_testing(
+        &mut self,
+    ) -> &mut CellTransaction<'block, 'world, Parameters> {
+        &mut self.parameters
+    }
     /// Test helper: get mutable access to citizenship storage for direct seeding.
     pub fn citizens_mut(
         &mut self,
@@ -27316,7 +27382,9 @@ impl State {
                                             ParliamentBody::OversightCommittee,
                                         ],
                                         iroha_data_model::governance::types::ProposalKind::RuntimeUpgrade(_)
-                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_) => &[
+                                        | iroha_data_model::governance::types::ProposalKind::SccpRouteGovernance(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePolicy(_)
+                                        | iroha_data_model::governance::types::ProposalKind::ValidationFeePayoutLifecycle(_) => &[
                                             ParliamentBody::RulesCommittee,
                                             ParliamentBody::AgendaCouncil,
                                             ParliamentBody::InterestPanel,
@@ -27395,6 +27463,7 @@ impl State {
                 // Automatic decision at h_end: compute tally and emit Approved/Rejected.
                 let mut approve: u128 = 0;
                 let mut reject: u128 = 0;
+                let mut abstain: u128 = 0;
                 let mut decision_ready = true;
                 match mode {
                     super::state::GovernanceReferendumMode::Plain => {
@@ -27432,6 +27501,7 @@ impl State {
                                 match rec.direction {
                                     0 => approve = approve.saturating_add(w),
                                     1 => reject = reject.saturating_add(w),
+                                    2 => abstain = abstain.saturating_add(w),
                                     _ => {}
                                 }
                             }
@@ -27442,6 +27512,7 @@ impl State {
                             if e.finalized && e.tally.len() >= 2 {
                                 approve = u128::from(e.tally[0]);
                                 reject = u128::from(e.tally[1]);
+                                abstain = e.tally.get(2).copied().map_or(0, u128::from);
                             } else {
                                 decision_ready = false;
                             }
@@ -27469,25 +27540,46 @@ impl State {
                                 super::state::GovernanceProposalStatus::Approved
                                     | super::state::GovernanceProposalStatus::Rejected
                                     | super::state::GovernanceProposalStatus::Enacted
+                                    | super::state::GovernanceProposalStatus::Superseded
                             )
                         })
                     {
                         continue;
                     }
                     // Threshold checks: turnout and approval ratio
-                    let turnout = approve.saturating_add(reject);
+                    let turnout = approve.saturating_add(reject).saturating_add(abstain);
+                    let threshold_numerator = sb.gov.approval_threshold_q_num;
+                    let threshold_denominator = sb.gov.approval_threshold_q_den.max(1);
                     let decision_approve = if turnout >= sb.gov.min_turnout {
-                        let num = sb.gov.approval_threshold_q_num;
-                        let den = sb.gov.approval_threshold_q_den.max(1);
-                        // approve/(approve+reject) >= num/den  => approve*den >= (approve+reject)*num
-                        let lhs = approve.saturating_mul(u128::from(den));
-                        let rhs = approve
-                            .saturating_add(reject)
-                            .saturating_mul(u128::from(num));
+                        // approve/turnout >= num/den, with abstentions contributing to turnout.
+                        let lhs = approve.saturating_mul(u128::from(threshold_denominator));
+                        let rhs = turnout.saturating_mul(u128::from(threshold_numerator));
                         lhs >= rhs
                     } else {
                         false
                     };
+                    let finalization_evidence = prop_id_opt.map(|proposal_id| {
+                        iroha_data_model::governance::types::GovernanceFinalizationEvidence {
+                            proposal_id,
+                            referendum_id: proposal_id,
+                            finalized_at_height: at_h,
+                            mode: match mode {
+                                super::state::GovernanceReferendumMode::Zk => {
+                                    iroha_data_model::isi::governance::VotingMode::Zk
+                                }
+                                super::state::GovernanceReferendumMode::Plain => {
+                                    iroha_data_model::isi::governance::VotingMode::Plain
+                                }
+                            },
+                            approve,
+                            reject,
+                            abstain,
+                            min_turnout: sb.gov.min_turnout,
+                            approval_threshold_numerator: threshold_numerator,
+                            approval_threshold_denominator: threshold_denominator,
+                            approved: decision_approve,
+                        }
+                    });
                     if decision_approve {
                         wtx.emit_events(Some(
                             governance_events::GovernanceEvent::ProposalApproved(
@@ -27499,6 +27591,7 @@ impl State {
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Approved;
+                                rec.finalization_evidence = finalization_evidence;
                                 wtx.governance_proposals.insert(pid, rec);
                             }
                         }
@@ -27513,6 +27606,7 @@ impl State {
                         if let Some(pid) = prop_id_opt {
                             if let Some(mut rec) = wtx.governance_proposals.get(&pid).cloned() {
                                 rec.status = super::state::GovernanceProposalStatus::Rejected;
+                                rec.finalization_evidence = finalization_evidence;
                                 wtx.governance_proposals.insert(pid, rec);
                             }
                         }
@@ -43931,6 +44025,34 @@ impl<'state> StateBlock<'state> {
             witness.writes.push(crate::sumeragi::consensus::ExecKv {
                 key: receiver_key.to_vec(),
                 value: receiver_value,
+            });
+
+            // Commit the complete protected validation-fee registry selection
+            // at every height. A finality proof for this fixed synthetic write
+            // therefore proves both the current policy and that no later
+            // Parliament enactment was omitted.
+            let validation_fee_parameter_id =
+                iroha_data_model::validation_fee::ValidationFeePolicyRegistryV1::parameter_id();
+            let validation_fee_custom = self
+                .world
+                .parameters()
+                .custom()
+                .get(&validation_fee_parameter_id);
+            let validation_fee_commitment =
+                iroha_data_model::validation_fee::ValidationFeePolicySnapshotCommitmentV1::from_custom_parameter_state(
+                    receiver_height,
+                    validation_fee_custom,
+                );
+            let validation_fee_value = norito::to_bytes(&validation_fee_commitment)
+                .expect("validation-fee policy snapshot commitment must encode");
+            let validation_fee_key =
+                iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1;
+            witness
+                .writes
+                .retain(|entry| entry.key.as_slice() != validation_fee_key);
+            witness.writes.push(crate::sumeragi::consensus::ExecKv {
+                key: validation_fee_key.to_vec(),
+                value: validation_fee_value,
             });
             witness
                 .writes
@@ -110273,10 +110395,14 @@ seiyaku SequentialNfts {
 
         state_block.capture_exec_witness();
         let witness = state_block.take_exec_witness().expect("witness captured");
-        assert_eq!(witness.writes.len(), 2);
+        assert_eq!(witness.writes.len(), 3);
         assert!(witness.writes.iter().any(|write| {
             write.key.as_slice()
                 == iroha_data_model::offline::KAGEMUSHA_ACTIVE_RECEIVER_WITNESS_KEY_V1
+        }));
+        assert!(witness.writes.iter().any(|write| {
+            write.key.as_slice()
+                == iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_WITNESS_KEY_V1
         }));
         assert!(state_block.take_exec_witness().is_none());
     }

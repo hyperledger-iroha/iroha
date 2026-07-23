@@ -186,6 +186,8 @@ REQUIRED_BRIDGE_SYMBOLS=(
   connect_norito_canonical_json_blake3_v1
   connect_norito_encode_account_onboarding_plan_body_v1
   connect_norito_alias_instruction_round_trip_v1
+  connect_norito_validation_fee_current_policy_proof_request_v1
+  connect_norito_validation_fee_current_policy_proof_verify_v1
   "${KAGEMUSHA_C_SYMBOLS[@]}"
 )
 
@@ -249,6 +251,12 @@ KAGEMUSHA_JNI_METHODS=(
   nativeVerifyRecipientRegistrationLineageV2
   nativeVerifyRecipientRequestV2
   nativeVerifySpendV4
+)
+
+VALIDATION_FEE_JNI_SYMBOLS=(
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1
+  Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1
 )
 
 relpath() {
@@ -1548,7 +1556,7 @@ check_android_native_symbols() {
   local nm_tool
   local symbols
   local namespace
-  local expected_jni=()
+  local expected_jni=("${VALIDATION_FEE_JNI_SYMBOLS[@]}")
 
   if ! nm_tool="$(find_android_nm)"; then
     fail "llvm-nm (or MOBILE_SDK_ANDROID_NM) is required to inspect client-android $abi native bridge"
@@ -1590,7 +1598,10 @@ for raw in os.fdopen(3):
         or symbol.startswith("connect_norito_kagemusha_")
         or (
             symbol.startswith("Java_org_hyperledger_iroha_")
-            and "_KagemushaRecursiveSpendProver_" in symbol
+            and (
+                "_KagemushaRecursiveSpendProver_" in symbol
+                or "_ValidationFeeConsensusProofBridge_" in symbol
+            )
         )
     ):
         actual.add(symbol)

@@ -1,9 +1,8 @@
 //! Validation-fee policy data shared by validators and clients.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use iroha_crypto::Hash;
-use iroha_crypto::{Algorithm, PublicKey, SignatureOf};
 use iroha_primitives::{
     json::Json,
     numeric::{Numeric, Quantity},
@@ -12,7 +11,7 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 use crate::{
-    Level,
+    ChainId, Level,
     account::AccountId,
     asset::AssetDefinitionId,
     isi::{InstructionBox, Log},
@@ -25,16 +24,42 @@ use crate::{
 pub const VALIDATION_FEE_POLICY_SCHEMA_VERSION: u16 = 1;
 /// Decimal scale required for the initial policy fee asset.
 pub const VALIDATION_FEE_DS_SCALE: u8 = 2;
-/// Canonical fee amount required by the initial validation-fee policy.
-pub const VALIDATION_FEE_INITIAL_AMOUNT: &str = "0.1";
+/// Canonical fee amount required by the initial validation-fee policy (0.10 SBD).
+pub const VALIDATION_FEE_INITIAL_AMOUNT: &str = "0.10";
+/// Minimum delay from Parliament enactment to policy activation.
+pub const VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS: u64 = 120_960;
+/// Exact SBD batch consumed by every validation-fee payout lifecycle tick.
+pub const VALIDATION_FEE_PAYOUT_BATCH_SBD: &str = "10";
+/// Exact inclusive minimum XOR output accepted by the payout lifecycle.
+pub const VALIDATION_FEE_PAYOUT_MIN_XOR: &str = "4";
+/// Exact inclusive maximum XOR output accepted by the payout lifecycle.
+pub const VALIDATION_FEE_PAYOUT_MAX_XOR: &str = "100";
+/// Exact share assigned to each of the four payout recipients.
+pub const VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE: &str = "0.25";
 /// Only release exemption class implemented by validator admission.
 pub const VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS: &str = "TREASURY_PAYOUT";
 /// Number of recipients required by the atomic treasury-payout plan.
 pub const VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT: usize = 4;
 /// Domain separator for policy hashing.
-pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.v1";
-/// Domain separator carried in signed validation-fee policy payloads.
-pub const VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN: &str = "iroha.validation_fee.policy.signature.v1";
+pub const VALIDATION_FEE_POLICY_HASH_DOMAIN: &[u8] = b"iroha.validation_fee.policy.parliament.v1";
+/// Domain separator for an exact Parliament-approved payout lifecycle.
+pub const VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN: &[u8] =
+    b"iroha.validation_fee.payout_lifecycle.seal.v1";
+/// Domain separator for the canonical full-registry snapshot hash.
+pub const VALIDATION_FEE_REGISTRY_SNAPSHOT_HASH_DOMAIN: &[u8] =
+    b"iroha.validation_fee.registry.snapshot.v1";
+/// Current validation-fee synthetic witness format.
+pub const VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1: u16 = 1;
+/// Exact sparse-tree depth of the execution-witness proof.
+pub const VALIDATION_FEE_POLICY_WITNESS_SIBLINGS_V1: usize = 256;
+/// Fixed synthetic execution-witness key committed by every block.
+pub const VALIDATION_FEE_POLICY_WITNESS_KEY_V1: &[u8] =
+    b"\xd4iroha:validation-fee:policy-registry:v1";
+/// Retired custom-parameter identifier for the pre-release governance keyset.
+pub const RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID: &str =
+    "iroha:validation_fee_governance_keyset_v1";
+/// Retired custom-parameter identifier for the pre-release active-policy copy.
+pub const RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID: &str = "iroha:validation_fee_policy_v1";
 /// Transaction metadata key that binds a signed transaction to a policy version.
 pub const VALIDATION_FEE_POLICY_VERSION_METADATA_KEY: &str = "validation_fee_policy_version";
 /// Transaction metadata key that binds a signed transaction to a policy hash.
@@ -47,6 +72,19 @@ pub const VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY: &str =
 /// Reserved prefix for the canonical marker carried inside fee-bearing multisig proposals.
 pub const VALIDATION_FEE_MULTISIG_MARKER_PREFIX: &str = "iroha:validation_fee:multisig:v1:";
 const VALIDATION_FEE_MULTISIG_MARKER_RESERVED_PREFIX: &str = "iroha:validation_fee:multisig:";
+
+/// Return whether a custom parameter identifier belongs to the consensus-owned
+/// validation-fee governance surface.
+///
+/// These parameters are enacted atomically by SORA Parliament and must never be
+/// writable through the generic `SetParameter` instruction, including at
+/// genesis.
+#[must_use]
+pub fn is_reserved_validation_fee_parameter_id(id: &CustomParameterId) -> bool {
+    id == &ValidationFeePolicyRegistryV1::parameter_id()
+        || id.to_string() == RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID
+        || id.to_string() == RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID
+}
 
 /// Signed fee designation carried inside a multisig proposal's instruction list.
 ///
@@ -206,70 +244,7 @@ impl core::fmt::Display for ValidationFeeMultisigMarkerError {
 
 impl std::error::Error for ValidationFeeMultisigMarkerError {}
 
-/// Error returned when signed validation-fee policy verification fails.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ValidationFeePolicySignatureError {
-    /// The referenced governance keyset is malformed.
-    InvalidGovernanceKeyset(&'static str),
-    /// The signed policy references a different keyset id.
-    GovernanceKeysetMismatch {
-        /// Keyset id expected from the policy.
-        expected: String,
-        /// Keyset id found in the supplied keyset parameter.
-        found: String,
-    },
-    /// No signatures were supplied.
-    NoSignatures,
-    /// A signature was produced by a key outside the active keyset.
-    UnknownSigner,
-    /// A signer appeared more than once.
-    DuplicateSigner,
-    /// A signature failed cryptographic verification.
-    InvalidSignature,
-    /// Valid signatures did not meet the active keyset threshold.
-    InsufficientThreshold {
-        /// Weight collected from valid signatures.
-        collected: u32,
-        /// Weight required by the governance keyset.
-        required: u32,
-    },
-}
-
-impl core::fmt::Display for ValidationFeePolicySignatureError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::InvalidGovernanceKeyset(reason) => {
-                write!(f, "validation-fee governance keyset is invalid: {reason}")
-            }
-            Self::GovernanceKeysetMismatch { expected, found } => write!(
-                f,
-                "validation-fee governance keyset mismatch: expected {expected}, found {found}"
-            ),
-            Self::NoSignatures => write!(f, "validation-fee policy has no signatures"),
-            Self::UnknownSigner => write!(
-                f,
-                "validation-fee policy signature was produced by an unknown signer"
-            ),
-            Self::DuplicateSigner => write!(
-                f,
-                "validation-fee policy signature set contains a duplicate signer"
-            ),
-            Self::InvalidSignature => write!(f, "validation-fee policy signature is invalid"),
-            Self::InsufficientThreshold {
-                collected,
-                required,
-            } => write!(
-                f,
-                "validation-fee policy signatures do not meet threshold: collected {collected}, required {required}"
-            ),
-        }
-    }
-}
-
-impl std::error::Error for ValidationFeePolicySignatureError {}
-
-/// Error returned when a validation-fee policy registry is malformed or
-/// does not match the active signed policy.
+/// Error returned when a validation-fee policy registry is malformed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationFeePolicyRegistryError {
     /// No registered policy entries were supplied.
@@ -291,22 +266,38 @@ pub enum ValidationFeePolicyRegistryError {
         /// Version of the broken policy entry.
         policy_version: u64,
     },
-    /// The registry active version does not match the latest registered entry
-    /// or the supplied active signed policy.
-    ActiveVersionMismatch {
-        /// Version expected by the registry or policy.
-        expected: u64,
-        /// Version found in the registry or policy.
-        found: u64,
-    },
-    /// The registry active hash does not match the latest registered entry or
-    /// the supplied active signed policy.
-    ActiveHashMismatch,
-    /// The active policy carries a different previous hash than its registry
-    /// entry.
-    ActivePreviousHashMismatch,
-    /// The active policy hash could not be computed.
+    /// A policy hash could not be computed.
     PolicyHashEncoding,
+    /// A policy payload violates the validation-fee policy invariants.
+    InvalidPolicyInvariant {
+        /// Version of the invalid policy.
+        policy_version: u64,
+    },
+    /// An entry's stored hash does not match its complete policy.
+    PolicyHashMismatch {
+        /// Version of the malformed entry.
+        policy_version: u64,
+    },
+    /// A successor was scheduled before its predecessor.
+    EffectiveHeightRollback {
+        /// Version of the malformed entry.
+        policy_version: u64,
+    },
+    /// A successor changed the immutable chain or genesis binding.
+    ChainIdentityChanged {
+        /// Version of the malformed entry.
+        policy_version: u64,
+    },
+    /// Typed Parliament authorization evidence is malformed.
+    InvalidParliamentAuthorization {
+        /// Version of the malformed entry.
+        policy_version: u64,
+    },
+    /// A payout lifecycle reference is missing, unexpected, or malformed.
+    InvalidPayoutLifecycleReference {
+        /// Version of the malformed entry.
+        policy_version: u64,
+    },
 }
 
 impl core::fmt::Display for ValidationFeePolicyRegistryError {
@@ -325,20 +316,36 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
                 f,
                 "validation-fee policy registry previous hash is broken at version {policy_version}"
             ),
-            Self::ActiveVersionMismatch { expected, found } => write!(
-                f,
-                "validation-fee policy registry active version mismatch: expected {expected}, found {found}"
-            ),
-            Self::ActiveHashMismatch => {
-                write!(f, "validation-fee policy registry active hash mismatch")
-            }
-            Self::ActivePreviousHashMismatch => write!(
-                f,
-                "validation-fee policy registry active previous hash mismatch"
-            ),
             Self::PolicyHashEncoding => {
-                write!(f, "validation-fee active policy hash could not be encoded")
+                write!(
+                    f,
+                    "validation-fee registry policy hash could not be encoded"
+                )
             }
+            Self::InvalidPolicyInvariant { policy_version } => write!(
+                f,
+                "validation-fee registry policy version {policy_version} violates policy invariants"
+            ),
+            Self::PolicyHashMismatch { policy_version } => write!(
+                f,
+                "validation-fee registry policy hash mismatch at version {policy_version}"
+            ),
+            Self::EffectiveHeightRollback { policy_version } => write!(
+                f,
+                "validation-fee policy effective height moves backwards at version {policy_version}"
+            ),
+            Self::ChainIdentityChanged { policy_version } => write!(
+                f,
+                "validation-fee policy changes the immutable chain identity at version {policy_version}"
+            ),
+            Self::InvalidParliamentAuthorization { policy_version } => write!(
+                f,
+                "validation-fee policy version {policy_version} has invalid Parliament authorization evidence"
+            ),
+            Self::InvalidPayoutLifecycleReference { policy_version } => write!(
+                f,
+                "validation-fee policy version {policy_version} has an invalid payout lifecycle reference"
+            ),
         }
     }
 }
@@ -346,7 +353,7 @@ impl core::fmt::Display for ValidationFeePolicyRegistryError {
 impl std::error::Error for ValidationFeePolicyRegistryError {}
 
 /// Validation-fee charging mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -357,147 +364,231 @@ impl std::error::Error for ValidationFeePolicyRegistryError {}
     rename_all = "SCREAMING_SNAKE_CASE"
 )]
 pub enum ValidationFeeChargingMode {
+    /// Disable validation-fee charging through the governed policy chain.
+    Disabled,
     /// Charge once per qualifying fee-asset transfer instruction or batch entry.
     PerQualifyingTransferInstruction,
 }
 
-/// One public key and its threshold weight in a validation-fee governance keyset.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ValidationFeeGovernanceKeyV1 {
-    /// Governance signer public key.
-    pub public_key: PublicKey,
-    /// Weight contributed by this signer.
-    pub weight: u16,
-}
-
-/// Active governance keyset used to verify signed validation-fee policies.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ValidationFeeGovernanceKeysetV1 {
-    /// Stable keyset identifier referenced by policies.
-    pub keyset_id: String,
-    /// Required aggregate signer weight.
-    pub threshold: u16,
-    /// Signer keys and weights.
-    pub keys: Vec<ValidationFeeGovernanceKeyV1>,
-}
-
-impl ValidationFeeGovernanceKeysetV1 {
-    /// Identifier of the chain-level custom parameter carrying the active keyset.
-    pub const PARAMETER_ID_STR: &'static str = "iroha:validation_fee_governance_keyset_v1";
-
-    /// Construct the custom-parameter identifier for this keyset.
-    #[must_use]
-    pub fn parameter_id() -> CustomParameterId {
-        Self::PARAMETER_ID_STR
-            .parse()
-            .expect("valid validation-fee governance keyset parameter identifier")
-    }
-
-    /// Convert this keyset into an on-ledger custom parameter.
-    #[must_use]
-    pub fn into_custom_parameter(self) -> CustomParameter {
-        CustomParameter::new(Self::parameter_id(), Json::new(self))
-    }
-
-    /// Decode a validation-fee keyset from a custom parameter.
-    #[must_use]
-    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
-        if custom.id() != &Self::parameter_id() {
-            return None;
-        }
-        custom.payload().try_into_any_norito::<Self>().ok()
-    }
-
-    /// Return governance keyset invariant violations, if any.
-    #[must_use]
-    pub fn invariant_error(&self) -> Option<&'static str> {
-        if self.keyset_id.trim().is_empty() {
-            return Some("validation-fee governance keyset id must be non-empty");
-        }
-        if self.threshold == 0 {
-            return Some("validation-fee governance keyset threshold must be positive");
-        }
-        if self.keys.is_empty() {
-            return Some("validation-fee governance keyset must contain at least one key");
-        }
-
-        let mut seen = BTreeSet::new();
-        let mut total_weight: u32 = 0;
-        for key in &self.keys {
-            if key.weight == 0 {
-                return Some("validation-fee governance key weight must be positive");
-            }
-            if !seen.insert(key.public_key.clone()) {
-                return Some("validation-fee governance keyset contains duplicate public keys");
-            }
-            total_weight = total_weight.saturating_add(u32::from(key.weight));
-        }
-        if total_weight < u32::from(self.threshold) {
-            return Some("validation-fee governance keyset threshold exceeds total key weight");
-        }
-        None
-    }
-
-    fn key_weights(&self) -> BTreeMap<PublicKey, u32> {
-        self.keys
-            .iter()
-            .map(|key| (key.public_key.clone(), u32::from(key.weight)))
-            .collect()
-    }
-}
-
-/// One entry in the registered validation-fee policy hash chain.
+/// Voting mode retained with validation-fee referendum finalization evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(
+    tag = "voting_mode",
+    content = "value",
+    rename_all = "SCREAMING_SNAKE_CASE"
+)]
+pub enum ValidationFeeGovernanceVotingModeV1 {
+    /// Zero-knowledge referendum tally.
+    Zk,
+    /// Plain referendum tally.
+    Plain,
+}
+
+/// Exact inclusive referendum window authorized for a validation-fee proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeeGovernanceWindowV1 {
+    /// First height in the authorized window.
+    pub lower: u64,
+    /// Last height in the authorized window.
+    pub upper: u64,
+}
+
+/// Typed deterministic referendum result retained in the validation-fee registry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeeFinalizationEvidenceV1 {
+    /// Referendum identifier, equal to the native proposal identifier.
+    pub referendum_id: [u8; 32],
+    /// Height at which the result was finalized.
+    pub finalized_at_height: u64,
+    /// Voting mode whose tally was finalized.
+    pub mode: ValidationFeeGovernanceVotingModeV1,
+    /// Final approve weight.
+    pub approve: u128,
+    /// Final reject weight.
+    pub reject: u128,
+    /// Final abstain weight.
+    pub abstain: u128,
+    /// Minimum turnout applied to this result.
+    pub min_turnout: u128,
+    /// Approval-threshold numerator applied to this result.
+    pub approval_threshold_numerator: u64,
+    /// Approval-threshold denominator applied to this result.
+    pub approval_threshold_denominator: u64,
+    /// Final deterministic decision.
+    pub approved: bool,
+}
+
+impl ValidationFeeFinalizationEvidenceV1 {
+    /// Recompute the approval decision encoded by this evidence.
+    #[must_use]
+    pub fn recomputed_approval(&self) -> bool {
+        if self.approval_threshold_denominator == 0 {
+            return false;
+        }
+        let turnout = self
+            .approve
+            .saturating_add(self.reject)
+            .saturating_add(self.abstain);
+        turnout >= self.min_turnout
+            && self
+                .approve
+                .saturating_mul(u128::from(self.approval_threshold_denominator))
+                >= turnout.saturating_mul(u128::from(self.approval_threshold_numerator))
+    }
+}
+
+/// Typed Parliament and referendum authorization for one enacted policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeeParliamentAuthorizationV1 {
+    /// Native proposal identifier.
+    pub proposal_id: [u8; 32],
+    /// Fingerprint of the exact stored proposal preimage.
+    pub proposal_fingerprint: [u8; 32],
+    /// Proposal-time commitment to all Parliament body rosters.
+    pub proposal_time_roster_root: [u8; 32],
+    /// Exact referendum window retained in consensus state.
+    pub referendum_window: ValidationFeeGovernanceWindowV1,
+    /// Deterministic finalized referendum result.
+    pub finalization: ValidationFeeFinalizationEvidenceV1,
+    /// Height at which the approved policy was appended to the registry.
+    pub enacted_at_height: u64,
+}
+
+impl ValidationFeeParliamentAuthorizationV1 {
+    /// Return a stable invariant violation, if any.
+    #[must_use]
+    pub fn invariant_error(&self) -> Option<&'static str> {
+        if self.proposal_id == [0; 32]
+            || self.proposal_fingerprint == [0; 32]
+            || self.proposal_id != self.proposal_fingerprint
+        {
+            return Some(
+                "validation-fee Parliament proposal id and fingerprint must be identical non-zero native identifiers",
+            );
+        }
+        if self.proposal_time_roster_root == [0; 32] {
+            return Some("validation-fee Parliament roster commitment must be non-zero");
+        }
+        if self.referendum_window.upper < self.referendum_window.lower {
+            return Some("validation-fee referendum window is invalid");
+        }
+        if self.finalization.referendum_id != self.proposal_id {
+            return Some("validation-fee finalization referendum id differs from the proposal id");
+        }
+        if self.finalization.finalized_at_height < self.referendum_window.lower
+            || self.finalization.finalized_at_height > self.referendum_window.upper
+        {
+            return Some("validation-fee finalization height is outside the referendum window");
+        }
+        if self.enacted_at_height < self.finalization.finalized_at_height
+            || self.enacted_at_height < self.referendum_window.lower
+            || self.enacted_at_height > self.referendum_window.upper
+        {
+            return Some("validation-fee enactment height is outside the finalized window");
+        }
+        if self.finalization.mode != ValidationFeeGovernanceVotingModeV1::Plain {
+            return Some("validation-fee governance supports plain referendum voting only");
+        }
+        if !self.finalization.approved || !self.finalization.recomputed_approval() {
+            return Some("validation-fee referendum evidence is not a finalized approval");
+        }
+        None
+    }
+}
+
+/// Exact enacted payout-lifecycle proposal referenced by a validation-fee policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeePayoutLifecycleReferenceV1 {
+    /// Non-zero lifecycle seal bound into the proposal fingerprint.
+    pub lifecycle_seal: [u8; 32],
+    /// Full typed Parliament and referendum authorization for the lifecycle proposal.
+    pub parliament_authorization: ValidationFeeParliamentAuthorizationV1,
+}
+
+impl ValidationFeePayoutLifecycleReferenceV1 {
+    /// Return a stable invariant violation, if any.
+    #[must_use]
+    pub fn invariant_error(&self) -> Option<&'static str> {
+        if self.lifecycle_seal == [0; 32] {
+            return Some("validation-fee payout lifecycle seal must be non-zero");
+        }
+        if self.parliament_authorization.invariant_error().is_some() {
+            return Some(
+                "validation-fee payout lifecycle Parliament authorization evidence is invalid",
+            );
+        }
+        None
+    }
+}
+
+/// One entry in the registered validation-fee policy hash chain.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
 pub struct ValidationFeePolicyRegistryEntryV1 {
-    /// Monotonic policy version.
-    pub policy_version: u64,
+    /// Complete governed policy, retained so scheduled policies do not hide
+    /// the policy that is effective at the current height.
+    pub policy: ValidationFeePolicyV1,
     /// Domain-separated policy hash.
     pub policy_hash: [u8; 32],
-    /// Previous policy hash for chain validation.
-    #[norito(default)]
-    pub previous_policy_hash: Option<[u8; 32]>,
+    /// Typed, independently checkable Parliament and referendum authorization.
+    pub parliament_authorization: ValidationFeeParliamentAuthorizationV1,
+    /// Exact enacted payout lifecycle required by a policy carrying a payout binding.
+    pub payout_lifecycle: Option<ValidationFeePayoutLifecycleReferenceV1>,
 }
 
 impl ValidationFeePolicyRegistryEntryV1 {
-    /// Build a registry entry from a policy.
+    /// Build a registry entry from one enacted Parliament proposal.
     ///
     /// # Errors
     ///
     /// Returns a Norito encoding error if the policy cannot be hashed.
-    pub fn from_policy(policy: &ValidationFeePolicyV1) -> Result<Self, norito::Error> {
+    pub fn from_enactment(
+        policy: ValidationFeePolicyV1,
+        parliament_authorization: ValidationFeeParliamentAuthorizationV1,
+        payout_lifecycle: Option<ValidationFeePayoutLifecycleReferenceV1>,
+    ) -> Result<Self, norito::Error> {
+        let policy_hash = policy.policy_hash()?;
         Ok(Self {
-            policy_version: policy.policy_version,
-            policy_hash: policy.policy_hash()?,
-            previous_policy_hash: policy.previous_policy_hash,
+            policy,
+            policy_hash,
+            parliament_authorization,
+            payout_lifecycle,
         })
     }
 }
 
 /// On-ledger validation-fee policy registry used to reject rollback and
-/// skipped-version policy changes.
+/// skipped-version policy changes while retaining scheduled policy history.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct ValidationFeePolicyRegistryV1 {
-    /// Hash of the active signed validation-fee policy.
-    pub active_policy_hash: [u8; 32],
-    /// Version of the active signed validation-fee policy.
-    pub active_policy_version: u64,
-    /// Registered policy hash chain through the active policy.
+    /// Registered policy chain in ascending, contiguous version order.
     pub registered_policies: Vec<ValidationFeePolicyRegistryEntryV1>,
 }
 
@@ -528,90 +619,418 @@ impl ValidationFeePolicyRegistryV1 {
         custom.payload().try_into_any_norito::<Self>().ok()
     }
 
-    /// Validate that the registry is a contiguous chain ending in `policy`.
+    /// Validate the complete contiguous policy chain.
     ///
     /// # Errors
     ///
     /// Returns an error when the registry is empty, non-monotonic, broken, or
-    /// does not identify `policy` as the active policy.
-    pub fn validate_active_policy(
-        &self,
-        policy: &ValidationFeePolicyV1,
-    ) -> Result<(), ValidationFeePolicyRegistryError> {
+    /// contains a policy whose stored hash differs from its payload.
+    pub fn validate(&self) -> Result<(), ValidationFeePolicyRegistryError> {
         let mut entries = self.registered_policies.iter();
         let Some(first) = entries.next() else {
             return Err(ValidationFeePolicyRegistryError::EmptyRegistry);
         };
-        if first.policy_version != 1 {
+        if first.policy.policy_version != 1 {
             return Err(ValidationFeePolicyRegistryError::UnexpectedPolicyVersion {
                 expected: 1,
-                found: first.policy_version,
+                found: first.policy.policy_version,
             });
         }
-        if first.previous_policy_hash.is_some() {
+        if first.policy.policy_invariant_error().is_some() {
+            return Err(ValidationFeePolicyRegistryError::InvalidPolicyInvariant {
+                policy_version: first.policy.policy_version,
+            });
+        }
+        if first.policy.previous_policy_hash.is_some() {
             return Err(ValidationFeePolicyRegistryError::BrokenPreviousPolicyHash {
-                policy_version: first.policy_version,
+                policy_version: first.policy.policy_version,
+            });
+        }
+        validate_registry_entry_authorization(first)?;
+        let first_hash = first
+            .policy
+            .policy_hash()
+            .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
+        if first_hash != first.policy_hash {
+            return Err(ValidationFeePolicyRegistryError::PolicyHashMismatch {
+                policy_version: first.policy.policy_version,
             });
         }
 
         let mut seen_hashes = BTreeSet::from([first.policy_hash]);
         let mut expected_version = 2u64;
         let mut previous_hash = first.policy_hash;
-        let mut latest = first;
+        let mut previous_effective_height = first.policy.effective_from_height;
+        let chain_id = first.policy.chain_id.clone();
+        let genesis_hash = first.policy.genesis_hash;
 
         for entry in entries {
-            if entry.policy_version != expected_version {
+            if entry.policy.policy_version != expected_version {
                 return Err(ValidationFeePolicyRegistryError::UnexpectedPolicyVersion {
                     expected: expected_version,
-                    found: entry.policy_version,
+                    found: entry.policy.policy_version,
+                });
+            }
+            if entry.policy.policy_invariant_error().is_some() {
+                return Err(ValidationFeePolicyRegistryError::InvalidPolicyInvariant {
+                    policy_version: entry.policy.policy_version,
                 });
             }
             if !seen_hashes.insert(entry.policy_hash) {
                 return Err(ValidationFeePolicyRegistryError::DuplicatePolicyHash {
-                    policy_version: entry.policy_version,
+                    policy_version: entry.policy.policy_version,
                 });
             }
-            if entry.previous_policy_hash != Some(previous_hash) {
+            if entry.policy.previous_policy_hash != Some(previous_hash) {
                 return Err(ValidationFeePolicyRegistryError::BrokenPreviousPolicyHash {
-                    policy_version: entry.policy_version,
+                    policy_version: entry.policy.policy_version,
                 });
             }
-            expected_version = expected_version.saturating_add(1);
+            if entry.policy.chain_id != chain_id || entry.policy.genesis_hash != genesis_hash {
+                return Err(ValidationFeePolicyRegistryError::ChainIdentityChanged {
+                    policy_version: entry.policy.policy_version,
+                });
+            }
+            validate_registry_entry_authorization(entry)?;
+            let policy_hash = entry
+                .policy
+                .policy_hash()
+                .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
+            if policy_hash != entry.policy_hash {
+                return Err(ValidationFeePolicyRegistryError::PolicyHashMismatch {
+                    policy_version: entry.policy.policy_version,
+                });
+            }
+            if entry.policy.effective_from_height < previous_effective_height {
+                return Err(ValidationFeePolicyRegistryError::EffectiveHeightRollback {
+                    policy_version: entry.policy.policy_version,
+                });
+            }
+            expected_version = expected_version.checked_add(1).ok_or(
+                ValidationFeePolicyRegistryError::UnexpectedPolicyVersion {
+                    expected: u64::MAX,
+                    found: entry.policy.policy_version,
+                },
+            )?;
             previous_hash = entry.policy_hash;
-            latest = entry;
-        }
-
-        if self.active_policy_version != latest.policy_version {
-            return Err(ValidationFeePolicyRegistryError::ActiveVersionMismatch {
-                expected: latest.policy_version,
-                found: self.active_policy_version,
-            });
-        }
-        if self.active_policy_hash != latest.policy_hash {
-            return Err(ValidationFeePolicyRegistryError::ActiveHashMismatch);
-        }
-        if self.active_policy_version != policy.policy_version {
-            return Err(ValidationFeePolicyRegistryError::ActiveVersionMismatch {
-                expected: self.active_policy_version,
-                found: policy.policy_version,
-            });
-        }
-        let policy_hash = policy
-            .policy_hash()
-            .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
-        if self.active_policy_hash != policy_hash {
-            return Err(ValidationFeePolicyRegistryError::ActiveHashMismatch);
-        }
-        if latest.previous_policy_hash != policy.previous_policy_hash {
-            return Err(ValidationFeePolicyRegistryError::ActivePreviousHashMismatch);
+            previous_effective_height = entry.policy.effective_from_height;
         }
 
         Ok(())
     }
+
+    /// Return the latest enacted entry, including a policy scheduled for a
+    /// future height.
+    #[must_use]
+    pub fn head(&self) -> Option<&ValidationFeePolicyRegistryEntryV1> {
+        self.registered_policies.last()
+    }
+
+    /// Return the highest-version policy whose effective height has arrived.
+    ///
+    /// An expired higher version never falls back to an older version.
+    #[must_use]
+    pub fn scheduled_entry_at_height(
+        &self,
+        height: u64,
+    ) -> Option<&ValidationFeePolicyRegistryEntryV1> {
+        self.registered_policies
+            .iter()
+            .rev()
+            .find(|entry| entry.policy.effective_from_height <= height)
+    }
+
+    /// Return the effective policy entry at `height`.
+    ///
+    /// This returns `None` before the first policy is effective or after the
+    /// selected highest-version policy expires.
+    #[must_use]
+    pub fn effective_entry_at_height(
+        &self,
+        height: u64,
+    ) -> Option<&ValidationFeePolicyRegistryEntryV1> {
+        self.scheduled_entry_at_height(height)
+            .filter(|entry| entry.policy.is_active_at_height(height))
+    }
+
+    /// Hash the canonical complete registry for a finality-bound snapshot.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error when the registry cannot be serialized.
+    pub fn snapshot_hash(&self) -> Result<[u8; 32], norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut preimage = Vec::with_capacity(
+            VALIDATION_FEE_REGISTRY_SNAPSHOT_HASH_DOMAIN.len() + 1 + encoded.len(),
+        );
+        preimage.extend_from_slice(VALIDATION_FEE_REGISTRY_SNAPSHOT_HASH_DOMAIN);
+        preimage.push(0);
+        preimage.extend_from_slice(&encoded);
+        Ok(*Hash::new(preimage).as_ref())
+    }
+}
+
+/// Valid registry facts bound into each block's synthetic witness write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeePolicySnapshotAvailableV1 {
+    /// Hash of the canonical complete registry.
+    pub registry_hash: [u8; 32],
+    /// Latest enacted policy hash, including a future scheduled successor.
+    pub head_policy_hash: [u8; 32],
+    /// Highest-version policy whose effective height has arrived.
+    pub scheduled_policy_hash: Option<[u8; 32]>,
+    /// Scheduled policy hash when its validity window is active.
+    pub effective_policy_hash: Option<[u8; 32]>,
+}
+
+/// Registry availability committed by a validation-fee synthetic witness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    norito(
+        tag = "status",
+        content = "value",
+        rename_all = "SCREAMING_SNAKE_CASE",
+        deny_unknown_fields
+    ),
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub enum ValidationFeePolicySnapshotStatusV1 {
+    /// Parliament has not enacted the first policy.
+    Unconfigured,
+    /// A malformed protected registry was observed; the hash identifies the failure.
+    Invalid(Hash),
+    /// A validated full registry and its height-dependent selection.
+    Available(ValidationFeePolicySnapshotAvailableV1),
+}
+
+/// Canonical validation-fee registry commitment written into every block witness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeePolicySnapshotCommitmentV1 {
+    /// Snapshot format version.
+    pub version: u16,
+    /// Block height whose post-execution registry state was evaluated.
+    pub evaluated_height: u64,
+    /// Validated registry state and selected policy hashes.
+    pub status: ValidationFeePolicySnapshotStatusV1,
+}
+
+impl ValidationFeePolicySnapshotCommitmentV1 {
+    /// Derive a deterministic commitment from the protected registry state.
+    #[must_use]
+    pub fn from_registry(
+        evaluated_height: u64,
+        registry: Option<&ValidationFeePolicyRegistryV1>,
+    ) -> Self {
+        let status = match registry {
+            None => ValidationFeePolicySnapshotStatusV1::Unconfigured,
+            Some(registry) => {
+                let available = registry.validate().and_then(|()| {
+                    let registry_hash = registry
+                        .snapshot_hash()
+                        .map_err(|_| ValidationFeePolicyRegistryError::PolicyHashEncoding)?;
+                    let head = registry
+                        .head()
+                        .ok_or(ValidationFeePolicyRegistryError::EmptyRegistry)?;
+                    Ok(ValidationFeePolicySnapshotAvailableV1 {
+                        registry_hash,
+                        head_policy_hash: head.policy_hash,
+                        scheduled_policy_hash: registry
+                            .scheduled_entry_at_height(evaluated_height)
+                            .map(|entry| entry.policy_hash),
+                        effective_policy_hash: registry
+                            .effective_entry_at_height(evaluated_height)
+                            .map(|entry| entry.policy_hash),
+                    })
+                });
+                match available {
+                    Ok(available) => ValidationFeePolicySnapshotStatusV1::Available(available),
+                    Err(error) => {
+                        ValidationFeePolicySnapshotStatusV1::Invalid(Hash::new(error.to_string()))
+                    }
+                }
+            }
+        };
+        Self {
+            version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
+            evaluated_height,
+            status,
+        }
+    }
+
+    /// Derive the commitment directly from the protected custom parameter.
+    #[must_use]
+    pub fn from_custom_parameter_state(
+        evaluated_height: u64,
+        custom: Option<&CustomParameter>,
+    ) -> Self {
+        match custom {
+            None => Self::from_registry(evaluated_height, None),
+            Some(custom) => {
+                if let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom)
+                {
+                    Self::from_registry(evaluated_height, Some(&registry))
+                } else {
+                    let invalid_hash = norito::to_bytes(custom)
+                        .map_or_else(|_| Hash::new(custom.id().to_string()), Hash::new);
+                    Self {
+                        version: VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1,
+                        evaluated_height,
+                        status: ValidationFeePolicySnapshotStatusV1::Invalid(invalid_hash),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Sparse-SMT proof that the validation-fee snapshot is an ordinary write.
+#[derive(Debug, Clone, PartialEq, Eq, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct ValidationFeePolicyWitnessProofV1 {
+    /// Fixed raw execution-witness key.
+    pub key: Vec<u8>,
+    /// Exact canonical encoded snapshot commitment.
+    pub value: Vec<u8>,
+    /// Exactly 256 siblings from leaf level to the ordinary-write root.
+    pub siblings: Vec<Hash>,
+}
+
+impl ValidationFeePolicyWitnessProofV1 {
+    /// Verify the fixed synthetic write against an ordinary-write SMT root.
+    #[must_use]
+    pub fn verify(&self, expected_ordinary_writes_root: Hash) -> bool {
+        if self.key != VALIDATION_FEE_POLICY_WITNESS_KEY_V1
+            || self.siblings.len() != VALIDATION_FEE_POLICY_WITNESS_SIBLINGS_V1
+        {
+            return false;
+        }
+        let Ok(commitment) =
+            norito::decode_from_bytes::<ValidationFeePolicySnapshotCommitmentV1>(&self.value)
+        else {
+            return false;
+        };
+        if commitment.version != VALIDATION_FEE_POLICY_SNAPSHOT_VERSION_V1
+            || norito::to_bytes(&commitment).ok().as_deref() != Some(self.value.as_slice())
+        {
+            return false;
+        }
+        let path = Hash::new(&self.key);
+        let value_hash = Hash::new(&self.value);
+        let mut leaf_preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+        leaf_preimage.push(0);
+        leaf_preimage.extend_from_slice(path.as_ref());
+        leaf_preimage.extend_from_slice(value_hash.as_ref());
+        let mut current = Hash::new(leaf_preimage);
+        for (level, sibling) in self.siblings.iter().copied().enumerate() {
+            let path_bit = 255_usize.saturating_sub(level);
+            let byte = path.as_ref()[path_bit / 8];
+            let right = byte & (1_u8 << (path_bit % 8)) != 0;
+            current = if right {
+                validation_fee_ordinary_smt_node_hash(sibling, current)
+            } else {
+                validation_fee_ordinary_smt_node_hash(current, sibling)
+            };
+        }
+        current == expected_ordinary_writes_root
+    }
+
+    /// Decode and return the exact canonical snapshot commitment.
+    pub fn commitment(&self) -> Result<ValidationFeePolicySnapshotCommitmentV1, String> {
+        let commitment = norito::decode_from_bytes(&self.value)
+            .map_err(|error| format!("validation-fee snapshot commitment is invalid: {error}"))?;
+        if norito::to_bytes(&commitment).map_err(|error| error.to_string())? != self.value {
+            return Err("validation-fee snapshot commitment is non-canonical".into());
+        }
+        Ok(commitment)
+    }
+}
+
+fn validation_fee_ordinary_smt_node_hash(left: Hash, right: Hash) -> Hash {
+    let mut preimage = Vec::with_capacity(1 + 2 * Hash::LENGTH);
+    preimage.push(1);
+    preimage.extend_from_slice(left.as_ref());
+    preimage.extend_from_slice(right.as_ref());
+    Hash::new(preimage)
+}
+
+fn validate_registry_entry_authorization(
+    entry: &ValidationFeePolicyRegistryEntryV1,
+) -> Result<(), ValidationFeePolicyRegistryError> {
+    use crate::governance::types::{
+        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+    };
+
+    let policy_version = entry.policy.policy_version;
+    if entry.parliament_authorization.invariant_error().is_some() {
+        return Err(
+            ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version },
+        );
+    }
+    let payout_lifecycle_proposal_id = match (
+        entry.policy.treasury_payout_binding.as_ref(),
+        entry.payout_lifecycle.as_ref(),
+    ) {
+        (Some(binding), Some(reference))
+            if reference.invariant_error().is_none()
+                && binding.lifecycle_seal().ok() == Some(reference.lifecycle_seal) =>
+        {
+            let lifecycle_kind =
+                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    payout_binding: binding.clone(),
+                });
+            let fingerprint = lifecycle_kind.fingerprint();
+            if reference.parliament_authorization.proposal_id != fingerprint
+                || reference.parliament_authorization.proposal_fingerprint != fingerprint
+            {
+                return Err(
+                    ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                        policy_version,
+                    },
+                );
+            }
+            Some(fingerprint)
+        }
+        (None, None) => None,
+        _ => {
+            return Err(
+                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                    policy_version,
+                },
+            );
+        }
+    };
+    let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        policy: entry.policy.clone(),
+        payout_lifecycle_proposal_id,
+    });
+    let fingerprint = policy_kind.fingerprint();
+    if entry.parliament_authorization.proposal_id != fingerprint
+        || entry.parliament_authorization.proposal_fingerprint != fingerprint
+    {
+        return Err(
+            ValidationFeePolicyRegistryError::InvalidParliamentAuthorization { policy_version },
+        );
+    }
+    Ok(())
 }
 
 /// One exact recipient and share in the atomic treasury-payout effect plan.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -628,7 +1047,7 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
 /// The binding names one immutable contract image and entrypoint plus the complete
 /// six-transfer effect plan. It is part of policy hashing, signatures, registry
 /// validation, and Norito/JSON serialization.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -659,6 +1078,25 @@ pub struct ValidationFeeTreasuryPayoutBindingV1 {
 }
 
 impl ValidationFeeTreasuryPayoutBindingV1 {
+    /// Compute the release seal for this exact payout binding.
+    ///
+    /// The seal is consensus-derived rather than caller supplied, so a lifecycle
+    /// proposal cannot authorize one binding while publishing an unrelated label.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if the binding cannot be encoded.
+    pub fn lifecycle_seal(&self) -> Result<[u8; 32], norito::Error> {
+        let encoded = norito::to_bytes(self)?;
+        let mut preimage = Vec::with_capacity(
+            VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN.len() + 1 + encoded.len(),
+        );
+        preimage.extend_from_slice(VALIDATION_FEE_PAYOUT_LIFECYCLE_SEAL_DOMAIN);
+        preimage.push(0);
+        preimage.extend_from_slice(&encoded);
+        Ok(*Hash::new(preimage).as_ref())
+    }
+
     /// Return a stable invariant violation, if any.
     #[must_use]
     pub fn invariant_error(&self) -> Option<&'static str> {
@@ -676,11 +1114,13 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
         if self.sbd_asset_id == self.xor_asset_id {
             return Some("validation-fee treasury payout SBD and XOR assets must differ");
         }
-        if self.batch_sbd.is_zero() {
-            return Some("validation-fee treasury payout batch must be positive");
+        if self.batch_sbd != validation_fee_payout_batch_sbd() {
+            return Some("validation-fee treasury payout batch must be exactly 10 SBD");
         }
-        if self.min_xor_out.is_zero() || self.min_xor_out > self.max_xor_out {
-            return Some("validation-fee treasury payout XOR output bounds are invalid");
+        if self.min_xor_out != validation_fee_payout_min_xor()
+            || self.max_xor_out != validation_fee_payout_max_xor()
+        {
+            return Some("validation-fee treasury payout XOR output bounds must be exactly 4..100");
         }
         if self.recipients.len() != VALIDATION_FEE_TREASURY_PAYOUT_RECIPIENT_COUNT {
             return Some("validation-fee treasury payout must bind exactly four recipients");
@@ -696,8 +1136,10 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
                     "validation-fee treasury payout recipients must be unique and differ from treasury and vault",
                 );
             }
-            if recipient.share <= Numeric::zero() {
-                return Some("validation-fee treasury payout shares must be positive");
+            if recipient.share != validation_fee_payout_recipient_share() {
+                return Some(
+                    "validation-fee treasury payout recipients must each receive exactly 25%",
+                );
             }
             let Ok(next) = share_sum.try_decimal_add(&recipient.share) else {
                 return Some(
@@ -714,7 +1156,7 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
 }
 
 /// Chain-level validation-fee policy.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
@@ -722,8 +1164,8 @@ impl ValidationFeeTreasuryPayoutBindingV1 {
 pub struct ValidationFeePolicyV1 {
     /// Policy schema version.
     pub schema_version: u16,
-    /// Network identifier bound into the policy.
-    pub network_id: String,
+    /// Chain identifier bound into the policy.
+    pub chain_id: ChainId,
     /// Genesis hash bound into the policy.
     pub genesis_hash: [u8; 32],
     /// Monotonic policy version.
@@ -732,13 +1174,13 @@ pub struct ValidationFeePolicyV1 {
     #[norito(default)]
     pub previous_policy_hash: Option<[u8; 32]>,
     /// Concrete fee-asset definition charged by this policy.
-    pub ds_asset_id: String,
+    pub ds_asset_id: AssetDefinitionId,
     /// Required decimal precision of the charged fee asset.
     pub ds_scale: u8,
     /// Exact non-negative fee charged for each qualifying transfer.
     pub fee: Quantity,
     /// Concrete validator treasury account.
-    pub treasury_account_id: String,
+    pub treasury_account_id: AccountId,
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
@@ -746,8 +1188,6 @@ pub struct ValidationFeePolicyV1 {
     /// Optional last active height.
     #[norito(default)]
     pub expires_after_height: Option<u64>,
-    /// Governance keyset identifier that authorized registration.
-    pub governance_keyset_id: String,
     /// Explicit exemption classes recognized by this policy.
     #[norito(default)]
     pub exemption_classes: Vec<String>,
@@ -756,32 +1196,6 @@ pub struct ValidationFeePolicyV1 {
 }
 
 impl ValidationFeePolicyV1 {
-    /// Identifier of the chain-level custom parameter carrying the active validation-fee policy.
-    pub const PARAMETER_ID_STR: &'static str = "iroha:validation_fee_policy_v1";
-
-    /// Construct the custom-parameter identifier for this policy.
-    #[must_use]
-    pub fn parameter_id() -> CustomParameterId {
-        Self::PARAMETER_ID_STR
-            .parse()
-            .expect("valid validation-fee policy parameter identifier")
-    }
-
-    /// Convert this policy into an on-ledger custom parameter.
-    #[must_use]
-    pub fn into_custom_parameter(self) -> CustomParameter {
-        CustomParameter::new(Self::parameter_id(), Json::new(self))
-    }
-
-    /// Decode a validation-fee policy from a custom parameter.
-    #[must_use]
-    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
-        if custom.id() != &Self::parameter_id() {
-            return None;
-        }
-        custom.payload().try_into_any_norito::<Self>().ok()
-    }
-
     /// Return true when this policy is active at the provided height.
     #[must_use]
     pub fn is_active_at_height(&self, height: u64) -> bool {
@@ -812,6 +1226,9 @@ impl ValidationFeePolicyV1 {
         if self.schema_version != VALIDATION_FEE_POLICY_SCHEMA_VERSION {
             return Some("unsupported validation-fee policy schema version");
         }
+        if self.genesis_hash == [0; 32] {
+            return Some("validation-fee policy genesis hash must be non-zero");
+        }
         if self.policy_version == 0 {
             return Some("validation-fee policy version must be positive");
         }
@@ -821,31 +1238,27 @@ impl ValidationFeePolicyV1 {
         if self.policy_version > 1 && self.previous_policy_hash.is_none() {
             return Some("non-initial validation-fee policy must carry a previous policy hash");
         }
-        if self.network_id.trim().is_empty() || self.network_id.trim() != self.network_id {
-            return Some("validation-fee policy network id must be a non-empty trimmed string");
-        }
-        if self.ds_asset_id.trim().is_empty() || self.ds_asset_id.trim() != self.ds_asset_id {
-            return Some("validation-fee policy asset id must be a non-empty trimmed string");
-        }
         if self.ds_scale != VALIDATION_FEE_DS_SCALE {
             return Some("validation-fee policy asset scale must be 2");
         }
-        if self.fee != initial_validation_fee_amount() {
-            return Some("validation-fee policy amount must be 0.1");
-        }
-        if self.treasury_account_id.trim().is_empty()
-            || self.treasury_account_id.trim() != self.treasury_account_id
-        {
-            return Some(
-                "validation-fee policy treasury account id must be a non-empty trimmed string",
-            );
-        }
-        if self.governance_keyset_id.trim().is_empty()
-            || self.governance_keyset_id.trim() != self.governance_keyset_id
-        {
-            return Some(
-                "validation-fee policy governance keyset id must be a non-empty trimmed string",
-            );
+        match self.charging_mode {
+            ValidationFeeChargingMode::Disabled if !self.fee.is_zero() => {
+                return Some("disabled validation-fee policy amount must be zero");
+            }
+            ValidationFeeChargingMode::Disabled
+                if !self.exemption_classes.is_empty() || self.treasury_payout_binding.is_some() =>
+            {
+                return Some(
+                    "disabled validation-fee policy cannot carry exemptions or a treasury payout binding",
+                );
+            }
+            ValidationFeeChargingMode::PerQualifyingTransferInstruction
+                if self.fee != initial_validation_fee_amount() =>
+            {
+                return Some("enabled validation-fee policy amount must be exactly 0.10 SBD");
+            }
+            ValidationFeeChargingMode::Disabled
+            | ValidationFeeChargingMode::PerQualifyingTransferInstruction => {}
         }
         let mut exemption_classes = BTreeSet::new();
         for class in &self.exemption_classes {
@@ -870,22 +1283,14 @@ impl ValidationFeePolicyV1 {
                 if let Some(reason) = binding.invariant_error() {
                     return Some(reason);
                 }
-                let Ok(treasury_account_id) = AccountId::parse_encoded(&self.treasury_account_id)
-                    .map(crate::account::ParsedAccountId::into_account_id)
-                else {
-                    return Some("validation-fee policy treasury account id is invalid");
-                };
-                let Ok(sbd_asset_id) = self.ds_asset_id.parse::<AssetDefinitionId>() else {
-                    return Some("validation-fee policy asset id is invalid");
-                };
-                if binding.treasury_account_id != treasury_account_id
-                    || binding.contract_address.subject_id() != treasury_account_id
+                if binding.treasury_account_id != self.treasury_account_id
+                    || binding.contract_address.subject_id() != self.treasury_account_id
                 {
                     return Some(
                         "validation-fee treasury payout contract subject must equal the policy treasury",
                     );
                 }
-                if binding.sbd_asset_id != sbd_asset_id {
+                if binding.sbd_asset_id != self.ds_asset_id {
                     return Some(
                         "validation-fee treasury payout SBD asset must equal the policy fee asset",
                     );
@@ -907,12 +1312,6 @@ impl ValidationFeePolicyV1 {
                 );
             }
         }
-        if !matches!(
-            self.charging_mode,
-            ValidationFeeChargingMode::PerQualifyingTransferInstruction
-        ) {
-            return Some("unsupported validation-fee charging mode");
-        }
         if self
             .expires_after_height
             .is_some_and(|expires_after_height| expires_after_height <= self.effective_from_height)
@@ -927,15 +1326,6 @@ impl ValidationFeePolicyV1 {
     pub fn initial_policy_invariant_error(&self) -> Option<&'static str> {
         self.policy_invariant_error()
     }
-
-    /// Domain-separated payload that governance keys sign.
-    #[must_use]
-    pub fn signing_payload(&self) -> ValidationFeePolicySigningPayloadV1 {
-        ValidationFeePolicySigningPayloadV1 {
-            domain: VALIDATION_FEE_POLICY_SIGNATURE_DOMAIN.to_string(),
-            policy: self.clone(),
-        }
-    }
 }
 
 /// Return the canonical initial validation-fee amount.
@@ -946,168 +1336,50 @@ pub fn initial_validation_fee_amount() -> Quantity {
         .expect("hard-coded validation-fee amount is canonical")
 }
 
-/// Domain-separated payload signed by governance keys.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ValidationFeePolicySigningPayloadV1 {
-    /// Domain separator preventing cross-protocol replay.
-    pub domain: String,
-    /// Policy being authorized.
-    pub policy: ValidationFeePolicyV1,
+/// Return the exact SBD payout batch amount.
+#[must_use]
+pub fn validation_fee_payout_batch_sbd() -> Quantity {
+    VALIDATION_FEE_PAYOUT_BATCH_SBD
+        .parse()
+        .expect("hard-coded validation-fee payout batch is canonical")
 }
 
-/// One governance signature over a validation-fee policy.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct ValidationFeePolicySignatureV1 {
-    /// Governance signer public key.
-    pub public_key: PublicKey,
-    /// Signature over the domain-separated policy payload.
-    pub signature: SignatureOf<ValidationFeePolicySigningPayloadV1>,
+/// Return the exact minimum XOR output.
+#[must_use]
+pub fn validation_fee_payout_min_xor() -> Quantity {
+    VALIDATION_FEE_PAYOUT_MIN_XOR
+        .parse()
+        .expect("hard-coded validation-fee minimum XOR output is canonical")
 }
 
-/// Signed validation-fee policy registered on-ledger.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct SignedValidationFeePolicyV1 {
-    /// Policy payload.
-    pub policy: ValidationFeePolicyV1,
-    /// Governance signatures over the policy payload.
-    pub signatures: Vec<ValidationFeePolicySignatureV1>,
+/// Return the exact maximum XOR output.
+#[must_use]
+pub fn validation_fee_payout_max_xor() -> Quantity {
+    VALIDATION_FEE_PAYOUT_MAX_XOR
+        .parse()
+        .expect("hard-coded validation-fee maximum XOR output is canonical")
 }
 
-impl SignedValidationFeePolicyV1 {
-    /// Convert this signed policy into the active on-ledger custom parameter.
-    #[must_use]
-    pub fn into_custom_parameter(self) -> CustomParameter {
-        CustomParameter::new(ValidationFeePolicyV1::parameter_id(), Json::new(self))
-    }
-
-    /// Decode a signed validation-fee policy from a custom parameter.
-    #[must_use]
-    pub fn from_custom_parameter(custom: &CustomParameter) -> Option<Self> {
-        if custom.id() != &ValidationFeePolicyV1::parameter_id() {
-            return None;
-        }
-        custom.payload().try_into_any_norito::<Self>().ok()
-    }
-
-    /// Verify signatures against the supplied active governance keyset.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the keyset is malformed, mismatched, or the
-    /// signature bundle does not satisfy threshold.
-    pub fn verify_against_keyset(
-        &self,
-        keyset: &ValidationFeeGovernanceKeysetV1,
-    ) -> Result<(), ValidationFeePolicySignatureError> {
-        if let Some(reason) = keyset.invariant_error() {
-            return Err(ValidationFeePolicySignatureError::InvalidGovernanceKeyset(
-                reason,
-            ));
-        }
-        if self.policy.governance_keyset_id != keyset.keyset_id {
-            return Err(
-                ValidationFeePolicySignatureError::GovernanceKeysetMismatch {
-                    expected: self.policy.governance_keyset_id.clone(),
-                    found: keyset.keyset_id.clone(),
-                },
-            );
-        }
-        if self.signatures.is_empty() {
-            return Err(ValidationFeePolicySignatureError::NoSignatures);
-        }
-
-        let payload = self.policy.signing_payload();
-        let weights = keyset.key_weights();
-        let mut seen = BTreeSet::new();
-        let mut collected = 0u32;
-
-        for signature in &self.signatures {
-            let Some(weight) = weights.get(&signature.public_key) else {
-                return Err(ValidationFeePolicySignatureError::UnknownSigner);
-            };
-            if !seen.insert(signature.public_key.clone()) {
-                return Err(ValidationFeePolicySignatureError::DuplicateSigner);
-            }
-            verify_policy_signature(&signature.signature, &signature.public_key, &payload)
-                .map_err(|_| ValidationFeePolicySignatureError::InvalidSignature)?;
-            collected = collected.saturating_add(*weight);
-        }
-
-        let required = u32::from(keyset.threshold);
-        if collected < required {
-            return Err(ValidationFeePolicySignatureError::InsufficientThreshold {
-                collected,
-                required,
-            });
-        }
-
-        Ok(())
-    }
-}
-
-fn verify_policy_signature(
-    signature: &SignatureOf<ValidationFeePolicySigningPayloadV1>,
-    public_key: &PublicKey,
-    payload: &ValidationFeePolicySigningPayloadV1,
-) -> Result<(), iroha_crypto::Error> {
-    match public_key.try_algorithm() {
-        Ok(Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload())?;
-        }
-        Ok(Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload())?;
-        }
-        _ => {}
-    }
-    signature.verify(public_key, payload)
+/// Return the exact share assigned to each payout recipient.
+#[must_use]
+pub fn validation_fee_payout_recipient_share() -> Numeric {
+    VALIDATION_FEE_PAYOUT_RECIPIENT_SHARE
+        .parse()
+        .expect("hard-coded validation-fee payout recipient share is canonical")
 }
 
 #[cfg(test)]
-mod tests {
+mod parliament_tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, KeyPair, Signature};
-    use iroha_primitives::numeric::Numeric;
-    use sha2::Digest as _;
+    use iroha_crypto::{Algorithm, KeyPair};
 
     use super::*;
     use crate::{
-        account::AccountId, asset::AssetDefinitionId, domain::DomainId, name::Name,
-        nexus::DataSpaceId, smart_contract::ContractAddress,
+        domain::DomainId,
+        governance::types::{ProposalKind, ValidationFeePayoutLifecycleProposal},
+        name::Name,
     };
-
-    #[derive(crate::DeriveJsonDeserialize)]
-    struct TreasuryPayoutFixtureEncodingNotes {
-        policy_norito: String,
-        raw_byte_arrays: String,
-        signature_payload: String,
-    }
-
-    #[derive(crate::DeriveJsonDeserialize)]
-    struct TreasuryPayoutFixture {
-        description: String,
-        encoding_notes: TreasuryPayoutFixtureEncodingNotes,
-        policy: ValidationFeePolicyV1,
-        policy_norito_hex: String,
-        policy_norito_sha256: String,
-        policy_hash: String,
-        signature_payload_hash: String,
-        signed_policy: SignedValidationFeePolicyV1,
-    }
-
-    const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 
     fn account(seed: u8) -> AccountId {
         let key_pair =
@@ -1115,726 +1387,394 @@ mod tests {
         AccountId::new(key_pair.public_key().clone())
     }
 
-    fn key_pair(seed: u8) -> KeyPair {
-        KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("key pair")
-    }
-
-    fn key_pair_with_algorithm(algorithm: Algorithm) -> KeyPair {
-        KeyPair::try_random_with_algorithm(algorithm)
-            .unwrap_or_else(|err| panic!("{algorithm:?} validation-fee key pair: {err}"))
-    }
-
     fn fee_asset() -> AssetDefinitionId {
         AssetDefinitionId::new(
-            DomainId::try_new("fees", "paynet").expect("domain id"),
-            Name::from_str("fee_token").expect("asset name"),
+            DomainId::try_new("fees", "validation").expect("domain id"),
+            Name::from_str("fee").expect("asset name"),
         )
     }
 
-    fn policy() -> ValidationFeePolicyV1 {
+    fn xor_asset() -> AssetDefinitionId {
+        AssetDefinitionId::new(
+            DomainId::try_new("xor", "validation").expect("domain id"),
+            Name::from_str("xor").expect("asset name"),
+        )
+    }
+
+    fn payout_binding() -> ValidationFeeTreasuryPayoutBindingV1 {
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        ValidationFeeTreasuryPayoutBindingV1 {
+            treasury_account_id: contract_address.subject_id(),
+            contract_address,
+            code_hash: [0x11; 32],
+            entrypoint: Name::from_str("autonomous_validation_fee_tick").expect("entrypoint"),
+            sbd_asset_id: fee_asset(),
+            xor_asset_id: xor_asset(),
+            pool_vault_account_id: account(2),
+            batch_sbd: validation_fee_payout_batch_sbd(),
+            min_xor_out: validation_fee_payout_min_xor(),
+            max_xor_out: validation_fee_payout_max_xor(),
+            recipients: (3..=6)
+                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
+                    account_id: account(seed),
+                    share: validation_fee_payout_recipient_share(),
+                })
+                .collect(),
+        }
+    }
+
+    fn authorization(proposal_id: [u8; 32], marker: u8) -> ValidationFeeParliamentAuthorizationV1 {
+        ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: [marker.wrapping_add(1); 32],
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: 1,
+                upper: 100,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: u64::from(marker),
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+            enacted_at_height: u64::from(marker),
+        }
+    }
+
+    fn policy(version: u64, previous_policy_hash: Option<[u8; 32]>) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: "generic-testnet".to_string(),
+            chain_id: ChainId::from("parliament-test"),
             genesis_hash: [7; 32],
-            policy_version: 1,
-            previous_policy_hash: None,
-            ds_asset_id: fee_asset().to_string(),
-            ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
+            policy_version: version,
+            previous_policy_hash,
+            ds_asset_id: fee_asset(),
+            ds_scale: VALIDATION_FEE_DS_SCALE,
             fee: initial_validation_fee_amount(),
-            treasury_account_id: account(1).to_string(),
+            treasury_account_id: account(1),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
-            effective_from_height: 10,
-            expires_after_height: Some(100),
-            governance_keyset_id: "validation-fee-governance-v1".to_string(),
+            effective_from_height: 10 * version,
+            expires_after_height: None,
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
     }
 
-    fn payout_binding() -> ValidationFeeTreasuryPayoutBindingV1 {
-        let contract_address = ContractAddress::derive(
-            crate::account::address::chain_discriminant(),
-            &account(9),
-            42,
-            DataSpaceId::UNIVERSAL,
+    fn entry(policy: ValidationFeePolicyV1, marker: u8) -> ValidationFeePolicyRegistryEntryV1 {
+        let proposal_id = ProposalKind::ValidationFeePolicy(
+            crate::governance::types::ValidationFeePolicyProposal {
+                policy: policy.clone(),
+                payout_lifecycle_proposal_id: None,
+            },
         )
-        .expect("contract address");
-        let treasury = contract_address.subject_id();
-        let xor_asset = AssetDefinitionId::new(
-            DomainId::try_new("xor", "universal").expect("domain id"),
-            Name::from_str("xor").expect("asset name"),
-        );
-        ValidationFeeTreasuryPayoutBindingV1 {
-            contract_address,
-            code_hash: [9; 32],
-            entrypoint: Name::from_str("autonomous_validation_fee_tick").expect("entrypoint"),
-            treasury_account_id: treasury,
-            sbd_asset_id: fee_asset(),
-            xor_asset_id: xor_asset,
-            pool_vault_account_id: account(2),
-            batch_sbd: "1.00".parse().expect("batch"),
-            min_xor_out: "4".parse().expect("minimum"),
-            max_xor_out: "100".parse().expect("maximum"),
-            recipients: (3..=6)
-                .map(|seed| ValidationFeeTreasuryPayoutRecipientV1 {
-                    account_id: account(seed),
-                    share: "0.25".parse().expect("share"),
-                })
-                .collect(),
-        }
-    }
-
-    fn policy_with_payout_binding() -> ValidationFeePolicyV1 {
-        let binding = payout_binding();
-        let mut policy = policy();
-        policy.treasury_account_id = binding.treasury_account_id.to_string();
-        policy.exemption_classes = vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string()];
-        policy.treasury_payout_binding = Some(binding);
-        policy
-    }
-
-    #[test]
-    fn treasury_payout_binding_roundtrips_and_is_signed_and_hashed() {
-        let policy = policy_with_payout_binding();
-        assert_eq!(policy.policy_invariant_error(), None);
-
-        let fixture: TreasuryPayoutFixture = norito::json::from_json(include_str!(
-            "../../../fixtures/validation_fee/treasury_payout_v1.json"
-        ))
-        .expect("decode typed treasury payout fixture");
-        assert_eq!(
-            fixture.description,
-            "Canonical ValidationFeePolicyV1 typed treasury payout cross-SDK vector"
-        );
-        assert!(fixture.encoding_notes.policy_norito.contains("NRT0"));
-        assert!(fixture.encoding_notes.raw_byte_arrays.contains("0x20"));
-        assert!(fixture.encoding_notes.signature_payload.contains("HashOf"));
-        assert_eq!(fixture.policy, policy);
-
-        let bytes = norito::to_bytes(&policy).expect("encode bound policy");
-        assert_eq!(hex::encode(&bytes), fixture.policy_norito_hex);
-        assert_eq!(
-            hex::encode(sha2::Sha256::digest(&bytes)),
-            fixture.policy_norito_sha256
-        );
-        assert_eq!(
-            hex::encode(policy.policy_hash().expect("bound policy hash")),
-            fixture.policy_hash
-        );
-        let decoded: ValidationFeePolicyV1 =
-            norito::decode_from_bytes(&bytes).expect("decode bound policy");
-        assert_eq!(decoded, policy);
-
-        let mut changed = policy.clone();
-        changed
-            .treasury_payout_binding
-            .as_mut()
-            .expect("binding")
-            .max_xor_out = "101".parse().expect("changed maximum");
-        assert_ne!(
-            policy.policy_hash().expect("bound policy hash"),
-            changed.policy_hash().expect("changed policy hash")
-        );
-
-        let signer = key_pair(77);
-        let signing_payload = policy.signing_payload();
-        let signing_hash = iroha_crypto::HashOf::new(&signing_payload);
-        let signing_hash_bytes: &[u8; 32] = signing_hash.as_ref();
-        assert_eq!(
-            hex::encode(signing_hash_bytes),
-            fixture.signature_payload_hash
-        );
-        let signed = signed_policy(policy.clone(), &[&signer]);
-        assert_eq!(fixture.signed_policy, signed);
-        signed
-            .verify_against_keyset(&keyset(&[&signer], 1))
-            .expect("typed binding is covered by the governance signature");
-    }
-
-    #[test]
-    fn treasury_payout_binding_is_mandatory_and_rejects_bad_shares() {
-        let mut missing = policy();
-        missing.exemption_classes =
-            vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_string()];
-        assert_eq!(
-            missing.policy_invariant_error(),
-            Some("validation-fee TREASURY_PAYOUT exemption requires an exact typed binding")
-        );
-
-        let mut bad_shares = policy_with_payout_binding();
-        bad_shares
-            .treasury_payout_binding
-            .as_mut()
-            .expect("binding")
-            .recipients[3]
-            .share = "0.24".parse().expect("bad share");
-        assert_eq!(
-            bad_shares.policy_invariant_error(),
-            Some("validation-fee treasury payout shares must sum exactly to one")
-        );
-    }
-
-    #[derive(Encode)]
-    struct ForgedValidationFeePolicy {
-        schema_version: u16,
-        network_id: String,
-        genesis_hash: [u8; 32],
-        policy_version: u64,
-        previous_policy_hash: Option<[u8; 32]>,
-        ds_asset_id: String,
-        ds_scale: u8,
-        fee: Numeric,
-        treasury_account_id: String,
-        charging_mode: ValidationFeeChargingMode,
-        effective_from_height: u64,
-        expires_after_height: Option<u64>,
-        governance_keyset_id: String,
-        exemption_classes: Vec<String>,
-        treasury_payout_binding: Option<ValidationFeeTreasuryPayoutBindingV1>,
-    }
-
-    #[test]
-    fn validation_fee_policy_rejects_negative_numeric_fee() {
-        let valid = policy();
-        let forged = ForgedValidationFeePolicy {
-            schema_version: valid.schema_version,
-            network_id: valid.network_id,
-            genesis_hash: valid.genesis_hash,
-            policy_version: valid.policy_version,
-            previous_policy_hash: valid.previous_policy_hash,
-            ds_asset_id: valid.ds_asset_id,
-            ds_scale: valid.ds_scale,
-            fee: Numeric::new(-1_i32, 1),
-            treasury_account_id: valid.treasury_account_id,
-            charging_mode: valid.charging_mode,
-            effective_from_height: valid.effective_from_height,
-            expires_after_height: valid.expires_after_height,
-            governance_keyset_id: valid.governance_keyset_id,
-            exemption_classes: valid.exemption_classes,
-            treasury_payout_binding: valid.treasury_payout_binding,
-        };
-        let encoded = forged.encode();
-        assert!(ValidationFeePolicyV1::decode(&mut encoded.as_slice()).is_err());
-    }
-
-    fn keyset(keys: &[&KeyPair], threshold: u16) -> ValidationFeeGovernanceKeysetV1 {
-        ValidationFeeGovernanceKeysetV1 {
-            keyset_id: "validation-fee-governance-v1".to_string(),
-            threshold,
-            keys: keys
-                .iter()
-                .map(|key_pair| ValidationFeeGovernanceKeyV1 {
-                    public_key: key_pair.public_key().clone(),
-                    weight: 1,
-                })
-                .collect(),
-        }
-    }
-
-    fn signature(
-        policy: &ValidationFeePolicyV1,
-        key_pair: &KeyPair,
-    ) -> ValidationFeePolicySignatureV1 {
-        ValidationFeePolicySignatureV1 {
-            public_key: key_pair.public_key().clone(),
-            signature: SignatureOf::try_new(key_pair.private_key(), &policy.signing_payload())
-                .expect("policy signature"),
-        }
-    }
-
-    fn signed_policy(
-        policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
-    ) -> SignedValidationFeePolicyV1 {
-        SignedValidationFeePolicyV1 {
-            signatures: key_pairs
-                .iter()
-                .map(|key_pair| signature(&policy, key_pair))
-                .collect(),
+        .fingerprint();
+        ValidationFeePolicyRegistryEntryV1::from_enactment(
             policy,
-        }
-    }
-
-    const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,
-    ];
-
-    const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
-        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    fn signature_with_malformed_ed25519_r(
-        signature: &SignatureOf<ValidationFeePolicySigningPayloadV1>,
-        replacement_r: &[u8; 32],
-    ) -> SignatureOf<ValidationFeePolicySigningPayloadV1> {
-        let mut payload = signature.payload().to_vec();
-        payload[..replacement_r.len()].copy_from_slice(replacement_r);
-        SignatureOf::from_signature(Signature::from_bytes(&payload))
-    }
-
-    fn successor_policy(previous: &ValidationFeePolicyV1) -> ValidationFeePolicyV1 {
-        let mut policy = previous.clone();
-        policy.policy_version += 1;
-        policy.previous_policy_hash = Some(previous.policy_hash().expect("previous policy hash"));
-        policy.effective_from_height += 100;
-        policy.expires_after_height = Some(policy.effective_from_height + 100);
-        policy
-    }
-
-    fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyRegistryV1 {
-        let registered_policies = policies
-            .iter()
-            .map(|policy| {
-                ValidationFeePolicyRegistryEntryV1::from_policy(policy).expect("registry entry")
-            })
-            .collect::<Vec<_>>();
-        let active = registered_policies.last().expect("at least one policy");
-        ValidationFeePolicyRegistryV1 {
-            active_policy_hash: active.policy_hash,
-            active_policy_version: active.policy_version,
-            registered_policies,
-        }
+            authorization(proposal_id, marker),
+            None,
+        )
+        .expect("policy hash")
     }
 
     #[test]
-    fn policy_custom_parameter_roundtrips() {
-        let expected = policy();
-        let custom = expected.clone().into_custom_parameter();
+    fn registry_retains_history_and_selects_scheduled_policy() {
+        let first = policy(1, None);
+        let first_entry = entry(first, 1);
+        let second = policy(2, Some(first_entry.policy_hash));
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![first_entry, entry(second, 2)],
+        };
 
-        assert_eq!(custom.id, ValidationFeePolicyV1::parameter_id());
+        registry.validate().expect("valid policy chain");
+        assert!(registry.scheduled_entry_at_height(9).is_none());
         assert_eq!(
-            ValidationFeePolicyV1::from_custom_parameter(&custom),
-            Some(expected)
+            registry
+                .effective_entry_at_height(10)
+                .expect("first policy")
+                .policy
+                .policy_version,
+            1
+        );
+        assert_eq!(
+            registry
+                .effective_entry_at_height(20)
+                .expect("successor policy")
+                .policy
+                .policy_version,
+            2
         );
     }
 
     #[test]
-    fn signed_policy_custom_parameter_roundtrips() {
-        let key_pair = key_pair(21);
-        let expected = signed_policy(policy(), &[&key_pair]);
-        let custom = expected.clone().into_custom_parameter();
+    fn registry_rejects_stale_predecessor() {
+        let first = entry(policy(1, None), 1);
+        let second = policy(2, Some([9; 32]));
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![first, entry(second, 2)],
+        };
 
-        assert_eq!(custom.id, ValidationFeePolicyV1::parameter_id());
-        assert_eq!(
-            SignedValidationFeePolicyV1::from_custom_parameter(&custom),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn governance_keyset_custom_parameter_roundtrips() {
-        let key_pair = key_pair(21);
-        let expected = keyset(&[&key_pair], 1);
-        let custom = expected.clone().into_custom_parameter();
-
-        assert_eq!(custom.id, ValidationFeeGovernanceKeysetV1::parameter_id());
-        assert_eq!(
-            ValidationFeeGovernanceKeysetV1::from_custom_parameter(&custom),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn policy_registry_custom_parameter_roundtrips() {
-        let first = policy();
-        let second = successor_policy(&first);
-        let expected = policy_registry(&[first, second]);
-        let custom = expected.clone().into_custom_parameter();
-
-        assert_eq!(custom.id, ValidationFeePolicyRegistryV1::parameter_id());
-        assert_eq!(
-            ValidationFeePolicyRegistryV1::from_custom_parameter(&custom),
-            Some(expected)
-        );
-    }
-
-    #[test]
-    fn policy_registry_validates_active_policy_chain() {
-        let first = policy();
-        let second = successor_policy(&first);
-        let registry = policy_registry(&[first, second.clone()]);
-
-        registry
-            .validate_active_policy(&second)
-            .expect("contiguous active chain validates");
-    }
-
-    #[test]
-    fn policy_registry_rejects_skipped_version() {
-        let first = policy();
-        let second = successor_policy(&first);
-        let mut registry = policy_registry(&[first, second.clone()]);
-        registry.registered_policies[1].policy_version = 3;
-
-        assert_eq!(
-            registry.validate_active_policy(&second),
-            Err(ValidationFeePolicyRegistryError::UnexpectedPolicyVersion {
-                expected: 2,
-                found: 3,
-            })
-        );
-    }
-
-    #[test]
-    fn policy_registry_rejects_broken_previous_hash() {
-        let first = policy();
-        let second = successor_policy(&first);
-        let mut registry = policy_registry(&[first, second.clone()]);
-        registry.registered_policies[1].previous_policy_hash = Some([9; 32]);
-
-        assert_eq!(
-            registry.validate_active_policy(&second),
+        assert!(matches!(
+            registry.validate(),
             Err(ValidationFeePolicyRegistryError::BrokenPreviousPolicyHash { policy_version: 2 })
-        );
+        ));
     }
 
     #[test]
-    fn policy_registry_rejects_rollback_active_policy() {
-        let first = policy();
-        let second = successor_policy(&first);
-        let registry = policy_registry(std::slice::from_ref(&first));
+    fn disabled_policy_is_explicit_and_zero_fee() {
+        let mut disabled = policy(1, None);
+        disabled.charging_mode = ValidationFeeChargingMode::Disabled;
+        disabled.fee = Quantity::zero();
+        assert_eq!(disabled.policy_invariant_error(), None);
 
+        disabled.fee = initial_validation_fee_amount();
         assert_eq!(
-            registry.validate_active_policy(&second),
-            Err(ValidationFeePolicyRegistryError::ActiveVersionMismatch {
-                expected: 1,
-                found: 2,
-            })
+            disabled.policy_invariant_error(),
+            Some("disabled validation-fee policy amount must be zero")
         );
     }
 
     #[test]
-    fn signed_policy_verifies_against_threshold_keyset() {
-        let first = key_pair(21);
-        let second = key_pair(22);
-        let third = key_pair(23);
-        let keyset = keyset(&[&first, &second, &third], 2);
-        let signed = signed_policy(policy(), &[&first, &second]);
-
-        signed
-            .verify_against_keyset(&keyset)
-            .expect("threshold signatures verify");
-    }
-
-    #[test]
-    fn signed_policy_rejects_invalid_signature() {
-        let first = key_pair(21);
-        let second = key_pair(22);
-        let wrong = key_pair(23);
-        let keyset = keyset(&[&first, &second], 2);
-        let policy = policy();
-        let mut signed = signed_policy(policy.clone(), &[&first]);
-        signed.signatures.push(ValidationFeePolicySignatureV1 {
-            public_key: second.public_key().clone(),
-            signature: SignatureOf::try_new(wrong.private_key(), &policy.signing_payload())
-                .expect("wrong signature"),
-        });
-
-        assert_eq!(
-            signed.verify_against_keyset(&keyset),
-            Err(ValidationFeePolicySignatureError::InvalidSignature)
-        );
-    }
-
-    #[test]
-    fn signed_policy_rejects_malformed_ed25519_signature_r() {
-        let first = key_pair(21);
-        let keyset = keyset(&[&first], 1);
-        let signed = signed_policy(policy(), &[&first]);
-
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
-            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
-        ] {
-            let mut invalid_signed = signed.clone();
-            invalid_signed.signatures[0].signature =
-                signature_with_malformed_ed25519_r(&signed.signatures[0].signature, &replacement_r);
-
+    fn enabled_policy_fee_is_exactly_ten_cents() {
+        let mut enabled = policy(1, None);
+        assert_eq!(enabled.policy_invariant_error(), None);
+        for malformed_fee in ["0.09", "0.11", "10"] {
+            enabled.fee = malformed_fee.parse().expect("quantity");
             assert_eq!(
-                invalid_signed.verify_against_keyset(&keyset),
-                Err(ValidationFeePolicySignatureError::InvalidSignature),
-                "{label} validation-fee policy signature R was not rejected"
+                enabled.policy_invariant_error(),
+                Some("enabled validation-fee policy amount must be exactly 0.10 SBD")
             );
         }
     }
 
     #[test]
-    fn signed_policy_rejects_malformed_mldsa_signature_lengths() {
-        let first = key_pair_with_algorithm(Algorithm::MlDsa);
-        let keyset = keyset(&[&first], 1);
-        let signed = signed_policy(policy(), &[&first]);
-        signed
-            .verify_against_keyset(&keyset)
-            .expect("valid ML-DSA validation-fee policy signature verifies");
-        let valid_signature = signed.signatures[0].signature.payload().to_vec();
-
-        for (label, replacement_signature) in [
-            (
-                "short",
-                valid_signature[..valid_signature.len() - 1].to_vec(),
-            ),
-            ("overlong", {
-                let mut payload = valid_signature.clone();
-                payload.push(0x5D);
-                payload
-            }),
+    fn retired_and_live_parameter_ids_are_reserved() {
+        for raw in [
+            RETIRED_VALIDATION_FEE_GOVERNANCE_KEYSET_PARAMETER_ID,
+            RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID,
+            ValidationFeePolicyRegistryV1::PARAMETER_ID_STR,
         ] {
-            let mut invalid_signed = signed.clone();
-            invalid_signed.signatures[0].signature =
-                SignatureOf::from_signature(Signature::from_bytes(&replacement_signature));
+            let id: CustomParameterId = raw.parse().expect("parameter id");
+            assert!(is_reserved_validation_fee_parameter_id(&id));
+        }
+    }
 
-            assert_eq!(
-                invalid_signed.verify_against_keyset(&keyset),
-                Err(ValidationFeePolicySignatureError::InvalidSignature),
-                "{label} validation-fee policy ML-DSA signature length was not rejected"
+    #[test]
+    fn payout_binding_accepts_only_the_release_constants() {
+        let binding = payout_binding();
+        assert_eq!(binding.invariant_error(), None);
+
+        for malformed in [
+            {
+                let mut value = binding.clone();
+                value.batch_sbd = "9.99".parse().expect("quantity");
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.batch_sbd = "10.01".parse().expect("quantity");
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.min_xor_out = "3".parse().expect("quantity");
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.max_xor_out = "101".parse().expect("quantity");
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.recipients[0].share = "0.24".parse().expect("numeric");
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.recipients[1].account_id = value.recipients[0].account_id.clone();
+                value
+            },
+            {
+                let mut value = binding.clone();
+                value.recipients.pop();
+                value
+            },
+        ] {
+            assert!(
+                malformed.invariant_error().is_some(),
+                "malformed payout binding must be rejected"
             );
         }
     }
 
     #[test]
-    fn signed_policy_rejects_insufficient_threshold() {
-        let first = key_pair(21);
-        let second = key_pair(22);
-        let keyset = keyset(&[&first, &second], 2);
-        let signed = signed_policy(policy(), &[&first]);
+    fn lifecycle_seal_is_derived_and_fingerprint_binds_exact_binding() {
+        let binding = payout_binding();
+        let seal = binding.lifecycle_seal().expect("lifecycle seal");
+        assert_ne!(seal, [0; 32]);
+        let proposal =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: binding.clone(),
+            });
 
-        assert_eq!(
-            signed.verify_against_keyset(&keyset),
-            Err(ValidationFeePolicySignatureError::InsufficientThreshold {
-                collected: 1,
-                required: 2,
-            })
-        );
+        let mut changed_binding = binding;
+        changed_binding.code_hash[0] ^= 1;
+        let changed_seal = changed_binding
+            .lifecycle_seal()
+            .expect("changed lifecycle seal");
+        let binding_variant =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: changed_binding,
+            });
+
+        assert_ne!(seal, changed_seal);
+        assert_ne!(proposal.fingerprint(), binding_variant.fingerprint());
     }
 
     #[test]
-    fn signed_policy_rejects_wrong_keyset() {
-        let first = key_pair(21);
-        let mut keyset = keyset(&[&first], 1);
-        keyset.keyset_id = "other-governance".to_string();
-        let signed = signed_policy(policy(), &[&first]);
+    fn payout_policy_requires_matching_enacted_lifecycle_reference() {
+        let binding = payout_binding();
+        let seal = binding.lifecycle_seal().expect("lifecycle seal");
+        let mut payout_policy = policy(1, None);
+        payout_policy.exemption_classes =
+            vec![VALIDATION_FEE_TREASURY_PAYOUT_EXEMPTION_CLASS.to_owned()];
+        payout_policy.treasury_account_id = binding.treasury_account_id.clone();
+        payout_policy.treasury_payout_binding = Some(binding);
 
-        assert_eq!(
-            signed.verify_against_keyset(&keyset),
+        let missing = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![
+                ValidationFeePolicyRegistryEntryV1::from_enactment(
+                    payout_policy.clone(),
+                    authorization([0x10; 32], 10),
+                    None,
+                )
+                .expect("registry entry"),
+            ],
+        };
+        assert!(matches!(
+            missing.validate(),
             Err(
-                ValidationFeePolicySignatureError::GovernanceKeysetMismatch {
-                    expected: "validation-fee-governance-v1".to_string(),
-                    found: "other-governance".to_string(),
+                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                    policy_version: 1
                 }
             )
-        );
-    }
+        ));
 
-    #[test]
-    fn signed_policy_rejects_unknown_and_duplicate_signers() {
-        let first = key_pair(21);
-        let unknown = key_pair(22);
-        let keyset = keyset(&[&first], 1);
-        let policy = policy();
-        let unknown_signed = signed_policy(policy.clone(), &[&unknown]);
-        assert_eq!(
-            unknown_signed.verify_against_keyset(&keyset),
-            Err(ValidationFeePolicySignatureError::UnknownSigner)
-        );
-
-        let duplicate_signed = signed_policy(policy, &[&first, &first]);
-        assert_eq!(
-            duplicate_signed.verify_against_keyset(&keyset),
-            Err(ValidationFeePolicySignatureError::DuplicateSigner)
-        );
-    }
-
-    #[test]
-    fn policy_hash_is_domain_separated_from_raw_norito() {
-        let policy = policy();
-        let policy_hash = policy.policy_hash().expect("policy hash");
-        let raw_hash = Hash::new(norito::to_bytes(&policy).expect("policy bytes").as_slice());
-
-        assert_ne!(policy_hash.as_slice(), raw_hash.as_ref());
-    }
-
-    #[test]
-    fn active_height_observes_effective_and_expiry_bounds() {
-        let policy = policy();
-
-        assert!(!policy.is_active_at_height(9));
-        assert!(policy.is_active_at_height(10));
-        assert!(!policy.is_active_at_height(100));
-        assert!(!policy.is_active_at_height(101));
-    }
-
-    #[test]
-    fn policy_invariants_reject_zero_height_validity_window() {
-        let mut policy = policy();
-        policy.expires_after_height = Some(policy.effective_from_height);
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("validation-fee policy validity window is invalid")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_wrong_fee_amount() {
-        let mut policy = policy();
-        policy.fee = "0.11".parse().expect("valid quantity");
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("validation-fee policy amount must be 0.1")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_wrong_fee_scale() {
-        let mut policy = policy();
-        policy.ds_scale = VALIDATION_FEE_DS_SCALE + 1;
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("validation-fee policy asset scale must be 2")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_zero_version() {
-        let mut policy = policy();
-        policy.policy_version = 0;
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("validation-fee policy version must be positive")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_previous_hash_on_initial_policy() {
-        let mut policy = policy();
-        policy.previous_policy_hash = Some([9; 32]);
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("initial validation-fee policy must not carry a previous policy hash")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_missing_previous_hash_on_successor_policy() {
-        let mut policy = policy();
-        policy.policy_version = 2;
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("non-initial validation-fee policy must carry a previous policy hash")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_empty_governance_keyset() {
-        let mut policy = policy();
-        policy.governance_keyset_id.clear();
-
-        assert_eq!(
-            policy.policy_invariant_error(),
-            Some("validation-fee policy governance keyset id must be a non-empty trimmed string")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_untrimmed_identifiers() {
-        let mut padded_network_policy = policy();
-        padded_network_policy.network_id = format!("{} ", padded_network_policy.network_id);
-
-        assert_eq!(
-            padded_network_policy.policy_invariant_error(),
-            Some("validation-fee policy network id must be a non-empty trimmed string")
-        );
-
-        let mut padded_keyset_policy = policy();
-        padded_keyset_policy.governance_keyset_id =
-            format!("{} ", padded_keyset_policy.governance_keyset_id);
-
-        assert_eq!(
-            padded_keyset_policy.policy_invariant_error(),
-            Some("validation-fee policy governance keyset id must be a non-empty trimmed string")
-        );
-    }
-
-    #[test]
-    fn policy_invariants_reject_invalid_exemption_classes() {
-        for exemption_classes in [
-            vec![String::new()],
-            vec!["SYSTEM_INSTRUCTION".to_string()],
-            vec![" TREASURY_PAYOUT".to_string()],
-            vec!["TREASURY_PAYOUT".to_string(), "TREASURY_PAYOUT".to_string()],
-        ] {
-            let mut policy = policy();
-            policy.exemption_classes = exemption_classes;
-
-            assert_eq!(
-                policy.policy_invariant_error(),
-                Some(
-                    "validation-fee policy exemption classes must be unique approved release classes: TREASURY_PAYOUT"
+        let mut bad_seal = seal;
+        bad_seal[0] ^= 1;
+        let mismatched = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![
+                ValidationFeePolicyRegistryEntryV1::from_enactment(
+                    payout_policy.clone(),
+                    authorization([0x10; 32], 10),
+                    Some(ValidationFeePayoutLifecycleReferenceV1 {
+                        lifecycle_seal: bad_seal,
+                        parliament_authorization: authorization([0x11; 32], 11),
+                    }),
                 )
-            );
-        }
-    }
-
-    #[test]
-    fn multisig_marker_round_trips_canonical_batch_coordinate() {
-        let marker = ValidationFeeMultisigMarkerV1::new(1, [0xabu8; 32], 7, Some(3));
-        let instruction = marker.into_instruction();
-        assert_eq!(
-            ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
-            Ok(Some(marker))
-        );
-        let log = instruction
-            .as_any()
-            .downcast_ref::<Log>()
-            .expect("marker log");
-        assert_eq!(log.level, Level::TRACE);
-        assert_eq!(
-            log.msg,
-            format!(
-                "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{}:7:3",
-                "ab".repeat(32)
+                .expect("registry entry"),
+            ],
+        };
+        assert!(matches!(
+            mismatched.validate(),
+            Err(
+                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                    policy_version: 1
+                }
             )
-        );
+        ));
+
+        let binding = payout_policy
+            .treasury_payout_binding
+            .as_ref()
+            .expect("payout binding");
+        let lifecycle_id =
+            ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                payout_binding: binding.clone(),
+            })
+            .fingerprint();
+        let policy_id = ProposalKind::ValidationFeePolicy(
+            crate::governance::types::ValidationFeePolicyProposal {
+                policy: payout_policy.clone(),
+                payout_lifecycle_proposal_id: Some(lifecycle_id),
+            },
+        )
+        .fingerprint();
+        let valid = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![
+                ValidationFeePolicyRegistryEntryV1::from_enactment(
+                    payout_policy,
+                    authorization(policy_id, 10),
+                    Some(ValidationFeePayoutLifecycleReferenceV1 {
+                        lifecycle_seal: seal,
+                        parliament_authorization: authorization(lifecycle_id, 9),
+                    }),
+                )
+                .expect("registry entry"),
+            ],
+        };
+        valid.validate().expect("exact typed proposal fingerprints");
+
+        let mut rebound_lifecycle = valid.clone();
+        let lifecycle_authorization = &mut rebound_lifecycle.registered_policies[0]
+            .payout_lifecycle
+            .as_mut()
+            .expect("lifecycle")
+            .parliament_authorization;
+        lifecycle_authorization.proposal_id = [0xA1; 32];
+        lifecycle_authorization.proposal_fingerprint = [0xA1; 32];
+        lifecycle_authorization.finalization.referendum_id = [0xA1; 32];
+        assert!(matches!(
+            rebound_lifecycle.validate(),
+            Err(
+                ValidationFeePolicyRegistryError::InvalidPayoutLifecycleReference {
+                    policy_version: 1
+                }
+            )
+        ));
+
+        let mut rebound_policy = valid;
+        let policy_authorization =
+            &mut rebound_policy.registered_policies[0].parliament_authorization;
+        policy_authorization.proposal_id = [0xA2; 32];
+        policy_authorization.proposal_fingerprint = [0xA2; 32];
+        policy_authorization.finalization.referendum_id = [0xA2; 32];
+        assert!(matches!(
+            rebound_policy.validate(),
+            Err(
+                ValidationFeePolicyRegistryError::InvalidParliamentAuthorization {
+                    policy_version: 1
+                }
+            )
+        ));
     }
 
     #[test]
-    fn multisig_marker_reserved_namespace_fails_closed_on_noncanonical_forms() {
-        let canonical = format!(
-            "{VALIDATION_FEE_MULTISIG_MARKER_PREFIX}1:{}:7:-",
-            "ab".repeat(32)
-        );
-        let malformed = [
-            canonical.replace(":1:", ":01:"),
-            canonical.replace(&"ab".repeat(32), &"AB".repeat(32)),
-            canonical.replace(":7:-", ":07:-"),
-            canonical.replace(":v1:", ":v2:"),
-            format!("{canonical}:extra"),
-        ];
-        for message in malformed {
-            let instruction: InstructionBox = Log::new(Level::TRACE, message).into();
-            assert_eq!(
-                ValidationFeeMultisigMarkerV1::parse_instruction(&instruction),
-                Err(ValidationFeeMultisigMarkerError::Malformed)
-            );
-        }
+    fn parliament_authorization_requires_exact_approved_window_evidence() {
+        let valid = authorization([0x12; 32], 12);
+        assert_eq!(valid.invariant_error(), None);
 
-        let wrong_level: InstructionBox = Log::new(Level::INFO, canonical).into();
-        assert_eq!(
-            ValidationFeeMultisigMarkerV1::parse_instruction(&wrong_level),
-            Err(ValidationFeeMultisigMarkerError::WrongLogLevel)
-        );
-        let ordinary_log: InstructionBox = Log::new(Level::INFO, "ordinary".to_owned()).into();
-        assert_eq!(
-            ValidationFeeMultisigMarkerV1::parse_instruction(&ordinary_log),
-            Ok(None)
-        );
+        let mut outside_window = valid;
+        outside_window.finalization.finalized_at_height =
+            outside_window.referendum_window.upper.saturating_add(1);
+        assert!(outside_window.invariant_error().is_some());
+
+        let mut fabricated_approval = valid;
+        fabricated_approval.finalization.approve = 0;
+        assert!(fabricated_approval.invariant_error().is_some());
+
+        let mut wrong_referendum = valid;
+        wrong_referendum.finalization.referendum_id = [0xAA; 32];
+        assert!(wrong_referendum.invariant_error().is_some());
     }
 }

@@ -3674,6 +3674,37 @@ fn governance_paths() -> Map {
         Value::Object(sccp_route_governance_operation()),
     );
     paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_CURRENT_POLICY_PROOF.to_owned(),
+        Value::Object(validation_fee_current_policy_proof_operation()),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_PROPOSALS.to_owned(),
+        Value::Object(json_get_operation(
+            "Validation fee",
+            "List validation-fee Parliament proposals.",
+            "Return every native validation-fee policy and payout-lifecycle proposal in canonical creation order.",
+            "#/components/schemas/ValidationFeeProposalListV1",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_PROPOSAL_DETAIL.to_owned(),
+        Value::Object(json_get_operation(
+            "Validation fee",
+            "Fetch one validation-fee Parliament proposal.",
+            "Return the exact native proposal, plain referendum, seven-body snapshot, finalization evidence, and enactment status.",
+            "#/components/schemas/ValidationFeeProposalDetailV1",
+            vec![string_path_param(
+                "proposal_id",
+                "Exact lowercase 32-byte native proposal fingerprint.",
+            )],
+        )),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::VALIDATION_FEE_PROPOSAL_DRAFT.to_owned(),
+        Value::Object(validation_fee_proposal_draft_operation()),
+    );
+    paths.insert(
         "/v1/gov/proposals/{id}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
@@ -8378,6 +8409,122 @@ fn sccp_route_governance_operation() -> Map {
         "415".into(),
         json_response(
             "The request Content-Type is neither application/json nor application/x-norito.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn validation_fee_current_policy_proof_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Validation fee".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a finalized validation-fee registry page.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Return the canonical complete validation-fee registry, its fixed synthetic \
+             ordinary-write witness, and an ordered Sumeragi-v2 finality chain beginning at the \
+             caller's checkpoint. Each response advances at most 63 blocks; when more_available \
+             is true the caller promotes evaluated_context_id and requests the next page."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("validationFeeCurrentPolicyProof".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(offline_typed_request_body(
+            iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME,
+            64,
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito_binary_response(
+            "One verified checkpoint-promotion page and finalized registry snapshot.",
+            "ValidationFeeCurrentPolicyProofV1",
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "The version or trusted checkpoint height is invalid.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "409".into(),
+        json_response(
+            "The bounded finality page exceeds its byte budget.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".into(),
+        json_response(
+            "The protected registry, historical witness, or finality material is unavailable or inconsistent.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
+fn validation_fee_proposal_draft_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Validation fee".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Draft a native validation-fee Parliament proposal.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Accept exactly one typed validation-fee policy or payout-lifecycle payload and \
+             return its native proposal kind, deterministic fingerprint, and one canonical \
+             instruction for local signing. Plain voting is canonical; ZK mode is rejected."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("validationFeeProposalDraft".to_owned()),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_or_norito_request_body(
+            "#/components/schemas/ValidationFeeProposalDraftRequestV1",
+        )),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Exact native proposal fingerprint, kind, and canonical instruction.",
+            schema_ref("ValidationFeeProposalDraftResponseV1"),
+        ),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "The version, policy, payout binding, lifecycle selector, window, or voting mode is invalid.",
             error_schema_reference(),
         ),
     );
@@ -13338,6 +13485,198 @@ fn sccp_schemas() -> Map {
     schemas
 }
 
+fn validation_fee_schemas(schemas: &mut Map) {
+    let hex32 = norito::json!({
+        "type": "string",
+        "minLength": 64,
+        "maxLength": 64,
+        "pattern": "^[0-9a-f]{64}$"
+    });
+    let policy_proof_request_schema_name =
+        iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_REQUEST_SCHEMA_NAME;
+    let policy_proof_response_schema_name =
+        iroha_torii_shared::validation_fee_api::VALIDATION_FEE_POLICY_PROOF_RESPONSE_SCHEMA_NAME;
+    schemas.insert(
+        "ValidationFeeCurrentPolicyProofRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "trusted_checkpoint_height"],
+            "additionalProperties": false,
+            "x-iroha-norito-schema": policy_proof_request_schema_name,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "trusted_checkpoint_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeCurrentPolicyProofV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "version", "registry", "policy_witness", "finality_chain",
+                "evaluated_context_id", "evaluated_block_height", "evaluated_block_hash",
+                "observed_ledger_tip_height", "more_available"
+            ],
+            "additionalProperties": false,
+            "x-iroha-norito-schema": policy_proof_response_schema_name,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "registry": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/JsonValue" },
+                        { "type": "null" }
+                    ],
+                    "description": "Canonical complete ValidationFeePolicyRegistryV1."
+                },
+                "policy_witness": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Fixed-key 256-level ordinary-write witness."
+                },
+                "finality_chain": {
+                    "type": "array", "minItems": 1, "maxItems": 64,
+                    "items": { "$ref": "#/components/schemas/BridgeFinalityProof" }
+                },
+                "evaluated_context_id": {
+                    "$ref": "#/components/schemas/SumeragiV2HeightContextId"
+                },
+                "evaluated_block_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "evaluated_block_hash": hex32,
+                "observed_ledger_tip_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "more_available": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalRecordV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "proposal_id", "proposer", "proposal_kind", "created_height", "status",
+                "referendum", "parliament_snapshot", "finalization_evidence",
+                "enacted_at_height"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "proposal_id": hex32,
+                "proposer": { "type": "string", "minLength": 1 },
+                "proposal_kind": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact native ValidationFeePolicy or ValidationFeePayoutLifecycle ProposalKind."
+                },
+                "created_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "status": { "$ref": "#/components/schemas/JsonValue" },
+                "referendum": { "$ref": "#/components/schemas/JsonValue" },
+                "parliament_snapshot": { "$ref": "#/components/schemas/JsonValue" },
+                "finalization_evidence": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/JsonValue" },
+                        { "type": "null" }
+                    ]
+                },
+                "enacted_at_height": {
+                    "type": ["integer", "null"], "format": "uint64", "minimum": 1
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalListV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "proposals"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposals": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalDetailV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "proposal"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposal": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalDraftRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "proposal", "referendum_window", "mode"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposal": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Closed POLICY or PAYOUT_LIFECYCLE typed payload."
+                },
+                "referendum_window": {
+                    "oneOf": [
+                        { "$ref": "#/components/schemas/SccpAtWindowV1" },
+                        { "type": "null" }
+                    ]
+                },
+                "mode": {
+                    "oneOf": [
+                        { "type": "string", "enum": ["Plain"] },
+                        { "type": "null" }
+                    ],
+                    "default": "Plain",
+                    "description": "Zk is deliberately outside the first-release validation-fee contract."
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalInstructionDraftV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["wire_id", "payload_hex"],
+            "additionalProperties": false,
+            "properties": {
+                "wire_id": { "type": "string", "minLength": 1 },
+                "payload_hex": {
+                    "type": "string", "minLength": 2, "pattern": "^(?:[0-9a-f]{2})+$"
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "ValidationFeeProposalDraftResponseV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["version", "proposal_id", "proposal_kind", "tx_instructions"],
+            "additionalProperties": false,
+            "properties": {
+                "version": { "type": "integer", "format": "uint16", "const": 1 },
+                "proposal_id": hex32,
+                "proposal_kind": { "$ref": "#/components/schemas/JsonValue" },
+                "tx_instructions": {
+                    "type": "array", "minItems": 1, "maxItems": 1,
+                    "items": {
+                        "$ref": "#/components/schemas/ValidationFeeProposalInstructionDraftV1"
+                    }
+                }
+            }
+        }),
+    );
+}
+
 fn sccp_crypto_and_registry_schemas(schemas: &mut Map) {
     schemas.insert(
         "SccpBn254G1PointV1".to_owned(),
@@ -15784,6 +16123,7 @@ fn openapi_schemas() -> Map {
     let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
+    validation_fee_schemas(&mut schemas);
     schemas.insert(
         "ZkSnapshotBlockHash".to_owned(),
         norito::json!({

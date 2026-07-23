@@ -75,7 +75,6 @@ import {
   parseSccpJsonObject,
   parseSccpBridgeSubmitResponseJson,
 } from "./sccp.js";
-import { snapshotValidationFeePolicyVerificationContext } from "./validationFeePolicy.js";
 import { IVM_ARTIFACT_MAX_BYTES } from "./ivmArtifact.js";
 import {
   normalizeKagemushaAssetSelector,
@@ -87,10 +86,18 @@ import {
   normalizeKagemushaTopUpRequestV4,
   requireKagemushaJsonContentType,
 } from "./kagemushaOffline.js";
+import {
+  VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+  VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+  encodeValidationFeeCurrentPolicyProofRequestV1,
+  normalizeValidationFeeCheckpointV1,
+  normalizeValidationFeeLedgerBindingV1,
+  verifyValidationFeeCurrentPolicyProofV1,
+} from "./validationFeeConsensus.js";
 
 const DEFAULT_PAGE_SIZE = 100;
-const VALIDATION_FEE_VERIFICATION_CONTEXTS = new WeakMap();
 const APPLICATION_JSON = "application/json";
+const APPLICATION_NORITO = "application/x-norito";
 const JSON_ACCEPT_HEADERS = Object.freeze({ Accept: APPLICATION_JSON });
 const JSON_REQUEST_HEADERS = Object.freeze({
   "Content-Type": APPLICATION_JSON,
@@ -1486,10 +1493,6 @@ function sortJsonForErrorMessage(value) {
  * @property {number | null | undefined} [retry]
  * @property {string | null} raw
  */
-export function getTrustedValidationFeeVerificationContext(client) {
-  return VALIDATION_FEE_VERIFICATION_CONTEXTS.get(client) ?? null;
-}
-
 export class ToriiClient {
   /**
    * @param {string} baseUrl Base Torii URL (e.g. http://localhost:8080).
@@ -1510,7 +1513,6 @@ export class ToriiClient {
  * @param {object} [options.sorafsAliasPolicy] Override SoraFS alias cache TTLs (seconds).
  * @param {(warning: {alias: string | null, evaluation: {state: string | null, statusLabel: string | null, rotationDue: boolean, ageSeconds: number | null, generatedAtUnix: number | null, expiresAtUnix: number | null, expiresInSeconds: number | null, servable: boolean}}) => void} [options.onSorafsAliasWarning]
  * @param {(manifest: Buffer, payload: Buffer, options: Record<string, unknown>) => unknown} [options.generateDaProofSummary] Custom proof summary generator (tests).
- * @param {object} [options.validationFeeVerificationContext] Immutable, out-of-band validation-fee trust anchor.
  * @param {object} [options.__nativeBinding] Custom native binding (tests).
  */
   constructor(baseUrl, options = {}) {
@@ -1537,16 +1539,6 @@ export class ToriiClient {
       );
     }
     this._nativeBinding = opts.__nativeBinding;
-    const validationFeeVerificationContext =
-      opts.validationFeeVerificationContext === undefined
-        ? null
-        : snapshotValidationFeePolicyVerificationContext(
-            opts.validationFeeVerificationContext,
-          );
-    VALIDATION_FEE_VERIFICATION_CONTEXTS.set(
-      this,
-      validationFeeVerificationContext,
-    );
     if (
       opts.sorafsGatewayFetch !== undefined &&
       typeof opts.sorafsGatewayFetch !== "function"
@@ -1588,7 +1580,6 @@ export class ToriiClient {
     delete overrides.onSorafsAliasWarning;
     delete overrides.sorafsGatewayFetch;
     delete overrides.generateDaProofSummary;
-    delete overrides.validationFeeVerificationContext;
     delete overrides.__nativeBinding;
     this._config = resolveToriiClientConfig({
       config: opts.config,
@@ -3115,6 +3106,135 @@ export class ToriiClient {
       throw new Error("fee quote endpoint returned no payload");
     }
     return normalizeFeeQuoteResponse(body, "fee quote response");
+  }
+
+  /**
+   * Fetch and locally verify one bounded validation-fee consensus proof page.
+   *
+   * @param {object} binding exact immutable ledger binding
+   * @param {object | null} checkpoint durable checkpoint, or null for binding.checkpoint
+   * @param {{signal?: AbortSignal}} [options]
+   */
+  async getValidationFeeCurrentPolicyProofPage(
+    binding,
+    checkpoint = null,
+    options = {},
+  ) {
+    const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
+    const normalizedCheckpoint =
+      checkpoint === null || checkpoint === undefined
+        ? normalizedBinding.checkpoint
+        : normalizeValidationFeeCheckpointV1(checkpoint);
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getValidationFeeCurrentPolicyProofPage",
+    );
+    const request = encodeValidationFeeCurrentPolicyProofRequestV1(
+      normalizedCheckpoint,
+    );
+    const response = await this._request(
+      "POST",
+      VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH,
+      {
+        headers: {
+          "Content-Type": APPLICATION_NORITO,
+          Accept: APPLICATION_NORITO,
+        },
+        body: request,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const contentType = this._getHeader(response, "content-type") ?? "";
+    if (!/^application\/x-norito(?:\s*;|$)/iu.test(contentType)) {
+      const error = new TypeError(
+        "validation-fee proof response must use application/x-norito",
+      );
+      await cancelSccpResponseBody(response, error);
+      throw error;
+    }
+    const proofNorito = Buffer.from(
+      await readBoundedSccpResponseBytes(
+        response,
+        VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+        "validation-fee proof",
+      ),
+    );
+    const projection = verifyValidationFeeCurrentPolicyProofV1(
+      proofNorito,
+      normalizedBinding,
+      normalizedCheckpoint,
+    );
+    const promotedCheckpoint = Object.freeze({
+      height: projection.evaluated_block_height,
+      contextId: projection.evaluated_context_id,
+    });
+    return Object.freeze({
+      proofNorito,
+      projection,
+      promotedCheckpoint,
+    });
+  }
+
+  /**
+   * Repeatedly verify bounded pages until Torii's observed ledger tip.
+   *
+   * Persist each page's `promotedCheckpoint` yourself when crash-durable
+   * promotion is required; this convenience method promotes only in memory.
+   */
+  async catchUpValidationFeeCurrentPolicyProof(binding, options = {}) {
+    const normalizedBinding = normalizeValidationFeeLedgerBindingV1(binding);
+    const normalizedOptions = ensureRecord(
+      options ?? {},
+      "catchUpValidationFeeCurrentPolicyProof options",
+    );
+    assertSupportedOptionKeys(
+      normalizedOptions,
+      new Set(["checkpoint", "maxPages", "signal"]),
+      "catchUpValidationFeeCurrentPolicyProof options",
+    );
+    let checkpoint =
+      normalizedOptions.checkpoint === undefined
+        ? normalizedBinding.checkpoint
+        : normalizeValidationFeeCheckpointV1(normalizedOptions.checkpoint);
+    const maxPages =
+      normalizedOptions.maxPages === undefined
+        ? 4096
+        : ToriiClient._normalizeUnsignedInteger(
+            normalizedOptions.maxPages,
+            "catchUpValidationFeeCurrentPolicyProof.maxPages",
+            { allowZero: false },
+          );
+    if (maxPages > 4096) {
+      throw new TypeError(
+        "catchUpValidationFeeCurrentPolicyProof.maxPages must not exceed 4096",
+      );
+    }
+    for (let pagesVerified = 1; pagesVerified <= maxPages; pagesVerified += 1) {
+      const page = await this.getValidationFeeCurrentPolicyProofPage(
+        normalizedBinding,
+        checkpoint,
+        { signal: normalizedOptions.signal },
+      );
+      if (
+        page.projection.evaluated_block_height < checkpoint.height ||
+        (page.projection.more_available &&
+          page.projection.evaluated_block_height === checkpoint.height)
+      ) {
+        throw new Error("validation-fee checkpoint promotion did not advance");
+      }
+      checkpoint = page.promotedCheckpoint;
+      if (!page.projection.more_available) {
+        return Object.freeze({
+          ...page,
+          binding: normalizedBinding,
+          pagesVerified,
+        });
+      }
+    }
+    throw new Error(
+      `validation-fee checkpoint promotion exceeded ${maxPages} pages`,
+    );
   }
 
   /**

@@ -3,7 +3,7 @@
 use core::fmt;
 
 use hex;
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, blake2::Blake2b512};
 use iroha_data_model::{
     ValidationFail,
     account::AccountId,
@@ -11,6 +11,10 @@ use iroha_data_model::{
     block::BlockHeader,
     isi::{
         InstructionBox, TransferAssetBatch, TransferBox,
+        governance::{
+            ApproveGovernanceProposal, CastParliamentBallot, EnactReferendum, FinalizeReferendum,
+            ProposeValidationFeePayoutLifecycle, ProposeValidationFeePolicy,
+        },
         register::RegisterBox,
         repo::{RepoInstructionBox, RepoIsi, ReverseRepoIsi},
         settlement::{
@@ -19,13 +23,15 @@ use iroha_data_model::{
     },
     metadata::Metadata,
     prelude::*,
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, ExecutableBatchItem, SignedTransaction},
     validation_fee::{
-        SignedValidationFeePolicyV1, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-        VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+        VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+        VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
         VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeChargingMode,
-        ValidationFeeGovernanceKeysetV1, ValidationFeeMultisigMarkerV1,
-        ValidationFeePolicyRegistryV1, ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1,
+        ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+        ValidationFeeMultisigMarkerV1, ValidationFeeParliamentAuthorizationV1,
+        ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
+        ValidationFeeTreasuryPayoutBindingV1,
     },
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -99,12 +105,6 @@ fn quantity_from_policy_minor_units(
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ValidationFeeAdmissionError {
-    MissingPolicyParameter,
-    MalformedPolicyParameter,
-    MissingGovernanceKeysetParameter,
-    MalformedGovernanceKeysetParameter,
-    InvalidPolicySignature(String),
-    MissingPolicyRegistryParameter,
     MalformedPolicyRegistryParameter,
     InvalidPolicyRegistry(String),
     InvalidPolicyInvariant(&'static str),
@@ -119,11 +119,6 @@ enum ValidationFeeAdmissionError {
     },
     PolicyExpired {
         expires_after_height: u64,
-        current_height: u64,
-    },
-    FutureSuccessorPolicy {
-        policy_version: u64,
-        effective_from_height: u64,
         current_height: u64,
     },
     TreasuryPayoutRequiresActiveContractSubject {
@@ -288,27 +283,6 @@ enum ValidationFeeAdmissionError {
 impl fmt::Display for ValidationFeeAdmissionError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::MissingPolicyParameter => {
-                write!(f, "validation-fee signed policy parameter is missing")
-            }
-            Self::MalformedPolicyParameter => {
-                write!(f, "validation-fee policy parameter is malformed")
-            }
-            Self::MissingGovernanceKeysetParameter => {
-                write!(f, "validation-fee governance keyset parameter is missing")
-            }
-            Self::MalformedGovernanceKeysetParameter => {
-                write!(f, "validation-fee governance keyset parameter is malformed")
-            }
-            Self::InvalidPolicySignature(reason) => {
-                write!(
-                    f,
-                    "validation-fee policy signature verification failed: {reason}"
-                )
-            }
-            Self::MissingPolicyRegistryParameter => {
-                write!(f, "validation-fee policy registry parameter is missing")
-            }
             Self::MalformedPolicyRegistryParameter => {
                 write!(f, "validation-fee policy registry parameter is malformed")
             }
@@ -341,14 +315,6 @@ impl fmt::Display for ValidationFeeAdmissionError {
             } => write!(
                 f,
                 "validation-fee policy expired at height {expires_after_height}; current height is {current_height}"
-            ),
-            Self::FutureSuccessorPolicy {
-                policy_version,
-                effective_from_height,
-                current_height,
-            } => write!(
-                f,
-                "active validation-fee successor policy version {policy_version} is not effective until height {effective_from_height}; current height is {current_height}"
             ),
             Self::TreasuryPayoutRequiresActiveContractSubject {
                 treasury_account_id,
@@ -735,6 +701,9 @@ pub(crate) fn enforce_validation_fee_admission(
     tx: &SignedTransaction,
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Option<ValidationFeeCredit>, TransactionRejectionReason> {
+    if is_validation_fee_control_plane_transaction(tx) {
+        return Ok(None);
+    }
     let Some(policy) = active_policy(state_transaction)? else {
         return Ok(None);
     };
@@ -768,6 +737,51 @@ pub(crate) fn enforce_validation_fee_admission(
     ensure_validation_fee_credit_capacity(state_transaction, &credit)
         .map_err(admission_rejection)?;
     Ok(Some(credit))
+}
+
+fn is_validation_fee_control_plane_transaction(tx: &SignedTransaction) -> bool {
+    fn is_control_plane_instruction(instruction: &InstructionBox) -> bool {
+        instruction
+            .as_any()
+            .downcast_ref::<ProposeValidationFeePolicy>()
+            .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<ProposeValidationFeePayoutLifecycle>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<CastParliamentBallot>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<ApproveGovernanceProposal>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<FinalizeReferendum>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<EnactReferendum>()
+                .is_some()
+    }
+
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            !instructions.is_empty() && instructions.iter().all(is_control_plane_instruction)
+        }
+        Executable::Batch(items) => {
+            !items.is_empty()
+                && items.iter().all(|item| match item {
+                    ExecutableBatchItem::Instruction(instruction) => {
+                        is_control_plane_instruction(instruction)
+                    }
+                    ExecutableBatchItem::ContractCall(_) => false,
+                })
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) | Executable::ContractCall(_) => false,
+    }
 }
 
 /// Reject proof-carrying AXT completions while an active validation-fee policy cannot classify
@@ -1417,56 +1431,265 @@ fn enforce_deferred_policy_with_credit(
 fn active_policy(
     state_transaction: &StateTransaction<'_, '_>,
 ) -> Result<Option<ValidationFeePolicyV1>, TransactionRejectionReason> {
-    let parameter_id = ValidationFeePolicyV1::parameter_id();
+    let parameter_id = ValidationFeePolicyRegistryV1::parameter_id();
     let Some(custom) = state_transaction
         .world
         .parameters()
         .custom()
         .get(&parameter_id)
     else {
-        let custom_parameters = state_transaction.world.parameters().custom();
-        let keyset_present = custom_parameters
-            .get(&ValidationFeeGovernanceKeysetV1::parameter_id())
-            .is_some();
-        let registry_present = custom_parameters
-            .get(&ValidationFeePolicyRegistryV1::parameter_id())
-            .is_some();
-        if keyset_present || registry_present {
-            return Err(admission_rejection(
-                ValidationFeeAdmissionError::MissingPolicyParameter,
-            ));
-        }
         return Ok(None);
     };
-    let Some(signed_policy) = SignedValidationFeePolicyV1::from_custom_parameter(custom) else {
+    let Some(registry) = ValidationFeePolicyRegistryV1::from_custom_parameter(custom) else {
         return Err(admission_rejection(
-            ValidationFeeAdmissionError::MalformedPolicyParameter,
+            ValidationFeeAdmissionError::MalformedPolicyRegistryParameter,
         ));
     };
-    let keyset = active_governance_keyset(state_transaction)?;
-    let policy = verify_signed_policy(signed_policy, &keyset).map_err(admission_rejection)?;
-    let registry = active_policy_registry(state_transaction)?;
-    verify_policy_registry(&policy, &registry).map_err(admission_rejection)?;
-    let expected_network = state_transaction.chain_id.to_string();
-    if policy.network_id != expected_network {
+    registry.validate().map_err(|err| {
+        admission_rejection(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            err.to_string(),
+        ))
+    })?;
+    for entry in &registry.registered_policies {
+        validate_registry_entry_governance(entry, state_transaction)
+            .map_err(admission_rejection)?;
+    }
+
+    let current_height = state_transaction.block_height();
+    let Some(entry) = registry.scheduled_entry_at_height(current_height) else {
+        // The initial Parliament policy is deliberately enacted well before
+        // activation so downstreams can pin its finalized proof. Until that
+        // first effective height arrives there is no active validation fee.
+        return Ok(None);
+    };
+    let policy = entry.policy.clone();
+    if let Some(reason) = policy.policy_invariant_error() {
+        return Err(admission_rejection(
+            ValidationFeeAdmissionError::InvalidPolicyInvariant(reason),
+        ));
+    }
+    if policy.chain_id != state_transaction.chain_id {
         return Err(admission_rejection(
             ValidationFeeAdmissionError::WrongPolicyNetwork {
-                expected: expected_network,
-                found: policy.network_id.clone(),
+                expected: state_transaction.chain_id.to_string(),
+                found: policy.chain_id.to_string(),
             },
         ));
     }
     validate_policy_genesis_hash(&policy, state_transaction.block_hashes())
         .map_err(admission_rejection)?;
-    if !policy_is_active_or_unexpired(&policy, state_transaction.block_height())
-        .map_err(admission_rejection)?
-    {
+    if let Some(expires_after_height) = policy.expires_after_height {
+        if current_height >= expires_after_height {
+            return Err(admission_rejection(
+                ValidationFeeAdmissionError::PolicyExpired {
+                    expires_after_height,
+                    current_height,
+                },
+            ));
+        }
+    }
+    if policy.charging_mode == ValidationFeeChargingMode::Disabled {
         return Ok(None);
     }
     validate_treasury_payout_contract_subject(&policy, state_transaction)
         .map_err(admission_rejection)?;
 
     Ok(Some(policy))
+}
+
+fn validate_registry_entry_governance(
+    entry: &ValidationFeePolicyRegistryEntryV1,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), ValidationFeeAdmissionError> {
+    use iroha_data_model::governance::types::{
+        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+    };
+
+    let lifecycle_id = entry
+        .payout_lifecycle
+        .as_ref()
+        .map(|reference| reference.parliament_authorization.proposal_id);
+    let policy_kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+        policy: entry.policy.clone(),
+        payout_lifecycle_proposal_id: lifecycle_id,
+    });
+    validate_parliament_authorization(
+        &entry.parliament_authorization,
+        &policy_kind,
+        state_transaction,
+    )?;
+
+    match (
+        entry.policy.treasury_payout_binding.as_ref(),
+        entry.payout_lifecycle.as_ref(),
+    ) {
+        (None, None) if entry.policy.charging_mode == ValidationFeeChargingMode::Disabled => Ok(()),
+        (Some(binding), Some(reference)) => {
+            let lifecycle_kind =
+                ProposalKind::ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal {
+                    payout_binding: binding.clone(),
+                });
+            validate_parliament_authorization(
+                &reference.parliament_authorization,
+                &lifecycle_kind,
+                state_transaction,
+            )
+        }
+        _ => Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "enabled policy requires paired payout binding and Parliament lifecycle authorization"
+                .to_owned(),
+        )),
+    }
+}
+
+fn validate_parliament_authorization(
+    authorization: &ValidationFeeParliamentAuthorizationV1,
+    exact_kind: &iroha_data_model::governance::types::ProposalKind,
+    state_transaction: &StateTransaction<'_, '_>,
+) -> Result<(), ValidationFeeAdmissionError> {
+    use iroha_data_model::governance::types::ParliamentBody;
+
+    if let Some(reason) = authorization.invariant_error() {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            reason.to_owned(),
+        ));
+    }
+    let fingerprint = exact_kind.fingerprint();
+    if fingerprint != authorization.proposal_fingerprint || authorization.proposal_id != fingerprint
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "stored proposal id/fingerprint does not match the exact typed proposal preimage"
+                .to_owned(),
+        ));
+    }
+    let proposal = state_transaction
+        .world
+        .governance_proposals
+        .get(&authorization.proposal_id)
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized governance proposal is missing".to_owned(),
+            )
+        })?;
+    if &proposal.kind != exact_kind
+        || proposal.status != crate::state::GovernanceProposalStatus::Enacted
+        || proposal.enacted_at_height != Some(authorization.enacted_at_height)
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "authorized governance proposal payload, status, or enactment height differs from the registry"
+                .to_owned(),
+        ));
+    }
+    let snapshot = proposal.parliament_snapshot.as_ref().ok_or_else(|| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "authorized governance proposal has no Parliament snapshot".to_owned(),
+        )
+    })?;
+    let snapshot_bytes = norito::to_bytes(&snapshot.bodies).map_err(|_| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "Parliament snapshot cannot be encoded".to_owned(),
+        )
+    })?;
+    let digest = Blake2b512::digest(snapshot_bytes);
+    let mut computed_roster_root = [0; 32];
+    computed_roster_root.copy_from_slice(&digest[..32]);
+    if computed_roster_root != snapshot.roster_root
+        || snapshot.roster_root != authorization.proposal_time_roster_root
+        || snapshot.bodies.selection_epoch != snapshot.selection_epoch
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "proposal-time Parliament roster commitment differs from retained consensus state"
+                .to_owned(),
+        ));
+    }
+
+    const REQUIRED_BODIES: [ParliamentBody; 7] = [
+        ParliamentBody::RulesCommittee,
+        ParliamentBody::AgendaCouncil,
+        ParliamentBody::InterestPanel,
+        ParliamentBody::ReviewPanel,
+        ParliamentBody::PolicyJury,
+        ParliamentBody::OversightCommittee,
+        ParliamentBody::FmaCommittee,
+    ];
+    if REQUIRED_BODIES
+        .iter()
+        .any(|body| !snapshot.bodies.rosters.contains_key(body))
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "proposal-time Parliament snapshot does not contain all seven required bodies"
+                .to_owned(),
+        ));
+    }
+    let referendum_id = hex::encode(authorization.proposal_id);
+    let referendum = state_transaction
+        .world
+        .governance_referenda
+        .get(&referendum_id)
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized referendum is missing".to_owned(),
+            )
+        })?;
+    if referendum.h_start != authorization.referendum_window.lower
+        || referendum.h_end != authorization.referendum_window.upper
+        || referendum.status != crate::state::GovernanceReferendumStatus::Closed
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "authorized referendum window or finalized status differs from retained consensus state"
+                .to_owned(),
+        ));
+    }
+    let approvals = state_transaction
+        .world
+        .governance_stage_approvals
+        .get(&referendum_id)
+        .ok_or_else(|| {
+            ValidationFeeAdmissionError::InvalidPolicyRegistry(
+                "authorized Parliament approval records are missing".to_owned(),
+            )
+        })?;
+    if REQUIRED_BODIES.iter().copied().any(|body| {
+        !approvals.quorum_met(body, snapshot.selection_epoch)
+            || approvals.rejection_quorum_met(body, snapshot.selection_epoch)
+    }) {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "all seven Parliament bodies do not retain affirmative quorum".to_owned(),
+        ));
+    }
+    let finalized = proposal.finalization_evidence.as_ref().ok_or_else(|| {
+        ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "authorized proposal finalization evidence is missing".to_owned(),
+        )
+    })?;
+    let typed_finalization = ValidationFeeFinalizationEvidenceV1 {
+        referendum_id: finalized.referendum_id,
+        finalized_at_height: finalized.finalized_at_height,
+        mode: match finalized.mode {
+            iroha_data_model::isi::governance::VotingMode::Zk => {
+                ValidationFeeGovernanceVotingModeV1::Zk
+            }
+            iroha_data_model::isi::governance::VotingMode::Plain => {
+                ValidationFeeGovernanceVotingModeV1::Plain
+            }
+        },
+        approve: finalized.approve,
+        reject: finalized.reject,
+        abstain: finalized.abstain,
+        min_turnout: finalized.min_turnout,
+        approval_threshold_numerator: finalized.approval_threshold_numerator,
+        approval_threshold_denominator: finalized.approval_threshold_denominator,
+        approved: finalized.approved,
+    };
+    if finalized.proposal_id != authorization.proposal_id
+        || typed_finalization != authorization.finalization
+    {
+        return Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(
+            "finalized referendum evidence differs from the typed registry authorization"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_treasury_payout_contract_subject(
@@ -1594,93 +1817,6 @@ fn verified_opaque_treasury_payout_binding(
     Ok(Some(binding.clone()))
 }
 
-fn policy_is_active_or_unexpired(
-    policy: &ValidationFeePolicyV1,
-    current_height: u64,
-) -> Result<bool, ValidationFeeAdmissionError> {
-    if current_height < policy.effective_from_height {
-        if policy.policy_version > 1 {
-            return Err(ValidationFeeAdmissionError::FutureSuccessorPolicy {
-                policy_version: policy.policy_version,
-                effective_from_height: policy.effective_from_height,
-                current_height,
-            });
-        }
-        return Ok(false);
-    }
-    if let Some(expires_after_height) = policy.expires_after_height {
-        if current_height >= expires_after_height {
-            return Err(ValidationFeeAdmissionError::PolicyExpired {
-                expires_after_height,
-                current_height,
-            });
-        }
-    }
-    Ok(true)
-}
-
-fn verify_signed_policy(
-    signed_policy: SignedValidationFeePolicyV1,
-    keyset: &ValidationFeeGovernanceKeysetV1,
-) -> Result<ValidationFeePolicyV1, ValidationFeeAdmissionError> {
-    signed_policy
-        .verify_against_keyset(keyset)
-        .map_err(|err| ValidationFeeAdmissionError::InvalidPolicySignature(err.to_string()))?;
-    let policy = signed_policy.policy;
-    if let Some(reason) = policy.policy_invariant_error() {
-        return Err(ValidationFeeAdmissionError::InvalidPolicyInvariant(reason));
-    }
-
-    Ok(policy)
-}
-
-fn verify_policy_registry(
-    policy: &ValidationFeePolicyV1,
-    registry: &ValidationFeePolicyRegistryV1,
-) -> Result<(), ValidationFeeAdmissionError> {
-    registry
-        .validate_active_policy(policy)
-        .map_err(|err| ValidationFeeAdmissionError::InvalidPolicyRegistry(err.to_string()))
-}
-
-fn active_governance_keyset(
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<ValidationFeeGovernanceKeysetV1, TransactionRejectionReason> {
-    let parameter_id = ValidationFeeGovernanceKeysetV1::parameter_id();
-    let Some(custom) = state_transaction
-        .world
-        .parameters()
-        .custom()
-        .get(&parameter_id)
-    else {
-        return Err(admission_rejection(
-            ValidationFeeAdmissionError::MissingGovernanceKeysetParameter,
-        ));
-    };
-    ValidationFeeGovernanceKeysetV1::from_custom_parameter(custom).ok_or_else(|| {
-        admission_rejection(ValidationFeeAdmissionError::MalformedGovernanceKeysetParameter)
-    })
-}
-
-fn active_policy_registry(
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<ValidationFeePolicyRegistryV1, TransactionRejectionReason> {
-    let parameter_id = ValidationFeePolicyRegistryV1::parameter_id();
-    let Some(custom) = state_transaction
-        .world
-        .parameters()
-        .custom()
-        .get(&parameter_id)
-    else {
-        return Err(admission_rejection(
-            ValidationFeeAdmissionError::MissingPolicyRegistryParameter,
-        ));
-    };
-    ValidationFeePolicyRegistryV1::from_custom_parameter(custom).ok_or_else(|| {
-        admission_rejection(ValidationFeeAdmissionError::MalformedPolicyRegistryParameter)
-    })
-}
-
 fn validate_policy_genesis_hash(
     policy: &ValidationFeePolicyV1,
     committed_block_hashes: &[HashOf<BlockHeader>],
@@ -1706,23 +1842,13 @@ fn admission_rejection(error: ValidationFeeAdmissionError) -> TransactionRejecti
 fn policy_fee_asset_definition_id(
     policy: &ValidationFeePolicyV1,
 ) -> Result<AssetDefinitionId, ValidationFeeAdmissionError> {
-    policy.ds_asset_id.parse().map_err(|_| {
-        ValidationFeeAdmissionError::InvalidPolicyInvariant(
-            "validation-fee policy DS asset id is not a ledger asset definition id",
-        )
-    })
+    Ok(policy.ds_asset_id.clone())
 }
 
 fn policy_treasury_account_id(
     policy: &ValidationFeePolicyV1,
 ) -> Result<AccountId, ValidationFeeAdmissionError> {
-    AccountId::parse_encoded(policy.treasury_account_id.as_str())
-        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-        .map_err(|_| {
-            ValidationFeeAdmissionError::InvalidPolicyInvariant(
-                "validation-fee policy treasury account id is not a ledger account id",
-            )
-        })
+    Ok(policy.treasury_account_id.clone())
 }
 
 /// Derive the exact IVM durable-state path used for the consensus-owned fee-credit counter.
@@ -2038,6 +2164,7 @@ fn enforce_policy_with_credit(
     policy: &ValidationFeePolicyV1,
 ) -> Result<u64, ValidationFeeAdmissionError> {
     match policy.charging_mode {
+        ValidationFeeChargingMode::Disabled => return Ok(0),
         ValidationFeeChargingMode::PerQualifyingTransferInstruction => {}
     }
 
@@ -3283,7 +3410,7 @@ fn format_entry_index(entry_index: Option<usize>) -> String {
 mod tests {
     use std::str::FromStr as _;
 
-    use iroha_crypto::{Algorithm, Hash, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, Hash, KeyPair};
     use iroha_data_model::{
         ChainId,
         asset::{AssetDefinitionId, AssetId},
@@ -3329,12 +3456,13 @@ mod tests {
             action::{Action, Repeats},
         },
         validation_fee::{
-            SignedValidationFeePolicyV1, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
-            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeGovernanceKeyV1,
+            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
+            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
+            VALIDATION_FEE_TRANSFER_ENTRY_INDEX_METADATA_KEY, ValidationFeeFinalizationEvidenceV1,
+            ValidationFeeGovernanceVotingModeV1, ValidationFeeGovernanceWindowV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePayoutLifecycleReferenceV1,
             ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicySignatureV1, ValidationFeeTreasuryPayoutRecipientV1,
+            ValidationFeeTreasuryPayoutRecipientV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::{MultisigApprove, MultisigPropose};
@@ -3369,18 +3497,17 @@ mod tests {
     fn policy(treasury: &AccountId) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: "generic-testnet".to_string(),
+            chain_id: "generic-testnet".into(),
             genesis_hash: [7; 32],
             policy_version: 1,
             previous_policy_hash: None,
-            ds_asset_id: fee_asset().to_string(),
+            ds_asset_id: fee_asset(),
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
-            treasury_account_id: treasury.to_string(),
+            treasury_account_id: treasury.clone(),
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 10,
             expires_after_height: Some(100),
-            governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
@@ -3415,7 +3542,7 @@ mod tests {
             sbd_asset_id: fee_asset(),
             xor_asset_id: xor_asset(),
             pool_vault_account_id: account(2),
-            batch_sbd: Quantity::one(),
+            batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
             min_xor_out: Quantity::from(4_u64),
             max_xor_out: Quantity::from(100_u64),
             recipients: (3..=6)
@@ -3439,44 +3566,7 @@ mod tests {
     }
 
     fn policy_fee_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
-        policy.ds_asset_id.parse().expect("policy DS asset id")
-    }
-
-    fn governance_keyset(
-        key_pairs: &[&KeyPair],
-        threshold: u16,
-    ) -> ValidationFeeGovernanceKeysetV1 {
-        ValidationFeeGovernanceKeysetV1 {
-            keyset_id: "validation-fee-governance-v1".to_string(),
-            threshold,
-            keys: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeeGovernanceKeyV1 {
-                    public_key: key_pair.public_key().clone(),
-                    weight: 1,
-                })
-                .collect(),
-        }
-    }
-
-    fn signed_policy(
-        policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
-    ) -> SignedValidationFeePolicyV1 {
-        SignedValidationFeePolicyV1 {
-            signatures: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeePolicySignatureV1 {
-                    public_key: key_pair.public_key().clone(),
-                    signature: SignatureOf::try_new(
-                        key_pair.private_key(),
-                        &policy.signing_payload(),
-                    )
-                    .expect("policy signature"),
-                })
-                .collect(),
-            policy,
-        }
+        policy.ds_asset_id.clone()
     }
 
     fn successor_policy(previous: &ValidationFeePolicyV1) -> ValidationFeePolicyV1 {
@@ -3488,19 +3578,247 @@ mod tests {
         policy
     }
 
+    fn test_parliament_bodies() -> iroha_data_model::governance::types::ParliamentBodies {
+        use iroha_data_model::governance::types::{
+            ParliamentBodies, ParliamentBody, ParliamentRoster,
+        };
+
+        let member = account(250);
+        let rosters = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .map(|body| {
+            (
+                body,
+                ParliamentRoster {
+                    body,
+                    epoch: 1,
+                    members: vec![member.clone()],
+                    alternates: Vec::new(),
+                    verified: 1,
+                    candidate_count: 1,
+                    derived_by: Default::default(),
+                },
+            )
+        })
+        .collect();
+        ParliamentBodies {
+            selection_epoch: 1,
+            rosters,
+        }
+    }
+
+    fn test_roster_root() -> [u8; 32] {
+        let encoded =
+            norito::to_bytes(&test_parliament_bodies()).expect("encode Parliament bodies");
+        let digest = Blake2b512::digest(encoded);
+        let mut root = [0; 32];
+        root.copy_from_slice(&digest[..32]);
+        root
+    }
+
+    fn test_authorization(proposal_id: [u8; 32]) -> ValidationFeeParliamentAuthorizationV1 {
+        ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: test_roster_root(),
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: 1,
+                upper: 1_000,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: 8,
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+            enacted_at_height: 9,
+        }
+    }
+
     fn policy_registry(policies: &[ValidationFeePolicyV1]) -> ValidationFeePolicyRegistryV1 {
         let registered_policies = policies
             .iter()
             .map(|policy| {
-                ValidationFeePolicyRegistryEntryV1::from_policy(policy).expect("registry entry")
+                use iroha_data_model::governance::types::{
+                    ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+                };
+
+                let payout_lifecycle = policy.treasury_payout_binding.as_ref().map(|binding| {
+                    let lifecycle_seal = binding
+                        .lifecycle_seal()
+                        .expect("derive payout lifecycle seal");
+                    let lifecycle_kind = ProposalKind::ValidationFeePayoutLifecycle(
+                        ValidationFeePayoutLifecycleProposal {
+                            payout_binding: binding.clone(),
+                        },
+                    );
+                    let lifecycle_id = lifecycle_kind.fingerprint();
+                    ValidationFeePayoutLifecycleReferenceV1 {
+                        lifecycle_seal,
+                        parliament_authorization: test_authorization(lifecycle_id),
+                    }
+                });
+                let lifecycle_id = payout_lifecycle
+                    .as_ref()
+                    .map(|reference| reference.parliament_authorization.proposal_id);
+                let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    policy: policy.clone(),
+                    payout_lifecycle_proposal_id: lifecycle_id,
+                });
+                let proposal_id = kind.fingerprint();
+                ValidationFeePolicyRegistryEntryV1::from_enactment(
+                    policy.clone(),
+                    test_authorization(proposal_id),
+                    payout_lifecycle,
+                )
+                .expect("registry entry")
             })
             .collect::<Vec<_>>();
-        let active = registered_policies.last().expect("at least one policy");
         ValidationFeePolicyRegistryV1 {
-            active_policy_hash: active.policy_hash,
-            active_policy_version: active.policy_version,
             registered_policies,
         }
+    }
+
+    fn seed_authorized_proposal(
+        kind: iroha_data_model::governance::types::ProposalKind,
+        authorization: ValidationFeeParliamentAuthorizationV1,
+        state_tx: &mut StateTransaction<'_, '_>,
+    ) {
+        use iroha_data_model::{
+            governance::types::{GovernanceFinalizationEvidence, ParliamentBody},
+            isi::governance::VotingMode,
+        };
+
+        let proposal_id = authorization.proposal_id;
+        let referendum_id = hex::encode(proposal_id);
+        let bodies = test_parliament_bodies();
+        state_tx.world.governance_proposals.insert(
+            proposal_id,
+            crate::state::GovernanceProposalRecord {
+                proposer: account(250),
+                kind,
+                created_height: 1,
+                status: crate::state::GovernanceProposalStatus::Enacted,
+                pipeline: crate::state::GovernancePipeline::default(),
+                parliament_snapshot: Some(crate::state::GovernanceParliamentSnapshot {
+                    selection_epoch: 1,
+                    beacon: [0x44; 32],
+                    roster_root: authorization.proposal_time_roster_root,
+                    bodies,
+                }),
+                finalization_evidence: Some(GovernanceFinalizationEvidence {
+                    proposal_id,
+                    referendum_id: proposal_id,
+                    finalized_at_height: authorization.finalization.finalized_at_height,
+                    mode: match authorization.finalization.mode {
+                        ValidationFeeGovernanceVotingModeV1::Zk => VotingMode::Zk,
+                        ValidationFeeGovernanceVotingModeV1::Plain => VotingMode::Plain,
+                    },
+                    approve: authorization.finalization.approve,
+                    reject: authorization.finalization.reject,
+                    abstain: authorization.finalization.abstain,
+                    min_turnout: authorization.finalization.min_turnout,
+                    approval_threshold_numerator: authorization
+                        .finalization
+                        .approval_threshold_numerator,
+                    approval_threshold_denominator: authorization
+                        .finalization
+                        .approval_threshold_denominator,
+                    approved: authorization.finalization.approved,
+                }),
+                enacted_at_height: Some(authorization.enacted_at_height),
+            },
+        );
+        state_tx.world.governance_referenda.insert(
+            referendum_id.clone(),
+            crate::state::GovernanceReferendumRecord {
+                h_start: authorization.referendum_window.lower,
+                h_end: authorization.referendum_window.upper,
+                status: crate::state::GovernanceReferendumStatus::Closed,
+                mode: match authorization.finalization.mode {
+                    ValidationFeeGovernanceVotingModeV1::Zk => {
+                        crate::state::GovernanceReferendumMode::Zk
+                    }
+                    ValidationFeeGovernanceVotingModeV1::Plain => {
+                        crate::state::GovernanceReferendumMode::Plain
+                    }
+                },
+            },
+        );
+        let mut approvals = crate::state::GovernanceStageApprovals::default();
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ] {
+            approvals
+                .ensure_stage(body, 1, 1, 10_000)
+                .record(account(250));
+        }
+        state_tx
+            .world
+            .governance_stage_approvals
+            .insert(referendum_id, approvals);
+    }
+
+    fn install_policy_registry_fixture(
+        registry: &ValidationFeePolicyRegistryV1,
+        state_tx: &mut StateTransaction<'_, '_>,
+    ) {
+        use iroha_data_model::governance::types::{
+            ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        };
+
+        for entry in &registry.registered_policies {
+            if let (Some(binding), Some(reference)) = (
+                entry.policy.treasury_payout_binding.as_ref(),
+                entry.payout_lifecycle.as_ref(),
+            ) {
+                seed_authorized_proposal(
+                    ProposalKind::ValidationFeePayoutLifecycle(
+                        ValidationFeePayoutLifecycleProposal {
+                            payout_binding: binding.clone(),
+                        },
+                    ),
+                    reference.parliament_authorization,
+                    state_tx,
+                );
+            }
+            seed_authorized_proposal(
+                ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+                    policy: entry.policy.clone(),
+                    payout_lifecycle_proposal_id: entry
+                        .payout_lifecycle
+                        .as_ref()
+                        .map(|reference| reference.parliament_authorization.proposal_id),
+                }),
+                entry.parliament_authorization,
+                state_tx,
+            );
+        }
+        state_tx
+            .world
+            .parameters
+            .get_mut()
+            .set_parameter(Parameter::Custom(registry.clone().into_custom_parameter()));
     }
 
     fn block_hash(bytes: [u8; 32]) -> HashOf<BlockHeader> {
@@ -4512,65 +4830,70 @@ mod tests {
     }
 
     #[test]
-    fn active_policy_requires_valid_threshold_signed_policy() {
-        let first = key_pair(21);
-        let second = key_pair(22);
-        let treasury = account(3);
-        let policy = policy(&treasury);
-        let keyset = governance_keyset(&[&first, &second], 2);
-
-        assert_eq!(
-            verify_signed_policy(signed_policy(policy.clone(), &[&first, &second]), &keyset),
-            Ok(policy.clone())
-        );
-
-        assert!(matches!(
-            verify_signed_policy(signed_policy(policy.clone(), &[&first]), &keyset),
-            Err(ValidationFeeAdmissionError::InvalidPolicySignature(reason))
-                if reason.contains("do not meet threshold")
-        ));
-
-        let mut invalid_policy = policy;
-        invalid_policy.fee = iroha_primitives::numeric::Quantity::zero();
-        assert_eq!(
-            verify_signed_policy(signed_policy(invalid_policy, &[&first, &second]), &keyset),
-            Err(ValidationFeeAdmissionError::InvalidPolicyInvariant(
-                "validation-fee policy amount must be 0.1"
-            ))
-        );
-    }
-
-    #[test]
     fn active_policy_registry_requires_monotonic_chain() {
         let treasury = account(3);
         let first = policy(&treasury);
         let second = successor_policy(&first);
         let registry = policy_registry(&[first.clone(), second.clone()]);
 
-        verify_policy_registry(&second, &registry).expect("valid policy chain");
+        registry.validate().expect("valid policy chain");
 
         let mut skipped = registry.clone();
-        skipped.registered_policies[1].policy_version = 3;
+        skipped.registered_policies[1].policy.policy_version = 3;
         assert!(matches!(
-            verify_policy_registry(&second, &skipped),
-            Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(reason))
-                if reason.contains("expected 2, found 3")
+            skipped.validate(),
+            Err(iroha_data_model::validation_fee::ValidationFeePolicyRegistryError::UnexpectedPolicyVersion {
+                expected: 2,
+                found: 3,
+            })
         ));
 
         let mut broken_previous = registry.clone();
-        broken_previous.registered_policies[1].previous_policy_hash = Some([9; 32]);
+        broken_previous.registered_policies[1]
+            .policy
+            .previous_policy_hash = Some([9; 32]);
         assert!(matches!(
-            verify_policy_registry(&second, &broken_previous),
-            Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(reason))
-                if reason.contains("previous hash is broken")
+            broken_previous.validate(),
+            Err(iroha_data_model::validation_fee::ValidationFeePolicyRegistryError::BrokenPreviousPolicyHash {
+                policy_version: 2,
+            })
         ));
+    }
 
-        let rollback = policy_registry(&[first]);
-        assert!(matches!(
-            verify_policy_registry(&second, &rollback),
-            Err(ValidationFeeAdmissionError::InvalidPolicyRegistry(reason))
-                if reason.contains("active version mismatch")
+    #[test]
+    fn enacted_initial_policy_remains_inactive_until_delayed_effective_height() {
+        let mut future = policy_with_treasury_payout_binding(treasury_payout_binding(
+            test_contract_address(),
+            b"future-policy-payout",
         ));
+        future.effective_from_height =
+            9 + iroha_data_model::validation_fee::VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
+        future.expires_after_height = future.effective_from_height.checked_add(100);
+        let registry = policy_registry(std::slice::from_ref(&future));
+        let state = crate::state::State::new_with_chain_for_testing(
+            crate::state::World::default(),
+            crate::kura::Kura::blank_kura_for_testing(),
+            crate::query::store::LiveQueryStore::start_test(),
+            "generic-testnet".parse().expect("chain id"),
+        );
+        let header = iroha_data_model::block::BlockHeader::new(
+            std::num::NonZeroU64::new(9).expect("height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = state.block(header);
+        let mut state_tx = block.transaction();
+        install_policy_registry_fixture(&registry, &mut state_tx);
+
+        assert!(
+            active_policy(&state_tx)
+                .expect("future initial policy is valid")
+                .is_none(),
+            "the mandatory 120,960-block activation delay must not halt pre-activation writes"
+        );
     }
 
     #[test]
@@ -4578,43 +4901,14 @@ mod tests {
         let treasury = account(3);
         let policy = policy(&treasury);
 
-        assert_eq!(
-            policy_is_active_or_unexpired(&policy, policy.effective_from_height - 1),
-            Ok(false)
-        );
-        assert_eq!(
-            policy_is_active_or_unexpired(&policy, policy.effective_from_height),
-            Ok(true)
-        );
+        assert!(!policy.is_active_at_height(policy.effective_from_height - 1));
+        assert!(policy.is_active_at_height(policy.effective_from_height));
         let successor = successor_policy(&policy);
-        assert_eq!(
-            policy_is_active_or_unexpired(
-                &successor,
-                successor.effective_from_height.saturating_sub(1)
-            ),
-            Err(ValidationFeeAdmissionError::FutureSuccessorPolicy {
-                policy_version: successor.policy_version,
-                effective_from_height: successor.effective_from_height,
-                current_height: successor.effective_from_height.saturating_sub(1),
-            })
+        assert!(!successor.is_active_at_height(successor.effective_from_height.saturating_sub(1)));
+        assert!(
+            policy.is_active_at_height(policy.expires_after_height.expect("expiry height") - 1)
         );
-        assert_eq!(
-            policy_is_active_or_unexpired(
-                &policy,
-                policy.expires_after_height.expect("expiry height") - 1
-            ),
-            Ok(true)
-        );
-        assert_eq!(
-            policy_is_active_or_unexpired(
-                &policy,
-                policy.expires_after_height.expect("expiry height")
-            ),
-            Err(ValidationFeeAdmissionError::PolicyExpired {
-                expires_after_height: policy.expires_after_height.expect("expiry height"),
-                current_height: policy.expires_after_height.expect("expiry height"),
-            })
-        );
+        assert!(!policy.is_active_at_height(policy.expires_after_height.expect("expiry height")));
     }
 
     #[test]
@@ -5589,7 +5883,7 @@ mod tests {
             test_contract_address(),
             b"bound-pool",
         ));
-        policy.treasury_account_id = account(7).to_string();
+        policy.treasury_account_id = account(7);
         assert_eq!(
             policy.policy_invariant_error(),
             Some("validation-fee treasury payout contract subject must equal the policy treasury")
@@ -5600,9 +5894,7 @@ mod tests {
     fn active_treasury_payout_policy_accepts_only_matching_bound_contract_runtime() {
         use iroha_data_model::{
             block::BlockHeader,
-            isi::SetParameter,
             nexus::DataSpaceId,
-            parameter::Parameter,
             prelude::{Account, AssetDefinition, Domain},
             smart_contract::ContractAddress,
         };
@@ -5696,47 +5988,22 @@ mod tests {
         )
         .expect("register immutable contract subject account");
         let policy = policy_with_treasury_payout_binding(binding.clone());
-        let governance = key_pair(44);
-        let keyset = governance_keyset(&[&governance], 1);
         let mut wrong_code_binding = binding.clone();
         wrong_code_binding.code_hash[0] ^= 0xff;
         let wrong_code_policy = policy_with_treasury_payout_binding(wrong_code_binding);
         let wrong_code_registry = policy_registry(std::slice::from_ref(&wrong_code_policy));
-        let wrong_code_signed = signed_policy(wrong_code_policy, &[&governance]);
-        for custom in [
-            keyset.into_custom_parameter(),
-            wrong_code_registry.into_custom_parameter(),
-            wrong_code_signed.into_custom_parameter(),
-        ] {
-            crate::smartcontracts::Execute::execute(
-                SetParameter::new(Parameter::Custom(custom)),
-                &deployer,
-                &mut state_tx,
-            )
-            .expect("install wrong-code validation-fee policy fixture");
-        }
+        install_policy_registry_fixture(&wrong_code_registry, &mut state_tx);
         let wrong_code_error = active_policy(&state_tx)
-            .expect_err("the signed binding cannot name another SHA-256 artifact");
+            .expect_err("the governed binding cannot name another SHA-256 artifact");
         assert!(
             matches!(wrong_code_error, TransactionRejectionReason::Validation(
                 ValidationFail::NotPermitted(ref message)
             ) if message.contains("deployed code hash differs from the signed binding")),
-            "unexpected signed code-hash rejection: {wrong_code_error:?}",
+            "unexpected governed code-hash rejection: {wrong_code_error:?}",
         );
 
         let registry = policy_registry(std::slice::from_ref(&policy));
-        let signed = signed_policy(policy.clone(), &[&governance]);
-        for custom in [
-            registry.into_custom_parameter(),
-            signed.into_custom_parameter(),
-        ] {
-            crate::smartcontracts::Execute::execute(
-                SetParameter::new(Parameter::Custom(custom)),
-                &deployer,
-                &mut state_tx,
-            )
-            .expect("install active validation-fee policy");
-        }
+        install_policy_registry_fixture(&registry, &mut state_tx);
 
         active_policy(&state_tx)
             .expect("read active policy")
@@ -6186,15 +6453,12 @@ mod tests {
 
     #[test]
     fn active_policy_admission_rejects_completed_ivm_proved_axt() {
-        use iroha_data_model::{block::BlockHeader, isi::SetParameter, parameter::Parameter};
+        use iroha_data_model::block::BlockHeader;
         use nonzero_ext::nonzero;
 
         let treasury = account(3);
         let policy = policy(&treasury);
-        let governance = key_pair(44);
-        let keyset = governance_keyset(&[&governance], 1);
         let registry = policy_registry(std::slice::from_ref(&policy));
-        let signed = signed_policy(policy, &[&governance]);
         let state = crate::state::State::new_with_chain_for_testing(
             crate::state::World::default(),
             crate::kura::Kura::blank_kura_for_testing(),
@@ -6210,18 +6474,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(10_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut state_tx = block.transaction();
-        for custom in [
-            keyset.into_custom_parameter(),
-            registry.into_custom_parameter(),
-            signed.into_custom_parameter(),
-        ] {
-            crate::smartcontracts::Execute::execute(
-                SetParameter::new(Parameter::Custom(custom)),
-                &treasury,
-                &mut state_tx,
-            )
-            .expect("install active validation-fee policy");
-        }
+        install_policy_registry_fixture(&registry, &mut state_tx);
 
         let error = enforce_ivm_proved_completed_axt_admission(1, &state_tx)
             .expect_err("active policy must reject opaque IvmProved AXT effects");

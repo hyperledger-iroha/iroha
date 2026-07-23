@@ -267,7 +267,124 @@ const JS_MAX_SAFE_INTEGER_F64: f64 = 9_007_199_254_740_991.0;
 /// a stale native module happens to expose similarly named privacy functions.
 #[napi(js_name = "connectNoritoBridgeAbiVersion")]
 pub fn connect_norito_bridge_abi_version() -> u32 {
-    19
+    21
+}
+
+fn validation_fee_fixed_hash(value: &Uint8Array, label: &str) -> napi::Result<[u8; 32]> {
+    let bytes: [u8; 32] = value.as_ref().try_into().map_err(|_| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must contain exactly 32 bytes"),
+        )
+    })?;
+    if bytes.iter().all(|byte| *byte == 0) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("{label} must be a non-zero 32-byte Iroha hash"),
+        ));
+    }
+    Ok(bytes)
+}
+
+/// Encode the frozen Norito request for one validation-fee proof page.
+#[napi(js_name = "validationFeeCurrentPolicyProofRequestV1")]
+pub fn validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: JsU64,
+    trusted_checkpoint_context_id: Uint8Array,
+) -> napi::Result<Buffer> {
+    let trusted_checkpoint_height = trusted_checkpoint_height.0;
+    if trusted_checkpoint_height == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "trustedCheckpointHeight must be positive",
+        ));
+    }
+    let _ =
+        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let request = iroha::client::ValidationFeeCurrentPolicyProofRequestV1 {
+        version: iroha::client::VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    };
+    norito::to_bytes(&request)
+        .map(Buffer::from)
+        .map_err(|error| {
+            napi::Error::new(
+                napi::Status::GenericFailure,
+                format!("failed to encode validation-fee proof request: {error}"),
+            )
+        })
+}
+
+/// Locally verify one validation-fee proof page under immutable deployment bindings.
+#[napi(js_name = "validationFeeVerifyCurrentPolicyProofV1")]
+#[allow(clippy::too_many_arguments)]
+pub fn validation_fee_verify_current_policy_proof_v1(
+    proof_norito: Uint8Array,
+    chain_id: String,
+    bound_genesis_hash: Uint8Array,
+    policy_chain_genesis_hash: Uint8Array,
+    trusted_checkpoint_height: JsU64,
+    trusted_checkpoint_context_id: Uint8Array,
+) -> napi::Result<String> {
+    const MAX_PROOF_BYTES: usize = iroha::client::VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES;
+    if proof_norito.is_empty() || proof_norito.len() > MAX_PROOF_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("proofNorito must contain 1..{MAX_PROOF_BYTES} bytes"),
+        ));
+    }
+    if chain_id.is_empty()
+        || chain_id.len() > 256
+        || chain_id.trim() != chain_id
+        || chain_id.chars().any(char::is_control)
+    {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "chainId must be canonical bounded text",
+        ));
+    }
+    let chain_id = chain_id.parse::<ChainId>().map_err(|error| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("chainId is invalid: {error}"),
+        )
+    })?;
+    let bound_genesis_hash = validation_fee_fixed_hash(&bound_genesis_hash, "boundGenesisHash")?;
+    let policy_chain_genesis_hash =
+        validation_fee_fixed_hash(&policy_chain_genesis_hash, "policyChainGenesisHash")?;
+    let trusted_checkpoint_height = trusted_checkpoint_height.0;
+    if trusted_checkpoint_height == 0 {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "trustedCheckpointHeight must be positive",
+        ));
+    }
+    let trusted_checkpoint_context_id =
+        validation_fee_fixed_hash(&trusted_checkpoint_context_id, "trustedCheckpointContextId")?;
+    let proof: iroha::client::ValidationFeeCurrentPolicyProofV1 =
+        decode_from_bytes(proof_norito.as_ref()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("proofNorito is not a validation-fee proof: {error}"),
+            )
+        })?;
+    let canonical = norito::to_bytes(&proof).map_err(norito_to_napi)?;
+    if canonical != proof_norito.as_ref() {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "proofNorito is not canonical",
+        ));
+    }
+    let projection = proof
+        .verify_with_immutable_binding(
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(napi::Error::from_reason)?;
+    json::to_json(&projection).map_err(norito_to_napi)
 }
 
 const SUPPORTED_CRYPTO_ALGORITHMS: &[Algorithm] = &[
@@ -14401,6 +14518,59 @@ pub fn sign_quoted_transaction_payload(
     })
 }
 
+/// Replace only an unsigned proved-IVM payload's fee limits, reattach its proof, and sign it.
+#[napi]
+#[allow(clippy::needless_pass_by_value)]
+pub fn sign_quoted_ivm_proved_transaction_payload(
+    payload_json: String,
+    attachment_json: String,
+    quoted_fee_payment_json: String,
+    secret: Uint8Array,
+    private_key_algorithm: Option<String>,
+) -> napi::Result<JsSignedTransaction> {
+    let mut payload: TransactionPayload = json::from_json(&payload_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid transaction payload JSON: {err}"),
+        )
+    })?;
+    if !matches!(payload.instructions, Executable::IvmProved(_)) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted proved-IVM signer requires an IvmProved executable",
+        ));
+    }
+    let attachment: ProofAttachment = json::from_json(&attachment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid ProofAttachment json: {err}"),
+        )
+    })?;
+    let quoted_fee_payment = parse_fee_payment_intent(&quoted_fee_payment_json)?;
+    if !same_fee_payer_selection(&payload.fee_payment, &quoted_fee_payment) {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "quoted fee intent changed the selected payer, exact sponsor program revision, or gas bound",
+        ));
+    }
+    payload.fee_payment = quoted_fee_payment;
+    let builder = TransactionBuilder::from_payload(payload)
+        .map_err(norito_to_napi)?
+        .with_attachments(ProofAttachmentList(vec![attachment]));
+    let algorithm = parse_crypto_algorithm(private_key_algorithm.as_deref())?;
+    let private_key = PrivateKey::from_bytes(algorithm, secret.as_ref()).map_err(norito_to_napi)?;
+    let signed = sign_js_transaction(
+        builder,
+        &private_key,
+        "quoted proved-IVM JavaScript payload",
+    )?;
+    let signed_bytes = Encode::encode(&signed);
+    Ok(JsSignedTransaction {
+        signed_transaction: Buffer::from(signed_bytes),
+        hash: Buffer::from(signed.hash().as_ref().to_vec()),
+    })
+}
+
 /// Build and sign a transaction from an array of instruction JSON payloads.
 #[napi]
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)] // JS bindings expose this exact surface to callers
@@ -14473,6 +14643,66 @@ pub fn build_executable_batch_transaction(
         secret.as_ref(),
         private_key_algorithm,
     )
+}
+
+/// Build, but do not sign, an `Executable::IvmProved` payload and its proof attachment.
+///
+/// The returned payload is the exact payload that must be submitted to the fee-quote endpoint
+/// before applying the quoted limits with [`sign_quoted_ivm_proved_transaction_payload`].
+#[napi]
+#[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
+pub fn build_ivm_proved_transaction_payload(
+    chain_id: String,
+    authority: String,
+    proved_json: String,
+    attachment_json: String,
+    fee_payment_json: String,
+    metadata_json: Option<String>,
+    creation_time_ms: Option<i64>,
+    ttl_ms: Option<i64>,
+    nonce: Option<u32>,
+) -> napi::Result<JsTransactionPayloadDraft> {
+    let chain_id: ChainId = chain_id.parse().map_err(|err| {
+        napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
+    })?;
+    let _chain_guard = scoped_chain_discriminant_for_literal(&authority);
+    let authority = parse_account_id(&authority, "authority account id")?;
+    let proved: IvmProved = json::from_json(&proved_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid IvmProved json: {err}"),
+        )
+    })?;
+    let attachment: ProofAttachment = json::from_json(&attachment_json).map_err(|err| {
+        napi::Error::new(
+            napi::Status::InvalidArg,
+            format!("invalid ProofAttachment json: {err}"),
+        )
+    })?;
+    let fee_payment = parse_fee_payment_intent(&fee_payment_json)?;
+    let metadata = parse_metadata_payload("transaction", metadata_json)?;
+    let builder = configure_transaction_builder(
+        TransactionBuilder::new(chain_id, authority, fee_payment)
+            .with_executable(Executable::IvmProved(proved)),
+        metadata,
+        Some(ProofAttachmentList(vec![attachment])),
+        creation_time_ms,
+        ttl_ms,
+        nonce,
+    )?;
+    let payload_bytes = builder.encode_payload();
+    if payload_bytes.len() > EXTERNAL_TRANSACTION_PAYLOAD_MAX_BYTES {
+        return Err(napi::Error::new(
+            napi::Status::InvalidArg,
+            "transaction payload exceeds 1048576 bytes",
+        ));
+    }
+    let payload_json = json::to_json(builder.payload()).map_err(norito_to_napi)?;
+    Ok(JsTransactionPayloadDraft {
+        payload_json,
+        payload_bytes: Buffer::from(payload_bytes),
+        payload_hash: Buffer::from(builder.payload_hash_bytes().to_vec()),
+    })
 }
 
 /// Build and sign a transaction carrying an `Executable::IvmProved` payload and its proof attachment.
@@ -14792,6 +15022,17 @@ pub fn build_precommit_trigger_action(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn validation_fee_hash_accepts_nonzero_even_ending_bytes() {
+        let hash = Uint8Array::from(vec![0x02; 32]);
+        assert_eq!(
+            validation_fee_fixed_hash(&hash, "checkpoint")
+                .expect("Iroha hashes have no parity validity bit"),
+            [0x02; 32]
+        );
+        assert!(validation_fee_fixed_hash(&Uint8Array::from(vec![0; 32]), "checkpoint").is_err());
+    }
+
     fn replication_order_with_timestamps(issued_at: u64, deadline_at: u64) -> ReplicationOrderV1 {
         ReplicationOrderV1 {
             version: 1,
@@ -23223,6 +23464,62 @@ seiyaku Privacy {
         let proved_json = json::to_json(&proved).expect("proved json");
         let attachment_json = json::to_json(&attachment).expect("attachment json");
         let (_, secret_bytes) = keypair.private_key().to_bytes();
+
+        let draft = build_ivm_proved_transaction_payload(
+            chain_id.to_string(),
+            account_json_literal(&authority),
+            proved_json.clone(),
+            attachment_json.clone(),
+            authority_fee_payment_json_with_gas(1_000),
+            None,
+            Some(1_700_000_000_000),
+            Some(5_000),
+            Some(42),
+        )
+        .expect("unsigned transaction built");
+        let draft_payload: TransactionPayload =
+            json::from_json(&draft.payload_json).expect("decode unsigned payload");
+        assert_eq!(draft.payload_bytes.as_ref(), draft_payload.encode());
+        assert_eq!(
+            draft.payload_hash.as_ref(),
+            TransactionBuilder::from_payload(draft_payload.clone())
+                .expect("valid payload")
+                .payload_hash_bytes()
+        );
+        assert_eq!(
+            draft_payload.instructions,
+            Executable::IvmProved(proved.clone())
+        );
+
+        let quoted = FeePaymentIntent::authority(
+            vec![iroha_data_model::transaction::FeeChargeLimit::new(
+                iroha_data_model::transaction::FeeChargeKind::PipelineGas,
+                AssetDefinitionId::new(
+                    DomainId::try_new("fees", "universal").expect("fee domain"),
+                    "xor".parse().expect("asset name"),
+                ),
+                "5".parse().expect("fee amount"),
+            )],
+            NonZeroU64::new(1_000),
+        );
+        let quoted_result = sign_quoted_ivm_proved_transaction_payload(
+            draft.payload_json,
+            attachment_json.clone(),
+            json::to_json(&quoted).expect("quote json"),
+            Uint8Array::from(secret_bytes.clone()),
+            None,
+        )
+        .expect("quoted transaction signed");
+        let quoted_tx =
+            decode_signed_transaction(quoted_result.signed_transaction.as_ref()).expect("decode");
+        assert_eq!(quoted_tx.fee_payment_intent(), &quoted);
+        assert_eq!(
+            quoted_tx.attachments(),
+            Some(&ProofAttachmentList(vec![attachment.clone()]))
+        );
+        quoted_tx
+            .verify_signature()
+            .expect("quoted transaction signature verifies");
 
         let result = build_ivm_proved_transaction(
             chain_id.to_string(),

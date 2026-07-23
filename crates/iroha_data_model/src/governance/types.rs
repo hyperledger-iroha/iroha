@@ -25,9 +25,13 @@ use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 use crate::{
     account::AccountId,
     asset::AssetId,
-    isi::{bridge::SccpRouteGovernanceActionV1, governance::CouncilDerivationKind},
+    isi::{
+        bridge::SccpRouteGovernanceActionV1,
+        governance::{CouncilDerivationKind, VotingMode},
+    },
     runtime::RuntimeUpgradeManifest,
     smart_contract::{ContractAddress, manifest::ManifestProvenance},
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
@@ -407,6 +411,10 @@ pub enum ProposalKind {
     RuntimeUpgrade(RuntimeUpgradeProposal),
     /// Apply one closed SCCP route-registry action through governance.
     SccpRouteGovernance(SccpRouteGovernanceProposal),
+    /// Enact one validation-fee policy through SORA Parliament.
+    ValidationFeePolicy(ValidationFeePolicyProposal),
+    /// Authorize one exact validation-fee treasury payout lifecycle.
+    ValidationFeePayoutLifecycle(ValidationFeePayoutLifecycleProposal),
 }
 
 /// Proposal payload for deploying an IVM contract via governance.
@@ -451,6 +459,34 @@ pub struct SccpRouteGovernanceProposal {
     pub action: Box<SccpRouteGovernanceActionV1>,
 }
 
+/// Proposal payload for one governed validation-fee policy.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeePolicyProposal {
+    /// Complete policy to append to the protected validation-fee registry.
+    pub policy: ValidationFeePolicyV1,
+    /// Exact previously enacted payout lifecycle required by a policy carrying a payout binding.
+    pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
+}
+
+/// Proposal payload authorizing one exact validation-fee payout lifecycle.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ValidationFeePayoutLifecycleProposal {
+    /// Exact payout binding authorized by this lifecycle.
+    ///
+    /// Its deterministic non-zero lifecycle seal is derived from this complete
+    /// payload, so the native proposal fingerprint binds the seal transitively
+    /// without accepting a redundant caller-supplied value.
+    pub payout_binding: ValidationFeeTreasuryPayoutBindingV1,
+}
+
 /// Inclusive execution window for enactment certificates.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -462,6 +498,37 @@ pub struct AtWindow {
     pub lower: u64,
     /// Last block in the enactment window (inclusive).
     pub upper: u64,
+}
+
+/// Consensus-retained evidence for one finalized governance referendum.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct GovernanceFinalizationEvidence {
+    /// Deterministic proposal identifier.
+    pub proposal_id: [u8; 32],
+    /// Referendum identifier, equal to the proposal identifier for native governance.
+    pub referendum_id: [u8; 32],
+    /// Block height at which the referendum result was finalized.
+    pub finalized_at_height: u64,
+    /// Voting mode whose tally was finalized.
+    pub mode: VotingMode,
+    /// Final approve weight.
+    pub approve: u128,
+    /// Final reject weight.
+    pub reject: u128,
+    /// Final abstain weight.
+    pub abstain: u128,
+    /// Minimum turnout applied to this result.
+    pub min_turnout: u128,
+    /// Approval-threshold numerator applied to this result.
+    pub approval_threshold_numerator: u64,
+    /// Approval-threshold denominator applied to this result.
+    pub approval_threshold_denominator: u64,
+    /// Final deterministic decision.
+    pub approved: bool,
 }
 
 /// Governance parameters (subset) — see gov.md for full spec.
@@ -1020,6 +1087,12 @@ mod tests {
             ProposalKind::SccpRouteGovernance(_) => {
                 panic!("unexpected sccp-route-governance proposal")
             }
+            ProposalKind::ValidationFeePolicy(_) => {
+                panic!("unexpected validation-fee policy proposal")
+            }
+            ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                panic!("unexpected validation-fee payout lifecycle proposal")
+            }
         }
     }
 
@@ -1050,6 +1123,12 @@ mod tests {
             ProposalKind::DeployContract(_) => panic!("unexpected deploy-contract proposal"),
             ProposalKind::SccpRouteGovernance(_) => {
                 panic!("unexpected sccp-route-governance proposal")
+            }
+            ProposalKind::ValidationFeePolicy(_) => {
+                panic!("unexpected validation-fee policy proposal")
+            }
+            ProposalKind::ValidationFeePayoutLifecycle(_) => {
+                panic!("unexpected validation-fee payout lifecycle proposal")
             }
         }
     }

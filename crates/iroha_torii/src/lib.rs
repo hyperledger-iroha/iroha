@@ -72,6 +72,8 @@ pub mod profile_stats;
 mod push;
 #[doc(hidden)]
 pub mod query_load_profiles;
+#[cfg(feature = "app_api")]
+mod validation_fee_api;
 mod vpn;
 /// Helpers for constructing Norito JSON values within Torii.
 pub mod json_utils {
@@ -52690,6 +52692,22 @@ impl Torii {
             mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
             mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
             mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_post!(
+                VALIDATION_FEE_CURRENT_POLICY_PROOF,
+                validation_fee_api::handler_current_policy_proof
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSALS,
+                validation_fee_api::handler_proposals
+            );
+            mount_get!(
+                VALIDATION_FEE_PROPOSAL_DETAIL,
+                validation_fee_api::handler_proposal_detail
+            );
+            mount_post!(
+                VALIDATION_FEE_PROPOSAL_DRAFT,
+                validation_fee_api::handler_proposal_draft
+            );
             mount_get!(GOV_PROPOSAL_GET, handler_gov_proposal_get);
             mount_get!(GOV_LOCKS_GET, handler_gov_locks_get);
             mount_get!(GOV_REFERENDUM_GET, handler_gov_referendum_get);

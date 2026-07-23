@@ -57424,33 +57424,32 @@ mod validation_fee_torii_ingress_tests {
         kura::Kura,
         query::store::LiveQueryStore,
         queue::{Queue, TransactionGuard},
-        smartcontracts::Execute,
         smartcontracts::ivm::cache::IvmCache,
         state::{State, World},
     };
-    use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, blake2::Blake2b512};
     use iroha_data_model::{
         account::AccountId,
         asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
         block::BlockHeader,
         domain::DomainId,
-        isi::{SetParameter, Transfer},
+        isi::Transfer,
         metadata::Metadata,
-        parameter::Parameter,
         prelude::*,
         transaction::SignedTransaction,
         validation_fee::{
-            SignedValidationFeePolicyV1, VALIDATION_FEE_DS_SCALE,
-            VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
-            VALIDATION_FEE_POLICY_SCHEMA_VERSION, VALIDATION_FEE_POLICY_VERSION_METADATA_KEY,
-            ValidationFeeChargingMode, ValidationFeeGovernanceKeyV1,
-            ValidationFeeGovernanceKeysetV1, ValidationFeeMultisigMarkerV1,
-            ValidationFeePolicyRegistryEntryV1, ValidationFeePolicyRegistryV1,
-            ValidationFeePolicySignatureV1, ValidationFeePolicyV1,
+            VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
+            VALIDATION_FEE_POLICY_HASH_METADATA_KEY, VALIDATION_FEE_POLICY_SCHEMA_VERSION,
+            VALIDATION_FEE_POLICY_VERSION_METADATA_KEY, ValidationFeeChargingMode,
+            ValidationFeeFinalizationEvidenceV1, ValidationFeeGovernanceVotingModeV1,
+            ValidationFeeGovernanceWindowV1, ValidationFeeMultisigMarkerV1,
+            ValidationFeeParliamentAuthorizationV1, ValidationFeePolicyRegistryEntryV1,
+            ValidationFeePolicyRegistryV1, ValidationFeePolicyV1,
         },
     };
     use iroha_executor_data_model::isi::multisig::MultisigPropose;
     use iroha_primitives::{json::Json, numeric::Quantity};
+    use sha2::Digest as _;
 
     use super::*;
 
@@ -57600,93 +57599,173 @@ mod validation_fee_torii_ingress_tests {
     ) -> ValidationFeePolicyV1 {
         ValidationFeePolicyV1 {
             schema_version: VALIDATION_FEE_POLICY_SCHEMA_VERSION,
-            network_id: state.chain_id.to_string(),
+            chain_id: state.chain_id.clone(),
             genesis_hash,
             policy_version: 1,
             previous_policy_hash: None,
-            ds_asset_id: fee_asset.to_string(),
+            ds_asset_id: fee_asset,
             ds_scale: TEST_VALIDATION_FEE_ASSET_SCALE,
             fee: iroha_data_model::validation_fee::initial_validation_fee_amount(),
-            treasury_account_id: treasury.to_string(),
+            treasury_account_id: treasury,
             charging_mode: ValidationFeeChargingMode::PerQualifyingTransferInstruction,
             effective_from_height: 3,
             expires_after_height: Some(100),
-            governance_keyset_id: "validation-fee-governance-v1".to_string(),
             exemption_classes: Vec::new(),
             treasury_payout_binding: None,
         }
     }
 
     fn validation_fee_policy_asset(policy: &ValidationFeePolicyV1) -> AssetDefinitionId {
-        policy.ds_asset_id.parse().expect("policy DS asset id")
+        policy.ds_asset_id.clone()
     }
 
     fn validation_fee_policy_treasury(policy: &ValidationFeePolicyV1) -> AccountId {
-        AccountId::parse_encoded(policy.treasury_account_id.as_str())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("policy treasury account id")
-    }
-
-    fn signed_policy(
-        policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
-    ) -> SignedValidationFeePolicyV1 {
-        SignedValidationFeePolicyV1 {
-            signatures: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeePolicySignatureV1 {
-                    public_key: key_pair.public_key().clone(),
-                    signature: SignatureOf::try_new(
-                        key_pair.private_key(),
-                        &policy.signing_payload(),
-                    )
-                    .expect("policy signature"),
-                })
-                .collect(),
-            policy,
-        }
-    }
-
-    fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistryV1 {
-        let entry = ValidationFeePolicyRegistryEntryV1::from_policy(policy)
-            .expect("validation-fee registry entry");
-        ValidationFeePolicyRegistryV1 {
-            active_policy_hash: entry.policy_hash,
-            active_policy_version: entry.policy_version,
-            registered_policies: vec![entry],
-        }
+        policy.treasury_account_id.clone()
     }
 
     fn install_validation_fee_policy(
         state: &Arc<State>,
         authority: &AccountId,
         policy: ValidationFeePolicyV1,
-        key_pairs: &[&KeyPair],
     ) {
-        let keyset = ValidationFeeGovernanceKeysetV1 {
-            keyset_id: policy.governance_keyset_id.clone(),
-            threshold: u16::try_from(key_pairs.len()).expect("threshold fits"),
-            keys: key_pairs
-                .iter()
-                .map(|key_pair| ValidationFeeGovernanceKeyV1 {
-                    public_key: key_pair.public_key().clone(),
-                    weight: 1,
-                })
-                .collect(),
+        use iroha_data_model::{
+            governance::types::{
+                GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
+                ProposalKind, ValidationFeePolicyProposal,
+            },
+            isi::governance::VotingMode,
         };
-        let signed = signed_policy(policy.clone(), key_pairs);
-        let registry = policy_registry(&policy);
+
+        let member = authority.clone();
+        let rosters = [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
+        ]
+        .into_iter()
+        .map(|body| {
+            (
+                body,
+                ParliamentRoster {
+                    body,
+                    epoch: 1,
+                    members: vec![member.clone()],
+                    alternates: Vec::new(),
+                    verified: 1,
+                    candidate_count: 1,
+                    derived_by: Default::default(),
+                },
+            )
+        })
+        .collect();
+        let bodies = ParliamentBodies {
+            selection_epoch: 1,
+            rosters,
+        };
+        let roster_digest = Blake2b512::digest(
+            norito::to_bytes(&bodies).expect("encode validation-fee Parliament bodies"),
+        );
+        let mut roster_root = [0; 32];
+        roster_root.copy_from_slice(&roster_digest[..32]);
+        let kind = ProposalKind::ValidationFeePolicy(ValidationFeePolicyProposal {
+            policy: policy.clone(),
+            payout_lifecycle_proposal_id: None,
+        });
+        let proposal_id = kind.fingerprint();
+        let authorization = ValidationFeeParliamentAuthorizationV1 {
+            proposal_id,
+            proposal_fingerprint: proposal_id,
+            proposal_time_roster_root: roster_root,
+            referendum_window: ValidationFeeGovernanceWindowV1 {
+                lower: 1,
+                upper: 100,
+            },
+            finalization: ValidationFeeFinalizationEvidenceV1 {
+                referendum_id: proposal_id,
+                finalized_at_height: 2,
+                mode: ValidationFeeGovernanceVotingModeV1::Plain,
+                approve: 1,
+                reject: 0,
+                abstain: 0,
+                min_turnout: 1,
+                approval_threshold_numerator: 1,
+                approval_threshold_denominator: 2,
+                approved: true,
+            },
+            enacted_at_height: 2,
+        };
+        let entry = ValidationFeePolicyRegistryEntryV1::from_enactment(policy, authorization, None)
+            .expect("validation-fee registry entry");
+        let registry = ValidationFeePolicyRegistryV1 {
+            registered_policies: vec![entry],
+        };
         let mut block = state.block(block_header(2, 1_700_000_001_000));
         let mut stx = block.transaction();
-        for custom in [
-            keyset.into_custom_parameter(),
-            registry.into_custom_parameter(),
-            signed.into_custom_parameter(),
+        stx.world.governance_proposals_mut().insert(
+            proposal_id,
+            iroha_core::state::GovernanceProposalRecord {
+                proposer: authority.clone(),
+                kind,
+                created_height: 1,
+                status: iroha_core::state::GovernanceProposalStatus::Enacted,
+                pipeline: iroha_core::state::GovernancePipeline::default(),
+                parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
+                    selection_epoch: 1,
+                    beacon: [0x55; 32],
+                    roster_root,
+                    bodies,
+                }),
+                finalization_evidence: Some(GovernanceFinalizationEvidence {
+                    proposal_id,
+                    referendum_id: proposal_id,
+                    finalized_at_height: 2,
+                    mode: VotingMode::Plain,
+                    approve: 1,
+                    reject: 0,
+                    abstain: 0,
+                    min_turnout: 1,
+                    approval_threshold_numerator: 1,
+                    approval_threshold_denominator: 2,
+                    approved: true,
+                }),
+                enacted_at_height: Some(2),
+            },
+        );
+        let referendum_id = hex::encode(proposal_id);
+        stx.world.governance_referenda_mut().insert(
+            referendum_id.clone(),
+            iroha_core::state::GovernanceReferendumRecord {
+                h_start: 1,
+                h_end: 100,
+                status: iroha_core::state::GovernanceReferendumStatus::Closed,
+                mode: iroha_core::state::GovernanceReferendumMode::Plain,
+            },
+        );
+        let mut approvals = iroha_core::state::GovernanceStageApprovals::default();
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+            ParliamentBody::FmaCommittee,
         ] {
-            SetParameter::new(Parameter::Custom(custom))
-                .execute(authority, &mut stx)
-                .expect("install validation-fee custom parameter");
+            approvals
+                .ensure_stage(body, 1, 1, 10_000)
+                .record(authority.clone());
         }
+        stx.world
+            .governance_stage_approvals_mut()
+            .insert(referendum_id, approvals);
+        stx.world
+            .parameters_mut_for_testing()
+            .get_mut()
+            .set_parameter(Parameter::Custom(registry.into_custom_parameter()));
         stx.apply();
         block.commit().expect("commit validation-fee policy");
     }
@@ -57856,10 +57935,8 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&state, &user, policy.clone());
 
         let missing_fee_queue = queue();
         let missing_fee_tx = signed_transfer(
@@ -57914,11 +57991,9 @@ mod validation_fee_torii_ingress_tests {
         let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
         let chain_id = Arc::new(state.chain_id.clone());
         let genesis_hash = commit_empty_genesis_like_block(&state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy =
             validation_fee_policy(&state, fee_asset.clone(), treasury.clone(), genesis_hash);
-        install_validation_fee_policy(&state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&state, &user, policy.clone());
         let (multisig, _) = account(4, "derive validation-fee multisig account");
 
         let proposal = || {
@@ -58030,10 +58105,8 @@ mod validation_fee_torii_ingress_tests {
     ) {
         let (app, user, user_key_pair, recipient, treasury, fee_asset) = test_app_state();
         let genesis_hash = commit_empty_genesis_like_block(&app.state);
-        let gov_1 = ed25519_key_pair(21, "derive validation-fee governance signer one");
-        let gov_2 = ed25519_key_pair(22, "derive validation-fee governance signer two");
         let policy = validation_fee_policy(&app.state, fee_asset.clone(), treasury, genesis_hash);
-        install_validation_fee_policy(&app.state, &user, policy.clone(), &[&gov_1, &gov_2]);
+        install_validation_fee_policy(&app.state, &user, policy.clone());
         (app, user, user_key_pair, recipient, policy)
     }
 

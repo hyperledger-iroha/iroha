@@ -20,8 +20,11 @@ pub use self::at_window_placeholder::AtWindow;
 #[cfg(feature = "governance")]
 pub use crate::governance::types::AtWindow;
 use crate::{
-    isi::bridge::SccpRouteGovernanceActionV1, prelude::*, runtime::RuntimeUpgradeManifest,
+    isi::bridge::SccpRouteGovernanceActionV1,
+    prelude::*,
+    runtime::RuntimeUpgradeManifest,
     smart_contract::manifest::ManifestProvenance,
+    validation_fee::{ValidationFeePolicyV1, ValidationFeeTreasuryPayoutBindingV1},
 };
 
 #[cfg(not(feature = "governance"))]
@@ -175,6 +178,37 @@ pub struct ProposeSccpRouteGovernance {
 }
 
 impl crate::seal::Instruction for ProposeSccpRouteGovernance {}
+
+/// Propose one validation-fee policy through SORA Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+pub struct ProposeValidationFeePolicy {
+    /// Complete policy to append if Parliament and the referendum approve it.
+    pub policy: ValidationFeePolicyV1,
+    /// Exact enacted payout lifecycle required when the policy carries a payout binding.
+    pub payout_lifecycle_proposal_id: Option<[u8; 32]>,
+    /// Optional inclusive referendum voting window override.
+    pub referendum_window: Option<AtWindow>,
+    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
+    pub mode: Option<VotingMode>,
+}
+
+impl crate::seal::Instruction for ProposeValidationFeePolicy {}
+
+/// Propose one exact validation-fee payout lifecycle through SORA Parliament.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
+pub struct ProposeValidationFeePayoutLifecycle {
+    /// Exact treasury payout binding authorized by this lifecycle.
+    ///
+    /// Consensus derives the non-zero lifecycle seal from this complete
+    /// binding before accepting the proposal.
+    pub payout_binding: ValidationFeeTreasuryPayoutBindingV1,
+    /// Optional inclusive referendum voting window override.
+    pub referendum_window: Option<AtWindow>,
+    /// Optional voting mode for the referendum (default `Plain`; `Zk` is rejected).
+    pub mode: Option<VotingMode>,
+}
+
+impl crate::seal::Instruction for ProposeValidationFeePayoutLifecycle {}
 
 /// Cast a ZK ballot (default voting mode)
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
@@ -539,6 +573,19 @@ impl_governance_decode_from_slice!(ProposeRuntimeUpgradeProposal {
 impl_governance_decode_from_slice!(ProposeSccpRouteGovernance {
     action: SccpRouteGovernanceActionV1,
     window: Option<AtWindow>,
+    mode: Option<VotingMode>,
+});
+
+impl_governance_decode_from_slice!(ProposeValidationFeePolicy {
+    policy: ValidationFeePolicyV1,
+    payout_lifecycle_proposal_id: Option<[u8; 32]>,
+    referendum_window: Option<AtWindow>,
+    mode: Option<VotingMode>,
+});
+
+impl_governance_decode_from_slice!(ProposeValidationFeePayoutLifecycle {
+    payout_binding: ValidationFeeTreasuryPayoutBindingV1,
+    referendum_window: Option<AtWindow>,
     mode: Option<VotingMode>,
 });
 

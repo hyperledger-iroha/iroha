@@ -410,6 +410,8 @@ PLIST
     "connect_norito_canonical_json_blake3_v1",
     "connect_norito_encode_account_onboarding_plan_body_v1",
     "connect_norito_alias_instruction_round_trip_v1",
+    "connect_norito_validation_fee_current_policy_proof_request_v1",
+    "connect_norito_validation_fee_current_policy_proof_verify_v1",
     "connect_norito_kagemusha_recursive_spend_capabilities_v4",
     "connect_norito_kagemusha_topup_finality_verify_v4",
     "connect_norito_kagemusha_topup_shield_build_unsigned_v4",
@@ -693,6 +695,8 @@ for namespace in (
 ):
     for method in shell_array("KAGEMUSHA_JNI_METHODS"):
         print(f"Java_{namespace}_KagemushaRecursiveSpendProver_{method}")
+for symbol in shell_array("VALIDATION_FEE_JNI_SYMBOLS"):
+    print(symbol)
 if os.environ.get("MOBILE_SDK_TEST_EXTRA_ANDROID_KAGEMUSHA") == "1":
     print("connect_norito_kagemusha_recursive_spend_init_v3")
 PY

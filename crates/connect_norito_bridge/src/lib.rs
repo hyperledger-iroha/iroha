@@ -67,7 +67,13 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::isi::multisig::{MultisigRegister, MultisigSpec};
 use iroha_primitives::{json::Json, numeric::Quantity};
-use iroha_torii_shared::{connect as proto, connect_sdk};
+use iroha_torii_shared::{
+    connect as proto, connect_sdk,
+    validation_fee_api::{
+        VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        ValidationFeeCurrentPolicyProofRequestV1, ValidationFeeCurrentPolicyProofV1,
+    },
+};
 use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
 use ivm::{AccelerationConfig, BackendRuntimeStatus};
 use libc::{c_char, c_int, c_uchar, c_ulong, free, malloc};
@@ -185,6 +191,7 @@ const ERR_ALIAS_INSTRUCTION: c_int = -409;
 const ERR_DETACHED_TRANSACTION_SCAFFOLD: c_int = -501;
 const ERR_DETACHED_TRANSACTION_SIGNATURE: c_int = -502;
 const ERR_CANONICAL_JSON: c_int = -503;
+const ERR_VALIDATION_FEE_POLICY_PROOF: c_int = -504;
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
@@ -233,6 +240,7 @@ enum BridgeError {
     DetachedTransactionScaffold,
     DetachedTransactionSignature,
     CanonicalJson,
+    ValidationFeePolicyProof,
 }
 
 impl BridgeError {
@@ -286,6 +294,7 @@ impl BridgeError {
             BridgeError::DetachedTransactionScaffold => ERR_DETACHED_TRANSACTION_SCAFFOLD,
             BridgeError::DetachedTransactionSignature => ERR_DETACHED_TRANSACTION_SIGNATURE,
             BridgeError::CanonicalJson => ERR_CANONICAL_JSON,
+            BridgeError::ValidationFeePolicyProof => ERR_VALIDATION_FEE_POLICY_PROOF,
         }
     }
 }
@@ -6015,6 +6024,172 @@ pub unsafe extern "C" fn connect_norito_canonical_json_blake3_v1(
         unsafe { write_bytes_bridge(out_canonical_json_ptr, out_canonical_json_len, &canonical) }?;
         unsafe { ptr::copy_nonoverlapping(digest.as_bytes().as_ptr(), out_hash_ptr, 32) };
         Ok(())
+    })();
+    bridge_result_to_code(result)
+}
+
+fn validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; 32],
+) -> BridgeResult<Vec<u8>> {
+    if trusted_checkpoint_height == 0 || trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
+    {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    norito::to_bytes(&ValidationFeeCurrentPolicyProofRequestV1 {
+        version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+        trusted_checkpoint_height,
+    })
+    .map_err(|_| BridgeError::ValidationFeePolicyProof)
+}
+
+fn validation_fee_current_policy_proof_verify_v1(
+    proof_archive: &[u8],
+    chain_id: ChainId,
+    bound_genesis_hash: [u8; 32],
+    policy_chain_genesis_hash: [u8; 32],
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id: [u8; 32],
+) -> BridgeResult<Vec<u8>> {
+    if proof_archive.is_empty()
+        || proof_archive.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
+    {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    let proof: ValidationFeeCurrentPolicyProofV1 =
+        decode_from_bytes(proof_archive).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    let canonical = norito::to_bytes(&proof).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    if canonical != proof_archive {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    let projection = proof
+        .verify_with_immutable_binding(
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    let json =
+        norito::json::to_vec(&projection).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+    if json.is_empty() || json.len() > DETACHED_TRANSACTION_JSON_MAX_BYTES {
+        return Err(BridgeError::ValidationFeePolicyProof);
+    }
+    Ok(json)
+}
+
+/// Encode the exact Norito request body for one bounded current-policy proof page.
+///
+/// The checkpoint context is validated here for API symmetry with the proof
+/// verifier but is intentionally not serialized: Torii's frozen V1 request
+/// contains only the layout version and checkpoint height.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_request_v1(
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    out_request_ptr: *mut *mut c_uchar,
+    out_request_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_request_ptr, out_request_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_request_ptr, out_request_len)?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<32>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let request = validation_fee_current_policy_proof_request_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )?;
+        unsafe { write_bytes_bridge(out_request_ptr, out_request_len, &request) }
+    })();
+    bridge_result_to_code(result)
+}
+
+/// Locally verify one canonical proof page and return bounded canonical JSON.
+///
+/// Verification binds the full registry to finality, the synthetic ordinary
+/// write, the exact chain id, every policy's deployment genesis, policy
+/// version one's hash, and the caller's durable checkpoint.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_validation_fee_current_policy_proof_verify_v1(
+    proof_norito_ptr: *const c_uchar,
+    proof_norito_len: c_ulong,
+    chain_id_ptr: *const c_uchar,
+    chain_id_len: c_ulong,
+    bound_genesis_hash_ptr: *const c_uchar,
+    bound_genesis_hash_len: c_ulong,
+    policy_chain_genesis_hash_ptr: *const c_uchar,
+    policy_chain_genesis_hash_len: c_ulong,
+    trusted_checkpoint_height: u64,
+    trusted_checkpoint_context_id_ptr: *const c_uchar,
+    trusted_checkpoint_context_id_len: c_ulong,
+    out_projection_json_ptr: *mut *mut c_uchar,
+    out_projection_json_len: *mut c_ulong,
+) -> c_int {
+    clear_bridge_output(out_projection_json_ptr, out_projection_json_len);
+    let result = (|| {
+        clear_bridge_output_or_null(out_projection_json_ptr, out_projection_json_len)?;
+        let proof_len =
+            usize::try_from(proof_norito_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        let chain_id_len =
+            usize::try_from(chain_id_len).map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        if proof_norito_ptr.is_null()
+            || proof_len == 0
+            || proof_len > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
+            || chain_id_ptr.is_null()
+            || chain_id_len == 0
+            || chain_id_len > 256
+        {
+            return Err(BridgeError::ValidationFeePolicyProof);
+        }
+        let proof = unsafe { slice::from_raw_parts(proof_norito_ptr, proof_len) };
+        let chain_id_bytes = unsafe { slice::from_raw_parts(chain_id_ptr, chain_id_len) };
+        let chain_id = std::str::from_utf8(chain_id_bytes)
+            .map_err(|_| BridgeError::ValidationFeePolicyProof)?
+            .parse::<ChainId>()
+            .map_err(|_| BridgeError::ValidationFeePolicyProof)?;
+        let bound_genesis_hash = unsafe {
+            read_fixed_array::<32>(
+                bound_genesis_hash_ptr,
+                bound_genesis_hash_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let policy_chain_genesis_hash = unsafe {
+            read_fixed_array::<32>(
+                policy_chain_genesis_hash_ptr,
+                policy_chain_genesis_hash_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let trusted_checkpoint_context_id = unsafe {
+            read_fixed_array::<32>(
+                trusted_checkpoint_context_id_ptr,
+                trusted_checkpoint_context_id_len,
+                BridgeError::ValidationFeePolicyProof,
+            )
+        }?;
+        let projection = validation_fee_current_policy_proof_verify_v1(
+            proof,
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )?;
+        unsafe {
+            write_bytes_bridge(
+                out_projection_json_ptr,
+                out_projection_json_len,
+                &projection,
+            )
+        }
     })();
     bridge_result_to_code(result)
 }
@@ -16612,6 +16787,57 @@ pub extern "C" fn connect_norito_free(ptr_: *mut c_uchar) {
         unsafe {
             free(ptr_ as *mut _);
         }
+    }
+}
+
+#[cfg(test)]
+mod validation_fee_policy_proof_bridge_tests {
+    use super::*;
+
+    #[test]
+    fn request_encoder_validates_context_without_serializing_it() {
+        let first_context = [1_u8; 32];
+        let mut second_context = [3_u8; 32];
+        second_context[0] = 9;
+        let first = validation_fee_current_policy_proof_request_v1(17, first_context)
+            .expect("encode first request");
+        let second = validation_fee_current_policy_proof_request_v1(17, second_context)
+            .expect("encode second request");
+        assert_eq!(first, second);
+        let decoded: ValidationFeeCurrentPolicyProofRequestV1 =
+            decode_from_bytes(&first).expect("decode request");
+        assert_eq!(
+            decoded,
+            ValidationFeeCurrentPolicyProofRequestV1 {
+                version: VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
+                trusted_checkpoint_height: 17,
+            }
+        );
+        assert!(
+            validation_fee_current_policy_proof_request_v1(0, first_context).is_err(),
+            "zero height must fail closed"
+        );
+        assert!(
+            validation_fee_current_policy_proof_request_v1(17, [0; 32]).is_err(),
+            "zero context must fail closed"
+        );
+        validation_fee_current_policy_proof_request_v1(17, [2; 32])
+            .expect("Iroha context hashes have no parity validity bit");
+    }
+
+    #[test]
+    fn proof_verifier_rejects_malformed_archive() {
+        assert!(
+            validation_fee_current_policy_proof_verify_v1(
+                b"not norito",
+                ChainId::from("validation-fee-test"),
+                [1; 32],
+                [3; 32],
+                1,
+                [5; 32],
+            )
+            .is_err()
+        );
     }
 }
 
@@ -31459,6 +31685,204 @@ fn read_java_byte_array_bounded(
     target_os = "macos",
     target_os = "windows"
 ))]
+fn java_validation_fee_policy_proof_result(
+    env: &mut jni::JNIEnv<'_>,
+    body: impl FnOnce(&mut jni::JNIEnv<'_>) -> Result<Vec<u8>, String>,
+) -> jni::sys::jbyteArray {
+    match body(env).and_then(|bytes| {
+        env.byte_array_from_slice(&bytes)
+            .map(jni::objects::JByteArray::into_raw)
+            .map_err(|error| error.to_string())
+    }) {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, format!("validation-fee consensus proof: {message}"));
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_validation_fee_current_policy_proof_request_v1(
+    env: &mut jni::JNIEnv<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_policy_proof_result(env, |env| {
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            32,
+        )
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        validation_fee_current_policy_proof_request_v1(
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| "trusted checkpoint was rejected".to_owned())
+    })
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::too_many_arguments)]
+fn java_native_validation_fee_current_policy_proof_verify_v1(
+    env: &mut jni::JNIEnv<'_>,
+    proof_norito: jni::objects::JByteArray<'_>,
+    chain_id: jni::objects::JByteArray<'_>,
+    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_validation_fee_policy_proof_result(env, |env| {
+        let proof = read_java_byte_array_bounded(
+            env,
+            &proof_norito,
+            "proofNorito",
+            VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES,
+        )
+        .ok_or_else(|| "proofNorito must be a bounded nonempty archive".to_owned())?;
+        let chain_id = read_java_byte_array_bounded(env, &chain_id, "chainId", 256)
+            .ok_or_else(|| "chainId must be bounded nonempty UTF-8".to_owned())
+            .and_then(|bytes| {
+                String::from_utf8(bytes).map_err(|_| "chainId must be UTF-8".to_owned())
+            })?
+            .parse::<ChainId>()
+            .map_err(|_| "chainId is invalid".to_owned())?;
+        let bound_genesis_hash: [u8; 32] =
+            read_java_byte_array_bounded(env, &bound_genesis_hash, "boundGenesisHash", 32)
+                .ok_or_else(|| "boundGenesisHash must contain exactly 32 bytes".to_owned())?
+                .try_into()
+                .map_err(|_| "boundGenesisHash must contain exactly 32 bytes".to_owned())?;
+        let policy_chain_genesis_hash: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &policy_chain_genesis_hash,
+            "policyChainGenesisHash",
+            32,
+        )
+        .ok_or_else(|| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "policyChainGenesisHash must contain exactly 32 bytes".to_owned())?;
+        let trusted_checkpoint_height = u64::try_from(trusted_checkpoint_height)
+            .ok()
+            .filter(|height| *height != 0)
+            .ok_or_else(|| "trustedCheckpointHeight must be positive".to_owned())?;
+        let trusted_checkpoint_context_id: [u8; 32] = read_java_byte_array_bounded(
+            env,
+            &trusted_checkpoint_context_id,
+            "trustedCheckpointContextId",
+            32,
+        )
+        .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
+        .try_into()
+        .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
+        validation_fee_current_policy_proof_verify_v1(
+            &proof,
+            chain_id,
+            bound_genesis_hash,
+            policy_chain_genesis_hash,
+            trusted_checkpoint_height,
+            trusted_checkpoint_context_id,
+        )
+        .map_err(|_| {
+            "proof, finality, registry, or immutable deployment binding was rejected".to_owned()
+        })
+    })
+}
+
+/// Report the exact native ABI required by the validation-fee proof bridge.
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeBridgeAbiVersion(
+    _env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+) -> jni::sys::jint {
+    CONNECT_NORITO_BRIDGE_ABI_VERSION as jni::sys::jint
+}
+
+/// JNI projection of
+/// [`connect_norito_validation_fee_current_policy_proof_request_v1`].
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeEncodeCurrentPolicyProofRequestV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_current_policy_proof_request_v1(
+        &mut env,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+    )
+}
+
+/// JNI projection of
+/// [`connect_norito_validation_fee_current_policy_proof_verify_v1`].
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc, clippy::too_many_arguments)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_validationfee_ValidationFeeConsensusProofBridge_nativeVerifyCurrentPolicyProofV1(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    proof_norito: jni::objects::JByteArray<'_>,
+    chain_id: jni::objects::JByteArray<'_>,
+    bound_genesis_hash: jni::objects::JByteArray<'_>,
+    policy_chain_genesis_hash: jni::objects::JByteArray<'_>,
+    trusted_checkpoint_height: jni::sys::jlong,
+    trusted_checkpoint_context_id: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_validation_fee_current_policy_proof_verify_v1(
+        &mut env,
+        proof_norito,
+        chain_id,
+        bound_genesis_hash,
+        policy_chain_genesis_hash,
+        trusted_checkpoint_height,
+        trusted_checkpoint_context_id,
+    )
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
 fn java_sorafs_reference_generated_at(generated_at: jni::sys::jlong) -> Result<u64, String> {
     u64::try_from(generated_at).map_err(|_| "generatedAtUnix must be non-negative".to_owned())
 }
@@ -34764,10 +35188,8 @@ fn java_native_kagemusha_verify_recipient_registration_lineage_v2(
         .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
         .try_into()
         .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
-            || trusted_checkpoint_context_id[31] & 1 == 0
-        {
-            return Err("trustedCheckpointContextId must be a canonical Iroha hash".to_owned());
+        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0) {
+            return Err("trustedCheckpointContextId must be a non-zero Iroha hash".to_owned());
         }
         let verified = kagemusha_recipient_registration_lineage_verify_v2(
             &request,
@@ -34921,10 +35343,8 @@ fn java_native_kagemusha_verify_recipient_receive_offer_v2(
         .ok_or_else(|| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?
         .try_into()
         .map_err(|_| "trustedCheckpointContextId must contain exactly 32 bytes".to_owned())?;
-        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
-            || trusted_checkpoint_context_id[31] & 1 == 0
-        {
-            return Err("trustedCheckpointContextId must be a canonical Iroha hash".to_owned());
+        if trusted_checkpoint_context_id.iter().all(|byte| *byte == 0) {
+            return Err("trustedCheckpointContextId must be a non-zero Iroha hash".to_owned());
         }
         let (projected, verified) = kagemusha_recipient_receive_offer_verify_v2(
             &offer,

@@ -62,10 +62,10 @@ pub mod kagemusha_finality;
 /// Fixed-shape ABI-21/V4 Eq/Ep recursive verifier and terminal IPA decisions.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_recursion_adapter;
+pub(crate) mod kagemusha_sha256_table16_v4;
 /// Exact row-bounded SHA-256 used by the composite Kagemusha Step circuit.
 #[cfg(feature = "zk-halo2-ipa")]
 pub(crate) mod kagemusha_sha256_v4;
-pub(crate) mod kagemusha_sha256_table16_v4;
 #[cfg(feature = "zk-halo2-ipa")]
 /// Exact field-neutral operation ABI and assigned two-parent Step transition.
 #[cfg(feature = "zk-halo2-ipa")]
