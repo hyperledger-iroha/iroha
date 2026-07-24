@@ -573,6 +573,16 @@
           }
         },
         {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+              "object": {
+                "name": "CanRegisterAccount"
+              }
+            }
+          }
+        },
+        {
           "Mint": {
             "Asset": {
               "destination": "61CtjvNd9T3THAR65GsMVHr82Bjc#testuﾛ1NrpｽﾓaMﾒﾌNhziﾙZfvWn9ﾙﾘvFqxｾmUﾓﾏ2ﾊｷﾍhqzｾ71P2D3",

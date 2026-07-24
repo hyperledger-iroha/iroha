@@ -144,6 +144,15 @@ def _contract_deployment_gate_projection(payload: dict) -> dict:
             .get("name")
             == "CanRegisterSmartContractCode"
         ],
+        "account_registration_grants": [
+            instruction["Grant"]["Permission"]
+            for instruction in instructions
+            if instruction.get("Grant", {})
+            .get("Permission", {})
+            .get("object", {})
+            .get("name")
+            == "CanRegisterAccount"
+        ],
     }
 
 
@@ -170,6 +179,12 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
             {
                 "destination": TAIRA_GENESIS_DEPLOYER_ID,
                 "object": {"name": "CanRegisterSmartContractCode"},
+            }
+        ],
+        "account_registration_grants": [
+            {
+                "destination": TAIRA_GENESIS_DEPLOYER_ID,
+                "object": {"name": "CanRegisterAccount"},
             }
         ],
     }
