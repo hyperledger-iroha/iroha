@@ -45,8 +45,8 @@ use crate::{
 };
 
 // Canonical argument preparation checks a conservative predecode gas quote
-// covering bounded complete materialization; keep the default above that
-// bound with room for a small call.
+// covering bounded complete materialization. Keep the default above the strict
+// admission floor; representative bounded schemas fit this default.
 const DEFAULT_CONTRACT_GAS_LIMIT: u64 = 1_500_000;
 
 #[derive(clap::Subcommand, Debug)]

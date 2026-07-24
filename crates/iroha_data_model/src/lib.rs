@@ -176,7 +176,8 @@ pub mod transaction;
 pub mod transactions;
 /// Trigger definitions and scheduling utilities.
 pub mod trigger;
-/// Validation-fee policy and transaction metadata bindings.
+/// Parliament-governed validation-fee policy and transaction metadata bindings.
+#[cfg(feature = "governance")]
 pub mod validation_fee;
 /// Permission tokens and helpers related to validators.
 pub mod validator;

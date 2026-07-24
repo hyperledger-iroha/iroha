@@ -19227,8 +19227,8 @@ pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Resul
 
 #[cfg(feature = "app_api")]
 // Canonical argument preparation checks a conservative predecode gas quote
-// covering bounded complete materialization; keep implicit contract-call/view
-// budgets above that bound.
+// covering bounded complete materialization. Keep implicit contract-call/view
+// budgets above the strict admission floor; representative bounded schemas fit.
 const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 
 #[cfg(feature = "app_api")]
