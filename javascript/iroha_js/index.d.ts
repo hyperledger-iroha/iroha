@@ -13665,6 +13665,17 @@ export function noritoDecodeInstruction(
   options?: { parseJson?: boolean },
 ): JsonValue;
 
+/**
+ * Compute the exact native Parliament fingerprint for a validation-fee policy.
+ *
+ * The policy must use the native snake-case `ValidationFeePolicyV1` JSON
+ * contract. Missing, unknown, and legacy fields are rejected natively.
+ */
+export function computeValidationFeePolicyProposalFingerprintV1(
+  policy: Readonly<Record<string, JsonValue>>,
+  payoutLifecycleProposalId?: string | null,
+): string;
+
 export interface LaneRelaySample {
   valid: Buffer;
   tampered: Buffer;

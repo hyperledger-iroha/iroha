@@ -73,6 +73,86 @@ pub mod i128_string {
     }
 }
 
+/// Serialize unsigned 64-bit integers as canonical decimal strings and reject
+/// every non-canonical spelling on input.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod u64_string {
+    use super::*;
+
+    fn parse_canonical(raw: &str) -> Result<u64, norito::json::Error> {
+        if raw.is_empty()
+            || (raw.len() > 1 && raw.starts_with('0'))
+            || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(norito::json::Error::Message(format!(
+                "invalid canonical u64 decimal string: {raw}"
+            )));
+        }
+        raw.parse::<u64>().map_err(|_| {
+            norito::json::Error::Message(format!("u64 decimal string is out of range: {raw}"))
+        })
+    }
+
+    pub fn serialize(value: &u64, out: &mut String) {
+        JsonSerialize::json_serialize(&value.to_string(), out);
+    }
+
+    pub fn deserialize(parser: &mut Parser<'_>) -> Result<u64, norito::json::Error> {
+        parse_canonical(&parser.parse_string()?)
+    }
+
+    pub mod option {
+        use super::*;
+
+        #[allow(clippy::ref_option)]
+        pub fn serialize(value: &Option<u64>, out: &mut String) {
+            match value {
+                Some(value) => super::serialize(value, out),
+                None => out.push_str("null"),
+            }
+        }
+
+        pub fn deserialize(parser: &mut Parser<'_>) -> Result<Option<u64>, norito::json::Error> {
+            parser.skip_ws();
+            if parser.try_consume_null()? {
+                return Ok(None);
+            }
+            super::deserialize(parser).map(Some)
+        }
+    }
+}
+
+/// Serialize unsigned 128-bit integers as canonical decimal strings and reject
+/// every non-canonical spelling on input.
+#[cfg(feature = "json")]
+#[allow(dead_code)]
+pub mod u128_string {
+    use super::*;
+
+    fn parse_canonical(raw: &str) -> Result<u128, norito::json::Error> {
+        if raw.is_empty()
+            || (raw.len() > 1 && raw.starts_with('0'))
+            || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(norito::json::Error::Message(format!(
+                "invalid canonical u128 decimal string: {raw}"
+            )));
+        }
+        raw.parse::<u128>().map_err(|_| {
+            norito::json::Error::Message(format!("u128 decimal string is out of range: {raw}"))
+        })
+    }
+
+    pub fn serialize(value: &u128, out: &mut String) {
+        JsonSerialize::json_serialize(&value.to_string(), out);
+    }
+
+    pub fn deserialize(parser: &mut Parser<'_>) -> Result<u128, norito::json::Error> {
+        parse_canonical(&parser.parse_string()?)
+    }
+}
+
 /// Helpers for fixed-size byte arrays (`[u8; N]`) and their container variants.
 #[cfg(feature = "json")]
 #[allow(dead_code)]

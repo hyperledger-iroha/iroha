@@ -58,6 +58,7 @@ export {
   normalizeValidationFeeLedgerBindingV1,
   verifyValidationFeeCurrentPolicyProofV1,
 } from "./validationFeeConsensus.js";
+export { computeValidationFeePolicyProposalFingerprintV1 } from "./validationFeeProposal.js";
 export { ValidationError, ValidationErrorCode } from "./validationError.js";
 export {
   ToriiClient,

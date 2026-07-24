@@ -28,6 +28,7 @@ use ed25519_dalek::{Signature as Ed25519Signature, Verifier as _};
 use ed25519_dalek::{Signer as _, SigningKey};
 use iroha_data_model::prelude::{Mintable, Name};
 use iroha_data_model::{
+    account::address::ChainDiscriminantGuard,
     asset::{AssetBalanceScope, AssetId},
     nexus::DataSpaceId,
     smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress},
@@ -83,6 +84,7 @@ struct TestOptions {
     exact: bool,
     jobs: usize,
     seed: u64,
+    chain_discriminant: u16,
     zk_enabled: bool,
     output: TestOutputFormat,
     output_path: Option<PathBuf>,
@@ -187,7 +189,7 @@ pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     if suite.tests.is_empty() {
         return Err("no Kotodama tests matched the requested filter".to_owned());
     }
-    let compiled = compile_suite(&suite, options.zk_enabled)?;
+    let compiled = compile_suite_for_chain(&suite, options.zk_enabled, options.chain_discriminant)?;
     let trace_mode = match options.command {
         Command::Run => TraceMode::Off,
         Command::Coverage => TraceMode::PcOnly,
@@ -197,7 +199,12 @@ pub fn run_cli(args: Vec<String>) -> Result<(), String> {
     if options.output != TestOutputFormat::Text && options.command != Command::Run {
         return Err("JSON and JUnit output are currently available for `koto test run`".to_owned());
     }
-    let results = execute_suite(&compiled, trace_mode, options.jobs)?;
+    let results = execute_suite_for_chain(
+        &compiled,
+        trace_mode,
+        options.jobs,
+        options.chain_discriminant,
+    )?;
     emit_test_results(
         &suite.target_path,
         &results,
@@ -234,6 +241,7 @@ fn parse_args(args: Vec<String>) -> Result<TestOptions, String> {
     let mut exact = false;
     let mut jobs = 1_usize;
     let mut seed = 0_u64;
+    let mut chain_discriminant = None;
     let mut zk_enabled = false;
     let mut output = TestOutputFormat::Text;
     let mut output_path = None;
@@ -281,6 +289,16 @@ fn parse_args(args: Vec<String>) -> Result<TestOptions, String> {
                     .parse()
                     .map_err(|_| "--seed must be an unsigned integer".to_owned())?;
             }
+            "--chain-discriminant" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| "--chain-discriminant requires a value".to_owned())?;
+                let parsed = parse_chain_discriminant(raw)?;
+                if chain_discriminant.replace(parsed).is_some() {
+                    return Err("--chain-discriminant may be supplied only once".to_owned());
+                }
+            }
             "--zk" => zk_enabled = true,
             "--json" => output = TestOutputFormat::Json,
             "--junit" => {
@@ -326,10 +344,32 @@ fn parse_args(args: Vec<String>) -> Result<TestOptions, String> {
         exact,
         jobs,
         seed,
+        chain_discriminant: chain_discriminant
+            .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
         zk_enabled,
         output,
         output_path,
     })
+}
+
+fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
+    if raw.is_empty()
+        || (raw.len() > 1 && raw.starts_with('0'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "invalid --chain-discriminant value `{raw}`: expected a decimal integer in 1..=65535"
+        ));
+    }
+    let value = raw.parse::<u16>().map_err(|_| {
+        format!(
+            "invalid --chain-discriminant value `{raw}`: expected a decimal integer in 1..=65535"
+        )
+    })?;
+    if value == 0 {
+        return Err("--chain-discriminant must be in 1..=65535".to_owned());
+    }
+    Ok(value)
 }
 
 fn filter_and_order_tests(tests: &mut Vec<TestCase>, options: &TestOptions) {
@@ -626,10 +666,24 @@ fn build_fixture_map(fixtures: &[FixtureDecl]) -> Result<HashMap<String, Fixture
     Ok(map)
 }
 
+#[cfg(test)]
 fn compile_suite(suite: &DiscoveredSuite, zk_enabled: bool) -> Result<CompiledSuite, String> {
+    compile_suite_for_chain(
+        suite,
+        zk_enabled,
+        iroha_data_model::account::address::chain_discriminant(),
+    )
+}
+
+fn compile_suite_for_chain(
+    suite: &DiscoveredSuite,
+    zk_enabled: bool,
+    chain_discriminant: u16,
+) -> Result<CompiledSuite, String> {
     let source_name = suite.target_path.display().to_string();
     let test_opts = CompilerOptions {
         force_zk: zk_enabled,
+        chain_discriminant,
         mode: CompilerMode::Test,
         ..CompilerOptions::default()
     };
@@ -808,10 +862,25 @@ fn normalize_user_function_name(name: &str) -> Option<&str> {
     Some(name)
 }
 
+#[cfg(test)]
 fn execute_suite(
     compiled: &CompiledSuite,
     trace_mode: TraceMode,
     jobs: usize,
+) -> Result<Vec<TestRunResult>, String> {
+    execute_suite_for_chain(
+        compiled,
+        trace_mode,
+        jobs,
+        iroha_data_model::account::address::chain_discriminant(),
+    )
+}
+
+fn execute_suite_for_chain(
+    compiled: &CompiledSuite,
+    trace_mode: TraceMode,
+    jobs: usize,
+    chain_discriminant: u16,
 ) -> Result<Vec<TestRunResult>, String> {
     let suite_return_pc = compiled
         .suite
@@ -820,6 +889,7 @@ fn execute_suite(
         .ok_or_else(|| "compiled suite is missing its validated return entrypoint".to_owned())?;
     let worker_count = jobs.min(compiled.tests.len().max(1));
     if worker_count == 1 {
+        let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
         return compiled
             .tests
             .iter()
@@ -831,6 +901,7 @@ fn execute_suite(
         let mut workers = Vec::with_capacity(worker_count);
         for worker in 0..worker_count {
             workers.push(scope.spawn(move || {
+                let _chain_discriminant = ChainDiscriminantGuard::enter(chain_discriminant);
                 compiled
                     .tests
                     .iter()
@@ -899,7 +970,7 @@ fn build_host_for_fixture(
     compiled: &CompiledSuite,
     fixture_name: Option<&str>,
 ) -> Result<KotoTestHost, String> {
-    let caller = parse_account_literal(DEFAULT_CALLER)?;
+    let caller = default_caller_account()?;
     let base_host =
         WsvHost::new_with_subject(MockWorldStateView::default(), caller, HashMap::new());
     let mut host = KotoTestHost::new(
@@ -1997,6 +2068,11 @@ fn parse_account_literal(raw: &str) -> Result<AccountId, String> {
         .map_err(|_| format!("invalid account id `{raw}`"))
 }
 
+fn default_caller_account() -> Result<AccountId, String> {
+    let _chain_discriminant = ChainDiscriminantGuard::enter(CHAIN_DISCRIMINANT_MAINNET);
+    parse_account_literal(DEFAULT_CALLER)
+}
+
 fn parse_domain_literal(raw: &str) -> Result<DomainId, String> {
     if raw.contains('.') {
         return DomainId::parse_fully_qualified(raw)
@@ -2805,6 +2881,8 @@ mod tests {
             "smoke".to_string(),
             "--jobs".to_string(),
             "2".to_string(),
+            "--chain-discriminant".to_string(),
+            "369".to_string(),
             "--zk".to_string(),
         ])
         .expect("parse args");
@@ -2812,7 +2890,66 @@ mod tests {
         assert_eq!(options.path, PathBuf::from("contracts/demo.ko"));
         assert_eq!(options.filter.as_deref(), Some("smoke"));
         assert_eq!(options.jobs, 2);
+        assert_eq!(options.chain_discriminant, 369);
         assert!(options.zk_enabled);
+    }
+
+    #[test]
+    fn parse_args_rejects_invalid_or_duplicate_chain_discriminants() {
+        for invalid in ["", "0", "0369", "+369", "-1", "369x", "65536"] {
+            assert!(
+                parse_chain_discriminant(invalid).is_err(),
+                "accepted invalid discriminant {invalid:?}"
+            );
+        }
+        let duplicate = parse_args(vec![
+            "run".to_owned(),
+            "--chain-discriminant".to_owned(),
+            "369".to_owned(),
+            "--chain-discriminant".to_owned(),
+            "753".to_owned(),
+            "demo.ko".to_owned(),
+        ])
+        .expect_err("duplicate discriminants must fail closed");
+        assert!(duplicate.contains("only once"));
+    }
+
+    #[test]
+    fn test_runner_uses_exact_taira_chain_discriminant() {
+        const TAIRA_RECIPIENT: &str =
+            "testﾜヰ8ｽuimdh9FﾂｦUｸﾈbﾕﾆヱMUYｴGｷﾙｹﾐRヱbﾐｷwﾄ6ﾃdDLPQﾋW496uﾙﾜFpﾈtHd4Hﾙﾎ45M1L5";
+        let temp = TestTempDir::new();
+        let target = temp.write(
+            "taira_literal.ko",
+            &format!(
+                r#"
+                seiyaku TairaLiteral {{
+                    fn recipient() -> AccountId {{
+                        return AccountId::parse("{TAIRA_RECIPIENT}");
+                    }}
+
+                    #[test]
+                    fn exact_network_literal_roundtrips() {{
+                        test::assert(
+                            recipient() == AccountId::parse("{TAIRA_RECIPIENT}")
+                        );
+                    }}
+                }}
+                "#
+            ),
+        );
+        let suite = discover_suite(&target).expect("discover Taira literal suite");
+        let compiled = compile_suite_for_chain(&suite, false, 369)
+            .expect("compile exact Taira literal under discriminant 369");
+        let results = execute_suite_for_chain(&compiled, TraceMode::Off, 2, 369)
+            .expect("execute exact Taira literal suite");
+        assert!(results.iter().all(|result| result.passed));
+
+        let mismatch = match compile_suite_for_chain(&suite, false, 753) {
+            Ok(_) => panic!("Taira literal must fail under Sora discriminant 753"),
+            Err(error) => error,
+        };
+        assert!(mismatch.contains("ERR_UNEXPECTED_NETWORK_PREFIX"));
     }
 
     #[test]
@@ -2882,6 +3019,7 @@ mod tests {
             exact: false,
             jobs: 1,
             seed: 7,
+            chain_discriminant: iroha_data_model::account::address::chain_discriminant(),
             zk_enabled: false,
             output: TestOutputFormat::Text,
             output_path: None,

@@ -17,17 +17,21 @@ use iroha_torii_shared::validation_fee_api::{
     VALIDATION_FEE_POLICY_PROOF_MAX_FINALITY_CHAIN_BYTES,
     VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES, VALIDATION_FEE_POLICY_PROOF_VERSION_V1,
     VALIDATION_FEE_PROPOSAL_API_VERSION_V1, ValidationFeeCurrentPolicyProofRequestV1,
-    ValidationFeeCurrentPolicyProofV1, ValidationFeeParliamentSnapshotV1,
+    ValidationFeeCurrentPolicyProofV1, ValidationFeeParliamentBodyProgressV1,
+    ValidationFeeParliamentSnapshotV1, ValidationFeeProposalDetailQueryV1,
     ValidationFeeProposalDetailV1, ValidationFeeProposalDraftPayloadV1,
     ValidationFeeProposalDraftRequestV1, ValidationFeeProposalDraftResponseV1,
     ValidationFeeProposalInstructionDraftV1, ValidationFeeProposalListV1,
+    ValidationFeeProposalLockV1, ValidationFeeProposalLocksV1,
+    ValidationFeeProposalPipelineStageV1, ValidationFeeProposalPipelineV1,
     ValidationFeeProposalRecordV1, ValidationFeeProposalReferendumV1,
-    ValidationFeeProposalStatusV1, validation_fee_policy_proof_page_tip,
+    ValidationFeeProposalStatusV1, ValidationFeeProposalTallyV1,
+    validation_fee_policy_proof_page_tip,
 };
 use mv::storage::StorageReadOnly as _;
 
 use crate::{
-    Error, JsonBody, NoritoBody, NoritoJson, SharedAppState, check_access,
+    Error, JsonBody, NoritoBody, NoritoJson, NoritoQuery, SharedAppState, check_access,
     utils::extractors::NoritoOnly,
 };
 
@@ -67,6 +71,175 @@ fn parse_proposal_id(value: &str) -> Result<[u8; 32], Error> {
     bytes
         .try_into()
         .map_err(|_| bad_request("proposal_id must decode to exactly 32 bytes"))
+}
+
+fn parliament_body_progress(
+    proposal: &iroha_core::state::GovernanceProposalRecord,
+    approvals: Option<&iroha_core::state::GovernanceStageApprovals>,
+    quorum_bps: u16,
+    account_id: Option<&iroha_data_model::account::AccountId>,
+) -> Result<Vec<ValidationFeeParliamentBodyProgressV1>, Error> {
+    let snapshot = proposal
+        .parliament_snapshot
+        .as_ref()
+        .ok_or_else(|| inconsistent("validation-fee proposal has no Parliament snapshot"))?;
+    let mut progress = Vec::with_capacity(7);
+    for body in [
+        iroha_data_model::governance::types::ParliamentBody::RulesCommittee,
+        iroha_data_model::governance::types::ParliamentBody::AgendaCouncil,
+        iroha_data_model::governance::types::ParliamentBody::InterestPanel,
+        iroha_data_model::governance::types::ParliamentBody::ReviewPanel,
+        iroha_data_model::governance::types::ParliamentBody::PolicyJury,
+        iroha_data_model::governance::types::ParliamentBody::OversightCommittee,
+        iroha_data_model::governance::types::ParliamentBody::FmaCommittee,
+    ] {
+        let roster = snapshot.bodies.rosters.get(&body).ok_or_else(|| {
+            inconsistent(format!(
+                "validation-fee Parliament snapshot is missing {body:?}"
+            ))
+        })?;
+        let stage = approvals
+            .and_then(|records| records.stages.get(&body))
+            .filter(|record| record.epoch == snapshot.selection_epoch);
+        let required = stage.map_or_else(
+            || iroha_core::state::council_quorum_threshold(roster.members.len(), quorum_bps),
+            |record| record.required,
+        );
+        let current_account_decision = account_id.and_then(|account| {
+            stage.and_then(|record| {
+                if record.approvers.contains(account) {
+                    Some("APPROVE".to_owned())
+                } else if record.rejections.contains(account) {
+                    Some("REJECT".to_owned())
+                } else if record.abstentions.contains(account) {
+                    Some("ABSTAIN".to_owned())
+                } else {
+                    None
+                }
+            })
+        });
+        let approve = stage.map_or(0, |record| {
+            u32::try_from(record.approvers.len()).unwrap_or(u32::MAX)
+        });
+        let reject = stage.map_or(0, |record| {
+            u32::try_from(record.rejections.len()).unwrap_or(u32::MAX)
+        });
+        let abstain = stage.map_or(0, |record| {
+            u32::try_from(record.abstentions.len()).unwrap_or(u32::MAX)
+        });
+        progress.push(ValidationFeeParliamentBodyProgressV1 {
+            body,
+            members: roster.members.clone(),
+            alternates: roster.alternates.clone(),
+            required: required.to_string(),
+            approve: approve.to_string(),
+            reject: reject.to_string(),
+            abstain: abstain.to_string(),
+            approval_quorum_met: approve >= required,
+            rejection_quorum_met: required > 0 && reject >= required,
+            current_account_decision,
+        });
+    }
+    Ok(progress)
+}
+
+fn integer_sqrt_u128(n: u128) -> u128 {
+    if n == 0 {
+        return 0;
+    }
+    let mut x0 = n;
+    let mut x1 = u128::midpoint(x0, n / x0);
+    while x1 < x0 {
+        x0 = x1;
+        x1 = u128::midpoint(x0, n / x0);
+    }
+    x0
+}
+
+fn live_plain_tally(
+    locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
+    referendum_end: u64,
+    conviction_step_blocks: u64,
+    max_conviction: u64,
+) -> Result<(u128, u128, u128), Error> {
+    let mut approve = 0_u128;
+    let mut reject = 0_u128;
+    let mut abstain = 0_u128;
+    let Some(locks) = locks else {
+        return Ok((approve, reject, abstain));
+    };
+    for record in locks.locks.values() {
+        if record.expiry_height < referendum_end {
+            continue;
+        }
+        let units = record.amount.to_string().parse::<u128>().map_err(|_| {
+            inconsistent("validation-fee citizen ballot amount is outside the integer tally domain")
+        })?;
+        let factor = 1_u64
+            .saturating_add(record.duration_blocks / conviction_step_blocks.max(1))
+            .min(max_conviction);
+        let weight = integer_sqrt_u128(units)
+            .checked_mul(u128::from(factor))
+            .ok_or_else(|| inconsistent("validation-fee citizen tally overflow"))?;
+        let target = match record.direction {
+            0 => &mut approve,
+            1 => &mut reject,
+            2 => &mut abstain,
+            _ => continue,
+        };
+        *target = target
+            .checked_add(weight)
+            .ok_or_else(|| inconsistent("validation-fee citizen tally overflow"))?;
+    }
+    Ok((approve, reject, abstain))
+}
+
+fn public_pipeline(
+    proposal: &iroha_core::state::GovernanceProposalRecord,
+) -> ValidationFeeProposalPipelineV1 {
+    ValidationFeeProposalPipelineV1 {
+        stages: proposal
+            .pipeline
+            .stages
+            .iter()
+            .map(|stage| ValidationFeeProposalPipelineStageV1 {
+                stage: format!("{:?}", stage.stage),
+                started_at: stage.started_at.to_string(),
+                deadline: stage.deadline.map(|height| height.to_string()),
+                completed_at: stage.completed_at.map(|height| height.to_string()),
+                failure: stage.failure.map(|failure| format!("{failure:?}")),
+            })
+            .collect(),
+    }
+}
+
+fn public_locks(
+    locks: Option<&iroha_core::state::GovernanceLocksForReferendum>,
+) -> ValidationFeeProposalLocksV1 {
+    let locks = locks
+        .into_iter()
+        .flat_map(|records| records.locks.iter())
+        .map(|(account_id, record)| {
+            let direction = match record.direction {
+                0 => "Aye",
+                1 => "Nay",
+                2 => "Abstain",
+                _ => "Unknown",
+            };
+            (
+                account_id.clone(),
+                ValidationFeeProposalLockV1 {
+                    owner: record.owner.clone(),
+                    amount: record.amount.to_string(),
+                    slashed: record.slashed.to_string(),
+                    expiry_height: record.expiry_height.to_string(),
+                    direction: direction.to_owned(),
+                    duration_blocks: record.duration_blocks.to_string(),
+                },
+            )
+        })
+        .collect();
+    ValidationFeeProposalLocksV1 { locks }
 }
 
 fn public_proposal_record(
@@ -122,8 +295,9 @@ fn public_proposal_record(
         proposal_id: hex::encode(proposal_id),
         proposer: proposal.proposer.clone(),
         proposal_kind: proposal.kind.clone(),
-        created_height: proposal.created_height,
+        created_height: proposal.created_height.to_string(),
         status,
+        pipeline: public_pipeline(proposal),
         referendum: ValidationFeeProposalReferendumV1 {
             window: AtWindow {
                 lower: referendum.h_start,
@@ -134,13 +308,13 @@ fn public_proposal_record(
             closed,
         },
         parliament_snapshot: ValidationFeeParliamentSnapshotV1 {
-            selection_epoch: snapshot.selection_epoch,
+            selection_epoch: snapshot.selection_epoch.to_string(),
             beacon: snapshot.beacon,
             roster_root: snapshot.roster_root,
             bodies: snapshot.bodies.clone(),
         },
         finalization_evidence: proposal.finalization_evidence,
-        enacted_at_height: proposal.enacted_at_height,
+        enacted_at_height: proposal.enacted_at_height.map(|height| height.to_string()),
     })
 }
 
@@ -178,7 +352,14 @@ pub(crate) async fn handler_proposals(
     }
     proposals.sort_by(|left, right| {
         left.created_height
-            .cmp(&right.created_height)
+            .parse::<u64>()
+            .expect("Core-created proposal height is canonical")
+            .cmp(
+                &right
+                    .created_height
+                    .parse::<u64>()
+                    .expect("Core-created proposal height is canonical"),
+            )
             .then_with(|| left.proposal_id.cmp(&right.proposal_id))
     });
     Ok(JsonBody(ValidationFeeProposalListV1 {
@@ -193,6 +374,7 @@ pub(crate) async fn handler_proposal_detail(
     headers: HeaderMap,
     ConnectInfo(remote): ConnectInfo<std::net::SocketAddr>,
     Path(proposal_id): Path<String>,
+    NoritoQuery(query): NoritoQuery<ValidationFeeProposalDetailQueryV1>,
 ) -> Result<JsonBody<ValidationFeeProposalDetailV1>, Error> {
     check_access(
         &app,
@@ -218,9 +400,53 @@ pub(crate) async fn handler_proposal_detail(
         .get(&proposal_id)
         .copied()
         .ok_or_else(|| inconsistent("validation-fee proposal has no exact retained referendum"))?;
+    let gov = app.state.governance_snapshot();
+    let approvals = world.governance_stage_approvals().get(&proposal_id);
+    let body_progress = parliament_body_progress(
+        proposal,
+        approvals,
+        gov.parliament_quorum_bps,
+        query.account_id.as_ref(),
+    )?;
+    let (approve, reject, abstain, approved) =
+        if let Some(evidence) = proposal.finalization_evidence.as_ref() {
+            (
+                evidence.approve,
+                evidence.reject,
+                evidence.abstain,
+                Some(evidence.approved),
+            )
+        } else {
+            let (approve, reject, abstain) = live_plain_tally(
+                world.governance_locks().get(&proposal_id),
+                referendum.h_end,
+                gov.conviction_step_blocks,
+                gov.max_conviction,
+            )?;
+            (approve, reject, abstain, None)
+        };
+    let turnout = approve
+        .checked_add(reject)
+        .and_then(|value| value.checked_add(abstain))
+        .ok_or_else(|| inconsistent("validation-fee citizen tally overflow"))?;
     Ok(JsonBody(ValidationFeeProposalDetailV1 {
         version: VALIDATION_FEE_PROPOSAL_API_VERSION_V1,
         proposal: public_proposal_record(proposal_id_bytes, proposal, referendum)?,
+        current_height: u64::try_from(app.state.committed_height())
+            .unwrap_or(u64::MAX)
+            .to_string(),
+        body_progress,
+        tally: ValidationFeeProposalTallyV1 {
+            approve: approve.to_string(),
+            reject: reject.to_string(),
+            abstain: abstain.to_string(),
+            turnout: turnout.to_string(),
+            min_turnout: gov.min_turnout.to_string(),
+            approval_threshold_numerator: gov.approval_threshold_q_num.to_string(),
+            approval_threshold_denominator: gov.approval_threshold_q_den.to_string(),
+            approved,
+        },
+        locks: public_locks(world.governance_locks().get(&proposal_id)),
     }))
 }
 
@@ -306,6 +532,43 @@ fn canonical_draft_instruction(
     Ok((proposal_kind, instruction))
 }
 
+fn validate_draft_referendum_window(
+    window: Option<AtWindow>,
+    current_tip: u64,
+    min_enactment_delay: u64,
+    configured_window_span: u64,
+) -> Result<(), String> {
+    let Some(window) = window else {
+        // An omitted lifecycle window is resolved atomically by Core from the
+        // actual proposal-inclusion height.
+        return Ok(());
+    };
+    let earliest_lower = current_tip
+        .checked_add(1)
+        .and_then(|height| height.checked_add(min_enactment_delay))
+        .ok_or_else(|| {
+            "validation-fee referendum staging height overflows the block-height domain"
+                .to_owned()
+        })?;
+    if window.lower < earliest_lower {
+        return Err(format!(
+            "validation-fee referendum window lower must be at least {earliest_lower} (current tip + one inclusion block + configured minimum delay)"
+        ));
+    }
+    let actual_span = window
+        .upper
+        .checked_sub(window.lower)
+        .and_then(|distance| distance.checked_add(1))
+        .ok_or_else(|| "validation-fee referendum window is reversed or overflows".to_owned())?;
+    let required_span = configured_window_span.max(1);
+    if actual_span != required_span {
+        return Err(format!(
+            "validation-fee referendum window must span exactly {required_span} blocks"
+        ));
+    }
+    Ok(())
+}
+
 /// Build one exact native validation-fee proposal instruction for local signing.
 pub(crate) async fn handler_proposal_draft(
     State(app): State<SharedAppState>,
@@ -321,6 +584,15 @@ pub(crate) async fn handler_proposal_draft(
     )
     .await?;
     let (proposal_kind, instruction) = canonical_draft_instruction(&request)?;
+    let current_tip = u64::try_from(app.state.committed_height())
+        .map_err(|_| inconsistent("ledger height does not fit validation-fee draft timing"))?;
+    validate_draft_referendum_window(
+        request.referendum_window,
+        current_tip,
+        app.state.gov.min_enactment_delay,
+        app.state.gov.window_span,
+    )
+    .map_err(bad_request)?;
     let proposal_id = proposal_kind.fingerprint();
     let wire_id = iroha_data_model::isi::Instruction::id(&*instruction).to_string();
     let payload = iroha_data_model::isi::Instruction::dyn_encode(&*instruction);
@@ -338,6 +610,51 @@ pub(crate) async fn handler_proposal_draft(
             payload_hex: hex::encode(framed),
         }],
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_draft_window_accounts_for_next_block_and_exact_span() {
+        let stale = AtWindow {
+            lower: 700,
+            upper: 4_299,
+        };
+        let error = validate_draft_referendum_window(Some(stale), 100, 600, 3_600)
+            .expect_err("tip+600 omits the proposal inclusion block");
+        assert!(error.contains("at least 701"));
+
+        validate_draft_referendum_window(
+            Some(AtWindow {
+                lower: 701,
+                upper: 4_300,
+            }),
+            100,
+            600,
+            3_600,
+        )
+        .expect("next-block-safe exact Taira window");
+
+        let error = validate_draft_referendum_window(
+            Some(AtWindow {
+                lower: 701,
+                upper: 4_299,
+            }),
+            100,
+            600,
+            3_600,
+        )
+        .expect_err("short referendum window must fail closed");
+        assert!(error.contains("exactly 3600 blocks"));
+    }
+
+    #[test]
+    fn omitted_draft_window_is_left_for_atomic_core_resolution() {
+        validate_draft_referendum_window(None, u64::MAX, 600, 3_600)
+            .expect("omitted lifecycle window does not precompute against a stale tip");
+    }
 }
 
 fn registry_at_height(

@@ -7297,6 +7297,49 @@ fn analyze_surface_builtin_call(
     coerce_builtin_exact_numeric_literals(builtin, &mut arg_typed)?;
     crate::secret::validate_builtin_call(builtin, &arg_typed)?;
     match builtin {
+        Builtin::ContractInvokeQuantity2 => {
+            if arg_typed.len() != 5
+                || resolve_struct_type(&arg_typed[0].ty) != Type::Bytes
+                || resolve_struct_type(&arg_typed[1].ty) != Type::String
+                || resolve_struct_type(&arg_typed[2].ty) != Type::String
+                || resolve_struct_type(&arg_typed[3].ty) != Type::Quantity
+                || resolve_struct_type(&arg_typed[4].ty) != Type::Quantity
+            {
+                return Err(SemanticError {
+                    code: "K2003",
+                    message: "contract::invoke requires named `(contract: bytes, entrypoint: string, returns: \"quantity\", amount_in: quantity, min_out: quantity)` arguments"
+                        .into(),
+                });
+            }
+            let ExprKind::String(entrypoint) = arg_typed[1].kind() else {
+                return Err(SemanticError {
+                    code: "E_CONTRACT_ENTRYPOINT_LITERAL",
+                    message: "contract::invoke requires a literal `entrypoint` selector".into(),
+                });
+            };
+            if !ivm_abi::entrypoint::is_canonical_kotodama_identifier(entrypoint) {
+                return Err(SemanticError {
+                    code: "E_CONTRACT_ENTRYPOINT_LITERAL",
+                    message: "contract::invoke entrypoint must be a canonical Kotodama identifier"
+                        .into(),
+                });
+            }
+            if !matches!(arg_typed[2].kind(), ExprKind::String(value) if value == "quantity") {
+                return Err(SemanticError {
+                    code: "E_CONTRACT_RETURN_SCHEMA",
+                    message:
+                        "the first production contract::invoke profile requires literal `returns: \"quantity\"`"
+                            .into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_owned(),
+                    args: arg_typed,
+                },
+                ty: Type::Quantity,
+            })
+        }
         Builtin::PointerConstructor(constructor) => {
             let name = constructor.name();
             if arg_typed.len() != 1 {

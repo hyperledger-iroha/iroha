@@ -53,6 +53,33 @@ test("ToriiClient emits an exact ASCII alias credential and a verifiable signatu
   assert.equal(verifyEd25519(message, signature, publicKey), true);
 });
 
+test("ToriiClient transports an exact canonical I105 credential as UTF-8 header bytes", async () => {
+  const captured = [];
+  const fetchImpl = async (url, init) => {
+    captured.push({ url, init });
+    return new Response(JSON.stringify({ items: [], total: 0 }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient("https://localhost:8080", { fetchImpl });
+  const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 10) });
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105(369);
+
+  await client.listAccountAssets(accountId, {
+    canonicalAuth: { accountId, privateKey },
+    limit: 1,
+  });
+
+  assert.equal(captured.length, 1);
+  assert.equal(
+    Buffer.from(captured[0].init.headers["X-Iroha-Account"], "latin1").toString(
+      "utf8",
+    ),
+    accountId,
+  );
+});
+
 test("ToriiClient rejects every noncanonical canonical-auth credential before fetch", async () => {
   let fetchCalls = 0;
   const fetchImpl = async () => {
@@ -63,7 +90,6 @@ test("ToriiClient rejects every noncanonical canonical-auth credential before fe
   const { privateKey, publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 11) });
   const targetAccountId = AccountAddress.fromAccount({ publicKey }).toI105();
   const invalidCredentials = [
-    targetAccountId,
     ` ${AUTH_ALIAS}`,
     `${AUTH_ALIAS} `,
     "Operator-1@hbl.sbp",
@@ -84,7 +110,7 @@ test("ToriiClient rejects every noncanonical canonical-auth credential before fe
         error?.name === "ValidationError" &&
         error?.code === ValidationErrorCode.INVALID_OBJECT &&
         error?.path === "canonicalAuth.accountId" &&
-        /exact canonical ASCII account alias/u.test(error.message),
+        /exact canonical I105 account or ASCII account alias/u.test(error.message),
       accountId,
     );
   }

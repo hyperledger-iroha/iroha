@@ -2706,6 +2706,12 @@ pub mod runtime_governance {
         "governance.proposal.sccp_route_governance",
         "/v1/gov/proposals/sccp-route-governance",
     );
+    /// Read strict public governance readiness and policy capabilities.
+    pub const GOV_CAPABILITIES: RouteDescriptor =
+        public_get("governance.capabilities.read", "/v1/gov/capabilities");
+    /// Draft the exact configured citizenship registration instruction.
+    pub const GOV_CITIZEN_DRAFT: RouteDescriptor =
+        app_post("governance.citizen.draft", "/v1/gov/citizens/draft");
     /// Finality-bound current validation-fee policy proof path.
     pub const VALIDATION_FEE_CURRENT_POLICY_PROOF_PATH: &str =
         "/v1/validation-fee/policy/current/proof";
@@ -2859,6 +2865,8 @@ pub mod runtime_governance {
         MINISTRY_AGENDA_GET,
         GOV_PROPOSE_DEPLOY,
         GOV_PROPOSE_SCCP,
+        GOV_CAPABILITIES,
+        GOV_CITIZEN_DRAFT,
         VALIDATION_FEE_CURRENT_POLICY_PROOF,
         VALIDATION_FEE_PROPOSALS,
         VALIDATION_FEE_PROPOSAL_DETAIL,
@@ -4345,6 +4353,8 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     runtime_governance::MINISTRY_AGENDA_GET,
     runtime_governance::GOV_PROPOSE_DEPLOY,
     runtime_governance::GOV_PROPOSE_SCCP,
+    runtime_governance::GOV_CAPABILITIES,
+    runtime_governance::GOV_CITIZEN_DRAFT,
     runtime_governance::VALIDATION_FEE_CURRENT_POLICY_PROOF,
     runtime_governance::VALIDATION_FEE_PROPOSALS,
     runtime_governance::VALIDATION_FEE_PROPOSAL_DETAIL,

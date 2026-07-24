@@ -6,6 +6,7 @@ import importlib.util
 import json
 import stat
 import sys
+import tomllib
 from pathlib import Path
 
 
@@ -19,6 +20,18 @@ SPEC.loader.exec_module(MODULE)
 COUNCIL_KEY_1 = "ed01202152F8D19B791D24453242E15F2EAB6CB7CFFA7B6A5ED30097960E069881DB12"
 COUNCIL_KEY_2 = "ed012022FC297792F0B6FFC0BFCFDB7EDB0C0AA14E025A365EC0E342E86E3829CB74B6"
 COUNCIL_KEY_3 = "ed01206355691C178A8FF91007A7478AFB955EF7352C63E7B25703984CF78B26E21A56"
+
+
+def test_taira_governance_timing_contract_is_release_pinned() -> None:
+    config_path = MODULE_PATH.parents[1] / "configs/soranexus/taira/config.toml"
+    config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    governance = config["gov"]
+
+    assert governance["plain_voting_enabled"] is True
+    assert governance["min_enactment_delay"] == 600
+    assert governance["window_span"] == 3_600
+    assert governance["min_turnout"] == 1
+    assert governance["pipeline_enactment_sla_blocks"] == 3_600
 
 
 BASE_CONFIG = """# baseline
@@ -244,6 +257,22 @@ def test_render_bundle_injects_public_roster_into_unsigned_genesis(tmp_path: Pat
     ]
     assert topology == [
         {"peer": f"peer-{index}-public", "pop_hex": f"peer-{index}-pop"}
+        for index in range(1, 5)
+    ]
+    registered_validator_accounts = [
+        instruction["Register"]["Account"]
+        for transaction in rendered["transactions"]
+        for instruction in transaction.get("instructions", [])
+        if "Account" in instruction.get("Register", {})
+    ]
+    assert registered_validator_accounts == [
+        {
+            "id": f"test-validator-{index}",
+            "metadata": {
+                "purpose": "taira_validator_payout_recipient",
+                "validator_slug": f"taira-validator-{index}",
+            },
+        }
         for index in range(1, 5)
     ]
     assert "peer-1-private" not in (output_dir / "genesis.json").read_text(

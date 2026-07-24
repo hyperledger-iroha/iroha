@@ -368,7 +368,7 @@ export function ensureCanonicalAccountId(value, name) {
     }
     throw error;
   }
-  const canonical = parsed.address.toI105();
+  const canonical = parsed.address.toI105(parsed.chainDiscriminant);
   if (raw !== canonical) {
     fail(
       ValidationErrorCode.INVALID_ACCOUNT_ID,

@@ -396,8 +396,10 @@ pub enum ValidationFeeGovernanceVotingModeV1 {
 )]
 pub struct ValidationFeeGovernanceWindowV1 {
     /// First height in the authorized window.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub lower: u64,
     /// Last height in the authorized window.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub upper: u64,
 }
 
@@ -411,20 +413,27 @@ pub struct ValidationFeeFinalizationEvidenceV1 {
     /// Referendum identifier, equal to the native proposal identifier.
     pub referendum_id: [u8; 32],
     /// Height at which the result was finalized.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub finalized_at_height: u64,
     /// Voting mode whose tally was finalized.
     pub mode: ValidationFeeGovernanceVotingModeV1,
     /// Final approve weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub approve: u128,
     /// Final reject weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub reject: u128,
     /// Final abstain weight.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub abstain: u128,
     /// Minimum turnout applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u128_string"))]
     pub min_turnout: u128,
     /// Approval-threshold numerator applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub approval_threshold_numerator: u64,
     /// Approval-threshold denominator applied to this result.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub approval_threshold_denominator: u64,
     /// Final deterministic decision.
     pub approved: bool,
@@ -467,6 +476,7 @@ pub struct ValidationFeeParliamentAuthorizationV1 {
     /// Deterministic finalized referendum result.
     pub finalization: ValidationFeeFinalizationEvidenceV1,
     /// Height at which the approved policy was appended to the registry.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub enacted_at_height: u64,
 }
 
@@ -496,11 +506,10 @@ impl ValidationFeeParliamentAuthorizationV1 {
         {
             return Some("validation-fee finalization height is outside the referendum window");
         }
-        if self.enacted_at_height < self.finalization.finalized_at_height
-            || self.enacted_at_height < self.referendum_window.lower
-            || self.enacted_at_height > self.referendum_window.upper
-        {
-            return Some("validation-fee enactment height is outside the finalized window");
+        if self.enacted_at_height <= self.finalization.finalized_at_height {
+            return Some(
+                "validation-fee enactment height must be after referendum finalization",
+            );
         }
         if self.finalization.mode != ValidationFeeGovernanceVotingModeV1::Plain {
             return Some("validation-fee governance supports plain referendum voting only");
@@ -1169,6 +1178,7 @@ pub struct ValidationFeePolicyV1 {
     /// Genesis hash bound into the policy.
     pub genesis_hash: [u8; 32],
     /// Monotonic policy version.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub policy_version: u64,
     /// Previous policy hash for policy-chain validation.
     #[norito(default)]
@@ -1184,9 +1194,14 @@ pub struct ValidationFeePolicyV1 {
     /// Charging mode.
     pub charging_mode: ValidationFeeChargingMode,
     /// First height at which the policy is active.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::u64_string"))]
     pub effective_from_height: u64,
     /// Optional last active height.
     #[norito(default)]
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::u64_string::option")
+    )]
     pub expires_after_height: Option<u64>,
     /// Explicit exemption classes recognized by this policy.
     #[norito(default)]
@@ -1447,7 +1462,7 @@ mod parliament_tests {
                 approval_threshold_denominator: 2,
                 approved: true,
             },
-            enacted_at_height: u64::from(marker),
+            enacted_at_height: u64::from(marker).saturating_add(1),
         }
     }
 
@@ -1763,6 +1778,37 @@ mod parliament_tests {
     fn parliament_authorization_requires_exact_approved_window_evidence() {
         let valid = authorization([0x12; 32], 12);
         assert_eq!(valid.invariant_error(), None);
+
+        let mut post_window_enactment = valid;
+        post_window_enactment.referendum_window.upper =
+            post_window_enactment.finalization.finalized_at_height;
+        post_window_enactment.enacted_at_height = post_window_enactment
+            .finalization
+            .finalized_at_height
+            .saturating_add(3_600);
+        assert_eq!(
+            post_window_enactment.invariant_error(),
+            None,
+            "an approved referendum must remain enactable after its closed voting window"
+        );
+
+        let mut equal_finalization = valid;
+        equal_finalization.enacted_at_height =
+            equal_finalization.finalization.finalized_at_height;
+        assert_eq!(
+            equal_finalization.invariant_error(),
+            Some("validation-fee enactment height must be after referendum finalization")
+        );
+
+        let mut before_finalization = valid;
+        before_finalization.enacted_at_height = before_finalization
+            .finalization
+            .finalized_at_height
+            .saturating_sub(1);
+        assert_eq!(
+            before_finalization.invariant_error(),
+            Some("validation-fee enactment height must be after referendum finalization")
+        );
 
         let mut outside_window = valid;
         outside_window.finalization.finalized_at_height =

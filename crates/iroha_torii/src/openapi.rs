@@ -3674,6 +3674,27 @@ fn governance_paths() -> Map {
         Value::Object(sccp_route_governance_operation()),
     );
     paths.insert(
+        iroha_torii_shared::uri::GOV_CAPABILITIES.to_owned(),
+        Value::Object(json_get_operation(
+            "Governance",
+            "Fetch governance capabilities.",
+            "Return the strict public governance schema, exact configured voting parameters, supported proposal kinds, and supported routes.",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        iroha_torii_shared::uri::GOV_CITIZEN_DRAFT.to_owned(),
+        Value::Object(json_post_operation(
+            "Governance",
+            "Draft citizenship registration.",
+            "Build the exact configured RegisterCitizen instruction for local signing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         iroha_torii_shared::uri::VALIDATION_FEE_CURRENT_POLICY_PROOF.to_owned(),
         Value::Object(validation_fee_current_policy_proof_operation()),
     );
@@ -13559,7 +13580,7 @@ fn validation_fee_schemas(schemas: &mut Map) {
             "type": "object",
             "required": [
                 "proposal_id", "proposer", "proposal_kind", "created_height", "status",
-                "referendum", "parliament_snapshot", "finalization_evidence",
+                "pipeline", "referendum", "parliament_snapshot", "finalization_evidence",
                 "enacted_at_height"
             ],
             "additionalProperties": false,
@@ -13570,8 +13591,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     "$ref": "#/components/schemas/JsonValue",
                     "description": "Exact native ValidationFeePolicy or ValidationFeePayoutLifecycle ProposalKind."
                 },
-                "created_height": { "type": "integer", "format": "uint64", "minimum": 1 },
+                "created_height": {
+                    "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$",
+                    "description": "Canonical unsigned decimal block height."
+                },
                 "status": { "$ref": "#/components/schemas/JsonValue" },
+                "pipeline": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Ordered pipeline stages with every height encoded as a canonical unsigned decimal string."
+                },
                 "referendum": { "$ref": "#/components/schemas/JsonValue" },
                 "parliament_snapshot": { "$ref": "#/components/schemas/JsonValue" },
                 "finalization_evidence": {
@@ -13581,7 +13609,10 @@ fn validation_fee_schemas(schemas: &mut Map) {
                     ]
                 },
                 "enacted_at_height": {
-                    "type": ["integer", "null"], "format": "uint64", "minimum": 1
+                    "oneOf": [
+                        { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" },
+                        { "type": "null" }
+                    ]
                 }
             }
         }),
@@ -13605,11 +13636,27 @@ fn validation_fee_schemas(schemas: &mut Map) {
         "ValidationFeeProposalDetailV1".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["version", "proposal"],
+            "required": ["version", "proposal", "current_height", "body_progress", "tally", "locks"],
             "additionalProperties": false,
             "properties": {
                 "version": { "type": "integer", "format": "uint16", "const": 1 },
-                "proposal": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" }
+                "proposal": { "$ref": "#/components/schemas/ValidationFeeProposalRecordV1" },
+                "current_height": {
+                    "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$"
+                },
+                "body_progress": {
+                    "type": "array",
+                    "items": { "$ref": "#/components/schemas/JsonValue" },
+                    "description": "Exact Parliament counts encoded as canonical unsigned decimal strings."
+                },
+                "tally": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Exact u128 tally and threshold values encoded as canonical unsigned decimal strings."
+                },
+                "locks": {
+                    "$ref": "#/components/schemas/JsonValue",
+                    "description": "Retained citizen locks with expiry and duration encoded as canonical unsigned decimal strings."
+                }
             }
         }),
     );
@@ -13627,7 +13674,15 @@ fn validation_fee_schemas(schemas: &mut Map) {
                 },
                 "referendum_window": {
                     "oneOf": [
-                        { "$ref": "#/components/schemas/SccpAtWindowV1" },
+                        {
+                            "type": "object",
+                            "required": ["lower", "upper"],
+                            "additionalProperties": false,
+                            "properties": {
+                                "lower": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" },
+                                "upper": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)$" }
+                            }
+                        },
                         { "type": "null" }
                     ]
                 },
@@ -27034,6 +27089,8 @@ mod tests {
         assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key(iroha_torii_shared::uri::GOV_PROPOSE_SCCP_ROUTE_GOVERNANCE));
+        assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CAPABILITIES));
+        assert!(paths.contains_key(iroha_torii_shared::uri::GOV_CITIZEN_DRAFT));
         assert!(paths.contains_key("/v1/gov/citizens"));
         assert!(paths.contains_key("/v1/gov/stream"));
         #[cfg(feature = "gov_vrf")]

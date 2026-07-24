@@ -6028,11 +6028,16 @@ pub unsafe extern "C" fn connect_norito_canonical_json_blake3_v1(
     bridge_result_to_code(result)
 }
 
+fn validation_fee_is_canonical_iroha_hash(value: &[u8; 32]) -> bool {
+    value[31] & 1 == 1
+}
+
 fn validation_fee_current_policy_proof_request_v1(
     trusted_checkpoint_height: u64,
     trusted_checkpoint_context_id: [u8; 32],
 ) -> BridgeResult<Vec<u8>> {
-    if trusted_checkpoint_height == 0 || trusted_checkpoint_context_id.iter().all(|byte| *byte == 0)
+    if trusted_checkpoint_height == 0
+        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
     {
         return Err(BridgeError::ValidationFeePolicyProof);
     }
@@ -6053,6 +6058,9 @@ fn validation_fee_current_policy_proof_verify_v1(
 ) -> BridgeResult<Vec<u8>> {
     if proof_archive.is_empty()
         || proof_archive.len() > VALIDATION_FEE_POLICY_PROOF_MAX_RESPONSE_BYTES
+        || !validation_fee_is_canonical_iroha_hash(&bound_genesis_hash)
+        || !validation_fee_is_canonical_iroha_hash(&policy_chain_genesis_hash)
+        || !validation_fee_is_canonical_iroha_hash(&trusted_checkpoint_context_id)
     {
         return Err(BridgeError::ValidationFeePolicyProof);
     }
@@ -16821,8 +16829,10 @@ mod validation_fee_policy_proof_bridge_tests {
             validation_fee_current_policy_proof_request_v1(17, [0; 32]).is_err(),
             "zero context must fail closed"
         );
-        validation_fee_current_policy_proof_request_v1(17, [2; 32])
-            .expect("Iroha context hashes have no parity validity bit");
+        assert!(
+            validation_fee_current_policy_proof_request_v1(17, [2; 32]).is_err(),
+            "unmarked context must fail closed"
+        );
     }
 
     #[test]

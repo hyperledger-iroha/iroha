@@ -180,6 +180,31 @@
         },
         {
           "Register": {
+            "AssetDefinition": {
+              "id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
+              "logo": null,
+              "metadata": {
+                "currency_code": "SBD",
+                "display_code": "e-SBD",
+                "display_name": "Digital Solomon Islands Dollar"
+              },
+              "mintable": "Infinitely",
+              "spec": {
+                "scale": 2
+              },
+              "name": "sbd"
+            }
+          }
+        },
+        {
+          "SetAssetDefinitionAlias": {
+            "alias": "sbd#cbsi",
+            "asset_definition_id": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv",
+            "lease_expiry_ms": null
+          }
+        },
+        {
+          "Register": {
             "Domain": {
               "id": "sora.universal",
               "logo": null,
@@ -299,11 +324,25 @@
           }
         },
         {
+          "Mint": {
+            "Asset": {
+              "destination": "7ZepsJTHCVLKsrFFNZGSRGZgvBhv#testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+              "object": "1000000000.00"
+            }
+          }
+        },
+        {
+          "RegisterCitizen": {
+            "owner": "testuﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
+            "amount": "10000"
+          }
+        },
+        {
           "CreateFeeSponsorProgram": {
             "program": {
               "id": {
                 "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-                "name": "default"
+                "name": "cbsi_web"
               },
               "lifecycle": {
                 "state": "staged"
@@ -316,7 +355,7 @@
             "revision": {
               "program_id": {
                 "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-                "name": "default"
+                "name": "cbsi_web"
               },
               "revision": 1,
               "eligibility": {
@@ -480,18 +519,18 @@
         },
         {
           "EnrollFeeSponsorBeneficiary": {
-            "program_id": {
-              "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-              "name": "default"
+          "program_id": {
+            "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+            "name": "cbsi_web"
             },
             "beneficiary": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
           }
         },
         {
           "FundFeeSponsorProgram": {
-            "program_id": {
-              "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-              "name": "default"
+          "program_id": {
+            "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+            "name": "cbsi_web"
             },
             "asset_definition_id": "6TEAJqbb8oEPmLncoNiMRbLEK6tw",
             "amount": "100000000"
@@ -499,9 +538,9 @@
         },
         {
           "ActivateFeeSponsorProgramRevision": {
-            "program_id": {
-              "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-              "name": "default"
+              "program_id": {
+                "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+                "name": "cbsi_web"
             },
             "revision": 1,
             "activate_at_height": 1
@@ -516,7 +555,7 @@
                 "payload": {
                   "program_id": {
                     "sponsor": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
-                    "name": "default"
+                    "name": "cbsi_web"
                   }
                 }
               }

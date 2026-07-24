@@ -59,14 +59,28 @@ fn zk_referendum_auto_close_defers_decision_without_tally() {
 
     let header2 = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
     let mut sblock2 = state.block(header2);
-    let events = sblock2.world.take_external_events();
+    let events_at_end = sblock2.world.take_external_events();
+    assert!(
+        !events_at_end.iter().any(|event| {
+            matches!(
+                event.as_data_event(),
+                Some(DataEvent::Governance(GovernanceEvent::ReferendumClosed(_)))
+            )
+        }),
+        "inclusive h_end must remain open for ballots"
+    );
+    sblock2.commit().unwrap();
+
+    let header3 = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, None, 0, 0);
+    let mut sblock3 = state.block(header3);
+    let events = sblock3.world.take_external_events();
     let has_closed = events.iter().any(|event| {
         matches!(
             event.as_data_event(),
             Some(DataEvent::Governance(GovernanceEvent::ReferendumClosed(_)))
         )
     });
-    assert!(has_closed, "expected ReferendumClosed at h_end");
+    assert!(has_closed, "expected ReferendumClosed at h_end + 1");
 
     let has_decision = events.iter().any(|event| {
         matches!(

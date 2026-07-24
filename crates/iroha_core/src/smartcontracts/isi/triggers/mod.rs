@@ -330,6 +330,34 @@ pub mod isi {
             ));
         }
 
+        let duplicates_enacted_payout =
+            |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
+                crate::validation_fee::is_enacted_validation_fee_payout_invocation(
+                    state_transaction,
+                    invocation,
+                )
+            };
+        let executable_duplicates_enacted_payout = match new_trigger.action().executable() {
+            Executable::ContractCall(invocation) => duplicates_enacted_payout(invocation),
+            Executable::Batch(items) => items.iter().any(|item| {
+                matches!(
+                    item,
+                    iroha_data_model::transaction::executable::ExecutableBatchItem::ContractCall(
+                        invocation
+                    )
+                        if duplicates_enacted_payout(invocation)
+                )
+            }),
+            Executable::Instructions(_) | Executable::Ivm(_) | Executable::IvmProved(_) => false,
+        };
+        if matches!(new_trigger.action().filter(), EventFilterBox::Time(_))
+            && executable_duplicates_enacted_payout
+        {
+            return Err(Error::InvariantViolation(
+                "an enacted validation-fee payout lifecycle pins its sole scheduled trigger".into(),
+            ));
+        }
+
         if let EventFilterBox::Pipeline(filter) = new_trigger.action().filter() {
             match filter {
                 PipelineEventFilterBox::Transaction(filter)
@@ -449,6 +477,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger_id = self.object().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
 
             if state_transaction.world.triggers.remove(&trigger_id) {
                 remove_trigger_associated_permissions(state_transaction, &trigger_id);
@@ -474,6 +510,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let id = self.destination().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
 
             let triggers = &mut state_transaction.world.triggers;
             triggers
@@ -512,6 +556,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger = self.destination().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             let mut removed = false;
             {
                 let triggers = &mut state_transaction.world.triggers;
@@ -555,6 +607,14 @@ pub mod isi {
                 key,
                 value,
             } = self;
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             ensure_metadata_key_is_not_reserved(&key)?;
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
@@ -591,6 +651,14 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let trigger_id = self.object().clone();
+            if crate::validation_fee::is_enacted_validation_fee_payout_trigger(
+                state_transaction,
+                &trigger_id,
+            ) {
+                return Err(Error::InvariantViolation(
+                    "an enacted validation-fee payout lifecycle pins this trigger".into(),
+                ));
+            }
             ensure_metadata_key_is_not_reserved(self.key())?;
 
             let value = state_transaction

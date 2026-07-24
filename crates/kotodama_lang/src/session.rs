@@ -6,7 +6,9 @@ use std::{
 };
 
 use indexmap::IndexMap;
-use iroha_data_model::smart_contract::manifest::ContractManifest;
+use iroha_data_model::{
+    account::address::ChainDiscriminantGuard, smart_contract::manifest::ContractManifest,
+};
 use ivm_abi::metadata::EmbeddedContractInterfaceV1;
 
 use crate::{
@@ -154,6 +156,14 @@ impl CompilerSession {
         Self { options }
     }
 
+    /// Enter the exact account-literal network selected by this session.
+    ///
+    /// Build drivers call this inside worker threads because thread-local
+    /// network context is intentionally not inherited by spawned workers.
+    pub(crate) fn enter_chain_discriminant(&self) -> ChainDiscriminantGuard {
+        ChainDiscriminantGuard::enter(self.options.chain_discriminant)
+    }
+
     /// Return a deterministic cache identity for every caller-controlled
     /// compiler policy that can change deployable output.
     pub fn policy_fingerprint(&self) -> iroha_crypto::Hash {
@@ -162,9 +172,10 @@ impl CompilerSession {
             crate::compiler::CompilerMode::Test => 1_u8,
         };
         iroha_crypto::Hash::new_from_chunks(&[
-            b"kotodama-compiler-policy-v1\0",
+            b"kotodama-compiler-policy-v2\0",
             &[u8::from(self.options.force_zk)],
             &self.options.max_cycles.to_le_bytes(),
+            &self.options.chain_discriminant.to_le_bytes(),
             &[mode],
         ])
     }
@@ -194,12 +205,14 @@ impl CompilerSession {
         graph: &crate::linker::ModuleBuildGraph,
         request: crate::linker::SourcePackageGraphRequest,
     ) -> Result<crate::linker::ValidatedSourcePackageGraph, crate::linker::SourceGraphError> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         graph.validate_package(request, self.linker_options())
     }
 
     /// Parse and type/effect-check one seiyaku or reusable module without
     /// publishing deployable output.
     pub fn check(&self, request: CompileRequest<'_>) -> Result<(), DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         let program = self.checked_program(request)?;
         crate::ast::drop_program_iterative(program);
         Ok(())
@@ -214,6 +227,7 @@ impl CompilerSession {
         &self,
         request: CompileRequest<'_>,
     ) -> Result<Vec<crate::lint::LintWarning>, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         let program = self.checked_program(request)?;
         let warnings = crate::lint::lint_program(&program);
         crate::ast::drop_program_iterative(program);
@@ -225,6 +239,7 @@ impl CompilerSession {
         &self,
         request: CompileRequest<'_>,
     ) -> Result<ParsedCompilationUnit, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         enforce_source_budget(request)?;
         let source = SourceFile::new(
             SourceId(0),
@@ -268,6 +283,7 @@ impl CompilerSession {
         &self,
         resolved: ResolvedCompilationUnit,
     ) -> Result<TypedProgram, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         self.type_effect_compilation_unit_ref(&resolved)
     }
 
@@ -327,6 +343,7 @@ impl CompilerSession {
 
     /// Compile one named source unit into a deployable artifact and sidecar report.
     pub fn build(&self, request: CompileRequest<'_>) -> Result<CompileOutput, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         let parsed = self.parse_compilation_unit(request)?;
         let resolved = self.resolve_compilation_unit(parsed)?;
         let typed = self.type_effect_compilation_unit(resolved)?;
@@ -343,6 +360,7 @@ impl CompilerSession {
         target: &TestSourceUnit,
         test_modules: &[TestSourceUnit],
     ) -> Result<TestCompileOutput, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         if self.options.mode != CompilerMode::Test {
             return Err(DiagnosticBundle::single(Diagnostic::error(
                 "E_TEST_ONLY_PRODUCTION",
@@ -555,6 +573,7 @@ impl CompilerSession {
         program: TypedProgram,
         source_name: Option<&str>,
     ) -> Result<CompileOutput, DiagnosticBundle> {
+        let _chain_discriminant = self.enter_chain_discriminant();
         if program.unit.kind != SourceUnitKind::Seiyaku {
             return Err(non_deployable_module_diagnostic(source_name));
         }
@@ -1056,6 +1075,46 @@ mod tests {
             })
             .expect_err("invalid source must return diagnostics");
         assert_eq!(error.diagnostics.len(), 1);
+    }
+
+    #[test]
+    fn session_chain_discriminant_accepts_exact_taira_account_and_rejects_mismatch() {
+        const TAIRA_RECIPIENT: &str =
+            "testﾜヰ8ｽuimdh9FﾂｦUｸﾈbﾕﾆヱMUYｴGｷﾙｹﾐRヱbﾐｷwﾄ6ﾃdDLPQﾋW496uﾙﾜFpﾈtHd4Hﾙﾎ45M1L5";
+        let source = format!(
+            "seiyaku TairaLiteral {{ view fn recipient() -> AccountId {{ return AccountId::parse(\"{TAIRA_RECIPIENT}\"); }} }}"
+        );
+        let taira = CompilerSession::new(CompilerOptions {
+            chain_discriminant: 369,
+            ..CompilerOptions::default()
+        });
+        taira
+            .build(CompileRequest {
+                source: &source,
+                source_name: Some("taira_literal.ko"),
+            })
+            .expect("the exact Taira I105 literal must compile under discriminant 369");
+
+        let sora = CompilerSession::new(CompilerOptions {
+            chain_discriminant: 753,
+            ..CompilerOptions::default()
+        });
+        let diagnostics = sora
+            .build(CompileRequest {
+                source: &source,
+                source_name: Some("taira_literal.ko"),
+            })
+            .expect_err("the Taira literal must fail under Sora discriminant 753");
+        assert!(
+            diagnostics
+                .render_human()
+                .contains("ERR_UNEXPECTED_NETWORK_PREFIX")
+        );
+        assert_ne!(
+            taira.policy_fingerprint(),
+            sora.policy_fingerprint(),
+            "network account-literal policy must be cache-keyed"
+        );
     }
 
     #[test]

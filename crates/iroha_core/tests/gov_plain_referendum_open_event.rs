@@ -66,7 +66,7 @@ fn plain_ballot_emits_open_event_with_window() {
         referendum_id: rid.clone(),
         owner: ALICE_ID.clone(),
         amount: 1_u64.into(),
-        duration_blocks: 1,
+        duration_blocks: 4,
         direction: 0,
     }
     .execute(&ALICE_ID, &mut stx)

@@ -1,4 +1,4 @@
-//! Auto-close approval test: decision at `h_end` without explicit finalize.
+//! Auto-close approval test: decision at `h_end + 1`, anchored to inclusive `h_end`.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 #![allow(clippy::too_many_lines, clippy::items_after_statements)]
 
@@ -6,10 +6,11 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{GovernanceStageApprovals, State, World, WorldReadOnly},
 };
 use iroha_data_model::{
     Registrable,
+    governance::types::ParliamentBody,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
@@ -105,6 +106,29 @@ fn auto_close_emits_approved() {
         }
         .execute(&ALICE_ID, &mut stx1)
         .expect("propose");
+        let rid = stx1
+            .world
+            .governance_referenda()
+            .iter()
+            .next()
+            .map(|(id, _)| id.clone())
+            .expect("referendum id");
+        let mut approvals = GovernanceStageApprovals::default();
+        for body in [
+            ParliamentBody::RulesCommittee,
+            ParliamentBody::AgendaCouncil,
+            ParliamentBody::InterestPanel,
+            ParliamentBody::ReviewPanel,
+            ParliamentBody::PolicyJury,
+            ParliamentBody::OversightCommittee,
+        ] {
+            approvals
+                .ensure_stage(body, 0, 1, stx1.gov.parliament_quorum_bps)
+                .record(ALICE_ID.clone());
+        }
+        stx1.world
+            .governance_stage_approvals_mut()
+            .insert(rid, approvals);
         stx1.apply();
         let _ = sblock1.commit();
     }
@@ -181,7 +205,7 @@ fn auto_close_emits_approved() {
     }
     let _ = sblock2.commit();
 
-    // H=3: auto close + ProposalApproved
+    // H=3 is the inclusive end height: the referendum remains open.
     let block3 = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(3).unwrap(),
         None,
@@ -192,7 +216,30 @@ fn auto_close_emits_approved() {
     );
     let mut sblock3 = state.block(block3);
     let evs3 = sblock3.world.take_external_events();
-    assert!(evs3.iter().any(|e| matches!(
+    assert!(!evs3.iter().any(|e| matches!(
+        e,
+        iroha_data_model::events::EventBox::Data(ev)
+            if matches!(
+                ev.as_ref(),
+                iroha_data_model::events::data::DataEvent::Governance(
+                    GovernanceEvent::ProposalApproved(_)
+                )
+            )
+    )));
+    sblock3.commit().expect("commit inclusive end block");
+
+    // H=4: auto-close/tally with evidence anchored to H=3.
+    let block4 = iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(4).unwrap(),
+        None,
+        None,
+        None,
+        0,
+        0,
+    );
+    let mut sblock4 = state.block(block4);
+    let evs4 = sblock4.world.take_external_events();
+    assert!(evs4.iter().any(|e| matches!(
         e,
         iroha_data_model::events::EventBox::Data(ev)
             if matches!(

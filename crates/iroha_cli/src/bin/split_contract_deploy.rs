@@ -38,8 +38,10 @@ struct Args {
     config: PathBuf,
     #[arg(long)]
     authority: String,
-    #[arg(long)]
-    private_key: String,
+    /// File containing one exact private-key literal. Inline key arguments are
+    /// intentionally unsupported so process listings cannot expose the signer.
+    #[arg(long, value_name = "PATH")]
+    private_key_file: PathBuf,
     #[arg(long)]
     code_file: PathBuf,
     #[arg(long)]
@@ -283,6 +285,70 @@ fn build_native_upload_plan(
     Err(eyre!("contract upload plan did not contain a final chunk"))
 }
 
+fn read_private_key_file(path: &Path) -> Result<PrivateKey> {
+    let metadata = fs::symlink_metadata(path)
+        .wrap_err_with(|| format!("inspect private-key file {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(eyre!(
+            "private-key file {} must be a regular non-symlink file",
+            path.display()
+        ));
+    }
+    if metadata.len() > 16 * 1024 {
+        return Err(eyre!(
+            "private-key file {} exceeds the 16384 byte limit",
+            path.display()
+        ));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(eyre!(
+                "private-key file {} must not be accessible by group or other users",
+                path.display()
+            ));
+        }
+    }
+    let raw = fs::read_to_string(path)
+        .wrap_err_with(|| format!("read private-key file {}", path.display()))?;
+    let private_key = raw.trim_end_matches(['\r', '\n']);
+    if private_key.is_empty()
+        || private_key.trim() != private_key
+        || private_key.chars().any(char::is_control)
+    {
+        return Err(eyre!(
+            "private-key file {} must contain one exact private-key literal",
+            path.display()
+        ));
+    }
+    private_key
+        .parse()
+        .wrap_err_with(|| format!("parse private-key file {}", path.display()))
+}
+
+fn read_fee_payment_file(path: &Path) -> Result<FeePaymentIntent> {
+    let bytes =
+        fs::read(path).wrap_err_with(|| format!("read fee-payment file {}", path.display()))?;
+    let supplied: norito::json::Value = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("parse fee-payment file {}", path.display()))?;
+    let intent: FeePaymentIntent = norito::json::from_slice(&bytes)
+        .wrap_err_with(|| format!("parse fee-payment file {}", path.display()))?;
+    intent
+        .validate()
+        .wrap_err("invalid signature-bound fee payment intent")?;
+    let canonical =
+        norito::json::to_value(&intent).wrap_err("serialize canonical fee payment intent")?;
+    if supplied != canonical {
+        return Err(eyre!(
+            "fee-payment file {} is not the exact canonical intent schema",
+            path.display()
+        ));
+    }
+    Ok(intent)
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(LoadPath::Explicit(&args.config))
@@ -295,17 +361,8 @@ fn main() -> Result<()> {
         .to_account_id()
         .map_err(|err| eyre!(err.to_string()))
         .wrap_err("failed to decode --authority")?;
-    let private_key: PrivateKey = args
-        .private_key
-        .parse()
-        .wrap_err("failed to parse --private-key")?;
-    let fee_payment_bytes = fs::read(&args.fee_payment_json)
-        .wrap_err_with(|| format!("read {}", args.fee_payment_json.display()))?;
-    let fee_payment: FeePaymentIntent = norito::json::from_slice(&fee_payment_bytes)
-        .wrap_err_with(|| format!("parse {}", args.fee_payment_json.display()))?;
-    fee_payment
-        .validate()
-        .wrap_err("invalid signature-bound fee payment intent")?;
+    let private_key = read_private_key_file(&args.private_key_file)?;
+    let fee_payment = read_fee_payment_file(&args.fee_payment_json)?;
     let signer = KeyPair::from(private_key.clone());
     let contract_address: iroha::data_model::smart_contract::ContractAddress = args
         .contract_address
@@ -465,6 +522,123 @@ mod tests {
     fn checked_split_contract_deploy_ed25519_key_fixture() -> KeyPair {
         KeyPair::try_random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
             .expect("generate checked split contract deploy fixture key")
+    }
+
+    fn private_key_file_fixture(contents: &str) -> Result<tempfile::NamedTempFile> {
+        use std::io::Write as _;
+
+        let mut file = tempfile::NamedTempFile::new()?;
+        file.write_all(contents.as_bytes())?;
+        file.flush()?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(file.path(), fs::Permissions::from_mode(0o600))?;
+        }
+        Ok(file)
+    }
+
+    #[test]
+    fn private_key_file_accepts_one_exact_literal_with_terminal_newline() -> Result<()> {
+        let expected = checked_split_contract_deploy_ed25519_key_fixture();
+        let exposed = iroha_crypto::ExposedPrivateKey(expected.private_key().clone()).to_string();
+        let file = private_key_file_fixture(&format!("{exposed}\n"))?;
+
+        let actual = read_private_key_file(file.path())?;
+
+        assert_eq!(
+            KeyPair::from(actual).public_key(),
+            expected.public_key(),
+            "the file parser must preserve the exact private key"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn private_key_file_rejects_surrounding_whitespace_without_echoing_secret() -> Result<()> {
+        let secret = "secret-material-that-must-not-appear-in-errors";
+        let file = private_key_file_fixture(&format!(" {secret}\n"))?;
+
+        let error = read_private_key_file(file.path()).expect_err("whitespace must be rejected");
+        let message = error.to_string();
+
+        assert!(message.contains("one exact private-key literal"));
+        assert!(!message.contains(secret));
+        Ok(())
+    }
+
+    #[test]
+    fn fee_payment_file_accepts_canonical_authority_gas_bound() -> Result<()> {
+        let file = private_key_file_fixture(
+            r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":2000000}}"#,
+        )?;
+
+        let actual = read_fee_payment_file(file.path())?;
+
+        assert_eq!(
+            actual,
+            FeePaymentIntent::authority(Vec::new(), std::num::NonZeroU64::new(2_000_000))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fee_payment_file_rejects_unknown_compatibility_fields() -> Result<()> {
+        let file = private_key_file_fixture(
+            r#"{"payer":"authority","value":{"charge_limits":[],"gas_limit":2000000,"legacy_fee":true}}"#,
+        )?;
+
+        let error =
+            read_fee_payment_file(file.path()).expect_err("unknown fee fields must be rejected");
+
+        let message = error.to_string();
+        assert!(
+            message.contains("parse fee-payment file")
+                || message.contains("not the exact canonical intent schema")
+        );
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_key_file_rejects_group_readable_permissions() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let file = private_key_file_fixture("not-inspected-after-mode-check\n")?;
+        fs::set_permissions(file.path(), fs::Permissions::from_mode(0o640))?;
+
+        let error =
+            read_private_key_file(file.path()).expect_err("group-readable secrets must fail");
+
+        assert!(error.to_string().contains("group or other users"));
+        Ok(())
+    }
+
+    #[test]
+    fn clap_surface_does_not_accept_inline_private_keys() {
+        let parsed = Args::try_parse_from([
+            "split-contract-deploy",
+            "--config",
+            "client.toml",
+            "--authority",
+            "authority",
+            "--private-key",
+            "must-not-be-accepted",
+            "--code-file",
+            "contract.to",
+            "--contract-address",
+            "contract",
+            "--deploy-nonce",
+            "1",
+            "--fee-payment-json",
+            "fee.json",
+        ]);
+
+        assert!(
+            parsed.is_err(),
+            "inline private keys must not be a CLI option"
+        );
     }
 
     #[test]

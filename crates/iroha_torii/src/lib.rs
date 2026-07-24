@@ -522,10 +522,10 @@ pub mod test_utils;
 pub use gov::{
     AtWindowDto, CouncilDeriveVrfRequest, EnactDto, GovernedContractResponse, LocksGetResponse,
     ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse,
-    handle_gov_citizen_status, handle_gov_contract_get, handle_gov_council_current,
-    handle_gov_enact, handle_gov_get_locks, handle_gov_get_proposal, handle_gov_get_referendum,
-    handle_gov_get_tally, handle_gov_protected_get, handle_gov_protected_set,
-    handle_gov_unlock_stats,
+    handle_gov_capabilities, handle_gov_citizen_draft, handle_gov_citizen_status,
+    handle_gov_contract_get, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
+    handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
+    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
 #[cfg(all(feature = "app_api", feature = "gov_vrf"))]
 pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
@@ -9583,14 +9583,7 @@ async fn handler_gov_enact(
 ) -> Result<JsonBody<crate::gov::EnactResponse>, Error> {
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/enact").await?;
-    crate::gov::handle_gov_enact(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        body,
-    )
-    .await
+    crate::gov::handle_gov_enact(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -9663,6 +9656,24 @@ async fn handler_gov_citizen_count(
     let remote_ip = remote.ip();
     check_access(&app, &headers, Some(remote_ip), "v1/gov/citizens").await?;
     crate::gov::handle_gov_citizen_count(app.state.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_capabilities(
+    State(app): State<SharedAppState>,
+) -> Result<JsonBody<crate::gov::GovernanceCapabilitiesV1>, Error> {
+    crate::gov::handle_gov_capabilities(app.state.clone()).await
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_gov_citizen_draft(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::CitizenDraftRequestV1>,
+) -> Result<JsonBody<crate::gov::CitizenDraftResponseV1>, Error> {
+    check_access(&app, &headers, Some(remote.ip()), "v1/gov/citizens/draft").await?;
+    crate::gov::handle_gov_citizen_draft(app.state.clone(), body).await
 }
 
 #[cfg(feature = "app_api")]
@@ -52692,6 +52703,8 @@ impl Torii {
             mount_get!(MINISTRY_AGENDA_GET, handler_ministry_agenda_proposal_get);
             mount_post!(GOV_PROPOSE_DEPLOY, handler_gov_propose_deploy);
             mount_post!(GOV_PROPOSE_SCCP, handler_gov_propose_sccp_route_governance);
+            mount_get!(GOV_CAPABILITIES, handler_gov_capabilities);
+            mount_post!(GOV_CITIZEN_DRAFT, handler_gov_citizen_draft);
             mount_post!(
                 VALIDATION_FEE_CURRENT_POLICY_PROOF,
                 validation_fee_api::handler_current_policy_proof

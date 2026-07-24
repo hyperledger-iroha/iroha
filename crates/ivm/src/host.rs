@@ -1100,6 +1100,7 @@ pub const fn registered_host_syscall_gas_formula(number: u32) -> Option<HostSysc
             | syscalls::SYSCALL_SORACLOUD_READ_SECRET_ENVELOPE
             | syscalls::SYSCALL_SMARTCONTRACT_EXECUTE_INSTRUCTION
             | syscalls::SYSCALL_CALL_CONTRACT
+            | syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2
             | syscalls::SYSCALL_CREATE_NFTS_FOR_ALL_USERS
             | syscalls::SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH
     ) {

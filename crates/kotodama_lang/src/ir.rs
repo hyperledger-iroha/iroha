@@ -6216,6 +6216,19 @@ fn lower_surface_builtin_call(
             ctx.current_instr(Instr::GetPublicInput { dest, key });
             dest
         }
+        Builtin::ContractInvokeQuantity2 => {
+            let contract = lower_expr(ctx, &args[0], vars);
+            let entrypoint = lower_expr(ctx, &args[1], vars);
+            let amount_in = lower_expr(ctx, &args[3], vars);
+            let min_out = lower_expr(ctx, &args[4], vars);
+            let dest = ctx.new_temp();
+            ctx.current_instr(Instr::DirectHelperSyscall {
+                dest,
+                syscall: ivm_abi::syscalls::SYSCALL_CALL_CONTRACT_QUANTITY2,
+                args: vec![contract, entrypoint, amount_in, min_out],
+            });
+            dest
+        }
         Builtin::DebugPrint => {
             let value = lower_expr_as_i64(ctx, &args[0], vars);
             ctx.current_instr(Instr::DebugPrint { value });

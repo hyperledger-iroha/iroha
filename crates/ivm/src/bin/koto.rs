@@ -38,11 +38,14 @@ const USAGE: &str = "\
 Kotodama V1 toolchain
 
 Usage:
-  koto check [--format human|json|sarif] [--zk] [--project <kotodama.project.json>] <source.ko>...
-  koto build [--format human|json|sarif] [--profile <name>] [--target-dir <path>] [--out <file.to>]
-             [--manifest-out <file.json>] [--max-cycles <count>] [--zk] [--verify]
+  koto check [--format human|json|sarif] [--chain-discriminant <1..65535>] [--zk]
              [--project <kotodama.project.json>] <source.ko>...
-  koto test [run|coverage|profile|list] [--zk] <options> <source.ko>
+  koto build [--format human|json|sarif] [--profile <name>] [--target-dir <path>] [--out <file.to>]
+             [--manifest-out <file.json>] [--max-cycles <count>]
+             [--chain-discriminant <1..65535>] [--zk] [--verify]
+             [--project <kotodama.project.json>] <source.ko>...
+  koto test [run|coverage|profile|list] [--chain-discriminant <1..65535>] [--zk]
+            <options> <source.ko>
   koto fmt [--check] <source.ko>...
   koto doc [--format markdown|json] [--zk] <source.ko>
   koto explain <diagnostic-code>
@@ -203,11 +206,13 @@ fn check(args: Vec<String>) -> Result<(), String> {
     let CheckOptions {
         format,
         zk_enabled,
+        chain_discriminant,
         project,
         inputs,
     } = parse_check_options(args)?;
     let session = CompilerSession::new(CompilerOptions {
         force_zk: zk_enabled,
+        chain_discriminant,
         ..CompilerOptions::default()
     });
     let driver = BuildDriver::new(session, "koto-check");
@@ -438,6 +443,7 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
     let mut explicit_output = None;
     let mut explicit_manifest_output = None;
     let mut max_cycles = None;
+    let mut chain_discriminant = None;
     let mut zk_enabled = false;
     let mut publish_mode = PublishMode::Write;
     let mut project_manifest = None;
@@ -493,6 +499,18 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
                 }
                 max_cycles = Some(parsed);
             }
+            "--chain-discriminant" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| "--chain-discriminant requires a value".to_owned())?;
+                let parsed = parse_chain_discriminant(raw)?;
+                if chain_discriminant.replace(parsed).is_some() {
+                    return Err("--chain-discriminant may be supplied only once"
+                        .to_owned()
+                        .into());
+                }
+            }
             "--zk" => zk_enabled = true,
             "--verify" => publish_mode = PublishMode::Verify,
             "--project" => {
@@ -538,6 +556,9 @@ fn build(args: Vec<String>) -> Result<(), KotoError> {
     let mut compiler_options = CompilerOptions::default();
     if let Some(max_cycles) = max_cycles {
         compiler_options.max_cycles = max_cycles;
+    }
+    if let Some(chain_discriminant) = chain_discriminant {
+        compiler_options.chain_discriminant = chain_discriminant;
     }
     compiler_options.force_zk = zk_enabled;
     let session = CompilerSession::new(compiler_options);
@@ -875,13 +896,35 @@ fn explain(args: Vec<String>) -> Result<(), String> {
 struct CheckOptions {
     format: DiagnosticFormat,
     zk_enabled: bool,
+    chain_discriminant: u16,
     project: Option<PathBuf>,
     inputs: Vec<PathBuf>,
+}
+
+fn parse_chain_discriminant(raw: &str) -> Result<u16, String> {
+    if raw.is_empty()
+        || (raw.len() > 1 && raw.starts_with('0'))
+        || !raw.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(format!(
+            "invalid --chain-discriminant value `{raw}`: expected a decimal integer in 1..=65535"
+        ));
+    }
+    let value = raw.parse::<u16>().map_err(|_| {
+        format!(
+            "invalid --chain-discriminant value `{raw}`: expected a decimal integer in 1..=65535"
+        )
+    })?;
+    if value == 0 {
+        return Err("--chain-discriminant must be in 1..=65535".to_owned());
+    }
+    Ok(value)
 }
 
 fn parse_check_options(args: Vec<String>) -> Result<CheckOptions, String> {
     let mut format = DiagnosticFormat::Human;
     let mut zk_enabled = false;
+    let mut chain_discriminant = None;
     let mut project = None;
     let mut inputs = Vec::new();
     let mut index = 0;
@@ -895,6 +938,16 @@ fn parse_check_options(args: Vec<String>) -> Result<CheckOptions, String> {
                 )?;
             }
             "--zk" => zk_enabled = true,
+            "--chain-discriminant" => {
+                index += 1;
+                let raw = args
+                    .get(index)
+                    .ok_or_else(|| "--chain-discriminant requires a value".to_owned())?;
+                let parsed = parse_chain_discriminant(raw)?;
+                if chain_discriminant.replace(parsed).is_some() {
+                    return Err("--chain-discriminant may be supplied only once".to_owned());
+                }
+            }
             "--project" => {
                 index += 1;
                 let path = PathBuf::from(
@@ -919,6 +972,8 @@ fn parse_check_options(args: Vec<String>) -> Result<CheckOptions, String> {
     Ok(CheckOptions {
         format,
         zk_enabled,
+        chain_discriminant: chain_discriminant
+            .unwrap_or_else(iroha_data_model::account::address::chain_discriminant),
         project,
         inputs,
     })
@@ -2099,6 +2154,8 @@ mod tests {
         let options = parse_check_options(vec![
             "--format".to_owned(),
             "sarif".to_owned(),
+            "--chain-discriminant".to_owned(),
+            "369".to_owned(),
             "--zk".to_owned(),
             "--project".to_owned(),
             "kotodama.project.json".to_owned(),
@@ -2106,11 +2163,37 @@ mod tests {
         .expect("parse check options");
         assert_eq!(options.format, DiagnosticFormat::Sarif);
         assert!(options.zk_enabled);
+        assert_eq!(options.chain_discriminant, 369);
         assert_eq!(
             options.project,
             Some(PathBuf::from("kotodama.project.json"))
         );
         assert!(options.inputs.is_empty());
+    }
+
+    #[test]
+    fn chain_discriminant_option_is_strict_and_nonzero() {
+        assert_eq!(parse_chain_discriminant("369").expect("Taira value"), 369);
+        assert_eq!(
+            parse_chain_discriminant("65535").expect("maximum u16 value"),
+            u16::MAX
+        );
+        for invalid in ["", "0", "0369", "+369", "-1", "369x", "65536"] {
+            assert!(
+                parse_chain_discriminant(invalid).is_err(),
+                "accepted invalid discriminant {invalid:?}"
+            );
+        }
+
+        let duplicate = parse_check_options(vec![
+            "--chain-discriminant".to_owned(),
+            "369".to_owned(),
+            "--chain-discriminant".to_owned(),
+            "753".to_owned(),
+            "contract.ko".to_owned(),
+        ])
+        .expect_err("duplicate option must fail closed");
+        assert!(duplicate.contains("only once"));
     }
 
     #[test]

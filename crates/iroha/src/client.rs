@@ -2570,7 +2570,35 @@ fn validate_validation_fee_draft_response(
     Ok(instruction)
 }
 
-fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<()> {
+fn parse_canonical_validation_fee_u64(value: &str, field: &str) -> Result<u64> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(eyre!(
+            "validation-fee proposal {field} must be a canonical unsigned decimal integer"
+        ));
+    }
+    value.parse::<u64>().wrap_err_with(|| {
+        format!("validation-fee proposal {field} is outside the unsigned 64-bit integer range")
+    })
+}
+
+fn parse_canonical_validation_fee_u128(value: &str, field: &str) -> Result<u128> {
+    if value.is_empty()
+        || (value.len() > 1 && value.starts_with('0'))
+        || !value.bytes().all(|byte| byte.is_ascii_digit())
+    {
+        return Err(eyre!(
+            "validation-fee proposal {field} must be a canonical unsigned decimal integer"
+        ));
+    }
+    value.parse::<u128>().wrap_err_with(|| {
+        format!("validation-fee proposal {field} is outside the unsigned 128-bit integer range")
+    })
+}
+
+fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV1) -> Result<u64> {
     use iroha_data_model::{governance::types::ProposalKind, isi::governance::VotingMode};
     let expected_id = hex::encode(record.proposal_kind.fingerprint());
     if record.proposal_id != expected_id
@@ -2583,6 +2611,52 @@ fn validate_validation_fee_proposal_record(record: &ValidationFeeProposalRecordV
         return Err(eyre!(
             "validation-fee proposal read response is not bound to its exact native proposal"
         ));
+    }
+    let created_height =
+        parse_canonical_validation_fee_u64(&record.created_height, "created_height")?;
+    parse_canonical_validation_fee_u64(
+        &record.parliament_snapshot.selection_epoch,
+        "parliament_snapshot.selection_epoch",
+    )?;
+    if let Some(height) = record.enacted_at_height.as_deref() {
+        parse_canonical_validation_fee_u64(height, "enacted_at_height")?;
+    }
+    for stage in &record.pipeline.stages {
+        parse_canonical_validation_fee_u64(&stage.started_at, "pipeline.started_at")?;
+        if let Some(height) = stage.deadline.as_deref() {
+            parse_canonical_validation_fee_u64(height, "pipeline.deadline")?;
+        }
+        if let Some(height) = stage.completed_at.as_deref() {
+            parse_canonical_validation_fee_u64(height, "pipeline.completed_at")?;
+        }
+    }
+    Ok(created_height)
+}
+
+fn validate_validation_fee_proposal_detail(detail: &ValidationFeeProposalDetailV1) -> Result<()> {
+    parse_canonical_validation_fee_u64(&detail.current_height, "current_height")?;
+    for progress in &detail.body_progress {
+        parse_canonical_validation_fee_u64(&progress.required, "body_progress.required")?;
+        parse_canonical_validation_fee_u64(&progress.approve, "body_progress.approve")?;
+        parse_canonical_validation_fee_u64(&progress.reject, "body_progress.reject")?;
+        parse_canonical_validation_fee_u64(&progress.abstain, "body_progress.abstain")?;
+    }
+    parse_canonical_validation_fee_u128(&detail.tally.approve, "tally.approve")?;
+    parse_canonical_validation_fee_u128(&detail.tally.reject, "tally.reject")?;
+    parse_canonical_validation_fee_u128(&detail.tally.abstain, "tally.abstain")?;
+    parse_canonical_validation_fee_u128(&detail.tally.turnout, "tally.turnout")?;
+    parse_canonical_validation_fee_u128(&detail.tally.min_turnout, "tally.min_turnout")?;
+    parse_canonical_validation_fee_u64(
+        &detail.tally.approval_threshold_numerator,
+        "tally.approval_threshold_numerator",
+    )?;
+    parse_canonical_validation_fee_u64(
+        &detail.tally.approval_threshold_denominator,
+        "tally.approval_threshold_denominator",
+    )?;
+    for lock in detail.locks.locks.values() {
+        parse_canonical_validation_fee_u64(&lock.expiry_height, "locks.expiry_height")?;
+        parse_canonical_validation_fee_u64(&lock.duration_blocks, "locks.duration_blocks")?;
     }
     Ok(())
 }
@@ -19486,13 +19560,12 @@ impl Client {
                 "validation-fee proposal list has an unsupported version"
             ));
         }
+        let mut order_keys = Vec::with_capacity(result.proposals.len());
         for proposal in &result.proposals {
-            validate_validation_fee_proposal_record(proposal)?;
+            let created_height = validate_validation_fee_proposal_record(proposal)?;
+            order_keys.push((created_height, proposal.proposal_id.as_str()));
         }
-        if result.proposals.windows(2).any(|pair| {
-            (pair[0].created_height, pair[0].proposal_id.as_str())
-                > (pair[1].created_height, pair[1].proposal_id.as_str())
-        }) {
+        if order_keys.windows(2).any(|pair| pair[0] > pair[1]) {
             return Err(eyre!(
                 "validation-fee proposal list is not canonically ordered"
             ));
@@ -19535,6 +19608,7 @@ impl Client {
             ));
         }
         validate_validation_fee_proposal_record(&result.proposal)?;
+        validate_validation_fee_proposal_detail(&result)?;
         Ok(result)
     }
 
@@ -24572,6 +24646,35 @@ mod tests {
     const ENCRYPTED_CREDENTIALS: &str = "bWFkX2hhdHRlcjppbG92ZXRlYQ==";
     const TEST_WORKER_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const TEST_AUDITOR_I105: &str = "sorauﾛ1PaQｽGh1ｴ6pAﾜnqｸfJuｿMﾑVqﾏvQﾐﾚｼｾﾋaﾈｳﾊc1ｺﾊ1GGM2D";
+
+    #[test]
+    fn validation_fee_governance_integer_strings_are_canonical_and_full_width() {
+        assert_eq!(
+            parse_canonical_validation_fee_u64("18446744073709551615", "test_u64",)
+                .expect("u64 maximum"),
+            u64::MAX
+        );
+        assert_eq!(
+            parse_canonical_validation_fee_u128(
+                "340282366920938463463374607431768211455",
+                "test_u128",
+            )
+            .expect("u128 maximum"),
+            u128::MAX
+        );
+        for invalid in ["", "00", "01", "+1", "-1", "1.0", "18446744073709551616"] {
+            assert!(
+                parse_canonical_validation_fee_u64(invalid, "test_u64").is_err(),
+                "accepted non-canonical or out-of-range u64 {invalid:?}",
+            );
+        }
+
+        let numeric_order = [(2_u64, "later-id"), (10_u64, "earlier-id")];
+        assert!(
+            !numeric_order.windows(2).any(|pair| pair[0] > pair[1]),
+            "proposal height ordering must be numeric rather than lexicographic",
+        );
+    }
 
     #[derive(Debug, Clone, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
     #[norito(deny_unknown_fields)]

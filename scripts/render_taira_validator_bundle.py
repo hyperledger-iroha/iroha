@@ -481,9 +481,39 @@ def render_genesis_template(
                 f"base genesis {base_genesis_path} contains a non-object transaction"
             )
         transaction["topology"] = []
+
+    registered_accounts: set[str] = set()
+    for transaction in transactions:
+        instructions = transaction.get("instructions", [])
+        if not isinstance(instructions, list):
+            raise ValueError(
+                f"base genesis {base_genesis_path} contains a non-array instructions field"
+            )
+        for instruction in instructions:
+            if not isinstance(instruction, dict):
+                continue
+            account = instruction.get("Register", {}).get("Account")
+            if isinstance(account, dict) and isinstance(account.get("id"), str):
+                registered_accounts.add(account["id"])
+
+    validator_account_instructions = [
+        {
+            "Register": {
+                "Account": {
+                    "id": validator.account_id,
+                    "metadata": {
+                        "purpose": "taira_validator_payout_recipient",
+                        "validator_slug": validator.slug,
+                    },
+                }
+            }
+        }
+        for validator in validators
+        if validator.account_id not in registered_accounts
+    ]
     transactions.append(
         {
-            "instructions": [],
+            "instructions": validator_account_instructions,
             "ivm_triggers": [],
             "topology": [
                 {"peer": validator.public_key, "pop_hex": validator.pop_hex}

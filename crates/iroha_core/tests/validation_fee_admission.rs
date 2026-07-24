@@ -1,7 +1,7 @@
 //! Integration coverage for validator admission of Parliament-enacted validation-fee policy.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
-use std::{num::NonZeroU64, sync::Arc};
+use std::{collections::BTreeMap, num::NonZeroU64, sync::Arc};
 
 use iroha_core::{
     block::{BlockBuilder, ValidBlock},
@@ -22,19 +22,26 @@ use iroha_data_model::{
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     block::BlockHeader,
     domain::DomainId,
+    events::{
+        EventFilterBox,
+        time::{ExecutionTime, TimeEventFilter},
+    },
     governance::types::{
-        GovernanceFinalizationEvidence, ParliamentBodies, ParliamentBody, ParliamentRoster,
-        ProposalKind, ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
+        ParliamentBodies, ParliamentBody, ParliamentRoster, ProposalKind,
+        ValidationFeePayoutLifecycleProposal, ValidationFeePolicyProposal,
     },
     isi::{
         SetParameter, Transfer, TransferAssetBatch, TransferAssetBatchEntry,
-        governance::{AtWindow, EnactReferendum, VotingMode},
+        governance::{AtWindow, EnactReferendum},
     },
     nexus::DataSpaceId,
     parameter::Parameter,
     prelude::*,
     smart_contract::ContractAddress,
-    transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction},
+    transaction::{
+        Executable, IvmBytecode, IvmProved, SignedTransaction, executable::ContractInvocation,
+    },
+    trigger::action::{Action, Repeats},
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
         VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
@@ -57,7 +64,10 @@ use sha2::Sha256;
 
 const TEST_VALIDATION_FEE_ASSET_SCALE: u8 = VALIDATION_FEE_DS_SCALE;
 const TEST_VALIDATION_FEE_MINOR_UNITS: u64 = 10;
-const TEST_POLICY_ENACTMENT_HEIGHT: u64 = 2;
+const TEST_LIFECYCLE_WINDOW_END_HEIGHT: u64 = 2;
+const TEST_LIFECYCLE_ENACTMENT_HEIGHT: u64 = TEST_LIFECYCLE_WINDOW_END_HEIGHT + 1;
+const TEST_POLICY_WINDOW_END_HEIGHT: u64 = 4;
+const TEST_POLICY_ENACTMENT_HEIGHT: u64 = TEST_POLICY_WINDOW_END_HEIGHT + 3_600;
 const TEST_POLICY_EFFECTIVE_HEIGHT: u64 =
     TEST_POLICY_ENACTMENT_HEIGHT + VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS;
 
@@ -110,6 +120,16 @@ fn payout_contract_address() -> ContractAddress {
     .expect("payout contract address")
 }
 
+fn pool_contract_address() -> ContractAddress {
+    ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &account(2).0,
+        43,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("pool contract address")
+}
+
 fn payout_contract_artifact() -> (
     Vec<u8>,
     iroha_data_model::smart_contract::manifest::ContractManifest,
@@ -129,7 +149,7 @@ fn payout_contract_artifact() -> (
         argument_schema: None,
         return_type: None,
         return_schema: None,
-        permission: Some("CanInvokeValidationFeePayout".to_owned()),
+        permission: Some("CanInvokeContractEntrypoint".to_owned()),
         read_keys: Vec::new(),
         write_keys: Vec::new(),
         access_hints_complete: None,
@@ -169,6 +189,64 @@ fn payout_contract_artifact() -> (
     (artifact, verified.manifest)
 }
 
+fn pool_contract_artifact() -> (
+    Vec<u8>,
+    iroha_data_model::smart_contract::manifest::ContractManifest,
+) {
+    let metadata = ivm::ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 1,
+        abi_version: 1,
+    };
+    let entrypoint = iroha_data_model::smart_contract::manifest::EntrypointDescriptor {
+        name: "swap_exact_in_quote_public".to_owned(),
+        kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage,
+        params: Vec::new(),
+        argument_schema: None,
+        return_type: None,
+        return_schema: None,
+        permission: Some("CanInvokeContractEntrypoint".to_owned()),
+        read_keys: Vec::new(),
+        write_keys: Vec::new(),
+        access_hints_complete: None,
+        access_hints_skipped: Vec::new(),
+        triggers: Vec::new(),
+    };
+    let interface = ivm::EmbeddedContractInterfaceV1 {
+        seiyaku_name: "ValidationFeePool".to_owned(),
+        compiler_fingerprint: "validation-fee-pool-admission-test".to_owned(),
+        abi_hash: ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1),
+        features_bitmap: 0,
+        access_set_hints: None,
+        kotoba: Vec::new(),
+        entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+            name: entrypoint.name.clone(),
+            kind: entrypoint.kind,
+            params: entrypoint.params.clone(),
+            argument_schema: entrypoint.argument_schema.clone(),
+            return_type: entrypoint.return_type.clone(),
+            return_schema: entrypoint.return_schema.clone(),
+            permission: entrypoint.permission.clone(),
+            read_keys: entrypoint.read_keys.clone(),
+            write_keys: entrypoint.write_keys.clone(),
+            access_hints_complete: entrypoint.access_hints_complete,
+            access_hints_skipped: entrypoint.access_hints_skipped.clone(),
+            triggers: entrypoint.triggers.clone(),
+            entry_pc: 0,
+        }],
+        error_codes: Vec::new(),
+        states: Vec::new(),
+    };
+    let mut artifact = metadata.encode();
+    artifact.extend_from_slice(&interface.encode_section());
+    artifact.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+    let verified = ivm::verify_contract_artifact(&artifact).expect("valid pool contract artifact");
+    (artifact, verified.manifest)
+}
+
 fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutBindingV1 {
     let contract_address = payout_contract_address();
     let (contract_artifact, _) = payout_contract_artifact();
@@ -181,7 +259,7 @@ fn payout_binding(fee_asset: &AssetDefinitionId) -> ValidationFeeTreasuryPayoutB
             .expect("payout entrypoint"),
         sbd_asset_id: fee_asset.clone(),
         xor_asset_id: xor_asset_definition_id(),
-        pool_vault_account_id: account(2).0,
+        pool_vault_account_id: pool_contract_address().subject_id(),
         batch_sbd: iroha_data_model::validation_fee::validation_fee_payout_batch_sbd(),
         min_xor_out: iroha_data_model::validation_fee::validation_fee_payout_min_xor(),
         max_xor_out: iroha_data_model::validation_fee::validation_fee_payout_max_xor(),
@@ -226,9 +304,10 @@ fn test_state() -> (
         Account::new(user.clone()).build(&user),
         Account::new(recipient.clone()).build(&user),
         Account::new(treasury.clone()).build(&user),
+        Account::new(pool_contract_address().subject_id()).build(&user),
     ];
     accounts.extend((2..=6).map(|seed| Account::new(account(seed).0).build(&user)));
-    let state = State::new_for_testing(
+    let mut state = State::new_for_testing(
         World::with_assets(
             [domain],
             accounts,
@@ -239,6 +318,9 @@ fn test_state() -> (
         Kura::blank_kura_for_testing(),
         LiveQueryStore::start_test(),
     );
+    let mut governance = state.gov.clone();
+    governance.pipeline_enactment_sla_blocks = 3_600;
+    state.set_gov(governance);
     let nexus = state.nexus_snapshot();
     state.install_lane_manifests(&Arc::new(
         LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
@@ -354,12 +436,12 @@ fn test_parliament_authorization(proposal_id: [u8; 32]) -> ValidationFeeParliame
         proposal_fingerprint: proposal_id,
         proposal_time_roster_root: test_roster_root(),
         referendum_window: ValidationFeeGovernanceWindowV1 {
-            lower: 1,
-            upper: TEST_POLICY_ENACTMENT_HEIGHT,
+            lower: TEST_POLICY_WINDOW_END_HEIGHT,
+            upper: TEST_POLICY_WINDOW_END_HEIGHT,
         },
         finalization: ValidationFeeFinalizationEvidenceV1 {
             referendum_id: proposal_id,
-            finalized_at_height: 1,
+            finalized_at_height: TEST_POLICY_WINDOW_END_HEIGHT,
             mode: ValidationFeeGovernanceVotingModeV1::Plain,
             approve: 1,
             reject: 0,
@@ -421,25 +503,22 @@ fn policy_registry(policy: &ValidationFeePolicyV1) -> ValidationFeePolicyRegistr
     }
 }
 
-fn seed_approved_proposal(
+fn seed_open_proposal(
     kind: ProposalKind,
     proposer: &AccountId,
+    window: AtWindow,
     state_transaction: &mut StateTransaction<'_, '_>,
-) -> ([u8; 32], AtWindow) {
+) -> [u8; 32] {
     let proposal_id = kind.fingerprint();
     let referendum_id = hex::encode(proposal_id);
-    let window = AtWindow {
-        lower: 1,
-        upper: TEST_POLICY_ENACTMENT_HEIGHT,
-    };
     let bodies = test_parliament_bodies();
     state_transaction.world.governance_proposals_mut().insert(
         proposal_id,
         iroha_core::state::GovernanceProposalRecord {
             proposer: proposer.clone(),
             kind,
-            created_height: 1,
-            status: iroha_core::state::GovernanceProposalStatus::Approved,
+            created_height: window.lower,
+            status: iroha_core::state::GovernanceProposalStatus::Proposed,
             pipeline: iroha_core::state::GovernancePipeline::default(),
             parliament_snapshot: Some(iroha_core::state::GovernanceParliamentSnapshot {
                 selection_epoch: 1,
@@ -447,19 +526,7 @@ fn seed_approved_proposal(
                 roster_root: test_roster_root(),
                 bodies,
             }),
-            finalization_evidence: Some(GovernanceFinalizationEvidence {
-                proposal_id,
-                referendum_id: proposal_id,
-                finalized_at_height: 1,
-                mode: VotingMode::Plain,
-                approve: 1,
-                reject: 0,
-                abstain: 0,
-                min_turnout: 1,
-                approval_threshold_numerator: 1,
-                approval_threshold_denominator: 2,
-                approved: true,
-            }),
+            finalization_evidence: None,
             enacted_at_height: None,
         },
     );
@@ -468,7 +535,7 @@ fn seed_approved_proposal(
         iroha_core::state::GovernanceReferendumRecord {
             h_start: window.lower,
             h_end: window.upper,
-            status: iroha_core::state::GovernanceReferendumStatus::Closed,
+            status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
         },
     );
@@ -489,8 +556,25 @@ fn seed_approved_proposal(
     state_transaction
         .world
         .governance_stage_approvals_mut()
-        .insert(referendum_id, approvals);
-    (proposal_id, window)
+        .insert(referendum_id.clone(), approvals);
+    let voter = proposer.clone();
+    state_transaction.world.governance_locks_mut().insert(
+        referendum_id,
+        iroha_core::state::GovernanceLocksForReferendum {
+            locks: BTreeMap::from([(
+                voter.clone(),
+                iroha_core::state::GovernanceLockRecord {
+                    owner: voter,
+                    amount: Quantity::from(1_u64),
+                    slashed: Quantity::zero(),
+                    expiry_height: window.upper,
+                    direction: 0,
+                    duration_blocks: 0,
+                },
+            )]),
+        },
+    );
+    proposal_id
 }
 
 fn install_validation_fee_policy(
@@ -499,56 +583,357 @@ fn install_validation_fee_policy(
     authority_key_pair: &KeyPair,
     policy: ValidationFeePolicyV1,
 ) {
-    let mut block = state.block(block_header(
-        TEST_POLICY_ENACTMENT_HEIGHT,
-        1_700_000_001_000,
-    ));
-    let mut stx = block.transaction();
-    let register_permission: iroha_data_model::permission::Permission =
-        iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode.into();
-    Grant::account_permission(register_permission, authority.clone())
+    let lifecycle_window = AtWindow {
+        lower: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+        upper: TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+    };
+    let lifecycle_id = payout_lifecycle_proposal_id(&policy);
+    let policy_window = AtWindow {
+        lower: TEST_POLICY_WINDOW_END_HEIGHT,
+        upper: TEST_POLICY_WINDOW_END_HEIGHT,
+    };
+    let proposal_id = policy_proposal(&policy).fingerprint();
+
+    // H=2: install the immutable payout runtime and persist an open lifecycle
+    // referendum. An enactment attempt before auto-finalization must fail closed.
+    {
+        let mut block = state.block(block_header(
+            TEST_LIFECYCLE_WINDOW_END_HEIGHT,
+            1_700_000_001_000,
+        ));
+        let mut stx = block.transaction();
+        let register_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        Grant::account_permission(register_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant payout-contract registration authority");
+        let payout_subject = payout_contract_address().subject_id();
+        let register_trigger_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: payout_subject.clone(),
+            }
+            .into();
+        Grant::account_permission(register_trigger_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant exact payout-trigger registration authority");
+        let (contract_artifact, contract_manifest) = payout_contract_artifact();
+        let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+            authority,
+            contract_artifact,
+            &mut stx,
+        )
+        .expect("register payout-contract bytes");
+        iroha_core::smartcontracts::code::register_manifest(
+            authority,
+            contract_manifest.signed(authority_key_pair),
+            &mut stx,
+        )
+        .expect("register signed payout-contract manifest");
+        iroha_core::smartcontracts::code::activate_instance(
+            authority,
+            payout_contract_address(),
+            registered_code_hash,
+            &mut stx,
+        )
+        .expect("activate immutable payout-contract subject");
+        let (pool_artifact, pool_manifest) = pool_contract_artifact();
+        let pool_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
+            authority,
+            pool_artifact,
+            &mut stx,
+        )
+        .expect("register pool-contract bytes");
+        iroha_core::smartcontracts::code::register_manifest(
+            authority,
+            pool_manifest.signed(authority_key_pair),
+            &mut stx,
+        )
+        .expect("register signed pool-contract manifest");
+        iroha_core::smartcontracts::code::activate_instance(
+            authority,
+            pool_contract_address(),
+            pool_code_hash,
+            &mut stx,
+        )
+        .expect("activate pool contract");
+        let wrapper_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: payout_contract_address(),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            }
+            .into();
+        Grant::account_permission(wrapper_permission, payout_subject.clone())
+            .execute(authority, &mut stx)
+            .expect("grant wrapper subject its exact autonomous selector");
+        let pool_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: pool_contract_address(),
+                entrypoint: "swap_exact_in_quote_public".to_owned(),
+            }
+            .into();
+        Grant::account_permission(pool_permission, payout_subject.clone())
+            .execute(authority, &mut stx)
+            .expect("grant wrapper subject its exact pool selector");
+        Register::trigger(Trigger::new(
+            "validation_fee_payout_tick"
+                .parse()
+                .expect("payout trigger id"),
+            Action::new(
+                Executable::ContractCall(ContractInvocation {
+                    contract_address: payout_contract_address(),
+                    expected_code_hash: registered_code_hash,
+                    entrypoint: "autonomous_validation_fee_tick".to_owned(),
+                    arguments: None,
+                }),
+                Repeats::Indefinitely,
+                payout_subject,
+                EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+            ),
+        ))
         .execute(authority, &mut stx)
-        .expect("grant payout-contract registration authority");
-    let (contract_artifact, contract_manifest) = payout_contract_artifact();
-    let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
-        authority,
-        contract_artifact,
-        &mut stx,
-    )
-    .expect("register payout-contract bytes");
-    iroha_core::smartcontracts::code::register_manifest(
-        authority,
-        contract_manifest.signed(authority_key_pair),
-        &mut stx,
-    )
-    .expect("register signed payout-contract manifest");
-    iroha_core::smartcontracts::code::activate_instance(
-        authority,
-        payout_contract_address(),
-        registered_code_hash,
-        &mut stx,
-    )
-    .expect("activate immutable payout-contract subject");
-    let (lifecycle_id, lifecycle_window) =
-        seed_approved_proposal(payout_lifecycle_proposal(&policy), authority, &mut stx);
-    EnactReferendum {
-        referendum_id: lifecycle_id,
-        preimage_hash: lifecycle_id,
-        at_window: lifecycle_window,
+        .expect("register exact autonomous payout trigger");
+        assert_eq!(
+            seed_open_proposal(
+                payout_lifecycle_proposal(&policy),
+                authority,
+                lifecycle_window,
+                &mut stx,
+            ),
+            lifecycle_id
+        );
+        let early_error = EnactReferendum {
+            referendum_id: lifecycle_id,
+            preimage_hash: lifecycle_id,
+            at_window: lifecycle_window,
+        }
+        .execute(authority, &mut stx)
+        .expect_err("an open lifecycle referendum must not enact");
+        assert!(
+            early_error.to_string().contains("approved"),
+            "unexpected pre-finalization lifecycle error: {early_error}"
+        );
+        stx.apply();
+        block.commit().expect("commit open lifecycle referendum");
     }
-    .execute(authority, &mut stx)
-    .expect("enact Parliament-approved validation-fee payout lifecycle");
-    let (proposal_id, window) =
-        seed_approved_proposal(policy_proposal(&policy), authority, &mut stx);
-    EnactReferendum {
-        referendum_id: proposal_id,
-        preimage_hash: proposal_id,
-        at_window: window,
+    {
+        let view = state.view();
+        let proposal = view
+            .world()
+            .governance_proposals()
+            .get(&lifecycle_id)
+            .expect("persisted lifecycle proposal");
+        assert_eq!(
+            proposal.status,
+            iroha_core::state::GovernanceProposalStatus::Proposed
+        );
+        assert!(proposal.finalization_evidence.is_none());
+        let derived_effect_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::asset::CanTransferAsset {
+                asset: AssetId::new(policy.ds_asset_id.clone(), policy.treasury_account_id.clone()),
+            }
+            .into();
+        assert!(
+            view.world()
+                .account_permissions()
+                .iter()
+                .all(|(_, permissions)| !permissions.contains(&derived_effect_permission)),
+            "the wrapper-owned SBD effect token must not exist before protected lifecycle enactment"
+        );
+        assert_eq!(
+            view.world()
+                .governance_referenda()
+                .get(&hex::encode(lifecycle_id))
+                .expect("persisted lifecycle referendum")
+                .status,
+            iroha_core::state::GovernanceReferendumStatus::Open
+        );
     }
-    .execute(authority, &mut stx)
-    .expect("enact Parliament-approved validation-fee policy");
-    stx.apply();
-    block.commit().expect("commit validation-fee policy");
+
+    // H=3: State::block performs the genuine Plain auto-close, retaining
+    // evidence anchored to inclusive H=2. Enact only after that evidence exists.
+    {
+        let mut block = state.block(block_header(
+            TEST_LIFECYCLE_ENACTMENT_HEIGHT,
+            1_700_000_002_000,
+        ));
+        let mut stx = block.transaction();
+        let proposal = stx
+            .world
+            .governance_proposals()
+            .get(&lifecycle_id)
+            .cloned()
+            .expect("auto-finalized lifecycle proposal");
+        assert_eq!(
+            proposal.status,
+            iroha_core::state::GovernanceProposalStatus::Approved
+        );
+        assert_eq!(
+            proposal
+                .finalization_evidence
+                .as_ref()
+                .expect("genuine lifecycle finalization evidence")
+                .finalized_at_height,
+            TEST_LIFECYCLE_WINDOW_END_HEIGHT
+        );
+        EnactReferendum {
+            referendum_id: lifecycle_id,
+            preimage_hash: lifecycle_id,
+            at_window: lifecycle_window,
+        }
+        .execute(authority, &mut stx)
+        .expect("enact auto-finalized validation-fee payout lifecycle");
+        stx.apply();
+        block.commit().expect("commit lifecycle enactment");
+    }
+    {
+        let view = state.view();
+        let proposal = view
+            .world()
+            .governance_proposals()
+            .get(&lifecycle_id)
+            .expect("persisted enacted lifecycle");
+        assert_eq!(
+            proposal.status,
+            iroha_core::state::GovernanceProposalStatus::Enacted
+        );
+        assert_eq!(
+            proposal.enacted_at_height,
+            Some(TEST_LIFECYCLE_ENACTMENT_HEIGHT)
+        );
+        let derived_effect_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::asset::CanTransferAsset {
+                asset: AssetId::new(policy.ds_asset_id.clone(), policy.treasury_account_id.clone()),
+            }
+            .into();
+        let direct_holders = view
+            .world()
+            .account_permissions()
+            .iter()
+            .filter_map(|(account_id, permissions)| {
+                permissions
+                    .contains(&derived_effect_permission)
+                    .then_some(account_id)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            direct_holders,
+            vec![&policy
+                .treasury_payout_binding
+                .as_ref()
+                .expect("payout binding")
+                .pool_vault_account_id],
+            "protected lifecycle enactment must atomically derive the sole pool effect grant"
+        );
+        assert!(
+            view.world().roles().iter().all(|(_, role)| !role
+                .permissions()
+                .any(|permission| permission == &derived_effect_permission)),
+            "the derived pool effect grant must never be role-owned"
+        );
+    }
+
+    // H=4: only after the lifecycle enactment is persisted, seed the policy
+    // referendum and prove that it cannot enact while still open.
+    {
+        let mut block = state.block(block_header(
+            TEST_POLICY_WINDOW_END_HEIGHT,
+            1_700_000_003_000,
+        ));
+        let mut stx = block.transaction();
+        assert_eq!(
+            seed_open_proposal(policy_proposal(&policy), authority, policy_window, &mut stx,),
+            proposal_id
+        );
+        let early_error = EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: policy_window,
+        }
+        .execute(authority, &mut stx)
+        .expect_err("an open policy referendum must not enact");
+        assert!(
+            early_error.to_string().contains("approved"),
+            "unexpected pre-finalization policy error: {early_error}"
+        );
+        stx.apply();
+        block.commit().expect("commit open policy referendum");
+    }
+
+    // H=5: genuine auto-close persists an approval anchored to inclusive H=4.
+    state
+        .block(block_header(
+            TEST_POLICY_WINDOW_END_HEIGHT + 1,
+            1_700_000_004_000,
+        ))
+        .commit()
+        .expect("commit policy auto-finalization");
+    {
+        let view = state.view();
+        let proposal = view
+            .world()
+            .governance_proposals()
+            .get(&proposal_id)
+            .expect("persisted auto-finalized policy");
+        assert_eq!(
+            proposal.status,
+            iroha_core::state::GovernanceProposalStatus::Approved
+        );
+        let evidence = proposal
+            .finalization_evidence
+            .as_ref()
+            .expect("genuine policy finalization evidence");
+        assert_eq!(evidence.finalized_at_height, TEST_POLICY_WINDOW_END_HEIGHT);
+        assert!(evidence.approved);
+    }
+
+    // The reviewed policy fixes effective=h_end+124,560. The exact activation
+    // equation therefore admits enactment only at h_end+3,600.
+    {
+        let mut early_block = state.block(block_header(
+            TEST_POLICY_ENACTMENT_HEIGHT - 1,
+            1_700_000_005_000,
+        ));
+        let mut early_stx = early_block.transaction();
+        let early_error = EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: policy_window,
+        }
+        .execute(authority, &mut early_stx)
+        .expect_err("policy enactment one block early must fail");
+        let early_error_debug = format!("{early_error:?}");
+        assert!(
+            early_error_debug.contains("effective height must equal"),
+            "unexpected early policy-enactment error: {early_error_debug}"
+        );
+    }
+    {
+        let mut block = state.block(block_header(
+            TEST_POLICY_ENACTMENT_HEIGHT,
+            1_700_000_006_000,
+        ));
+        let mut stx = block.transaction();
+        EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: policy_window,
+        }
+        .execute(authority, &mut stx)
+        .expect("enact policy at the exact scheduled height");
+        stx.apply();
+        block.commit().expect("commit validation-fee policy");
+    }
+    let view = state.view();
+    let proposal = view
+        .world()
+        .governance_proposals()
+        .get(&proposal_id)
+        .expect("persisted enacted policy");
+    assert_eq!(
+        proposal.enacted_at_height,
+        Some(TEST_POLICY_ENACTMENT_HEIGHT)
+    );
 }
 
 fn metadata_for_policy(policy: &ValidationFeePolicyV1, fee_instruction_index: usize) -> Metadata {
@@ -949,6 +1334,117 @@ fn validation_fee_registry_cannot_be_installed_through_generic_parameter_path() 
         error_debug.contains("can only be changed by an enacted SORA Parliament proposal"),
         "unexpected protected-registry rejection: {error_debug}"
     );
+}
+
+#[test]
+fn active_registry_rejects_stored_governance_enactment_height_mismatch() {
+    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+    let genesis_hash = commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset.clone(), treasury, genesis_hash);
+    install_validation_fee_policy(&state, &user, &user_key_pair, policy.clone());
+    let proposal_id = policy_proposal(&policy).fingerprint();
+
+    {
+        let mut block = state.block(block_header(
+            TEST_POLICY_ENACTMENT_HEIGHT + 1,
+            1_700_000_007_000,
+        ));
+        let mut stx = block.transaction();
+        let mut proposal = stx
+            .world
+            .governance_proposals()
+            .get(&proposal_id)
+            .cloned()
+            .expect("enacted policy proposal");
+        proposal.enacted_at_height = Some(TEST_POLICY_ENACTMENT_HEIGHT + 1);
+        stx.world
+            .governance_proposals_mut()
+            .insert(proposal_id, proposal);
+        stx.apply();
+        block
+            .commit()
+            .expect("commit adversarial stored-height mismatch");
+    }
+
+    let error = validate_in_block(
+        &state,
+        TEST_POLICY_EFFECTIVE_HEIGHT,
+        signed_transfer(
+            &state,
+            &user,
+            &user_key_pair,
+            &recipient,
+            &fee_asset,
+            &policy,
+            true,
+        ),
+    );
+    assert!(
+        error.contains(
+            "authorized governance proposal payload, status, or enactment height differs from the registry"
+        ),
+        "stored enactment-height mismatch must fail closed: {error}"
+    );
+}
+
+#[test]
+fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
+    let (state, user, user_key_pair, recipient, treasury, fee_asset) = test_state();
+    let genesis_hash = commit_empty_genesis_like_block(&state);
+    let policy = validation_fee_policy(&state, fee_asset, treasury.clone(), genesis_hash);
+    install_validation_fee_policy(&state, &user, &user_key_pair, policy);
+
+    let wrapper_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: payout_contract_address(),
+            entrypoint: "autonomous_validation_fee_tick".to_owned(),
+        }
+        .into();
+    let pool_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+            contract: pool_contract_address(),
+            entrypoint: "swap_exact_in_quote_public".to_owned(),
+        }
+        .into();
+    let wrapper_sbd_transfer_permission: iroha_data_model::permission::Permission =
+        iroha_executor_data_model::permission::asset::CanTransferAsset {
+            asset: AssetId::new(fee_asset_definition_id(), treasury.clone()),
+        }
+        .into();
+    let mut block = state.block(block_header(
+        TEST_POLICY_ENACTMENT_HEIGHT + 1,
+        1_700_000_007_000,
+    ));
+    let mut stx = block.transaction();
+
+    for (permission, required_owner) in [
+        (wrapper_permission, treasury.clone()),
+        (pool_permission, treasury.clone()),
+        (
+            wrapper_sbd_transfer_permission,
+            pool_contract_address().subject_id(),
+        ),
+    ] {
+        let grant_error = Grant::account_permission(permission.clone(), recipient.clone())
+            .execute(&user, &mut stx)
+            .expect_err("payout runtime permission must not be delegated after lifecycle enactment");
+        assert!(
+            grant_error
+                .to_string()
+                .contains("forbids delegating its exact runtime permissions"),
+            "unexpected payout runtime delegation error: {grant_error}"
+        );
+
+        let revoke_error = Revoke::account_permission(permission, required_owner)
+            .execute(&user, &mut stx)
+            .expect_err("required payout runtime permission must remain pinned");
+        assert!(
+            revoke_error
+                .to_string()
+                .contains("pins its exact runtime permissions"),
+            "unexpected payout runtime revocation error: {revoke_error}"
+        );
+    }
 }
 
 #[test]

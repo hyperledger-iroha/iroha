@@ -27433,12 +27433,15 @@ impl State {
                     ),
                 ));
             }
-            // Collect candidates to close at end height
+            // Close after the inclusive end height so ballots submitted in the
+            // `h_end` block remain eligible for the deterministic final tally.
             let to_close: Vec<(String, u64)> = wtx
                 .governance_referenda
                 .iter()
                 .filter_map(|(rid, rec)| match rec.status {
-                    super::state::GovernanceReferendumStatus::Open if rec.h_end == now_h => {
+                    super::state::GovernanceReferendumStatus::Open
+                        if rec.h_end.checked_add(1) == Some(now_h) =>
+                    {
                         Some((rid.clone(), rec.h_end))
                     }
                     _ => None,
@@ -27483,7 +27486,7 @@ impl State {
                             let step = sb.gov.conviction_step_blocks.max(1);
                             let max_c = sb.gov.max_conviction;
                             for rec in locks.locks.values() {
-                                if rec.expiry_height < now_h {
+                                if rec.expiry_height < at_h {
                                     continue;
                                 }
                                 let voting_units = crate::smartcontracts::isi::world::isi::quantity_to_voting_units(
@@ -58582,9 +58585,10 @@ impl StateTransaction<'_, '_> {
                 self.last_tx_gas_used = self.last_tx_gas_used.saturating_add(trigger_gas_used);
                 let artifacts = artifacts?;
                 let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                    crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                    crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                         context,
                         summary.prepared_contract().artifact(),
+                        &event,
                     )
                 });
                 let validation_outcome =
@@ -58837,9 +58841,10 @@ impl StateTransaction<'_, '_> {
                                 self.last_tx_gas_used.saturating_add(trigger_gas_used);
                             let artifacts = artifacts?;
                             let runtime_origin = contract_runtime_context.as_ref().map(|context| {
-                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::new(
+                                crate::validation_fee::OpaqueDeferredRuntimeOrigin::from_trigger_event(
                                     context,
                                     prepared_contract.artifact(),
+                                    &event,
                                 )
                             });
                             let validation_outcome =

@@ -71,6 +71,14 @@ function lowerHex32(value, label) {
   return value;
 }
 
+function irohaHash32(value, label) {
+  const normalized = lowerHex32(value, label);
+  if ((Number.parseInt(normalized.slice(-2), 16) & 1) === 0) {
+    throw new TypeError(`${label} must carry the canonical Iroha hash marker`);
+  }
+  return normalized;
+}
+
 function positiveU64(value, label) {
   let parsed;
   if (typeof value === "bigint") {
@@ -114,11 +122,11 @@ export function normalizeValidationFeeLedgerBindingV1(value) {
   return Object.freeze({
     schema: binding.schema,
     chainId: exactChainId(binding.chainId, "validation-fee ledger binding.chainId"),
-    genesisHash: lowerHex32(
+    genesisHash: irohaHash32(
       binding.genesisHash,
       "validation-fee ledger binding.genesisHash",
     ),
-    policyChainGenesisHash: lowerHex32(
+    policyChainGenesisHash: irohaHash32(
       binding.policyChainGenesisHash,
       "validation-fee ledger binding.policyChainGenesisHash",
     ),
@@ -132,7 +140,7 @@ export function normalizeValidationFeeCheckpointV1(value) {
   exactKeys(checkpoint, CHECKPOINT_KEYS, "validation-fee checkpoint");
   return Object.freeze({
     height: positiveU64(checkpoint.height, "validation-fee checkpoint.height"),
-    contextId: lowerHex32(
+    contextId: irohaHash32(
       checkpoint.contextId,
       "validation-fee checkpoint.contextId",
     ),
@@ -258,19 +266,19 @@ export function verifyValidationFeeCurrentPolicyProofV1(
       "validation-fee projection.observed_ledger_tip_height",
     ),
   };
-  lowerHex32(
+  irohaHash32(
     normalized.evaluated_context_id,
     "validation-fee projection.evaluated_context_id",
   );
-  lowerHex32(
+  irohaHash32(
     normalized.evaluated_block_hash,
     "validation-fee projection.evaluated_block_hash",
   );
-  lowerHex32(
+  irohaHash32(
     normalized.registry_hash,
     "validation-fee projection.registry_hash",
   );
-  lowerHex32(
+  irohaHash32(
     normalized.head_policy_hash,
     "validation-fee projection.head_policy_hash",
   );
