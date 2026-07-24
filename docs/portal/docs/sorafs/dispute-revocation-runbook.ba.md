@@ -61,7 +61,7 @@ translator: machine-google-reviewed
 2. CLI-ны эшләгеҙ:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -93,7 +93,7 @@ translator: machine-google-reviewed
 
 ## 6. Һылтанма материалдары
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (бәхәс бүлеге)
 - `docs/source/sorafs/provider_admission_policy.md` (ҡайтарыу эш ағымы)
 - Күҙәтеүсәнлек панелендә: `SoraFS / Capacity Providers`

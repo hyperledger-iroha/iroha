@@ -379,8 +379,8 @@ pub use pricing::{
     PricingMicropaymentPolicyV1, PricingNonceJsonError, PricingTierError, PricingTierV1,
 };
 pub use proof_stream::{
-    MAX_PROOF_STREAM_SAMPLE_COUNT, ProofStreamKind, ProofStreamRequestError, ProofStreamRequestV1,
-    ProofStreamTier,
+    MAX_PROOF_STREAM_SAMPLE_COUNT, ProofStreamHttpRequestError, ProofStreamHttpRequestV1,
+    ProofStreamKind, ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier,
 };
 pub use provider_admission::{
     AdmissionRecord, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionError, EndpointAdmissionV1,

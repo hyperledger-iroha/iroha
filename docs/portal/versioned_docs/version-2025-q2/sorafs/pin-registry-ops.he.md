@@ -116,7 +116,7 @@ groups:
    - הפעל את `iroha app sorafs providers list` וודא שהיכולות המפורסמות תואמות לדרישות השכפול.
    - בדוק את מדדי `torii_sorafs_capacity_*` כדי לאשר הצלחת GiB ו-PoR.
 3. **הקצה מחדש שכפול**
-   - הנפק הזמנות חדשות באמצעות `sorafs_manifest_stub capacity replication-order` כאשר צבר ההזמנות (`stat="avg"`) יורד מתחת ל-5 עידנים (אריזה של Manifest/CAR משתמש ב-`iroha app sorafs toolkit pack`).
+   - הנפק הזמנות חדשות באמצעות `sorafs_manifest_builder capacity replication-order` כאשר צבר ההזמנות (`stat="avg"`) יורד מתחת ל-5 עידנים (אריזה של Manifest/CAR משתמש ב-`iroha app sorafs toolkit pack`).
    - הודע לממשל אם כינויים חסרים כריכות מניפסט אקטיביות (`torii_sorafs_registry_aliases_total` יורד באופן בלתי צפוי).
 4. **תוצאת המסמך**
    - רשום הערות תקריות ביומן הפעולות של SoraFS עם חותמות זמן ותקצירי מניפסט מושפעים.

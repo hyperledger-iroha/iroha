@@ -37,6 +37,9 @@ pub mod pin_registry;
 /// Authoritative proof-of-personhood issuer and registry records.
 pub mod pop_registry;
 
+/// Finalized chain-authoritative PDP and PoTR outcome projections.
+pub mod proof_ledger;
+
 /// Storage deal contracts, micropayment tickets, and settlement ledgers.
 pub mod deal;
 
@@ -136,9 +139,13 @@ pub mod prelude {
             REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1,
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
             REPAIR_LEDGER_MIN_LEASE_MS_V1, REPAIR_LEDGER_TASK_ID_DOMAIN_V1,
-            REPAIR_LEDGER_TASK_VERSION_V1, RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1,
-            RepairLedgerCompletedV1, RepairLedgerEscalatedV1, RepairLedgerFailedV1,
-            RepairLedgerLeaseV1, RepairLedgerSlashRecordV1, RepairLedgerStatusV1,
+            REPAIR_LEDGER_TASK_VERSION_V1, REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+            REPAIR_QUERY_MAX_ITEMS_V1, REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
+            RepairFinalizedCursorV1, RepairFinalizedEventCursorV1, RepairFinalizedEventPageV1,
+            RepairFinalizedEventV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
+            RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1, RepairLedgerCompletedV1,
+            RepairLedgerEscalatedV1, RepairLedgerFailedV1, RepairLedgerLeaseV1,
+            RepairLedgerSlashRecordV1, RepairLedgerStatusV1, RepairLedgerTaskPageV1,
             RepairLedgerTaskV1, RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1,
             sorafs_moderation_panel_roster_hash_v1, sorafs_moderation_pop_challenge_v1,
             sorafs_moderation_pop_verifier_context_v1, sorafs_moderation_select_panel_v1,
@@ -181,6 +188,17 @@ pub mod prelude {
             PopRegistryRevocationReasonV1, PopRegistryStatusV1, PopRevocationPublicationRecordV1,
             PopRevocationRecordV1, pop_credential_payload_commitment_v1,
             pop_registry_payload_digest_v1, pop_revocation_nonce_commitment_v1,
+        },
+        proof_ledger::{
+            PROOF_OUTCOME_MAX_POTR_RECEIPT_BYTES_V1, PROOF_OUTCOME_MAX_PROVIDER_KEY_BYTES_V1,
+            PROOF_OUTCOME_QUERY_MAX_EVENT_PAGE_BYTES_V1, PROOF_OUTCOME_QUERY_MAX_ITEMS_V1,
+            PROOF_OUTCOME_RECORD_VERSION_V1, PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
+            PdpOutcomeProjectionV1, PdpOutcomeStatusV1, PotrOutcomeProjectionV1,
+            PotrOutcomeStatusV1, ProofOutcomeEd25519AttestationV1,
+            ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
+            ProofOutcomeFinalizedEventPageV1, ProofOutcomeFinalizedEventV1, ProofOutcomeKindV1,
+            ProofOutcomeProjectionV1, ProofOutcomeRecordV1, ProofOutcomeSignerPolicyRecordV1,
+            ProofOutcomeSignerPolicyV1,
         },
         pricing::{
             CollateralPolicy, CommitmentDiscountTier, CreditMutationError, CreditPolicy,

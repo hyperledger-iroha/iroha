@@ -27,9 +27,6 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
    ```bash
    ./ci/package_docs_portal_sorafs.sh \
      --out artifacts/devportal/sorafs/$(date -u +%Y%m%dT%H%M%SZ) \
-     --sign \
-     --sigstore-provider=github-actions \
-     --sigstore-audience=sorafs-devportal \
      --proof
    ```
 
@@ -42,9 +39,9 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      `sorafs.sf1@1.0.0`, pin policy min 5 replicas, warm storage, 14‑epoch retention).
    - When `--proof` is supplied, `sorafs_cli proof verify` adds a `${label}.proof.json`
      bundle for each CAR/manifest pair.
-   - When `--sign` is supplied, `sorafs_cli manifest sign` emits Sigstore bundles
-     (`.manifest.bundle.json` / `.manifest.sig`), using the token pointed at
-     `${SIGSTORE_ID_TOKEN}` by default.
+   - The packager deliberately does not sign content manifests. The final portal
+     inventory is incorporated into the canonical aggregate release manifest,
+     which is authenticated later through the governed Ed25519/HSM release job.
 
 2. **Inspect the output summary**
 
@@ -62,9 +59,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
            "car_summary": "artifacts/devportal/sorafs/.../portal.car.json",
            "manifest": "artifacts/devportal/sorafs/.../portal.manifest.to",
            "manifest_json": "artifacts/devportal/sorafs/.../portal.manifest.json",
-           "proof": "artifacts/devportal/sorafs/.../portal.proof.json",
-           "bundle": "artifacts/devportal/sorafs/.../portal.manifest.bundle.json",
-           "signature": "artifacts/devportal/sorafs/.../portal.manifest.sig"
+           "proof": "artifacts/devportal/sorafs/.../portal.proof.json"
          }
        ]
      }
@@ -72,7 +67,7 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
 
    - Archive the whole directory (or symlink via
      `artifacts/devportal/sorafs/latest`) so governance reviewers can trace the
-     payload digests back to build logs and Sigstore bundles.
+     payload digests back to build logs.
 
 # 3. Submit & Pin Manifests with Aliases
 
@@ -174,16 +169,26 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
      --report-json artifacts/sorafs_gateway_probe/docs.json
 
    scripts/sorafs_gateway_self_cert.sh \
-     --manifest "${OUT}/portal.manifest.json" \
-     --headers "${OUT}/portal.gateway.headers.txt" \
-     --output artifacts/sorafs_gateway_self_cert/docs
+     --signing-key "${GATEWAY_ATTESTATION_KEY}" \
+     --signer "${GATEWAY_ATTESTATION_ACCOUNT}" \
+     --gateway "${REGIONAL_GATEWAY_URL}" \
+     --release-manifest "${RELEASE_MANIFEST}" \
+     --release-manifest-signature "${RELEASE_MANIFEST_SIGNATURE}" \
+     --release-manifest-public-key "${RELEASE_MANIFEST_PUBLIC_KEY}" \
+     --trusted-signing-fingerprint "${TRUSTED_SIGNING_FINGERPRINT}" \
+     --release-manifest-verifier "${RELEASE_MANIFEST_VERIFIER}" \
+     --trusted-release-manifest-verifier-sha256 \
+       "${TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256}" \
+     --out artifacts/sorafs_gateway_self_cert/docs
    ```
 
    - The probe enforces GAR signature freshness, alias proof policy, and TLS
      fingerprints (`dashboards/grafana/sorafs_gateway_observability.json` will
      show `torii_sorafs_gateway_refusals_total` spikes if anything drifts).
-   - The self-cert harness mirrors the production fetch path with `sorafs_fetch`,
-     storing CAR replay logs under `artifacts/sorafs_gateway_self_cert/`.
+   - The self-cert wrapper authenticates the aggregate release manifest through
+     the reviewed native verifier before it starts the gateway harness. Store
+     both the verification receipt and harness outputs under
+     `artifacts/sorafs_gateway_self_cert/`.
    - Metadata-only checks against `/.well-known/sorafs/manifest` and
      `/v1/sorafs/cid/{cid}` may append `?limit=N` (default 50, max 500) to bound
      the embedded `files` listing. The response still carries full
@@ -221,7 +226,9 @@ this file stays focused on the multi-team runbook tied to DOCS-7.
 
 - Archive the following into the release bundle (Git annex or SoraFS):
   - `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-    Sigstore bundles, package summary, manifest submit summaries).
+    package summary, manifest submit summaries).
+  - The aggregate release manifest, raw Ed25519 signature/public key, reviewed
+    signer fingerprint, pinned native-verifier SHA256, and verification receipt.
   - `artifacts/sorafs_gateway_probe/<stamp>/` and
     `artifacts/sorafs_gateway_self_cert/<stamp>/`.
   - DNS skeleton (`portal.dns-cutover.json`) and gateway header templates.

@@ -522,7 +522,7 @@ match the unique target list, missing binary/archive checksums, missing
 deterministic-archive proof, tracked generated `dist/*` artifacts beyond
 `dist/.gitkeep`, unsigned or unverified release manifests, missing governed
 release-key fingerprints, missing
-JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+JavaScript/Python/Kotlin/JVM/Java Android/Swift/C# package publication evidence,
 duplicate or unknown downstream-package entries, `package_count` values that do not match
 the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
@@ -622,7 +622,7 @@ Remaining production gates:
   release manifests outside the repository using governed release keys, then
   require those artifacts to pass the SF-11 release evidence gate.
 - Ship/publish downstream SDK binding packages and release artifacts for the
-  local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers and
+  local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers and
   attach their digests to the SF-11 downstream-bindings evidence packet.
 - Archive live operator smoke evidence for the published `sorafs-validate`
   archives and cookbook replay before declaring SF-11 fully released, and

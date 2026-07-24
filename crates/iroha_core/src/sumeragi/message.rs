@@ -5,9 +5,12 @@ use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{
         BlockHeader, BlockSignature, SignedBlock,
-        consensus::{LaneBlockCertificateV1, LaneBlockProposalV1, LaneBlockQcV1},
-        consensus_v2::{ConsensusMessageV2, finality::V2FinalityArtifact},
+        consensus::{
+            LaneBlockCertificateV1, LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1,
+        },
+        consensus_v2::{ConsensusMessageV2, ExecutionCommitment, finality::V2FinalityArtifact},
     },
+    nexus::{DataSpaceId, LaneId},
     peer::PeerId,
 };
 use iroha_logger::prelude::*;
@@ -644,15 +647,59 @@ pub struct BlockSyncUpdate {
     pub stake_snapshot: Option<super::stake_snapshot::CommitStakeSnapshot>,
 }
 
-/// Current clean-break layout for lane historical recovery transport.
-pub const LANE_HISTORICAL_RECOVERY_VERSION_V1: u16 = 1;
+/// Current clean-break layout for lane and Native historical recovery transport.
+///
+/// Version 1 did not carry Native participant authority and encoded a
+/// mandatory lane certificate. Version 2 is deliberately not legacy-decodable.
+pub const LANE_HISTORICAL_RECOVERY_VERSION_V2: u16 = 2;
+
+/// Exact replicated Native AMX participant frontier which owns a carrier-body repair.
+///
+/// The requester copies these fields from State's canonical route/incarnation
+/// marker.  A responder and the eventual importer both require the recovered
+/// block's QC-authenticated application-manifest leaf to reproduce this
+/// identity exactly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode)]
+#[norito(deny_unknown_fields)]
+pub struct NativeAmxParticipantRecoveryMarkerV1 {
+    /// Exact replicated State frontier-marker layout version.
+    pub frontier_version: u8,
+    /// Participant lane route.
+    pub lane_id: LaneId,
+    /// Participant dataspace route.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Contiguous participant height.
+    pub participant_height: u64,
+    /// Independently certified participant view.
+    pub participant_view: u64,
+    /// Exact predecessor height.
+    pub predecessor_height: u64,
+    /// Exact predecessor descriptor, absent only at height one.
+    pub predecessor_descriptor_hash: Option<Hash>,
+    /// Exact participant descriptor.
+    pub descriptor_hash: Hash,
+    /// Exact participant proposal.
+    pub proposal_hash: Hash,
+    /// Exact zero-effect participant settlement.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Canonical global application height.
+    pub application_block_height: u64,
+    /// Canonical global application hash.
+    pub application_block_hash: HashOf<BlockHeader>,
+    /// Number of unique grouped sources in the application leaf.
+    pub source_count: u64,
+}
 
 /// Exact durable dependency named by a historical lane recovery request.
 ///
-/// Both variants bind the immutable lane certificate carried by
-/// [`LaneHistoricalRecoveryRequestV1`]. The additional hashes prevent a
-/// response for another canonical body or READY payload from being correlated
-/// merely because it names the same lane-local height.
+/// Lane-owned variants bind the immutable lane certificate carried by
+/// [`LaneHistoricalRecoveryRequestV1`]. Native participant repair instead
+/// binds the exact replicated frontier plus the locally durable global
+/// finality/execution commitment. The additional hashes prevent a response for
+/// another canonical body or READY payload from being correlated merely
+/// because it names the same height.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub enum LaneHistoricalRecoveryKindV1 {
     /// Rehydrate the result-bearing canonical block selected by global finality.
@@ -671,15 +718,24 @@ pub enum LaneHistoricalRecoveryKindV1 {
         /// Hash of the matching CommitQC.
         commit_qc_hash: HashOf<LaneBlockQcV1>,
     },
+    /// Rehydrate a pruned canonical carrier needed to repair Native participant evidence.
+    #[codec(index = 3)]
+    NativeAmxParticipantCanonicalBlock {
+        /// Exact State frontier whose manifest leaf must be recovered.
+        marker: Box<NativeAmxParticipantRecoveryMarkerV1>,
+        /// Hash of the requester's locally durable, verified V2 finality artifact.
+        finality_artifact_hash: HashOf<V2FinalityArtifact>,
+        /// Exact execution commitment authenticated by that finality artifact.
+        execution_commitment: Box<ExecutionCommitment>,
+    },
 }
 
 /// Versioned request for one exact historical lane recovery dependency.
 ///
 /// The outer P2P envelope authenticates `requester`; ingress rejects any
-/// mismatch. The complete certificate and exact signer PoPs make the request
-/// independent of mutable State and proposer-local journals, and bind route,
-/// incarnation, predecessor, proposal, Prepare, Commit, and READY identities
-/// in one canonical hash.
+/// mismatch. Lane-owned requests carry a complete certificate and exact signer
+/// PoPs. Native participant repair carries no lane certificate: its kind binds
+/// the exact replicated marker and global finality execution commitment.
 #[derive(Debug, Clone, PartialEq, Eq, Decode, Encode)]
 pub struct LaneHistoricalRecoveryRequestV1 {
     /// Current-only layout version.
@@ -687,8 +743,13 @@ pub struct LaneHistoricalRecoveryRequestV1 {
     /// Authenticated peer requesting the exact durable evidence.
     pub requester: PeerId,
     /// Complete historical lane certificate which owns this dependency.
-    pub certificate: LaneBlockCertificateV1,
+    ///
+    /// This is present exactly for `CanonicalBlock` and `AutonomousPayload`,
+    /// and absent for `NativeAmxParticipantCanonicalBlock`.
+    pub certificate: Option<LaneBlockCertificateV1>,
     /// Exact historical PoPs for the union of Prepare/Commit QC signers.
+    ///
+    /// Native participant carrier recovery requires this map to be empty.
     pub signer_pops: BTreeMap<PublicKey, Vec<u8>>,
     /// Exact missing durable dependency.
     pub kind: LaneHistoricalRecoveryKindV1,
@@ -697,8 +758,24 @@ pub struct LaneHistoricalRecoveryRequestV1 {
 impl LaneHistoricalRecoveryRequestV1 {
     /// Immutable lane proposal which owns this request.
     #[must_use]
-    pub const fn proposal(&self) -> &LaneBlockProposalV1 {
-        &self.certificate.proposal
+    pub const fn proposal(&self) -> Option<&LaneBlockProposalV1> {
+        match &self.certificate {
+            Some(certificate) => Some(&certificate.proposal),
+            None => None,
+        }
+    }
+
+    /// Exact global height whose durable dependency is requested.
+    #[must_use]
+    pub const fn source_height(&self) -> u64 {
+        match (&self.certificate, &self.kind) {
+            (Some(certificate), _) => certificate.proposal.descriptor.proposal_height,
+            (
+                None,
+                LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { marker, .. },
+            ) => marker.application_block_height,
+            (None, _) => 0,
+        }
     }
 }
 
@@ -714,6 +791,9 @@ pub enum LaneHistoricalRecoveryPayloadV1 {
         finality_artifact: V2FinalityArtifact,
     },
     /// Producer payload plus exact origin Prepare/Commit proof material.
+    ///
+    /// Signer PoPs live only in the hash-bound request, avoiding two
+    /// independently mutable copies of the same historical authority.
     #[codec(index = 2)]
     AutonomousPayload {
         /// Exact producer-authenticated executable payload.
@@ -2445,9 +2525,9 @@ mod tests {
         let historical_signer = KeyPair::try_from_seed(vec![0x71; 32], Algorithm::BlsNormal)
             .expect("derive historical request signer");
         let historical_request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             requester: certificate.commit_qc.validator_set[0].clone(),
-            certificate: certificate.clone(),
+            certificate: Some(certificate.clone()),
             signer_pops: BTreeMap::from([(
                 historical_signer.public_key().clone(),
                 iroha_crypto::bls_normal_pop_prove(historical_signer.private_key())

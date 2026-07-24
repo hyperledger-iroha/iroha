@@ -46,9 +46,11 @@ use iroha_data_model::{
         BlockHeader, SignedBlock,
         consensus::{
             EvidenceRecord, LaneBlockCommitment, NexusFeeReceipt,
-            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiLaneBlockSessionStatus,
-            SumeragiLanePayloadOwnership, SumeragiNativeAmxParticipantApplication,
-            SumeragiNativeAmxParticipantApplicationState,
+            SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
+            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX, SumeragiAutonomousLaneExecution,
+            SumeragiAutonomousLaneExecutionStage, SumeragiAutonomousLaneExecutionStuckReason,
+            SumeragiLaneBlockSessionStatus, SumeragiLanePayloadOwnership,
+            SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
         },
         proofs::{BlockProofs, BlockReceiptProof, ExecutionReceiptProof},
     },
@@ -1808,6 +1810,24 @@ struct MergeExecutionSource {
     origin_proposal: iroha_data_model::block::consensus::LaneBlockProposalV1,
     certified: crate::kura::CertifiedLaneBlockArtifact,
     input: crate::kura::LaneBlockExecutionInputArtifact,
+}
+
+type MergeExecutionCanonicalOrderKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, Hash, Hash);
+
+fn merge_execution_canonical_order_key(
+    proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+) -> MergeExecutionCanonicalOrderKey {
+    let descriptor = &proposal.descriptor;
+    (
+        descriptor.lane_id,
+        descriptor.dataspace_id,
+        descriptor.lane_incarnation,
+        descriptor.lane_block_height,
+        descriptor.proposal_height,
+        descriptor.lane_block_view,
+        descriptor.descriptor_hash,
+        proposal.proposal_hash,
+    )
 }
 
 fn merge_execution_source_bundle_hash(source_bundle: &[u8]) -> Hash {
@@ -10001,6 +10021,226 @@ struct ReplayMergeCarrier {
     block_height: u64,
     block_hash: HashOf<BlockHeader>,
     entry: MergeLedgerEntry,
+}
+
+type AutonomousLaneDiagnosticKey = (LaneId, DataSpaceId, Hash, u64, u64, u64, u64, Hash);
+
+#[derive(Clone)]
+struct AutonomousLaneDiagnosticEvidence {
+    row: SumeragiAutonomousLaneExecution,
+    reservation_keys: Option<Vec<crate::queue::LaneQueueReservationKeyV1>>,
+    payload_durable: bool,
+    availability_certified: bool,
+    lane_certified: bool,
+    bundle_durable: bool,
+    merge_candidate: bool,
+    globally_committed: bool,
+    application_receipt: bool,
+    queue_finalized: bool,
+    conflict: bool,
+}
+
+impl AutonomousLaneDiagnosticEvidence {
+    fn from_proposal(
+        proposal: &iroha_data_model::block::consensus::LaneBlockProposalV1,
+    ) -> Option<Self> {
+        let descriptor = &proposal.descriptor;
+        let transaction_count = u64::try_from(descriptor.accepted_transaction_hashes.len()).ok()?;
+        if transaction_count == 0
+            || descriptor.accepted_candidate_indices.len()
+                != descriptor.accepted_transaction_hashes.len()
+        {
+            return None;
+        }
+        Some(Self {
+            row: SumeragiAutonomousLaneExecution {
+                lane_id: descriptor.lane_id,
+                dataspace_id: descriptor.dataspace_id,
+                lane_incarnation: descriptor.lane_incarnation,
+                lane_block_height: descriptor.lane_block_height,
+                lane_block_view: descriptor.lane_block_view,
+                proposal_height: descriptor.proposal_height,
+                proposal_view: proposal
+                    .payload_block_hint
+                    .map_or(0, |hint| hint.proposal_view),
+                proposal_hash: proposal.proposal_hash,
+                descriptor_hash: descriptor.descriptor_hash,
+                executable_payload_hash: None,
+                source_bundle_hash: None,
+                merge_entry_hash: None,
+                application_block_height: None,
+                application_block_hash: None,
+                reservation_count: 0,
+                transaction_count,
+                highest_durable_stage: SumeragiAutonomousLaneExecutionStage::LaneCertified,
+                stuck_reason: None,
+            },
+            reservation_keys: None,
+            payload_durable: false,
+            availability_certified: false,
+            lane_certified: false,
+            bundle_durable: false,
+            merge_candidate: false,
+            globally_committed: false,
+            application_receipt: false,
+            queue_finalized: false,
+            conflict: false,
+        })
+    }
+
+    fn key(&self) -> AutonomousLaneDiagnosticKey {
+        self.row.ordering_key()
+    }
+
+    fn exact_reservation_keys(&self) -> Option<&[crate::queue::LaneQueueReservationKeyV1]> {
+        let keys = self.reservation_keys.as_deref()?;
+        let count = u64::try_from(keys.len()).ok()?;
+        if count != self.row.reservation_count
+            || count != self.row.transaction_count
+            || keys.iter().any(|key| {
+                key.lane_id != self.row.lane_id
+                    || key.dataspace_id != self.row.dataspace_id
+                    || key.lane_incarnation != self.row.lane_incarnation
+                    || key.proposal_height != self.row.proposal_height
+                    || key.lane_block_height != self.row.lane_block_height
+                    || key.lane_block_view != self.row.lane_block_view
+            })
+        {
+            return None;
+        }
+        Some(keys)
+    }
+
+    fn merge(&mut self, other: Self) {
+        if self.row.descriptor_hash != other.row.descriptor_hash
+            || self.row.transaction_count != other.row.transaction_count
+        {
+            self.conflict = true;
+        }
+        for (current, incoming) in [
+            (
+                &mut self.row.executable_payload_hash,
+                other.row.executable_payload_hash,
+            ),
+            (
+                &mut self.row.source_bundle_hash,
+                other.row.source_bundle_hash,
+            ),
+        ] {
+            if current.is_some() && incoming.is_some() && *current != incoming {
+                self.conflict = true;
+            } else if current.is_none() {
+                *current = incoming;
+            }
+        }
+        if self.row.merge_entry_hash.is_some()
+            && other.row.merge_entry_hash.is_some()
+            && self.row.merge_entry_hash != other.row.merge_entry_hash
+        {
+            self.conflict = true;
+        } else if self.row.merge_entry_hash.is_none() {
+            self.row.merge_entry_hash = other.row.merge_entry_hash;
+        }
+        if self.row.application_block_height.is_some()
+            && other.row.application_block_height.is_some()
+            && (self.row.application_block_height != other.row.application_block_height
+                || self.row.application_block_hash != other.row.application_block_hash)
+        {
+            self.conflict = true;
+        } else if self.row.application_block_height.is_none() {
+            self.row.application_block_height = other.row.application_block_height;
+            self.row.application_block_hash = other.row.application_block_hash;
+        }
+        if self.row.reservation_count != 0
+            && other.row.reservation_count != 0
+            && self.row.reservation_count != other.row.reservation_count
+        {
+            self.conflict = true;
+        } else {
+            self.row.reservation_count =
+                self.row.reservation_count.max(other.row.reservation_count);
+        }
+        match (&self.reservation_keys, other.reservation_keys) {
+            (Some(current), Some(incoming)) if *current != incoming => {
+                self.conflict = true;
+            }
+            (None, incoming) => {
+                self.reservation_keys = incoming;
+            }
+            _ => {}
+        }
+        self.payload_durable |= other.payload_durable;
+        self.availability_certified |= other.availability_certified;
+        self.lane_certified |= other.lane_certified;
+        self.bundle_durable |= other.bundle_durable;
+        self.merge_candidate |= other.merge_candidate;
+        self.globally_committed |= other.globally_committed;
+        self.application_receipt |= other.application_receipt;
+        self.queue_finalized |= other.queue_finalized;
+        self.conflict |= other.conflict;
+    }
+
+    fn finish(mut self) -> SumeragiAutonomousLaneExecution {
+        let (stage, reason) = if self.conflict {
+            (
+                SumeragiAutonomousLaneExecutionStage::Conflict,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict),
+            )
+        } else if self.application_receipt && self.queue_finalized {
+            (SumeragiAutonomousLaneExecutionStage::QueueFinalized, None)
+        } else if self.application_receipt {
+            (
+                SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable),
+            )
+        } else if self.globally_committed {
+            (
+                SumeragiAutonomousLaneExecutionStage::GlobalCarrierCommitted,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingApplicationReceipt),
+            )
+        } else if self.merge_candidate {
+            (
+                SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier),
+            )
+        } else if self.bundle_durable {
+            (
+                SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection),
+            )
+        } else if self.lane_certified {
+            (
+                SumeragiAutonomousLaneExecutionStage::LaneCertified,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::CertifiedBundleUnavailable),
+            )
+        } else if self.availability_certified {
+            (
+                SumeragiAutonomousLaneExecutionStage::PayloadAvailabilityCertified,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingLaneCertification),
+            )
+        } else if self.payload_durable {
+            (
+                SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability),
+            )
+        } else if self.row.reservation_count == self.row.transaction_count {
+            // Reserved for a future State-owned durable Queue witness. The
+            // current projection never reaches this branch because Queue is
+            // deliberately outside State/Kura diagnostics authority.
+            (
+                SumeragiAutonomousLaneExecutionStage::ReservationsDurable,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability),
+            )
+        } else {
+            (
+                SumeragiAutonomousLaneExecutionStage::Conflict,
+                Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict),
+            )
+        };
+        self.row.highest_durable_stage = stage;
+        self.row.stuck_reason = reason;
+        self.row
+    }
 }
 
 struct LoadedStateJournals {
@@ -23918,6 +24158,19 @@ impl State {
         cursor_reset.into_iter().chain(incarnation_reset).max()
     }
 
+    /// Fence queue admission and durable reservation ownership against lane
+    /// lifecycle publication.
+    ///
+    /// Callers must acquire this guard before any queue ownership lock and
+    /// retain it through the final state-bound route/incarnation validation
+    /// and queue mutation. Lifecycle commit follows the same
+    /// `lane_lifecycle_lock -> queue ownership` order conceptually, so a queue
+    /// operation either becomes visible before a drain closes or validates
+    /// against the fully published post-transition catalog.
+    pub(crate) fn lock_lane_lifecycle_work_admission(&self) -> parking_lot::MutexGuard<'_, ()> {
+        self.lane_lifecycle_lock.lock()
+    }
+
     fn lane_consensus_lifecycle_snapshot(&self) -> LaneConsensusLifecycleSnapshot {
         loop {
             let generation_before = self.state_view_generation();
@@ -31187,6 +31440,15 @@ impl State {
             self.verify_lane_relay_fastpq_record(envelope)?;
         }
 
+        // Serialize only the final authenticated lifecycle recheck and cache
+        // insertion with geometry archive/removal, catalog publication, and
+        // lane-scoped cache pruning. Expensive QC/PoP verification above does
+        // not stall lifecycle progress. If admission wins this fence,
+        // retirement observes the relay as a drain blocker. If retirement
+        // wins, this post-fence snapshot rejects the retired incarnation.
+        // Raw/unvalidated cache noise never crosses this fence and therefore
+        // cannot veto Byzantine-tolerant retirement.
+        let lifecycle_guard = persist.then(|| self.lane_lifecycle_lock.lock());
         let current_lifecycle = self.lane_consensus_lifecycle_snapshot();
         let current_incarnation = current_lifecycle
             .incarnations
@@ -31225,6 +31487,7 @@ impl State {
             let mut guard = self.lane_relays.write();
             guard.insert(envelope.clone())?
         };
+        drop(lifecycle_guard);
 
         if matches!(
             inserted,
@@ -31821,16 +32084,8 @@ impl State {
                 input,
             });
         }
-        sources.sort_by_key(|source| {
-            let descriptor = &source.certified.proposal.descriptor;
-            (
-                descriptor.proposal_height,
-                descriptor.lane_block_height,
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_block_view,
-            )
-        });
+        sources
+            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
         (!sources.is_empty()).then_some(sources)
     }
 
@@ -32139,16 +32394,8 @@ impl State {
         if sources.is_empty() {
             return None;
         }
-        sources.sort_by_key(|source| {
-            let descriptor = &source.certified.proposal.descriptor;
-            (
-                descriptor.proposal_height,
-                descriptor.lane_block_height,
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_block_view,
-            )
-        });
+        sources
+            .sort_by_key(|source| merge_execution_canonical_order_key(&source.certified.proposal));
         let mut bounded_prefix_len = 0usize;
         let mut bounded_entrypoints = 0usize;
         for source in &sources {
@@ -34042,6 +34289,383 @@ impl State {
         Some(ExecutionStatus::AwaitingExecutablePayload)
     }
 
+    /// Derive bounded autonomous execution stages exclusively from current
+    /// lifecycle State and independently revalidated durable Kura evidence.
+    ///
+    /// The State-only projection can prove exact reservation bytes retained in
+    /// Kura, but deliberately stops at the durable application receipt because
+    /// it has no authority over the Queue `ForgetCommit` boundary. Operational
+    /// callers that also own the Queue should use
+    /// [`Self::autonomous_lane_execution_diagnostics_with_queue`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a bounded Kura evidence snapshot cannot be read
+    /// safely. Callers must fail the diagnostics request closed.
+    pub fn autonomous_lane_execution_diagnostics(
+        &self,
+    ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
+        self.autonomous_lane_execution_diagnostics_inner(None)
+    }
+
+    /// Derive bounded autonomous execution stages with an exact durable Queue
+    /// Commit/Forget witness for terminal rows.
+    ///
+    /// The Queue observer is consulted only after the canonical application
+    /// receipt and exact source bundle have independently revalidated. It
+    /// cannot authorize application or advance any consensus state.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a bounded Kura evidence snapshot cannot be read
+    /// safely. Callers must fail the diagnostics request closed.
+    pub fn autonomous_lane_execution_diagnostics_with_queue(
+        &self,
+        queue: &crate::queue::Queue,
+    ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
+        self.autonomous_lane_execution_diagnostics_inner(Some(queue))
+    }
+
+    fn autonomous_lane_execution_diagnostics_inner(
+        &self,
+        queue: Option<&crate::queue::Queue>,
+    ) -> Result<Vec<SumeragiAutonomousLaneExecution>> {
+        use crate::kura::LaneBlockApplicationReceiptArtifactFormat;
+
+        let lifecycle = self.lane_consensus_lifecycle_snapshot();
+        let mut routes = Self::lane_block_artifact_routes(&lifecycle.nexus)
+            .into_iter()
+            .filter_map(|(lane_id, dataspace_id)| {
+                lifecycle
+                    .incarnations
+                    .get(&lane_id)
+                    .copied()
+                    .map(|incarnation| (lane_id, dataspace_id, incarnation))
+            })
+            .collect::<Vec<_>>();
+        routes.sort();
+        routes.dedup();
+        routes.truncate(SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX);
+        if routes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let active_routes = routes.iter().copied().collect::<BTreeSet<_>>();
+        let chain_id_hash = Hash::new(self.chain_id.clone().into_inner().as_bytes());
+        let authority = self.view();
+        let mut evidence =
+            BTreeMap::<AutonomousLaneDiagnosticKey, AutonomousLaneDiagnosticEvidence>::new();
+        let mut autonomous_proposal_keys = BTreeSet::<AutonomousLaneDiagnosticKey>::new();
+
+        let mut insert = |incoming: AutonomousLaneDiagnosticEvidence| {
+            let descriptor_route = (
+                incoming.row.lane_id,
+                incoming.row.dataspace_id,
+                incoming.row.lane_incarnation,
+            );
+            if !active_routes.contains(&descriptor_route) {
+                return;
+            }
+            let key = incoming.key();
+            if let Some(existing) = evidence.get_mut(&key) {
+                existing.merge(incoming);
+            } else {
+                evidence.insert(key, incoming);
+            }
+        };
+
+        let autonomous = self
+            .kura
+            .latest_autonomous_lane_block_artifacts_snapshot(
+                chain_id_hash,
+                SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX,
+                |proposal_height| {
+                    crate::sumeragi::epoch_for_height_from_world(&authority.world, proposal_height)
+                },
+            )
+            .wrap_err("failed to read bounded autonomous payload diagnostics")?;
+        for (artifact, _) in autonomous {
+            let payload = &artifact.executable_payload;
+            let Some(mut incoming) =
+                AutonomousLaneDiagnosticEvidence::from_proposal(&payload.origin_proposal)
+            else {
+                continue;
+            };
+            incoming.payload_durable = true;
+            incoming.availability_certified = artifact.availability_certificate.is_some();
+            incoming.row.executable_payload_hash = Some(payload.payload_hash);
+            incoming.row.reservation_count =
+                u64::try_from(payload.reservation_keys.len()).unwrap_or(u64::MAX);
+            incoming.reservation_keys = Some(payload.reservation_keys.clone());
+            if payload.reservation_keys.len() != payload.entrypoints.len()
+                || incoming.row.transaction_count
+                    != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
+            {
+                incoming.conflict = true;
+            }
+            autonomous_proposal_keys.insert(incoming.key());
+            insert(incoming);
+        }
+
+        let per_route_limit = (SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX / routes.len()).max(1);
+        for (lane_id, dataspace_id, incarnation) in routes.iter().copied() {
+            for certified in self.kura.latest_certified_lane_block_artifacts_matching(
+                lane_id,
+                per_route_limit,
+                |artifact| {
+                    let descriptor = &artifact.proposal.descriptor;
+                    descriptor.dataspace_id == dataspace_id
+                        && descriptor.lane_incarnation == incarnation
+                        && lifecycle.lane_route_and_incarnation_matches(
+                            lane_id,
+                            dataspace_id,
+                            descriptor.proposal_height,
+                            descriptor.lane_incarnation,
+                        )
+                },
+            ) {
+                let Some(mut incoming) =
+                    AutonomousLaneDiagnosticEvidence::from_proposal(&certified.proposal)
+                else {
+                    continue;
+                };
+                let key = incoming.key();
+                let expected_epoch = crate::sumeragi::epoch_for_height_from_world(
+                    &authority.world,
+                    certified.proposal.descriptor.proposal_height,
+                );
+                if let Ok(bundle) =
+                    self.kura
+                        .autonomous_lane_merge_bundle(certified, chain_id_hash, expected_epoch)
+                {
+                    let payload = bundle.executable_payload();
+                    incoming.payload_durable = true;
+                    incoming.availability_certified =
+                        bundle.autonomous.availability_certificate.is_some();
+                    incoming.lane_certified = true;
+                    incoming.bundle_durable = true;
+                    incoming.row.executable_payload_hash = Some(payload.payload_hash);
+                    incoming.row.source_bundle_hash = bundle.bundle_hash().ok();
+                    incoming.row.reservation_count =
+                        u64::try_from(payload.reservation_keys.len()).unwrap_or(u64::MAX);
+                    incoming.reservation_keys = Some(payload.reservation_keys.clone());
+                    if payload.reservation_keys.len() != payload.entrypoints.len()
+                        || incoming.row.transaction_count
+                            != u64::try_from(payload.entrypoints.len()).unwrap_or(u64::MAX)
+                    {
+                        incoming.conflict = true;
+                    }
+                    insert(incoming);
+                } else if autonomous_proposal_keys.contains(&key) {
+                    // Certification alone does not encode whether this was an
+                    // ordinary globally anchored lane proposal or an
+                    // autonomous source. Only advance an incomplete bundle to
+                    // `LaneCertified` when an independently validated
+                    // autonomous payload for the same exact identity exists.
+                    incoming.lane_certified = true;
+                    insert(incoming);
+                }
+            }
+        }
+
+        let pending_entries = self
+            .kura
+            .pending_certified_merge_entries_bounded(
+                SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX.saturating_mul(2),
+            )
+            .wrap_err("failed to read pending autonomous merge diagnostics")?;
+        let mut source_budget = SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX.saturating_mul(2);
+        let committed_entries = self.kura.merge_ledger_latest_snapshot(source_budget);
+        for (committed, entry_hash, entry) in pending_entries
+            .into_iter()
+            .map(|(hash, entry)| (false, hash, entry))
+            .chain(committed_entries.into_iter().map(|entry| {
+                let hash = crate::merge::merge_ledger_entry_hash(&entry);
+                (true, hash, entry)
+            }))
+        {
+            let Some(batch) = entry.execution_batch.as_ref() else {
+                continue;
+            };
+            for execution in &batch.lanes {
+                if source_budget == 0 {
+                    break;
+                }
+                source_budget = source_budget.saturating_sub(1);
+                let Some(mut incoming) =
+                    AutonomousLaneDiagnosticEvidence::from_proposal(&execution.proposal)
+                else {
+                    continue;
+                };
+                incoming.row.merge_entry_hash = Some(entry_hash);
+                incoming.row.executable_payload_hash = Some(execution.autonomous_payload_hash);
+                incoming.row.source_bundle_hash = Some(execution.source_bundle_hash);
+                incoming.row.reservation_count =
+                    u64::try_from(execution.reservation_keys.len()).unwrap_or(u64::MAX);
+                incoming.payload_durable = true;
+                incoming.availability_certified = true;
+                incoming.lane_certified = true;
+                incoming.bundle_durable = true;
+                incoming.merge_candidate = !committed;
+                incoming.globally_committed = committed;
+                let source_bundle_revalidates =
+                    match crate::kura::Kura::decode_autonomous_lane_merge_bundle(
+                        &execution.source_bundle,
+                        execution.autonomous_chain_id_hash,
+                        execution.autonomous_epoch,
+                    ) {
+                        Ok(bundle) => {
+                            let payload = bundle.executable_payload();
+                            let reservation_bytes = payload
+                                .reservation_keys
+                                .iter()
+                                .map(norito::to_bytes)
+                                .collect::<std::result::Result<Vec<_>, _>>();
+                            let routing_bytes = payload
+                                .routing_plans
+                                .iter()
+                                .map(norito::to_bytes)
+                                .collect::<std::result::Result<Vec<_>, _>>();
+                            let exact = bundle.bundle_hash().ok()
+                                == Some(execution.source_bundle_hash)
+                                && bundle.certified.proposal == execution.proposal
+                                && payload.origin_proposal == execution.origin_proposal
+                                && payload.payload_hash == execution.autonomous_payload_hash
+                                && payload.entrypoints == execution.entrypoints
+                                && payload.entrypoint_hashes == execution.entrypoint_hashes
+                                && reservation_bytes.ok().as_ref()
+                                    == Some(&execution.reservation_keys)
+                                && routing_bytes.ok().as_ref() == Some(&execution.routing_plans)
+                                && payload.native_amx_receipts == execution.native_amx_receipts;
+                            if exact {
+                                incoming.reservation_keys = Some(payload.reservation_keys.clone());
+                            }
+                            exact
+                        }
+                        Err(_) => false,
+                    };
+                if execution.origin_proposal.proposal_hash != execution.proposal.proposal_hash
+                    || execution.origin_proposal.descriptor != execution.proposal.descriptor
+                    || execution.entrypoints.len() != execution.reservation_keys.len()
+                    || execution.entrypoints.len() != execution.entrypoint_hashes.len()
+                    || incoming.row.transaction_count
+                        != u64::try_from(execution.entrypoints.len()).unwrap_or(u64::MAX)
+                    || !source_bundle_revalidates
+                {
+                    incoming.conflict = true;
+                }
+                insert(incoming);
+            }
+            if source_budget == 0 {
+                break;
+            }
+        }
+        drop(insert);
+
+        // A route/incarnation/lane-height slot may have only one authenticated
+        // proposal identity. Retain every bounded conflicting identity and
+        // mark all of them instead of selecting one silently.
+        let mut identities_by_slot =
+            BTreeMap::<(LaneId, DataSpaceId, Hash, u64), BTreeSet<(Hash, Hash, u64, u64)>>::new();
+        for candidate in evidence.values() {
+            identities_by_slot
+                .entry((
+                    candidate.row.lane_id,
+                    candidate.row.dataspace_id,
+                    candidate.row.lane_incarnation,
+                    candidate.row.lane_block_height,
+                ))
+                .or_default()
+                .insert((
+                    candidate.row.proposal_hash,
+                    candidate.row.descriptor_hash,
+                    candidate.row.lane_block_view,
+                    candidate.row.proposal_height,
+                ));
+        }
+        for candidate in evidence.values_mut() {
+            if identities_by_slot
+                .get(&(
+                    candidate.row.lane_id,
+                    candidate.row.dataspace_id,
+                    candidate.row.lane_incarnation,
+                    candidate.row.lane_block_height,
+                ))
+                .is_some_and(|identities| identities.len() > 1)
+            {
+                candidate.conflict = true;
+            }
+        }
+
+        let mut candidates = evidence.into_values().collect::<Vec<_>>();
+        candidates.sort_by_key(|candidate| {
+            (
+                std::cmp::Reverse(candidate.conflict),
+                std::cmp::Reverse(candidate.row.proposal_height),
+                std::cmp::Reverse(candidate.row.lane_block_height),
+                candidate.key(),
+            )
+        });
+        candidates.truncate(SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX);
+
+        for candidate in &mut candidates {
+            let Some(receipt) = self.kura.read_lane_block_application_receipt(
+                candidate.row.lane_id,
+                candidate.row.lane_block_height,
+            ) else {
+                continue;
+            };
+            let receipt_descriptor = &receipt.proposal.descriptor;
+            if receipt.proposal.proposal_hash != candidate.row.proposal_hash
+                || receipt_descriptor.lane_id != candidate.row.lane_id
+                || receipt_descriptor.dataspace_id != candidate.row.dataspace_id
+                || receipt_descriptor.lane_incarnation != candidate.row.lane_incarnation
+                || receipt_descriptor.lane_block_height != candidate.row.lane_block_height
+                || receipt_descriptor.lane_block_view != candidate.row.lane_block_view
+                || receipt_descriptor.proposal_height != candidate.row.proposal_height
+                || receipt_descriptor.descriptor_hash != candidate.row.descriptor_hash
+                || receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution
+                || receipt.merge_source_bundle_hash != candidate.row.source_bundle_hash
+                || candidate.row.merge_entry_hash.is_some()
+                    && receipt.merge_entry_hash != candidate.row.merge_entry_hash
+            {
+                candidate.conflict = true;
+                continue;
+            }
+            candidate.application_receipt = true;
+            candidate.row.merge_entry_hash = receipt.merge_entry_hash;
+            candidate.row.application_block_height = receipt.merge_carrier_block_height;
+            candidate.row.application_block_hash = receipt.merge_carrier_block_hash;
+            if candidate.row.application_block_height.is_none()
+                || candidate.row.application_block_hash.is_none()
+            {
+                candidate.conflict = true;
+                continue;
+            }
+            if let Some(queue) = queue {
+                candidate.queue_finalized =
+                    candidate.exact_reservation_keys().is_some_and(|keys| {
+                        queue.lane_reservation_group_is_finalized_for_diagnostics(keys)
+                    });
+            }
+        }
+
+        let mut rows = candidates
+            .into_iter()
+            .map(AutonomousLaneDiagnosticEvidence::finish)
+            .collect::<Vec<_>>();
+        rows.sort_by_key(SumeragiAutonomousLaneExecution::ordering_key);
+        if rows
+            .windows(2)
+            .any(|pair| pair[0].ordering_key() >= pair[1].ordering_key())
+        {
+            eyre::bail!("autonomous lane execution diagnostics contain duplicate identities");
+        }
+        for row in &rows {
+            row.validate().map_err(|reason| eyre!(reason))?;
+        }
+        Ok(rows)
+    }
+
     /// Derive bounded lane diagnostics exclusively from current lifecycle State and Kura.
     ///
     /// The result contains one newest canonical ownership per active route and a fair,
@@ -34466,12 +35090,6 @@ impl State {
         let consensus = self.merge_consensus_snapshot();
         let lifecycle = &consensus.lifecycle;
         let lane_incarnation = lifecycle.incarnations.get(&lane_id).copied()?;
-        (consensus_lane_dataspace_at_height(
-            lane_id,
-            &lifecycle.nexus,
-            consensus.committed_height.saturating_add(1),
-        ) == Some(dataspace_id))
-        .then_some(())?;
         let expected_height = expected_next_merge_lane_height(
             &consensus.admission.latest_lane_snapshots,
             lane_id,
@@ -36208,13 +36826,7 @@ impl State {
                 ));
             }
             let origin_descriptor = &execution.origin_proposal.descriptor;
-            let order = (
-                descriptor.proposal_height,
-                descriptor.lane_block_height,
-                descriptor.lane_id,
-                descriptor.dataspace_id,
-                descriptor.lane_block_view,
-            );
+            let order = merge_execution_canonical_order_key(&execution.proposal);
             if previous_order.is_some_and(|previous| order <= previous) {
                 return Err(MergeLedgerCommitError::ExecutionBatchInvalid(
                     "lane executions are not in strict canonical total order".to_owned(),
@@ -78751,7 +79363,7 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn certified_autoscale_scale_in_ignores_opportunistic_unmerged_relay_cache() {
+    fn certified_autoscale_scale_in_ignores_unvalidated_wrong_incarnation_relay_cache() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -78783,13 +79395,20 @@ seiyaku SequentialNfts {
             sample_lane_relay_envelope(2, retired_lane_id, &signers, full_signer_bitmap(4));
         assert!(
             future_relay.is_merge_admissible(),
-            "test setup should seed verified relay progress"
+            "test noise is structurally merge-admissible before lifecycle authentication"
+        );
+        assert_ne!(
+            future_relay.lane_incarnation,
+            state
+                .lane_incarnation(retired_lane_id)
+                .expect("retiring lane has an active incarnation"),
+            "test noise must not authenticate as work for the retiring incarnation"
         );
         state
             .lane_relays
             .write()
             .insert(future_relay.clone())
-            .expect("verified future relay stored");
+            .expect("inject unvalidated future relay cache noise");
 
         let retirement =
             prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
@@ -78810,7 +79429,7 @@ seiyaku SequentialNfts {
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
             vec![LaneId::SINGLE],
-            "globally certified retirement must not depend on opportunistic relay inventory"
+            "wrong-incarnation cache noise must not veto certified retirement"
         );
         assert_eq!(
             nexus.autoscale.last_transition_height, 3,
@@ -78818,14 +79437,14 @@ seiyaku SequentialNfts {
         );
         assert!(
             state_block.pending_autoscale_lifecycle.is_some(),
-            "a certified drain must stage lifecycle cleanup despite local relay cache asymmetry"
+            "a certified drain must stage cleanup despite unvalidated cache noise"
         );
         assert!(
             state
                 .lane_relay_snapshot()
                 .iter()
                 .any(|relay| relay == &future_relay),
-            "block-local staging must not mutate the committed relay cache before commit"
+            "block-local staging must not mutate cache noise before commit"
         );
         drop(state_block);
 
@@ -79136,7 +79755,7 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn certified_autoscale_scale_in_ignores_local_unapplied_lane_block_cache() {
+    fn certified_autoscale_scale_in_blocks_on_active_incarnation_unapplied_lane_block() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -79196,26 +79815,26 @@ seiyaku SequentialNfts {
                 .iter()
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
-            vec![LaneId::SINGLE],
-            "globally certified retirement must not depend on node-local Kura inventory"
+            vec![LaneId::SINGLE, retired_lane_id],
+            "active-incarnation certified work must keep the lane in the catalog"
         );
         assert_eq!(
-            nexus.autoscale.last_transition_height, 3,
-            "the strictly later retirement carrier must advance the transition height"
+            nexus.autoscale.last_transition_height, 1,
+            "blocked retirement must preserve the committed drain transition height"
         );
         assert!(
-            state_block.pending_autoscale_lifecycle.is_some(),
-            "local unapplied artifacts must not suppress a globally certified retirement"
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "unapplied active-incarnation certification must suppress retirement staging"
         );
         assert!(
             kura.read_certified_lane_block_artifact(retired_lane_id, 1)
                 .is_some(),
-            "block-local staging must not delete Kura artifacts before commit"
+            "blocked retirement must preserve the certified reconstruction source"
         );
     }
 
     #[test]
-    fn certified_autoscale_scale_in_ignores_local_direct_application_marker_cache() {
+    fn certified_autoscale_scale_in_blocks_on_unrepaired_direct_application_marker() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -79271,16 +79890,16 @@ seiyaku SequentialNfts {
                 .iter()
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
-            vec![LaneId::SINGLE],
-            "globally certified retirement must not depend on a local repair cache"
+            vec![LaneId::SINGLE, retired_lane_id],
+            "unrepaired active-incarnation application evidence must keep the lane active"
         );
         assert_eq!(
-            nexus.autoscale.last_transition_height, 3,
-            "the strictly later retirement carrier must advance the transition height"
+            nexus.autoscale.last_transition_height, 1,
+            "blocked retirement must preserve the committed drain transition height"
         );
         assert!(
-            state_block.pending_autoscale_lifecycle.is_some(),
-            "a local unrepaired marker must not suppress certified retirement"
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "an unrepaired marker must suppress certified retirement"
         );
         assert!(
             state
@@ -79289,7 +79908,7 @@ seiyaku SequentialNfts {
                 .direct_lane_block_application_markers()
                 .get(&marker_key)
                 .is_some(),
-            "block-local staging must not mutate committed repair markers before commit"
+            "blocked retirement must preserve repair metadata"
         );
     }
 
@@ -79554,7 +80173,7 @@ seiyaku SequentialNfts {
     }
 
     #[test]
-    fn certified_autoscale_scale_in_ignores_late_local_unmerged_relay() {
+    fn certified_autoscale_scale_in_ignores_late_unvalidated_wrong_incarnation_relay_noise() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -79600,17 +80219,24 @@ seiyaku SequentialNfts {
             sample_lane_relay_envelope(1, retired_lane_id, &signers, full_signer_bitmap(4));
         assert!(
             late_relay.is_merge_admissible(),
-            "test setup should inject verified relay progress after staging"
+            "test noise is structurally merge-admissible before lifecycle authentication"
+        );
+        assert_ne!(
+            late_relay.lane_incarnation,
+            state
+                .lane_incarnation(retired_lane_id)
+                .expect("retiring lane has an active incarnation"),
+            "test noise must not authenticate as work for the retiring incarnation"
         );
         state
             .lane_relays
             .write()
             .insert(late_relay.clone())
-            .expect("late verified relay stored");
+            .expect("inject unvalidated late relay cache noise");
 
         state_block
             .commit()
-            .expect("late node-local relay inventory must not veto a certified retirement");
+            .expect("wrong-incarnation cache noise must not veto a certified retirement");
 
         let nexus = state.nexus_snapshot();
         assert_eq!(
@@ -79632,12 +80258,109 @@ seiyaku SequentialNfts {
                 .lane_relay_snapshot()
                 .iter()
                 .all(|relay| relay.lane_id != retired_lane_id),
-            "committed retirement must prune late node-local relay inventory"
+            "committed retirement must prune late unvalidated relay cache noise"
         );
     }
 
     #[test]
-    fn certified_autoscale_scale_in_ignores_late_local_unapplied_lane_block() {
+    fn certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+        let retired_lane_id = LaneId::new(1);
+        let elastic_lane =
+            autoscale_elastic_lane_config(retired_lane_id, DataSpaceId::UNIVERSAL, 1);
+        state
+            .set_nexus(autoscale_transition_test_nexus(
+                vec![LaneConfig::default()],
+                1,
+                2,
+                200,
+            ))
+            .expect("apply autoscale test nexus config");
+        state
+            .apply_lane_lifecycle_with_options(
+                &iroha_data_model::nexus::LaneLifecyclePlan {
+                    additions: vec![elastic_lane],
+                    retire: Vec::new(),
+                },
+                false,
+                true,
+            )
+            .expect("seed internally managed elastic lane");
+        let validator_keypairs = autoscale_drain_keypairs_for_test(4);
+        seed_consensus_keys_with_pops(&state, &validator_keypairs);
+
+        let retirement =
+            prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
+
+        let mut state_block = state.block(retirement.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
+        let committed_retirement = ValidBlock::new_unverified_for_tests(retirement)
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "cold window should stage autoscale scale-in before the delayed relay arrives"
+        );
+
+        let late_relay =
+            sample_lane_relay_envelope_for_state(&state, 1, retired_lane_id, &validator_keypairs);
+        assert_eq!(
+            late_relay.lane_incarnation,
+            state
+                .lane_incarnation(retired_lane_id)
+                .expect("retiring lane has an active incarnation"),
+            "delayed relay must bind the exact retiring incarnation"
+        );
+        assert_eq!(
+            state
+                .record_lane_relay(&late_relay)
+                .expect("authenticate delayed pre-close relay"),
+            LaneRelayInsert::Inserted
+        );
+        assert!(
+            state.lane_has_drain_blocking_evidence(
+                retired_lane_id,
+                DataSpaceId::UNIVERSAL,
+                late_relay.lane_incarnation,
+            ),
+            "authenticated pre-close relay must remain a drain blocker after the close height"
+        );
+
+        let error = state_block
+            .commit()
+            .expect_err("late authenticated unmerged work must veto retirement");
+        assert!(matches!(
+            error,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
+        assert!(
+            state
+                .nexus_snapshot()
+                .lane_catalog
+                .lanes()
+                .iter()
+                .any(|lane| lane.id == retired_lane_id),
+            "failed retirement must keep the exact lane incarnation active"
+        );
+        assert!(
+            state
+                .lane_relay_snapshot()
+                .iter()
+                .any(|relay| relay == &late_relay),
+            "failed retirement must retain the authenticated relay for merge"
+        );
+        assert_eq!(
+            state.transactions.view().latest_height_for_tests(),
+            2,
+            "failed retirement must not publish its carrier block"
+        );
+    }
+
+    #[test]
+    fn certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -79694,9 +80417,13 @@ seiyaku SequentialNfts {
             "test setup should inject unapplied certified lane-block progress after staging"
         );
 
-        state_block
+        let error = state_block
             .commit()
-            .expect("late node-local lane-block inventory must not veto certified retirement");
+            .expect_err("late active-incarnation certification must veto retirement");
+        assert!(matches!(
+            error,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
 
         let nexus = state.nexus_snapshot();
         assert_eq!(
@@ -79706,22 +80433,27 @@ seiyaku SequentialNfts {
                 .iter()
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
-            vec![LaneId::SINGLE],
-            "certified autoscale scale-in must publish the retired-lane catalog"
+            vec![LaneId::SINGLE, retired_lane_id],
+            "failed retirement must preserve the lane catalog"
         );
         assert_eq!(
-            nexus.autoscale.last_transition_height, 3,
-            "certified autoscale scale-in must record its retirement carrier"
+            nexus.autoscale.last_transition_height, 1,
+            "failed retirement must preserve the committed drain transition height"
         );
         assert_eq!(
             state.transactions.view().latest_height_for_tests(),
-            3,
-            "certified autoscale scale-in must publish the retirement block height"
+            2,
+            "failed retirement must not publish the retirement block height"
+        );
+        assert!(
+            kura.read_certified_lane_block_artifact(retired_lane_id, 1)
+                .is_some(),
+            "failed retirement must retain the certified reconstruction source"
         );
     }
 
     #[test]
-    fn certified_autoscale_scale_in_prunes_unrepaired_direct_application_marker() {
+    fn certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
@@ -79747,6 +80479,29 @@ seiyaku SequentialNfts {
             )
             .expect("seed internally managed elastic lane");
 
+        let retirement =
+            prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
+        let mut state_block = state.block(retirement.header());
+        insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
+        let committed_retirement = ValidBlock::new_unverified_for_tests(retirement.clone())
+            .commit_unchecked()
+            .unpack(|_| {});
+        let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
+        assert!(
+            state_block.pending_autoscale_lifecycle.is_some(),
+            "certified retirement should stage before late repair metadata arrives"
+        );
+        let staged_retirement = state_block
+            .pending_autoscale_lifecycle
+            .clone()
+            .expect("staged retirement lifecycle");
+        // A `StateBlock` owns the MVCC writer for every world cell, so trying
+        // to open a second direct-marker block while it is alive would only
+        // test the storage mutex by deadlocking. Drop the speculative block,
+        // publish the recovered marker, then restore the exact already-staged
+        // lifecycle into a fresh block to exercise the commit-time recheck.
+        drop(state_block);
+
         let marker_key = seed_direct_lane_application_marker(
             &state,
             retired_lane_id,
@@ -79757,25 +80512,24 @@ seiyaku SequentialNfts {
         assert_eq!(
             state.unrepaired_direct_lane_application_marker_height(retired_lane_id),
             Some(1),
-            "test setup should seed node-local repair metadata before certified retirement"
+            "test setup should inject active-incarnation repair metadata after staging"
         );
 
-        let retirement =
-            prepare_certified_autoscale_retirement_for_test(&mut state, &kura, retired_lane_id);
         let mut state_block = state.block(retirement.header());
         insert_empty_transaction_block_for_state_commit(&mut state_block, &retirement);
-        let committed_retirement = ValidBlock::new_unverified_for_tests(retirement)
-            .commit_unchecked()
-            .unpack(|_| {});
         let _events = state_block.apply_without_execution(&committed_retirement, Vec::new());
         assert!(
-            state_block.pending_autoscale_lifecycle.is_some(),
-            "certified retirement should be staged despite node-local repair metadata"
+            state_block.pending_autoscale_lifecycle.is_none(),
+            "fresh staging must observe the recovered marker and suppress retirement"
         );
-
-        state_block
+        state_block.pending_autoscale_lifecycle = Some(staged_retirement);
+        let error = state_block
             .commit()
-            .expect("node-local repair metadata must not veto certified retirement");
+            .expect_err("late unrepaired direct application evidence must veto retirement");
+        assert!(matches!(
+            error,
+            TransactionsBlockError::AutoscaleLaneLifecycle
+        ));
 
         let nexus = state.nexus_snapshot();
         assert_eq!(
@@ -79785,17 +80539,17 @@ seiyaku SequentialNfts {
                 .iter()
                 .map(|lane| lane.id)
                 .collect::<Vec<_>>(),
-            vec![LaneId::SINGLE],
-            "certified autoscale scale-in must publish the retired-lane catalog"
+            vec![LaneId::SINGLE, retired_lane_id],
+            "failed retirement must preserve the lane catalog"
         );
         assert_eq!(
-            nexus.autoscale.last_transition_height, 3,
-            "certified autoscale scale-in must record its retirement carrier"
+            nexus.autoscale.last_transition_height, 1,
+            "failed retirement must preserve the committed drain transition height"
         );
         assert_eq!(
             state.transactions.view().latest_height_for_tests(),
-            3,
-            "certified autoscale scale-in must publish the retirement block height"
+            2,
+            "failed retirement must not publish the retirement block height"
         );
         assert!(
             state
@@ -79803,8 +80557,8 @@ seiyaku SequentialNfts {
                 .view()
                 .direct_lane_block_application_markers()
                 .get(&marker_key)
-                .is_none(),
-            "committed retirement must prune node-local repair metadata"
+                .is_some(),
+            "failed retirement must preserve repair metadata"
         );
     }
 
@@ -93357,7 +94111,14 @@ seiyaku SequentialNfts {
                 CommittedLaneBlockExecutionStatus::StateAppliedByCanonicalBlock
             );
             assert!(snapshot.lane_block_sessions[0].committed_session_drained);
-            snapshot
+            let autonomous = state
+                .autonomous_lane_execution_diagnostics()
+                .expect("derive restart-stable autonomous diagnostics");
+            assert!(
+                autonomous.is_empty(),
+                "globally anchored lane evidence must not be misclassified as autonomous"
+            );
+            (snapshot, autonomous)
         };
 
         let (reopened_kura, _) =
@@ -93369,9 +94130,119 @@ seiyaku SequentialNfts {
         );
         assert_eq!(
             restarted_state.durable_lane_diagnostics(),
-            expected,
+            expected.0,
             "a restarted peer must reconstruct the same diagnostic rows from durable evidence"
         );
+        assert_eq!(
+            restarted_state
+                .autonomous_lane_execution_diagnostics()
+                .expect("reconstruct autonomous diagnostics after restart"),
+            expected.1,
+            "autonomous diagnostics must reconstruct from Kura instead of process caches"
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_diagnostic_same_identity_drift_is_conflict() {
+        let incarnation = Hash::new(b"autonomous-diagnostic-conflict-incarnation");
+        let (_, session, _) = lane_artifact_block_and_session_for_state_test(
+            None,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            incarnation,
+            1,
+        );
+        let mut left =
+            AutonomousLaneDiagnosticEvidence::from_proposal(&session.proposal).expect("row");
+        left.payload_durable = true;
+        left.row.reservation_count = left.row.transaction_count;
+        left.row.executable_payload_hash = Some(Hash::new(b"first-payload"));
+        let mut right = left.clone();
+        right.row.executable_payload_hash = Some(Hash::new(b"conflicting-payload"));
+        left.merge(right);
+        let row = left.finish();
+        assert_eq!(
+            row.highest_durable_stage,
+            SumeragiAutonomousLaneExecutionStage::Conflict
+        );
+        assert_eq!(
+            row.stuck_reason,
+            Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict)
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall() {
+        let incarnation = Hash::new(b"autonomous-diagnostic-certified-incarnation");
+        let (_, session, _) = lane_artifact_block_and_session_for_state_test(
+            None,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            incarnation,
+            1,
+        );
+        let mut evidence =
+            AutonomousLaneDiagnosticEvidence::from_proposal(&session.proposal).expect("row");
+        evidence.payload_durable = true;
+        evidence.availability_certified = true;
+        evidence.lane_certified = true;
+        evidence.row.reservation_count = evidence.row.transaction_count;
+        evidence.row.executable_payload_hash =
+            Some(Hash::new(b"autonomous-diagnostic-certified-payload"));
+
+        let row = evidence.finish();
+        assert_eq!(
+            row.highest_durable_stage,
+            SumeragiAutonomousLaneExecutionStage::LaneCertified
+        );
+        assert_eq!(
+            row.stuck_reason,
+            Some(SumeragiAutonomousLaneExecutionStuckReason::CertifiedBundleUnavailable)
+        );
+        row.validate()
+            .expect("certified autonomous payload stall must remain a valid diagnostic row");
+    }
+
+    #[test]
+    fn autonomous_lane_diagnostic_queue_finalization_is_terminal() {
+        let incarnation = Hash::new(b"autonomous-diagnostic-finalized-incarnation");
+        let (_, session, _) = lane_artifact_block_and_session_for_state_test(
+            None,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            incarnation,
+            1,
+        );
+        let mut evidence =
+            AutonomousLaneDiagnosticEvidence::from_proposal(&session.proposal).expect("row");
+        evidence.payload_durable = true;
+        evidence.availability_certified = true;
+        evidence.lane_certified = true;
+        evidence.bundle_durable = true;
+        evidence.globally_committed = true;
+        evidence.application_receipt = true;
+        evidence.queue_finalized = true;
+        evidence.row.reservation_count = evidence.row.transaction_count;
+        evidence.row.executable_payload_hash =
+            Some(Hash::new(b"autonomous-diagnostic-finalized-payload"));
+        evidence.row.source_bundle_hash =
+            Some(Hash::new(b"autonomous-diagnostic-finalized-bundle"));
+        evidence.row.merge_entry_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"autonomous-diagnostic-finalized-merge",
+        )));
+        evidence.row.application_block_height = Some(9);
+        evidence.row.application_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"autonomous-diagnostic-finalized-carrier",
+        )));
+
+        let row = evidence.finish();
+        assert_eq!(
+            row.highest_durable_stage,
+            SumeragiAutonomousLaneExecutionStage::QueueFinalized
+        );
+        assert_eq!(row.stuck_reason, None);
+        row.validate()
+            .expect("queue-finalized autonomous work must be a valid terminal diagnostic row");
     }
 
     #[test]
@@ -116072,6 +116943,38 @@ seiyaku IdentitylessRawCallback {
             Err(MergeLedgerCommitError::ExecutionBatchInvalid(reason))
                 if reason == "lane count is empty or exceeds the hard limit"
         ));
+    }
+
+    #[test]
+    fn merge_execution_canonical_order_is_route_first() {
+        let (earlier_route_later_proposal, _) = sample_committed_lane_block_session_for_state_test(
+            LaneId::new(1),
+            DataSpaceId::new(9),
+            Hash::new(b"route-first earlier incarnation"),
+            99,
+            1,
+        );
+        let (later_route_earlier_proposal, _) = sample_committed_lane_block_session_for_state_test(
+            LaneId::new(2),
+            DataSpaceId::new(1),
+            Hash::new(b"route-first later incarnation"),
+            1,
+            1,
+        );
+        let mut proposals = vec![
+            later_route_earlier_proposal.proposal,
+            earlier_route_later_proposal.proposal,
+        ];
+        proposals.sort_by_key(merge_execution_canonical_order_key);
+
+        assert_eq!(
+            proposals
+                .iter()
+                .map(|proposal| proposal.descriptor.lane_id)
+                .collect::<Vec<_>>(),
+            vec![LaneId::new(1), LaneId::new(2)],
+            "proposal timing must not reorder the canonical lane/route prefix"
+        );
     }
 
     fn empty_merge_settlement(

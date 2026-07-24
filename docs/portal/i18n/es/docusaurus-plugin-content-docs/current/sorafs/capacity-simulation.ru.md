@@ -19,7 +19,7 @@ descripción: Simuladores de teclados SF-2c con dispositivos integrados, accesor
 Esta página contiene la letra `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Deje copias sincronizadas de los documentos de Sphinx no incluidos en el presupuesto.
 :::
 
-Esta opción se puede utilizar para insertar simulaciones de impresoras SF-2c y visualizar las métricas de alta calidad. En las actualizaciones de seguridad, implementamos conmutación por error y soluciones de corte de extremo a extremo, implementamos configuraciones determinadas en `docs/examples/sorafs_capacity_simulation/`. Cargas útiles емкости по-прежнему используют `sorafs_manifest_stub capacity`; Utilice `iroha app sorafs toolkit pack` para el manifiesto/CAR de los automóviles.
+Esta opción se puede utilizar para insertar simulaciones de impresoras SF-2c y visualizar las métricas de alta calidad. En las actualizaciones de seguridad, implementamos conmutación por error y soluciones de corte de extremo a extremo, implementamos configuraciones determinadas en `docs/examples/sorafs_capacity_simulation/`. Cargas útiles емкости по-прежнему используют `sorafs_manifest_builder capacity`; Utilice `iroha app sorafs toolkit pack` para el manifiesto/CAR de los automóviles.
 
 ## 1. Сгенерировать CLI-артефакты
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` incluye `sorafs_manifest_stub capacity`, qué cargas útiles de Norito, bloques base64, archivos Torii y archivos JSON para:
+`run_cli.sh` incluye `sorafs_manifest_builder capacity`, qué cargas útiles de Norito, bloques base64, archivos Torii y archivos JSON para:
 
 - Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
 - Одного распоряжения о репликации, распределяющего манифест между провайдерами.

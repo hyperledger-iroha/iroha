@@ -2079,6 +2079,9 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
@@ -37310,9 +37313,14 @@ async fn handler_sumeragi_diagnostics(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_v1_sumeragi_diagnostics(State(app.state.clone()), accept, nexus_enabled)
-        .await
-        .map(axum::response::IntoResponse::into_response)
+    routing::handle_v1_sumeragi_diagnostics(
+        State(app.state.clone()),
+        Some(Arc::clone(&app.queue)),
+        accept,
+        nexus_enabled,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(feature = "telemetry")]
@@ -43048,7 +43056,24 @@ async fn handler_post_transaction(
     crate::utils::extractors::JsonOrNoritoVersioned(transaction): crate::utils::extractors::JsonOrNoritoVersioned<
         SignedTransaction,
     >,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
+    submit_signed_transaction_for_ingress(app, headers, accept, transaction).await
+}
+
+/// Admit one already-decoded caller-signed transaction through the canonical
+/// Torii transaction path.
+///
+/// Dedicated API families use this hook only after validating that the signed
+/// executable contains exactly the native instruction allowed by that route.
+/// The transaction is never rebuilt or re-signed: its caller authority,
+/// signature-bound payload, and stable hash remain the standard ingress
+/// idempotency identity.
+pub(crate) async fn submit_signed_transaction_for_ingress(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    transaction: SignedTransaction,
+) -> Result<Response, Error> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(resp) => return Ok(resp),
@@ -43077,6 +43102,7 @@ async fn handler_post_transaction(
             )));
         }
     }
+    let submitted_signed_transaction_hash = transaction.hash();
     let transaction_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
             &transaction,
@@ -43086,8 +43112,15 @@ async fn handler_post_transaction(
             code: "invalid_transaction_payload",
             message: format!("transaction payload could not be decoded: {error}"),
         })?;
+    if transaction.hash() != submitted_signed_transaction_hash {
+        return Err(Error::AppServiceUnavailable {
+            code: "transaction_identity_changed",
+            message: "canonical transaction decoding changed the signed transaction hash"
+                .to_owned(),
+        });
+    }
     let entrypoint_hash = transaction.hash_as_entrypoint();
-    let signed_transaction_hash = Some(transaction.hash());
+    let signed_transaction_hash = Some(submitted_signed_transaction_hash.clone());
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
@@ -43106,6 +43139,15 @@ async fn handler_post_transaction(
             message: error.to_string(),
         })??
     };
+    if accepted_tx.external().map(SignedTransaction::hash)
+        != Some(submitted_signed_transaction_hash)
+    {
+        return Err(Error::AppServiceUnavailable {
+            code: "transaction_identity_changed",
+            message: "transaction admission changed the caller-signed transaction identity"
+                .to_owned(),
+        });
+    }
     #[allow(unused_variables)]
     let routing_plan = app
         .queue
@@ -49791,6 +49833,9 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
@@ -49843,6 +49888,9 @@ pub struct ToriiRuntimeDeps {
     soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_moderation_quarantine_key_wrapper:
@@ -49868,6 +49916,8 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             soracloud_hf_config: None,
             sorafs_node: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: None,
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
@@ -49905,6 +49955,17 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach the finalized-chain SoraFS moderation transaction orchestrator.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_orchestrator(
+        mut self,
+        runtime: Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>,
+    ) -> Self {
+        self.sorafs_moderation_orchestrator = Some(runtime);
         self
     }
 
@@ -53057,6 +53118,9 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_orchestrator =
+            runtime_deps.sorafs_moderation_orchestrator.clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
         #[cfg(feature = "app_api")]
         let shared_sorafs_moderation_quarantine_key_wrapper = runtime_deps
@@ -53436,11 +53500,9 @@ impl Torii {
             );
             let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
             let privacy_cycle_prf_required = storage_config.privacy_aggregate_schedule().is_some()
-                && storage_config
-                    .privacy_aggregate_policy()
-                    .is_some_and(
-                        sorafs_node::config::PrivacyAggregatePolicyConfig::requires_cycle_prf,
-                    );
+                && storage_config.privacy_aggregate_policy().is_some_and(
+                    sorafs_node::config::PrivacyAggregatePolicyConfig::requires_cycle_prf,
+                );
             match shared_sorafs_node {
                 Some(node) => {
                     assert_eq!(
@@ -53495,15 +53557,13 @@ impl Torii {
                 }
                 None => {
                     let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
-                    let node_runtime_deps =
-                        if let Some(key_wrapper) =
-                            shared_sorafs_moderation_quarantine_key_wrapper
-                        {
-                            node_runtime_deps
-                                .with_moderation_quarantine_key_wrapper(key_wrapper)
-                        } else {
-                            node_runtime_deps
-                        };
+                    let node_runtime_deps = if let Some(key_wrapper) =
+                        shared_sorafs_moderation_quarantine_key_wrapper
+                    {
+                        node_runtime_deps.with_moderation_quarantine_key_wrapper(key_wrapper)
+                    } else {
+                        node_runtime_deps
+                    };
                     let node_runtime_deps =
                         if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider {
                             node_runtime_deps.with_privacy_cycle_prf_provider(provider)
@@ -53520,6 +53580,42 @@ impl Torii {
                         panic!("failed to initialise embedded SoraFS runtime: {err}")
                     })
                 }
+            }
+        };
+        #[cfg(feature = "app_api")]
+        let sorafs_moderation_orchestrator = match (
+            config.sorafs_storage.moderation_orchestrator.as_ref(),
+            shared_sorafs_moderation_orchestrator,
+        ) {
+            (None, None) => None,
+            (Some(config), Some(runtime)) => {
+                let expected =
+                    sorafs_node::moderation_orchestrator::ModerationOrchestratorConfigV1 {
+                        checkpoint_path: config.checkpoint_path.clone(),
+                        max_cases: config.max_cases,
+                        max_events: config.max_events,
+                        max_outbox_entries: config.max_outbox_entries,
+                        max_idempotency_records: config.max_idempotency_records,
+                        max_handoffs: config.max_handoffs,
+                        max_submit_attempts: config.max_submit_attempts,
+                        checkpoint_max_bytes: config.checkpoint_max_bytes.0,
+                    };
+                assert_eq!(
+                    runtime.config(),
+                    &expected,
+                    "injected SoraFS moderation orchestrator does not match torii.sorafs.storage.moderation_orchestrator"
+                );
+                Some(runtime)
+            }
+            (Some(_), None) => {
+                panic!(
+                    "torii.sorafs.storage.moderation_orchestrator is enabled but runtime-only transaction, finalized-reader, and terminal-sink dependencies were not injected"
+                )
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "a SoraFS moderation orchestrator was injected without enabling torii.sorafs.storage.moderation_orchestrator"
+                )
             }
         };
         #[cfg(feature = "app_api")]
@@ -53837,6 +53933,8 @@ impl Torii {
             sorafs_cache,
             #[cfg(feature = "app_api")]
             sorafs_node,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator,
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials,
             #[cfg(feature = "app_api")]
@@ -54268,6 +54366,8 @@ impl Torii {
             ),
             #[cfg(feature = "app_api")]
             sorafs_node: self.sorafs_node.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: self.sorafs_moderation_orchestrator.clone(),
             #[cfg(feature = "app_api")]
             sorafs_pop_credentials: self.sorafs_pop_credentials.clone(),
             #[cfg(feature = "app_api")]
@@ -55163,7 +55263,7 @@ fn gateway_compliance_controller_config(
                 .collect(),
         })
         .collect();
-    GatewayComplianceControllerConfig {
+    sorafs::gateway::GatewayComplianceControllerConfig {
         trust_policy,
         feeds,
         fetch_limits: GatewayComplianceFetchLimits {
@@ -55559,14 +55659,17 @@ mod gateway_runtime_config_tests {
     #[test]
     fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
         let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");
+        let checkpoint_dir = checkpoint_dir
+            .path()
+            .canonicalize()
+            .expect("canonical temporary checkpoint directory");
         let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
         let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
             Arc::new(TestComplianceFeedTransport);
         let mut config = iroha_config::parameters::actual::SorafsGateway::default();
         config.acme.enabled = true;
-        config.compliance = Some(compliance_config(
-            checkpoint_dir.path().join("checkpoint.norito"),
-        ));
+        config.acme.ech_enabled = true;
+        config.compliance = Some(compliance_config(checkpoint_dir.join("checkpoint.norito")));
 
         let components = build_sorafs_gateway_security(
             &config,
@@ -55576,6 +55679,14 @@ mod gateway_runtime_config_tests {
         );
 
         assert!(components.tls_automation.is_some());
+        assert!(
+            components
+                .tls_state
+                .try_read()
+                .expect("TLS state lock")
+                .header_value()
+                .starts_with("ech-enabled")
+        );
         assert!(components.compliance_controller.is_some());
         assert!(Arc::ptr_eq(
             components
@@ -59284,6 +59395,8 @@ pub(crate) mod tests_runtime_handlers {
             ),
             #[cfg(feature = "app_api")]
             sorafs_node,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: None,
             #[cfg(feature = "app_api")]
             sorafs_limits,
             #[cfg(feature = "app_api")]

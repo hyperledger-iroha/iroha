@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-01-01
 ./analyze.py --artifacts ./artifacts
 ```
 
-سكربت `run_cli.sh` يستدعي `sorafs_manifest_stub capacity` لبناء:
+سكربت `run_cli.sh` يستدعي `sorafs_manifest_builder capacity` لبناء:
 
 - تصريحات مزودين حتمية لمجموعة fixtures لتفاوض الحصص.
 - ترتيب تكرار يطابق سيناريو التفاوض.

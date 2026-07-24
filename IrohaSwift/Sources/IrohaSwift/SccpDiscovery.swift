@@ -104,6 +104,13 @@ public struct SccpSoraFinalityAnchorV1: Equatable, Sendable {
     public let anchorHash: Data
 }
 
+/// Required typed proof policy bound into every EVM/TRON destination deployment.
+public struct SccpOutboundProofPolicyV1: Equatable, Sendable {
+    public let version: UInt8
+    public let semanticProfile: SccpSemanticProofProfileV1
+    public let soraFinalityAnchor: SccpSoraFinalityAnchorV1
+}
+
 /// Exact governed destination deployment summary. The full 38-word key was validated before construction.
 public struct SccpDestinationDeploymentV1: Equatable, Sendable {
     public let family: SccpDestinationProofBackendV1
@@ -112,8 +119,7 @@ public struct SccpDestinationDeploymentV1: Equatable, Sendable {
     public let verifierAddress: Data
     public let verifierCodeHash: Data
     public let verifierKeyHash: Data
-    public let semanticProofProfile: SccpSemanticProofProfileV1
-    public let soraFinalityAnchor: SccpSoraFinalityAnchorV1
+    public let outboundProofPolicy: SccpOutboundProofPolicyV1
     public let routeAddress: Data
     public let routeCodeHash: Data
     public let tairaToTokenMultiplier: UInt64
@@ -182,7 +188,9 @@ public struct SccpGroth16ProofRequestV1: Equatable, Sendable {
     public let finalityBlockHash: String
     public let verifierKeyHash: String
     public let semanticProofProfile: SccpSemanticProofProfileV1
+    public let semanticProofProfileHash: String
     public let soraFinalityAnchor: SccpSoraFinalityAnchorV1
+    public let soraFinalityAnchorHash: String
     public let statementHash: String
     public let destinationBindingHash: String
     public let routeConfigurationHash: String
@@ -725,7 +733,9 @@ private enum SccpExactParser {
             finalityBlockHash: finalityBlockHash,
             verifierKeyHash: keyHash,
             semanticProofProfile: semantic,
+            semanticProofProfileHash: semanticHash,
             soraFinalityAnchor: finalityAnchor,
+            soraFinalityAnchorHash: anchorHash,
             statementHash: statement,
             destinationBindingHash: binding,
             routeConfigurationHash: configuration,
@@ -986,7 +996,10 @@ private enum SccpExactParser {
         let keyBytes = try verifyingKey(object(deployment, "verifying_key"), label: "\(label).deployment.verifying_key")
         guard irohaKeccak256(keyBytes) == hashes[2] else { throw SccpV1Error.invalid("\(label).deployment.verifier_key_hash does not match verifying_key") }
         let policy = try outboundPolicy(object(deployment, "outbound_proof_policy"), label: "\(label).deployment.outbound_proof_policy")
-        let deploymentHashRoles = hashes + [policy.0.profileHash, policy.1.anchorHash]
+        let deploymentHashRoles = hashes + [
+            policy.semanticProfile.profileHash,
+            policy.soraFinalityAnchor.anchorHash,
+        ]
         guard Set(deploymentHashRoles).count == deploymentHashRoles.count else {
             throw SccpV1Error.invalid("\(label).deployment reuses a proof-policy or deployment hash role")
         }
@@ -1000,8 +1013,7 @@ private enum SccpExactParser {
             verifierAddress: addresses[1],
             verifierCodeHash: hashes[1],
             verifierKeyHash: hashes[2],
-            semanticProofProfile: policy.0,
-            soraFinalityAnchor: policy.1,
+            outboundProofPolicy: policy,
             routeAddress: addresses[2],
             routeCodeHash: hashes[3],
             tairaToTokenMultiplier: 1_000_000_000,
@@ -1015,8 +1027,7 @@ private enum SccpExactParser {
             verifierAddress: partial.verifierAddress,
             verifierCodeHash: partial.verifierCodeHash,
             verifierKeyHash: partial.verifierKeyHash,
-            semanticProofProfile: partial.semanticProofProfile,
-            soraFinalityAnchor: partial.soraFinalityAnchor,
+            outboundProofPolicy: partial.outboundProofPolicy,
             routeAddress: partial.routeAddress,
             routeCodeHash: partial.routeCodeHash,
             tairaToTokenMultiplier: partial.tairaToTokenMultiplier,
@@ -1024,13 +1035,20 @@ private enum SccpExactParser {
         )
     }
 
-    private static func outboundPolicy(_ item: [String: Any], label: String) throws -> (SccpSemanticProofProfileV1, SccpSoraFinalityAnchorV1) {
+    private static func outboundPolicy(
+        _ item: [String: Any],
+        label: String
+    ) throws -> SccpOutboundProofPolicyV1 {
         try SccpStrictJSON.exactFields(item, ["version", "semantic_profile", "sora_finality_anchor"], label: label)
         guard try SccpStrictJSON.uint64(item, "version", minimum: 1) == 1 else { throw SccpV1Error.invalid("\(label).version must be 1") }
         let semantic = try semanticProfile(object(item, "semantic_profile"), label: "\(label).semantic_profile")
         let anchor = try finalityAnchor(object(item, "sora_finality_anchor"), label: "\(label).sora_finality_anchor")
         try validateOutboundPolicyRoles(semantic, anchor, label: label)
-        return (semantic, anchor)
+        return SccpOutboundProofPolicyV1(
+            version: 1,
+            semanticProfile: semantic,
+            soraFinalityAnchor: anchor
+        )
     }
 
     private static func validateOutboundPolicyRoles(
@@ -1326,8 +1344,8 @@ private enum SccpExactParser {
         payload.append(isTron ? abiTronAddress(destination.routeAddress) : abiAddress(destination.routeAddress))
         payload.append(destination.verifierCodeHash)
         payload.append(destination.verifierKeyHash)
-        payload.append(destination.semanticProofProfile.profileHash)
-        payload.append(destination.soraFinalityAnchor.anchorHash)
+        payload.append(destination.outboundProofPolicy.semanticProfile.profileHash)
+        payload.append(destination.outboundProofPolicy.soraFinalityAnchor.anchorHash)
         return irohaKeccak256(payload)
     }
 
@@ -1355,8 +1373,9 @@ private enum SccpExactParser {
         let sourceHash = SccpV1.laneHash(lane)
         let reverseHash = SccpV1.laneHash(try SccpLaneIdV1(source: lane.target, target: lane.source))
         var roles = [sourceHash, reverseHash, destination.tokenCodeHash, destination.verifierCodeHash,
-                     destination.verifierKeyHash, destination.semanticProofProfile.profileHash,
-                     destination.soraFinalityAnchor.anchorHash]
+                     destination.verifierKeyHash,
+                     destination.outboundProofPolicy.semanticProfile.profileHash,
+                     destination.outboundProofPolicy.soraFinalityAnchor.anchorHash]
         if destination.family == .tronGroth16Bn254 {
             roles.append(destination.destinationBindingHash)
         }
@@ -1366,8 +1385,8 @@ private enum SccpExactParser {
         deployment.append(abiAddress(destination.verifierAddress))
         deployment.append(destination.verifierCodeHash)
         deployment.append(destination.verifierKeyHash)
-        deployment.append(destination.semanticProofProfile.profileHash)
-        deployment.append(destination.soraFinalityAnchor.anchorHash)
+        deployment.append(destination.outboundProofPolicy.semanticProfile.profileHash)
+        deployment.append(destination.outboundProofPolicy.soraFinalityAnchor.anchorHash)
         if destination.family == .tronGroth16Bn254 { deployment.append(destination.destinationBindingHash) }
         let deploymentHash = irohaKeccak256(deployment)
         var assetRoute = irohaKeccak256(Data("xor".utf8))

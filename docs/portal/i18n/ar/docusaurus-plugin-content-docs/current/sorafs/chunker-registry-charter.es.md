@@ -63,7 +63,7 @@ Sidebar_label: بطاقة التسجيل الخاصة بالقطعة
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - إرسال علاقة عامة تحتوي على التركيبات والعروض وتقرير الحتمية
@@ -97,14 +97,14 @@ Sidebar_label: بطاقة التسجيل الخاصة بالقطعة
 
 ## توقعات الأدوات
 
-- `sorafs_manifest_chunk_store` و `sorafs_manifest_stub` الموضح:
+- `sorafs_manifest_chunk_store` و `sorafs_manifest_builder` الموضح:
   - `--list-profiles` لفحص السجل.
   - `--promote-profile=<handle>` لإنشاء كتلة البيانات التعريفية المستخدمة
     al promover un perfil.
   - `--json-out=-` لإرسال التقارير إلى الوضع القياسي وتأهيل سجلات المراجعة
     القابلة للتكرار.
 - `ensure_charter_compliance()` يتم استدعاؤه في البداية في الثنائيات ذات الصلة
-  (`manifest_chunk_store`، `provider_advert_stub`). Las pruebas CI deben Fallar si
+  (`manifest_chunk_store`، `sorafs_provider_advert`). Las pruebas CI deben Fallar si
   nuevas entradas violan la carta.
 
 ## التسجيل

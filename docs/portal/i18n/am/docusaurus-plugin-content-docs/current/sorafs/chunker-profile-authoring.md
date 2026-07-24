@@ -95,9 +95,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   አንጸባራቂ መፍጨት፣ PoR ከታቀዱት መለኪያዎች ጋር ይፈትሻል።
 - `sorafs_manifest_chunk_store --json-out=-` - የ chunk-store ሪፖርትን ወደ ዥረት ያሰራጩ
   stdout ለ አውቶሜትድ ንጽጽሮች.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - መግለጫዎችን እና CARን ያረጋግጡ
+- `sorafs_manifest_builder --chunker-profile=<handle>` - መግለጫዎችን እና CARን ያረጋግጡ
   ዕቅዶች ቀኖናዊውን እጀታ እና ተለዋጭ ስሞችን አካተዋል።
-- `sorafs_manifest_stub --plan=-` - የቀደመውን I18NI0000048X መልሰው ይመግቡ
+- `sorafs_manifest_builder --plan=-` - የቀደመውን I18NI0000048X መልሰው ይመግቡ
   ከለውጥ በኋላ ማካካሻዎችን/መፍጨትን ለማረጋገጥ።
 
 በፕሮፖዛሉ ውስጥ የትዕዛዙን ውፅዓት (መፈጨት፣ የPoR roots፣ manifest hashes) ይመዝግቡ
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

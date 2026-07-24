@@ -119,7 +119,7 @@ groups:
    - Run `iroha app sorafs providers list` һәм реклама мөмкинлектәрен раҫлау репликация талаптарына тап килә.
    - Тикшерергә `torii_sorafs_capacity_*` датчиктар раҫлау өсөн тәьмин ителгән GiB һәм PoR уңыш.
 3. **Респумент репликация**
-   - Яңы заказдар сығарыу аша `sorafs_manifest_stub capacity replication-order` ҡасан артта ҡалған ялҡаулыҡ (`stat="avg"`) 5 эпоханан түбән төшә (махсус/CAR упаковка ҡулланыу `iroha app sorafs toolkit pack`).
+   - Яңы заказдар сығарыу аша `sorafs_manifest_builder capacity replication-order` ҡасан артта ҡалған ялҡаулыҡ (`stat="avg"`) 5 эпоханан түбән төшә (махсус/CAR упаковка ҡулланыу `iroha app sorafs toolkit pack`).
    - Әгәр псевдонимдар әүҙем асыҡтан-асыҡ бәйләүҙәр булмаһа, идара итеүгә хәбәр итегеҙ (`torii_sorafs_registry_aliases_total` көтөлмәгәнсә төшә).
 4. **Документ һөҙөмтәһе**
    - SoraFS операциялар журналында ваҡыт маркалары һәм зарарланған асыҡ һеңдереүҙең рекордтары яҙылған.

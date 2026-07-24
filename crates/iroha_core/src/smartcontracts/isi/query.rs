@@ -1022,7 +1022,10 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsOrderbookChannelById(_)
         | SingularQueryBox::FindSorafsOrderbookStatus(_)
         | SingularQueryBox::FindSorafsOrderbookOrders(_)
-        | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
+        | SingularQueryBox::FindSorafsOrderbookReceipts(_)
+        | SingularQueryBox::FindSorafsOrderbookTrades(_)
+        | SingularQueryBox::FindSorafsOrderbookChannels(_)
+        | SingularQueryBox::FindSorafsOrderbookEvents(_) => {
             return Err(reject_unbounded("SoraFS orderbook query"));
         }
         SingularQueryBox::FindSorafsReservePolicy(_)
@@ -1040,7 +1043,10 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsPopRegistryStatus(_) => {
             return Err(reject_unbounded("SoraFS PoP registry query"));
         }
-        SingularQueryBox::FindSorafsRepairTask(_) | SingularQueryBox::FindSorafsRepairStatus(_) => {
+        SingularQueryBox::FindSorafsRepairTask(_)
+        | SingularQueryBox::FindSorafsRepairTasks(_)
+        | SingularQueryBox::FindSorafsRepairStatus(_)
+        | SingularQueryBox::FindSorafsRepairEvents(_) => {
             return Err(reject_unbounded("SoraFS repair query"));
         }
         SingularQueryBox::FindSorafsModerationPolicy(_)
@@ -1052,7 +1058,9 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsModerationChallenge(_)
         | SingularQueryBox::FindSorafsModerationOutcome(_)
         | SingularQueryBox::FindSorafsModerationNoShow(_)
-        | SingularQueryBox::FindSorafsModerationStatus(_) => {
+        | SingularQueryBox::FindSorafsModerationStatus(_)
+        | SingularQueryBox::FindSorafsModerationSnapshot(_)
+        | SingularQueryBox::FindSorafsModerationEvents(_) => {
             return Err(reject_unbounded("SoraFS moderation query"));
         }
         SingularQueryBox::FindDataspaceNameOwnerById(_) => {
@@ -1211,6 +1219,15 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsOrderbookReceipts(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsOrderbookTrades(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsOrderbookChannels(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsOrderbookEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsReservePolicy(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1247,7 +1264,13 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsRepairTask(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsRepairTasks(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsRepairStatus(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsRepairEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {
@@ -1278,6 +1301,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationStatus(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsModerationSnapshot(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsModerationEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindDataspaceNameOwnerById(q) => {

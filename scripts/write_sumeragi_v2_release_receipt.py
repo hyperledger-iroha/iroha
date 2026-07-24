@@ -78,9 +78,14 @@ _MAX_SCALING_BUNDLE_FILE_BYTES = 256 * 1024 * 1024
 _MAX_SCALING_BUNDLE_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
 _MAX_G12_TSV_BYTES = 1024 * 1024
 _MAX_G12_LOG_BYTES = 16 * 1024 * 1024
+_SCALING_REQUIRED_TOOLING = (
+    ("localnet", "scripts/deploy_localnet.sh"),
+    ("load_generator", "scripts/tx_load.py"),
+    ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
+)
 _REPLAY_TIMEOUT_SECONDS = 120
 _FROZEN_BOOTSTRAP_SHA256 = (
-    "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+    "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
 )
 _BOOTSTRAP_COMPLETION_NAME = "BOOTSTRAP_COMPLETED.json"
 _BOOTSTRAP_TRUSTED_ARCHIVES = {
@@ -111,6 +116,11 @@ _BOOTSTRAP_RUNNER_ENV_ALLOWLIST = {
     "CARGO_HOME",
     "CARGO_NET_GIT_FETCH_WITH_CLI",
     "CARGO_NET_OFFLINE",
+    "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+    "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
+    "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+    "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+    "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
     "NIX_SSL_CERT_FILE",
     "RUSTUP_HOME",
     "RUSTUP_TOOLCHAIN",
@@ -425,12 +435,75 @@ _CROSS_SDK_TESTS = (
     "sumeragi_v2_cross_sdk_fixtures::shared_sdk_accept_fixtures_are_exact_current_rust_encodings",
     "sumeragi_v2_cross_sdk_fixtures::shared_sdk_negative_fixtures_fail_rust_structure_or_protocol_validation",
 )
+_NATIVE_AMX_GROUPED_PARITY_HARNESS = "ci/run_native_amx_v2_grouped_sdk_parity.sh"
+_NATIVE_AMX_GROUPED_FIXTURE = "fixtures/sumeragi_v2/native_amx_v2_grouped.json"
+_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT = 34
+_NATIVE_AMX_GROUPED_PARITY_SUITES = (
+    ("openapi", 4),
+    ("python", 35),
+    ("javascript", 37),
+    ("swift", 2),
+    ("kotlin", 6),
+    ("java", 5),
+)
+_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS = (
+    "ci/run_native_amx_v2_grouped_sdk_parity.sh",
+    "ci/native_amx_v2_grouped_gradle_init.gradle",
+    "pytests/scripts/native_amx_v2_grouped_fixture_test.py",
+    "python/iroha_python/tests/native_amx_v2_grouped_fixture_test.py",
+    "python/iroha_python/src/iroha_python/client.py",
+    "python/iroha_python/src/iroha_python/__init__.py",
+    "python/iroha_torii_client/client.py",
+    "javascript/iroha_js/test/nativeAmxV2GroupedFixture.test.js",
+    "javascript/iroha_js/src/toriiClient.js",
+    "javascript/iroha_js/dist/toriiClient.js",
+    "javascript/iroha_js/index.d.ts",
+    "IrohaSwift/Tests/IrohaSwiftTests/NativeAmxV2GroupedFixtureTests.swift",
+    "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
+    "IrohaSwift/Package.swift",
+    "IrohaSwift/Package.resolved",
+    "kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/consensus/"
+    "NativeAmxV2GroupedFixtureTest.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+    "NativeAmxV2.kt",
+    "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/"
+    "SumeragiDiagnosticsModels.kt",
+    "kotlin/core-jvm/build.gradle.kts",
+    "kotlin/settings.gradle.kts",
+    "kotlin/gradlew",
+    "kotlin/gradle/wrapper/gradle-wrapper.jar",
+    "kotlin/gradle/wrapper/gradle-wrapper.properties",
+    "java/iroha_android/src/test/java/org/hyperledger/iroha/android/consensus/"
+    "NativeAmxV2GroupedFixtureTests.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
+    "NativeAmxV2Models.java",
+    "java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/"
+    "SumeragiDiagnosticsModels.java",
+    "java/iroha_android/core/build.gradle.kts",
+    "java/iroha_android/settings.gradle.kts",
+    "java/iroha_android/gradlew",
+    "java/iroha_android/gradle/wrapper/gradle-wrapper.jar",
+    "java/iroha_android/gradle/wrapper/gradle-wrapper.properties",
+    "docs/portal/static/openapi/torii.json",
+    "docs/portal/static/openapi/versions/current/torii.json",
+)
 _JS_STATUS_TESTS = (
     "getSumeragiStatusTyped validates and normalizes authoritative v2 status",
     "getSumeragiStatusTyped accepts the local-control liveness blocker",
     "getSumeragiStatusTyped accepts the unsafe-proposal ignore reason",
     "getSumeragiStatusTyped accepts all twelve ignore reasons at the bound",
 )
+
+
+def _native_amx_grouped_suite_source_manifest(repo_root: Path) -> str:
+    digest = hashlib.sha256()
+    for relative_path in _NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS:
+        source = _regular_file(
+            repo_root / relative_path,
+            f"grouped Native AMX V2 suite source {relative_path}",
+        )
+        digest.update(f"{relative_path}\t{_sha256(source)}\n".encode())
+    return digest.hexdigest()
 
 
 def _canonical_production_tests(repo_root: Path) -> list[str]:
@@ -602,16 +675,27 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
         )
         for index, test in enumerate(_TAIRA_CONTRACT_TESTS)
     )
+    legs.append(
+        (
+            "cross-sdk-rust",
+            "cargo-exact",
+            2,
+            "cargo test --locked --offline -p iroha_data_model --test "
+            "iroha_data_model_group_02 sumeragi_v2_cross_sdk_fixtures:: "
+            "-- --test-threads=1",
+        )
+    )
     legs.extend(
         (
-            (
-                "cross-sdk-rust",
-                "cargo-exact",
-                2,
-                "cargo test --locked --offline -p iroha_data_model --test "
-                "iroha_data_model_group_02 sumeragi_v2_cross_sdk_fixtures:: "
-                "-- --test-threads=1",
-            ),
+            f"native-amx-grouped-{surface}",
+            "native-amx-sdk",
+            count,
+            f"bash {_NATIVE_AMX_GROUPED_PARITY_HARNESS} {surface}",
+        )
+        for surface, count in _NATIVE_AMX_GROUPED_PARITY_SUITES
+    )
+    legs.extend(
+        (
             (
                 "status-javascript",
                 "node",
@@ -683,7 +767,7 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-bootstrap",
                 "pytest",
-                71,
+                82,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider "
                 "pytests/scripts/sumeragi_v2_release_bootstrap_test.py",
@@ -699,9 +783,18 @@ def _corridor_legs() -> list[tuple[str, str, int, str]]:
             (
                 "preflight-release-receipt",
                 "pytest",
-                189,
+                221,
                 "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
                 "-q -p no:cacheprovider pytests/scripts/sumeragi_v2_release_receipt_test.py",
+            ),
+            (
+                "preflight-multilane-scaling",
+                "pytest",
+                52,
+                "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest "
+                "-q -p no:cacheprovider "
+                "scripts/tests/validate_multilane_scaling_evidence_test.py "
+                "scripts/tests/run_multilane_scaling_gate_test.py",
             ),
             (
                 "preflight-proof-fidelity",
@@ -2543,6 +2636,11 @@ def _validate_bootstrap_evidence(
     expected_signer_fingerprint: str,
     signature_archives: dict[str, dict[str, Any]],
     runner_logs_sealed: bool,
+    expected_scaling_manifest_path: Path,
+    expected_scaling_trial_harness_sha256: str,
+    expected_scaling_configuration_sha256: str,
+    expected_scaling_irohad_sha256: str,
+    expected_scaling_iroha_cli_sha256: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     expected_marker_sha = _require_digest(
         expected_completion_sha256, "expected bootstrap completion digest"
@@ -3107,6 +3205,31 @@ def _validate_bootstrap_evidence(
         for key in extras
     ) or environment != {**base_environment, **extras, **policy_environment, **alias_environment}:
         raise ReceiptError("bootstrap runner environment is not the closed frozen environment")
+    if environment.get("IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST") != str(
+        expected_scaling_manifest_path
+    ):
+        raise ReceiptError(
+            "bootstrap runner G-SCALE manifest is not the receipt manifest"
+        )
+    expected_scaling_environment = {
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": (
+            expected_scaling_trial_harness_sha256
+        ),
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": (
+            expected_scaling_configuration_sha256
+        ),
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256": expected_scaling_irohad_sha256,
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": (
+            expected_scaling_iroha_cli_sha256
+        ),
+    }
+    if any(
+        environment.get(name) != value
+        for name, value in expected_scaling_environment.items()
+    ):
+        raise ReceiptError(
+            "bootstrap runner G-SCALE trust anchors are not the receipt trust anchors"
+        )
     for child_name in ("home", "tmp"):
         child, _ = _private_evidence_directory(
             directory / child_name, f"bootstrap {child_name} directory"
@@ -3315,7 +3438,19 @@ def _formal_artifacts(
     sealed: dict[str, Any],
     checker_environment: dict[str, str],
     repo_root: Path,
-) -> tuple[Path, Path, Path, Path, Path, Path, Path, Path, Path]:
+) -> tuple[
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+    Path,
+]:
     ledger = _regular_file(
         completion_path.with_name("proof_coverage.json"), "formal proof ledger"
     )
@@ -3335,6 +3470,8 @@ def _formal_artifacts(
         "cross_tool_evidence_sha256",
         "harness_cargo_lock_sha256",
         "formal_toolchain_sha256",
+        "tlaps_resource_jsonl_sha256",
+        "tlaps_resource_summary_sha256",
     }
     _require_fields(
         fields,
@@ -3378,6 +3515,13 @@ def _formal_artifacts(
     toolchain_path = _regular_file(
         completion_path.with_name("formal-toolchain.tsv"), "formal toolchain"
     )
+    tlaps_resource_jsonl = _regular_file(
+        completion_path.with_name("tlaps_resource.jsonl"), "TLAPS resource samples"
+    )
+    tlaps_resource_summary = _regular_file(
+        completion_path.with_name("tlaps_resource_summary.json"),
+        "TLAPS resource summary",
+    )
     for artifact, digest_field, name in (
         (gate_log, "formal_gate_log_sha256", "formal gate log"),
         (ledger, "proof_coverage_sha256", "formal proof ledger"),
@@ -3396,6 +3540,16 @@ def _formal_artifacts(
         ),
         (harness_lock, "harness_cargo_lock_sha256", "formal harness lock"),
         (toolchain_path, "formal_toolchain_sha256", "formal toolchain"),
+        (
+            tlaps_resource_jsonl,
+            "tlaps_resource_jsonl_sha256",
+            "TLAPS resource samples",
+        ),
+        (
+            tlaps_resource_summary,
+            "tlaps_resource_summary_sha256",
+            "TLAPS resource summary",
+        ),
     ):
         if _sha256(artifact) != fields[digest_field]:
             raise ReceiptError(f"{name} digest mismatch")
@@ -3403,6 +3557,22 @@ def _formal_artifacts(
         multilane_apalache_evidence,
         sealed["workspace_source_manifest_sha256"],
     )
+    resource_summary = _decode_canonical_json(
+        tlaps_resource_summary.read_bytes(), "TLAPS resource summary"
+    )
+    if (
+        resource_summary.get("schema_version") != 1
+        or resource_summary.get("event") != "summary"
+        or resource_summary.get("exit_reason") != "completed"
+        or resource_summary.get("exit_status") != 0
+        or resource_summary.get("memory_limit_bytes") != 2 * 1024 * 1024 * 1024
+        or resource_summary.get("sample_interval_seconds") != 0.25
+        or not isinstance(resource_summary.get("peak_memory_bytes"), int)
+        or resource_summary["peak_memory_bytes"] < 0
+        or resource_summary["peak_memory_bytes"]
+        > resource_summary["memory_limit_bytes"]
+    ):
+        raise ReceiptError("TLAPS resource summary is not a successful bounded release run")
     if fields["harness_cargo_lock_sha256"] != _HARNESS_LOCK_SHA256:
         raise ReceiptError("formal harness lock is not the pinned dependency graph")
     cross_tool_result = subprocess.run(
@@ -3451,7 +3621,7 @@ def _formal_artifacts(
     if (
         toolchain["schema_version"] != "1"
         or toolchain["tlc_profile"] != "ci"
-        or toolchain["tlaps_threads"] != "4"
+        or toolchain["tlaps_threads"] != "1"
     ):
         raise ReceiptError("formal toolchain does not describe the pinned release profile")
     for tool in ("java", "tlapm", "tla2tools", "verus", "cargo_verus"):
@@ -3533,6 +3703,8 @@ def _formal_artifacts(
         cross_tool_evidence,
         harness_lock,
         toolchain_path,
+        tlaps_resource_jsonl,
+        tlaps_resource_summary,
     )
 
 
@@ -3583,6 +3755,24 @@ def _test_count_from_log(lines: list[str], kind: str, name: str) -> int:
         if len(matches) != 1 or lines.count("# fail 0") != 1:
             raise ReceiptError(f"{name} has an ambiguous Node transcript")
         return int(matches[0].group(1))
+    if kind == "native-amx-sdk":
+        matches = [
+            match
+            for line in lines
+            if (
+                match := re.fullmatch(
+                    r"native-amx-v2-grouped-parity surface=[a-z]+ "
+                    r"tests=([0-9]+) fixture_sha256=[0-9a-f]{64} "
+                    r"suite_source_manifest_sha256=[0-9a-f]{64}",
+                    line,
+                )
+            )
+        ]
+        if len(matches) != 1:
+            raise ReceiptError(
+                f"{name} has an ambiguous grouped Native AMX V2 SDK transcript"
+            )
+        return int(matches[0].group(1))
     if kind == "command":
         return 0
     raise ReceiptError(f"{name} has unknown leg kind {kind}")
@@ -3618,12 +3808,18 @@ def _corridor_artifacts(
             "python3_sha256",
             "node_path",
             "node_sha256",
+            "swift_path",
+            "swift_sha256",
+            "swift_version",
             "bash_path",
             "bash_sha256",
             "git_path",
             "git_sha256",
             "cargo_home_path",
             "repo_cargo_config_sha256",
+            "native_amx_grouped_fixture_sha256",
+            "native_amx_grouped_suite_source_manifest_sha256",
+            "native_amx_grouped_negative_control_count",
             "tlc_profile",
             "tlaps_threads",
         },
@@ -3637,8 +3833,11 @@ def _corridor_artifacts(
         "cargo_lock_sha256": sealed["cargo_lock_sha256"],
         "leg_count": str(len(_corridor_legs())),
         "production_required_test_count": str(_PRODUCTION_TEST_COUNT),
+        "native_amx_grouped_negative_control_count": str(
+            _NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT
+        ),
         "tlc_profile": "ci",
-        "tlaps_threads": "4",
+        "tlaps_threads": "1",
     }
     if any(fields.get(name) != value for name, value in expected_identity.items()):
         raise ReceiptError("corridor completion is not the exact release preflight")
@@ -3648,7 +3847,16 @@ def _corridor_artifacts(
         != "rustc 1.93.1 (01f6ddf75 2026-02-11)"
     ):
         raise ReceiptError("corridor Rust tools do not match rust-toolchain.toml")
-    for tool in ("java", "cargo", "rustc", "python3", "node", "bash", "git"):
+    for tool in (
+        "java",
+        "cargo",
+        "rustc",
+        "python3",
+        "node",
+        "swift",
+        "bash",
+        "git",
+    ):
         tool_path = Path(fields[f"{tool}_path"])
         if not tool_path.is_absolute():
             raise ReceiptError(f"corridor {tool} path is not absolute")
@@ -3656,6 +3864,8 @@ def _corridor_artifacts(
         digest = fields[f"{tool}_sha256"]
         if not _DIGEST_RE.fullmatch(digest) or _sha256(tool_path) != digest:
             raise ReceiptError(f"corridor {tool} tool digest mismatch")
+    if not fields["swift_version"].strip():
+        raise ReceiptError("corridor Swift tool version is blank")
     cargo_home = Path(fields["cargo_home_path"])
     if (
         not cargo_home.is_absolute()
@@ -3675,6 +3885,27 @@ def _corridor_artifacts(
         or _sha256(repo_cargo_config) != fields["repo_cargo_config_sha256"]
     ):
         raise ReceiptError("repository Cargo config digest mismatch")
+    grouped_fixture = _regular_file(
+        repo_root / _NATIVE_AMX_GROUPED_FIXTURE,
+        "grouped Native AMX V2 fixture",
+    )
+    if (
+        not _DIGEST_RE.fullmatch(fields["native_amx_grouped_fixture_sha256"])
+        or _sha256(grouped_fixture)
+        != fields["native_amx_grouped_fixture_sha256"]
+    ):
+        raise ReceiptError("grouped Native AMX V2 fixture digest mismatch")
+    expected_suite_manifest = _native_amx_grouped_suite_source_manifest(repo_root)
+    if (
+        not _DIGEST_RE.fullmatch(
+            fields["native_amx_grouped_suite_source_manifest_sha256"]
+        )
+        or fields["native_amx_grouped_suite_source_manifest_sha256"]
+        != expected_suite_manifest
+    ):
+        raise ReceiptError(
+            "grouped Native AMX V2 suite-source manifest digest mismatch"
+        )
 
     summary = _regular_file(completion_path.with_name("summary.tsv"), "corridor summary")
     required_path = _regular_file(
@@ -3803,6 +4034,21 @@ def _corridor_artifacts(
                     raise ReceiptError(
                         "corridor Node leg lacks its exact TAP subtest result"
                     )
+        if kind == "native-amx-sdk":
+            surface = leg_id.removeprefix("native-amx-grouped-")
+            expected_marker = (
+                f"native-amx-v2-grouped-parity surface={surface} "
+                f"tests={observed} "
+                "fixture_sha256="
+                f"{fields['native_amx_grouped_fixture_sha256']} "
+                "suite_source_manifest_sha256="
+                f"{fields['native_amx_grouped_suite_source_manifest_sha256']}"
+            )
+            if lines.count(expected_marker) != 1:
+                raise ReceiptError(
+                    f"corridor grouped Native AMX V2 {surface} leg is not "
+                    "bound to the exact fixture and suite sources"
+                )
         logs.append(log)
     return summary, required_path, logs
 
@@ -4276,7 +4522,27 @@ def _validate_scaling_evidence(
     sealed: dict[str, Any],
     repo_root: Path,
     checker_environment: dict[str, str],
-) -> tuple[dict[str, Any], dict[str, Any]]:
+    expected_trial_harness_sha256: str,
+    expected_configuration_sha256: str,
+    expected_irohad_sha256: str,
+    expected_iroha_cli_sha256: str,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    expected_trial_harness_sha256 = _require_digest(
+        expected_trial_harness_sha256,
+        "expected scaling trial harness digest",
+    )
+    expected_configuration_sha256 = _require_digest(
+        expected_configuration_sha256,
+        "expected scaling configuration digest",
+    )
+    expected_irohad_sha256 = _require_digest(
+        expected_irohad_sha256,
+        "expected scaling irohad digest",
+    )
+    expected_iroha_cli_sha256 = _require_digest(
+        expected_iroha_cli_sha256,
+        "expected scaling iroha CLI digest",
+    )
     if (
         not manifest_path.is_absolute()
         or Path(os.path.abspath(manifest_path)) != manifest_path
@@ -4358,6 +4624,76 @@ def _validate_scaling_evidence(
             "scaling identity workspace_source_sha256 is not the sealed "
             "workspace manifest"
         )
+    if software.get("irohad_sha256") != expected_irohad_sha256:
+        raise ReceiptError(
+            "scaling identity irohad_sha256 is not the authenticated digest"
+        )
+    if software.get("iroha_cli_sha256") != expected_iroha_cli_sha256:
+        raise ReceiptError(
+            "scaling identity iroha_cli_sha256 is not the authenticated digest"
+        )
+
+    _, configuration_contract = _scaling_ref_path(
+        manifest.get("configuration"),
+        root=root,
+        contracts=contracts,
+        name="scaling configuration",
+    )
+    if configuration_contract.sha256 != expected_configuration_sha256:
+        raise ReceiptError(
+            "scaling configuration is not the authenticated digest"
+        )
+    _, trial_harness_contract = _scaling_ref_path(
+        manifest.get("trial_harness"),
+        root=root,
+        contracts=contracts,
+        name="scaling trial harness",
+    )
+    if trial_harness_contract.sha256 != expected_trial_harness_sha256:
+        raise ReceiptError(
+            "scaling trial harness is not the authenticated digest"
+        )
+
+    tooling = manifest.get("tooling")
+    if (
+        not isinstance(tooling, list)
+        or len(tooling) != len(_SCALING_REQUIRED_TOOLING)
+    ):
+        raise ReceiptError(
+            "scaling tooling does not contain the exact retained tool set"
+        )
+    retained_tooling: list[tuple[str, str, PathContract]] = []
+    for index, ((role, source_path), entry) in enumerate(
+        zip(_SCALING_REQUIRED_TOOLING, tooling)
+    ):
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"role", "source_path", "artifact"}
+            or entry.get("role") != role
+            or entry.get("source_path") != source_path
+        ):
+            raise ReceiptError(
+                f"scaling tooling entry {index} is not the retained {role} tool"
+            )
+        _, archived_tool = _scaling_ref_path(
+            entry.get("artifact"),
+            root=root,
+            contracts=contracts,
+            name=f"scaling archived {role} tool",
+        )
+        retained_path = repo_root.joinpath(*PurePosixPath(source_path).parts)
+        retained_tool = _capture_path_contract(
+            retained_path,
+            f"retained scaling {role} tool",
+            expected_sha256=None,
+            expected_owner=os.geteuid(),
+            expected_nlink=1,
+        )
+        if archived_tool.sha256 != retained_tool.sha256:
+            raise ReceiptError(
+                f"scaling archived {role} tool is not the retained sealed tool"
+            )
+        retained_tooling.append((role, source_path, retained_tool))
 
     retained_validator = _regular_file(
         repo_root
@@ -4394,6 +4730,22 @@ def _validate_scaling_evidence(
                     "-S",
                     str(retained_validator),
                     str(manifest_path),
+                    "--expected-source-revision",
+                    sealed["head_commit"],
+                    "--expected-workspace-source-sha256",
+                    sealed["workspace_source_manifest_sha256"],
+                    "--expected-validator-sha256",
+                    retained_contract.sha256,
+                    "--expected-trial-harness-sha256",
+                    expected_trial_harness_sha256,
+                    "--expected-configuration-sha256",
+                    expected_configuration_sha256,
+                    "--expected-irohad-sha256",
+                    expected_irohad_sha256,
+                    "--expected-iroha-cli-sha256",
+                    expected_iroha_cli_sha256,
+                    "--expected-repository-root",
+                    str(repo_root),
                     "--report",
                     str(replay_report),
                     "--quiet",
@@ -4441,6 +4793,20 @@ def _validate_scaling_evidence(
     )
     if final_retained != retained_contract:
         raise ReceiptError("retained scaling evidence validator changed during replay")
+    for role, _, retained_tool in retained_tooling:
+        final_tool = _capture_path_contract(
+            retained_tool.path,
+            f"retained scaling {role} tool after replay",
+            expected_sha256=retained_tool.sha256,
+            expected_mode=retained_tool.mode,
+            expected_owner=retained_tool.owner,
+            expected_nlink=retained_tool.nlink,
+            expected_size=retained_tool.size,
+        )
+        if final_tool != retained_tool:
+            raise ReceiptError(
+                f"retained scaling {role} tool changed during replay"
+            )
     if hashlib.sha256(manifest_data).hexdigest() != manifest_contract.sha256:
         raise ReceiptError("scaling evidence manifest changed while decoded")
 
@@ -4457,7 +4823,22 @@ def _validate_scaling_evidence(
             for relative, contract in files
         ],
     }
-    return bundle, _path_contract_artifact(retained_contract)
+    trust_anchors = {
+        "trial_harness_sha256": expected_trial_harness_sha256,
+        "configuration_sha256": expected_configuration_sha256,
+        "irohad_sha256": expected_irohad_sha256,
+        "iroha_cli_sha256": expected_iroha_cli_sha256,
+        "repository_root": str(repo_root),
+        "retained_tooling": [
+            {
+                "role": role,
+                "source_path": source_path,
+                **_path_contract_artifact(contract),
+            }
+            for role, source_path, contract in retained_tooling
+        ],
+    }
+    return bundle, _path_contract_artifact(retained_contract), trust_anchors
 
 
 def _read_g12_snapshot(
@@ -4780,6 +5161,10 @@ def build_receipt(
     g12_seed_completion_path: Path,
     g12_fault_soak_completion_path: Path,
     scaling_evidence_manifest_path: Path,
+    expected_scaling_trial_harness_sha256: str,
+    expected_scaling_configuration_sha256: str,
+    expected_scaling_irohad_sha256: str,
+    expected_scaling_iroha_cli_sha256: str,
     repository_root_path: Path,
     runner_logs_sealed: bool = False,
 ) -> dict[str, Any]:
@@ -4808,6 +5193,22 @@ def build_receipt(
     # so child completions bind the sealed permission-aware manifest. The
     # candidate manifest remains independently recorded in the final receipt.
     manifest = sealed["workspace_source_manifest_sha256"]
+    expected_scaling_trial_harness_sha256 = _require_digest(
+        expected_scaling_trial_harness_sha256,
+        "expected scaling trial harness digest",
+    )
+    expected_scaling_configuration_sha256 = _require_digest(
+        expected_scaling_configuration_sha256,
+        "expected scaling configuration digest",
+    )
+    expected_scaling_irohad_sha256 = _require_digest(
+        expected_scaling_irohad_sha256,
+        "expected scaling irohad digest",
+    )
+    expected_scaling_iroha_cli_sha256 = _require_digest(
+        expected_scaling_iroha_cli_sha256,
+        "expected scaling iroha CLI digest",
+    )
 
     release_authentication, signature_archives = _validate_signature_evidence(
         candidate_identity_path=candidate_identity_path,
@@ -4843,6 +5244,15 @@ def build_receipt(
         expected_signer_fingerprint=expected_signer_fingerprint,
         signature_archives=signature_archives,
         runner_logs_sealed=runner_logs_sealed,
+        expected_scaling_manifest_path=scaling_evidence_manifest_path,
+        expected_scaling_trial_harness_sha256=(
+            expected_scaling_trial_harness_sha256
+        ),
+        expected_scaling_configuration_sha256=(
+            expected_scaling_configuration_sha256
+        ),
+        expected_scaling_irohad_sha256=expected_scaling_irohad_sha256,
+        expected_scaling_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
     )
     checker_environment = _closed_replay_environment(
         Path(signature_archives["git"]["path"]).parent
@@ -4855,11 +5265,23 @@ def build_receipt(
         }
     )
 
-    scaling_bundle, retained_scaling_validator = _validate_scaling_evidence(
+    (
+        scaling_bundle,
+        retained_scaling_validator,
+        scaling_trust_anchors,
+    ) = _validate_scaling_evidence(
         manifest_path=scaling_evidence_manifest_path,
         sealed=sealed,
         repo_root=repo_root,
         checker_environment=checker_environment,
+        expected_trial_harness_sha256=(
+            expected_scaling_trial_harness_sha256
+        ),
+        expected_configuration_sha256=(
+            expected_scaling_configuration_sha256
+        ),
+        expected_irohad_sha256=expected_scaling_irohad_sha256,
+        expected_iroha_cli_sha256=expected_scaling_iroha_cli_sha256,
     )
     g12_evidence = _validate_g12_evidence(
         seed_completion_path=g12_seed_completion_path,
@@ -4887,6 +5309,8 @@ def build_receipt(
         formal_cross_tool_evidence,
         formal_harness_lock,
         formal_toolchain,
+        formal_tlaps_resource_jsonl,
+        formal_tlaps_resource_summary,
     ) = _formal_artifacts(
         formal_path, formal_completion, sealed, checker_environment, repo_root
     )
@@ -5111,6 +5535,8 @@ def build_receipt(
             "formal_cross_tool_evidence": _artifact(formal_cross_tool_evidence),
             "formal_harness_lock": _artifact(formal_harness_lock),
             "formal_toolchain": _artifact(formal_toolchain),
+            "formal_tlaps_resource_jsonl": _artifact(formal_tlaps_resource_jsonl),
+            "formal_tlaps_resource_summary": _artifact(formal_tlaps_resource_summary),
             "seed_matrix_completion": _artifact(seed_path),
             "seed_matrix_summary": _artifact(seed_summary),
             "seed_matrix_run_logs": [_artifact(path) for path in seed_run_logs],
@@ -5127,6 +5553,7 @@ def build_receipt(
             "taira_run_log": _artifact(taira_log),
             "multilane_scaling_bundle": scaling_bundle,
             "multilane_scaling_retained_validator": retained_scaling_validator,
+            "multilane_scaling_trust_anchors": scaling_trust_anchors,
             "g12_cross_dataspace": g12_evidence,
         },
     }
@@ -5782,6 +6209,14 @@ def main() -> int:
     parser.add_argument("--g12-seed-completion", type=Path, required=True)
     parser.add_argument("--g12-fault-soak-completion", type=Path, required=True)
     parser.add_argument("--scaling-evidence-manifest", type=Path, required=True)
+    parser.add_argument(
+        "--expected-scaling-trial-harness-sha256", required=True
+    )
+    parser.add_argument(
+        "--expected-scaling-configuration-sha256", required=True
+    )
+    parser.add_argument("--expected-scaling-irohad-sha256", required=True)
+    parser.add_argument("--expected-scaling-iroha-cli-sha256", required=True)
     parser.add_argument("--repository-root", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
@@ -5826,6 +6261,18 @@ def main() -> int:
             g12_seed_completion_path=args.g12_seed_completion,
             g12_fault_soak_completion_path=args.g12_fault_soak_completion,
             scaling_evidence_manifest_path=args.scaling_evidence_manifest,
+            expected_scaling_trial_harness_sha256=(
+                args.expected_scaling_trial_harness_sha256
+            ),
+            expected_scaling_configuration_sha256=(
+                args.expected_scaling_configuration_sha256
+            ),
+            expected_scaling_irohad_sha256=(
+                args.expected_scaling_irohad_sha256
+            ),
+            expected_scaling_iroha_cli_sha256=(
+                args.expected_scaling_iroha_cli_sha256
+            ),
             repository_root_path=args.repository_root,
             runner_logs_sealed=args.verify_existing,
         )

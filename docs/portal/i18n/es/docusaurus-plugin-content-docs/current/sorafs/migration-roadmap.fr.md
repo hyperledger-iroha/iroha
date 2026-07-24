@@ -42,12 +42,12 @@ que la gobernanza y la ingeniería de lanzamiento se sincronizan.## Pistas de tr
 |-------|-------|-------------|----------|--------|
 | Repeticiones de partidos | M0 | Los hebdomadaires realizan ensayos en seco comparando los resúmenes de lugares de fragmentos con `fixtures/sorafs_chunker`. Publier un rapport sous `docs/source/sorafs/reports/`. | Proveedores de almacenamiento | `determinism-<date>.md` con matriz pasa/falla. |
 | Exiger les firmas | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` se hacen eco de firmas o manifiestos derivados. Las anulaciones de desarrollo exigen un agregado de gobernanza de exención en las relaciones públicas. | Grupo de Trabajo sobre Herramientas | Registro CI, gravamen versus ticket de waiver (si corresponde). |
-| Banderas de expectativa | M1 | Les pipelines apelante `sorafs_manifest_stub` con las expectativas explícitas para hacer las salidas: | Documentos CI | Los guiones son un día referente a las banderas de expectativas (voir bloc de commande ci-dessous). |
+| Banderas de expectativa | M1 | Les pipelines apelante `sorafs_manifest_builder` con las expectativas explícitas para hacer las salidas: | Documentos CI | Los guiones son un día referente a las banderas de expectativas (voir bloc de commande ci-dessous). |
 | Fijar el registro primero | M2 | `sorafs pin propose` e `sorafs pin approve` envuelven las soumisiones de manifiesto; La CLI por defecto utiliza `--require-registry`. | Operaciones de gobernanza | Registro de auditoría del registro CLI, telemetría de propuestas tarifadas. |
 | Observabilidad parita | M3 | Los paneles de control Prometheus/Grafana alertan sobre los inventarios de fragmentos divergentes del registro de manifiestos; alertes Branchees sur l'astreinte ops. | Observabilidad | Panel de control de gravámenes, ID de reglas de alerta, resultados de GameDay. |
 
 #### Comando canónico de publicación```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

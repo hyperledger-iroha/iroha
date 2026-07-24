@@ -19226,8 +19226,9 @@ pub fn validate_contract_view_batch_request(req: &ContractViewBatchDto) -> Resul
 }
 
 #[cfg(feature = "app_api")]
-// Canonical argument preparation reserves the bounded 1 MiB HEAP before
-// decoding; keep implicit contract-call/view budgets above that floor.
+// Canonical argument preparation checks a conservative predecode gas quote
+// covering bounded complete materialization; keep implicit contract-call/view
+// budgets above that bound.
 const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 
 #[cfg(feature = "app_api")]
@@ -55438,6 +55439,7 @@ fn sumeragi_npos_diagnostics(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sumeragi_diagnostics(
     State(state): State<std::sync::Arc<CoreState>>,
+    durable_queue: Option<std::sync::Arc<Queue>>,
     accept: Option<axum::http::HeaderValue>,
     nexus_enabled: bool,
 ) -> Result<Response> {
@@ -55472,6 +55474,19 @@ pub async fn handle_v1_sumeragi_diagnostics(
     let durable_lane_diagnostics = nexus_enabled
         .then(|| state.durable_lane_diagnostics())
         .unwrap_or_default();
+    let autonomous_lane_executions = if nexus_enabled {
+        let derived = durable_queue.as_ref().map_or_else(
+            || state.autonomous_lane_execution_diagnostics(),
+            |queue| state.autonomous_lane_execution_diagnostics_with_queue(queue),
+        );
+        derived.map_err(|error| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                "failed to derive autonomous lane execution diagnostics: {error}",
+            )))
+        })?
+    } else {
+        Vec::new()
+    };
 
     let lane_commitments = nexus_enabled
         .then(|| {
@@ -55570,9 +55585,17 @@ pub async fn handle_v1_sumeragi_diagnostics(
             .unwrap_or_default(),
         lane_governance,
         native_amx_participant_applications,
+        autonomous_lane_executions,
     };
     diagnostics
         .validate_native_amx_participant_applications()
+        .map_err(|reason| {
+            Error::Query(iroha_data_model::ValidationFail::InternalError(
+                reason.to_owned(),
+            ))
+        })?;
+    diagnostics
+        .validate_autonomous_lane_executions()
         .map_err(|reason| {
             Error::Query(iroha_data_model::ValidationFail::InternalError(
                 reason.to_owned(),
@@ -83551,7 +83574,7 @@ mod tests {
             LiveQueryStore::start_test(),
         ));
         let response =
-            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, false)
+            super::handle_v1_sumeragi_diagnostics(axum::extract::State(state), None, None, false)
                 .await
                 .expect("diagnostics handler");
         assert_eq!(response.status(), StatusCode::OK);
@@ -83567,6 +83590,7 @@ mod tests {
         assert!(decoded.lane_commitments.is_empty());
         assert!(decoded.lane_relay_envelopes.is_empty());
         assert!(decoded.native_amx_participant_applications.is_empty());
+        assert!(decoded.autonomous_lane_executions.is_empty());
         let json: norito::json::Value =
             norito::json::from_slice(&body).expect("decode diagnostics JSON object");
         assert!(json.get("npos").is_none());
@@ -83576,6 +83600,13 @@ mod tests {
                 .map(|rows| rows.len()),
             Some(0),
             "diagnostics expose the durable Native AMX evidence vector independently of status"
+        );
+        assert_eq!(
+            json.get("autonomous_lane_executions")
+                .and_then(|value| value.as_array())
+                .map(Vec::len),
+            Some(0),
+            "autonomous stage evidence belongs only to the diagnostics endpoint"
         );
         for canonical in ["height", "view", "phase", "leader", "locked_prepare_qc"] {
             assert!(

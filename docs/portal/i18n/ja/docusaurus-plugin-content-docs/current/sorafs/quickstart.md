@@ -61,12 +61,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 
 ## 3. マニフェストを作成して署名
 
-チャンク計画、エイリアス、ガバナンス署名を `sorafs-manifest-stub` でマニフェストに
+チャンク計画、エイリアス、ガバナンス署名を `sorafs-manifest-builder` でマニフェストに
 まとめます。以下のコマンドは単一ファイルのペイロード例です。ディレクトリパスを
 渡すとツリーをパッケージ化できます（CLI は辞書順で走査します）。
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

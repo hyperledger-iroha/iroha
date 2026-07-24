@@ -327,8 +327,8 @@ present set binds the V4 generation, manifest, release-policy and release-attest
 issuance window, proof-pair bound, and asset scale to exact logical roles
 `kagemusha_recursive_step_eq_v4_verifier_record` and
 `kagemusha_recursive_step_ep_v4_verifier_record` with circuits
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4` and
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`, respectively. An absent artifact set
+`kagemusha-recursive-spend-step-eq-compact-layout-v5` and
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`, respectively. An absent artifact set
 requires both recursive records and backend construction to be unavailable with exactly one
 `recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed` blocker; a present set
 forbids both. `proofBackendAvailable` reports exact backend construction independently.

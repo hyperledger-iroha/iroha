@@ -63,7 +63,7 @@ les livrables requis pour la première release et les décline en pistes actionn
 - Les helpers partagés (`CapacityMetadataEntry`, `PricingScheduleV1`, נתיב אימות/מקצה/SLA) fournissent une validation déterministe des clés et un reporting d'erreur réutilisable par CI et le tooling במורד הזרם.【ארגזים/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` לחשוף את תמונת המצב על השרשרת דרך `/v1/sorafs/capacity/state`, ב-`/v1/sorafs/capacity/state`, הצהרות משולבות של ספקים וכניסות ל-Fee Ledger Derrière un Norito JSON déterministe.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La couverture de validation exerce l'application des handles canoniques, la détection de doublons, les bornes par lane, les guards d'assignation de réplication et les checks de plage de télémétrie pour que les régressions apparaissent immmédiatement en CI.【ארגזים/sorafs_manifest/src/capacity.rs:792】
-- מפעיל כלי עבודה: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` המרת מפרט טכני ומטענים Norito canoniques, blobs base64 ו-JSON קורות חיים, אבל מתכננים מתקנים Prometheus, Prometheus, des ordres de réplication avec validation locale.【ארגזים/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Les fixtures de référence vivent dans `fixtures/sorafs_manifest/replication_order/` (Prometheus, son Prometheus, son Prometheus, générées via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- מפעיל כלי עבודה: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` המרת מפרט טכני ומטענים Norito canoniques, blobs base64 ו-JSON קורות חיים, אבל מתכננים מתקנים Prometheus, Prometheus, des ordres de réplication avec validation locale.【ארגזים/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Les fixtures de référence vivent dans `fixtures/sorafs_manifest/replication_order/` (Prometheus, son Prometheus, son Prometheus, générées via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Intégration du plan de contrôle| טאצ'ה | בעלים | הערות |
 |------|----------------|-------|
@@ -147,13 +147,13 @@ ci-dessous pour garder les critères d'acceptation alignés avec l'implémentati
 - Archiver le résumé JSON et les hashes sous `docs/examples/sorafs_capacity_marketplace_validation/` עם חבילות ניהול.
 
 ### Preuve de dispute & slashing
-- Deposer des disputes באמצעות `sorafs_manifest_stub capacity dispute` (בדיקות:
+- Deposer des disputes באמצעות `sorafs_manifest_builder capacity dispute` (בדיקות:
   `cargo test -p sorafs_car --test capacity_cli`) pour garder des payloads canoniques.
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et les suites de pénalité (`record_capacity_telemetry_penalises_persistent_under_delivery`) pour prouver que disputes et slashes rejouent de manière déterministe.
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` pour la capture de preuves et l'escalade ; lier les approbations de strike au rapport de validation.
 
 ### כניסה של ספקים ובדיקות עשן למיון
-- Regénérer les artefacts de déclaration/télémétrie avec `sorafs_manifest_stub capacity ...` et rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Regénérer les artefacts de déclaration/télémétrie avec `sorafs_manifest_builder capacity ...` et rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Soumettre via Torii (`/v1/sorafs/capacity/declare`) puis capturer `/v1/sorafs/capacity/state` et des captures Grafana. Suivre le flux de sortie dans `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Archiver les artefacts signnés et les outputs de réconciliation dans
   `docs/examples/sorafs_capacity_marketplace_validation/`.

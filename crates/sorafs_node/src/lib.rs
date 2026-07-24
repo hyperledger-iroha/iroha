@@ -15,6 +15,7 @@ pub mod gateway;
 mod governance;
 pub mod metering;
 mod moderation;
+pub mod moderation_orchestrator;
 mod orderbook;
 pub mod pdp_provider;
 pub mod pop_credentials;
@@ -1834,13 +1835,9 @@ pub trait GovernancePublisher: Send + Sync + std::fmt::Debug {
     /// Persist an admission-bound PDP terminal archive to the governance pipeline.
     fn publish_pdp_archive(
         &self,
-        _archive: &PdpGovernanceArchiveV1,
-        _encoded: &[u8],
-    ) -> Result<(), GovernancePublishError> {
-        Err(GovernancePublishError::other(
-            "PDP governance archive publication is not implemented by this publisher",
-        ))
-    }
+        archive: &PdpGovernanceArchiveV1,
+        encoded: &[u8],
+    ) -> Result<(), GovernancePublishError>;
     /// Persist a repair audit event to the governance pipeline.
     fn publish_repair_audit_event(
         &self,
@@ -2604,7 +2601,11 @@ fn repair_mutation_binding_digest(
 fn repair_mutation_required_outbox_slots(operation: &str) -> Option<u8> {
     match operation {
         "heartbeat_ticket" => Some(0),
-        "enqueue_report" | "mark_in_progress" | "mark_completed" | "claim_ticket"
+        "enqueue_report"
+        | "enqueue_report_idempotent"
+        | "mark_in_progress"
+        | "mark_completed"
+        | "claim_ticket"
         | "complete_ticket" => Some(1),
         "submit_slash" | "mark_failed" | "fail_ticket" | "run_watchdog" => Some(2),
         _ => None,
@@ -28113,6 +28114,51 @@ mod tests {
     }
 
     #[test]
+    fn idempotent_repair_report_reserves_one_publication_and_rejects_source_rebinding() {
+        let (cfg, _dir) = storage_config_with_temp_dir();
+        let handle =
+            NodeHandle::new_with_policies(cfg, enabled_repair_config(3), GcConfig::default());
+        let report = repair_report_fixture("REP-IDEMPOTENT-001", 0x71, 0x81, 1_701_100_000);
+        let source_identity = [0x91; 32];
+
+        let first = handle
+            .enqueue_repair_report_idempotent(source_identity, &report)
+            .expect("first subsystem-authenticated report commits");
+        assert_eq!(first.ticket_id, report.ticket_id);
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+
+        let replay = handle
+            .enqueue_repair_report_idempotent(source_identity, &report)
+            .expect("exact subsystem report replay is idempotent");
+        assert_eq!(replay.ticket_id, first.ticket_id);
+        assert_eq!(replay.state, first.state);
+        assert_eq!(
+            handle.repair_events_since(None, 10).len(),
+            1,
+            "exact replay must not append another repair event"
+        );
+        assert_eq!(
+            handle.pending_governance_publication_count(),
+            1,
+            "exact replay must not reserve or publish a second audit row"
+        );
+
+        let mut rebound = report.clone();
+        rebound.notes = Some("different canonical report for the same source".to_owned());
+        let error = handle
+            .enqueue_repair_report_idempotent(source_identity, &rebound)
+            .expect_err("source identity rebinding must fail closed");
+        assert!(
+            error.to_string().contains("idempotency")
+                || error.to_string().contains("already bound"),
+            "unexpected source-rebinding error: {error}"
+        );
+        assert_eq!(handle.repair_events_since(None, 10).len(), 1);
+        assert_eq!(handle.pending_governance_publication_count(), 1);
+    }
+
+    #[test]
     fn repair_publication_transaction_discards_crash_before_domain_commit() {
         let (cfg, _dir) = storage_config_with_temp_dir();
         let report = repair_report_fixture("REP-TX-002", 0x32, 0x42, 1_701_000_100);
@@ -32183,6 +32229,16 @@ mod tests {
             Ok(())
         }
 
+        fn publish_pdp_archive(
+            &self,
+            _archive: &PdpGovernanceArchiveV1,
+            encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.payloads.lock().expect("publisher lock poisoned");
+            guard.push(encoded.to_vec());
+            Ok(())
+        }
+
         fn publish_repair_audit_event(
             &self,
             _event: &RepairAuditEventV1,
@@ -32320,6 +32376,16 @@ mod tests {
         fn publish_deal_settlement(
             &self,
             _settlement: &DealSettlementV1,
+            _encoded: &[u8],
+        ) -> Result<(), GovernancePublishError> {
+            let mut guard = self.attempts.lock().expect("publisher lock poisoned");
+            *guard += 1;
+            Err(GovernancePublishError::other("simulated publish failure"))
+        }
+
+        fn publish_pdp_archive(
+            &self,
+            _archive: &PdpGovernanceArchiveV1,
             _encoded: &[u8],
         ) -> Result<(), GovernancePublishError> {
             let mut guard = self.attempts.lock().expect("publisher lock poisoned");

@@ -679,6 +679,7 @@ __all__ = [
     "SumeragiDataspaceCommitmentStatus",
     "SumeragiLaneGovernanceStatus",
     "SumeragiNativeAmxParticipantApplication",
+    "SumeragiAutonomousLaneExecution",
     "SumeragiDiagnosticsStatus",
     "PipelinePreflightSumeragi",
     "PipelinePreflightAdmission",
@@ -3089,9 +3090,9 @@ _KAGEMUSHA_VERIFIER_CIRCUITS = {
     "active_unshield_verifier":
         "halo2/pasta/ipa/confidential-unshield-change-merkle16-axiom-poseidon-v4",
     "active_recursive_step_eq_verifier":
-        "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        "kagemusha-recursive-spend-step-eq-compact-layout-v5",
     "active_recursive_step_ep_verifier":
-        "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+        "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
 }
 
 
@@ -7156,6 +7157,30 @@ class SumeragiNativeAmxParticipantApplication:
 
 
 @dataclass(frozen=True)
+class SumeragiAutonomousLaneExecution:
+    """Restart-stable autonomous lane execution stage."""
+
+    lane_id: int
+    dataspace_id: int
+    lane_incarnation: str
+    lane_block_height: int
+    lane_block_view: int
+    proposal_height: int
+    proposal_view: int
+    proposal_hash: str
+    descriptor_hash: str
+    executable_payload_hash: Optional[str]
+    source_bundle_hash: Optional[str]
+    merge_entry_hash: Optional[str]
+    application_block_height: Optional[int]
+    application_block_hash: Optional[str]
+    reservation_count: int
+    transaction_count: int
+    highest_durable_stage: str
+    stuck_reason: Optional[str]
+
+
+@dataclass(frozen=True)
 class SumeragiDiagnosticsStatus:
     """Non-authoritative response from ``GET /v1/sumeragi/diagnostics``."""
 
@@ -7183,6 +7208,7 @@ class SumeragiDiagnosticsStatus:
     native_amx_participant_applications: List[
         SumeragiNativeAmxParticipantApplication
     ]
+    autonomous_lane_executions: List[SumeragiAutonomousLaneExecution]
 
     @classmethod
     def from_payload(cls, payload: Any) -> "SumeragiDiagnosticsStatus":
@@ -9589,7 +9615,8 @@ class _SumeragiV2StatusParser:
                     leg["lane_id"] == lane_id
                     and leg["dataspace_id"] == dataspace_id
                     and (
-                        leg["participant_proposal"]["descriptor"][
+                        leg["requires_mixed_role_anchor_validation"]
+                        or leg["participant_proposal"]["descriptor"][
                             "lane_incarnation"
                         ]
                         != lane_incarnation
@@ -9872,6 +9899,7 @@ class _SumeragiDiagnosticsParser:
 
     MAX_LANES = 128
     MAX_NATIVE_APPLICATIONS = 1_024
+    MAX_AUTONOMOUS_EXECUTIONS = 128
     PIPELINE_FIELDS = (
         "tx_vertices_total",
         "tx_edges_total",
@@ -9932,6 +9960,7 @@ class _SumeragiDiagnosticsParser:
             "lane_governance_sealed_aliases",
             "lane_governance",
             "native_amx_participant_applications",
+            "autonomous_lane_executions",
         }
         unknown = set(record) - fields
         if unknown:
@@ -9939,7 +9968,7 @@ class _SumeragiDiagnosticsParser:
                 "sumeragi diagnostics contains unknown field "
                 f"{sorted(unknown)[0]}"
             )
-        required = fields - {"npos"}
+        required = fields - {"npos", "autonomous_lane_executions"}
         missing = required - set(record)
         if missing:
             raise RuntimeError(
@@ -10025,6 +10054,9 @@ class _SumeragiDiagnosticsParser:
             lane_governance=cls._lane_governance(record.get("lane_governance")),
             native_amx_participant_applications=cls._native_applications(
                 record.get("native_amx_participant_applications")
+            ),
+            autonomous_lane_executions=cls._autonomous_executions(
+                record.get("autonomous_lane_executions", [])
             ),
         )
 
@@ -10477,6 +10509,181 @@ class _SumeragiDiagnosticsParser:
                     state=state,
                 )
             )
+        return result
+
+    @classmethod
+    def _autonomous_executions(
+        cls, value: Any
+    ) -> List[SumeragiAutonomousLaneExecution]:
+        allowed = {
+            "lane_id", "dataspace_id", "lane_incarnation", "lane_block_height",
+            "lane_block_view", "proposal_height", "proposal_view", "proposal_hash",
+            "descriptor_hash", "executable_payload_hash", "source_bundle_hash",
+            "merge_entry_hash", "application_block_height", "application_block_hash",
+            "reservation_count", "transaction_count", "highest_durable_stage",
+            "stuck_reason",
+        }
+        optional = {
+            "executable_payload_hash", "source_bundle_hash", "merge_entry_hash",
+            "application_block_height", "application_block_hash", "stuck_reason",
+        }
+        stages = {
+            "reservations_durable", "executable_payload_durable",
+            "payload_availability_certified", "lane_certified",
+            "certified_bundle_durable", "merge_candidate_durable",
+            "global_carrier_committed", "kura_wsv_application_receipt_durable",
+            "queue_finalized", "conflict",
+        }
+        reasons = {
+            "awaiting_payload_availability", "awaiting_lane_certification",
+            "certified_bundle_unavailable", "awaiting_merge_selection",
+            "awaiting_global_carrier", "awaiting_application_receipt",
+            "queue_finalization_unverifiable", "evidence_conflict",
+        }
+        result: List[SumeragiAutonomousLaneExecution] = []
+        previous_key: Optional[Tuple[Any, ...]] = None
+        rows = _SumeragiV2StatusParser._array(
+            value,
+            "sumeragi diagnostics.autonomous_lane_executions",
+            maximum=cls.MAX_AUTONOMOUS_EXECUTIONS,
+        )
+        for index, item in enumerate(rows):
+            context = f"sumeragi diagnostics.autonomous_lane_executions[{index}]"
+            record = _SumeragiV2StatusParser._mapping(item, context)
+            unknown = set(record) - allowed
+            missing = (allowed - optional) - set(record)
+            if unknown or missing:
+                field = sorted(unknown or missing)[0]
+                problem = "unknown" if unknown else "missing required"
+                raise RuntimeError(f"{context} contains {problem} field {field}")
+            def optional_hash(field: str) -> Optional[str]:
+                value = record.get(field)
+                if value is None:
+                    return None
+                return _SumeragiV2StatusParser._nonzero_hash(
+                    value, f"{context}.{field}"
+                )
+            lane_id = cls._unsigned(
+                record, "lane_id", maximum=_SumeragiV2StatusParser.MAX_U32,
+                prefix=context,
+            )
+            dataspace_id = cls._unsigned(record, "dataspace_id", prefix=context)
+            incarnation = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("lane_incarnation"), f"{context}.lane_incarnation"
+            )
+            lane_height = cls._unsigned(
+                record, "lane_block_height", positive=True, prefix=context
+            )
+            lane_view = cls._unsigned(record, "lane_block_view", prefix=context)
+            proposal_height = cls._unsigned(
+                record, "proposal_height", positive=True, prefix=context
+            )
+            proposal_view = cls._unsigned(record, "proposal_view", prefix=context)
+            proposal_hash = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("proposal_hash"), f"{context}.proposal_hash"
+            )
+            descriptor_hash = _SumeragiV2StatusParser._nonzero_hash(
+                record.get("descriptor_hash"), f"{context}.descriptor_hash"
+            )
+            key = (
+                lane_id, dataspace_id, incarnation, lane_height, lane_view,
+                proposal_height, proposal_view, proposal_hash,
+            )
+            if previous_key is not None and previous_key >= key:
+                raise RuntimeError(
+                    "sumeragi diagnostics autonomous lane executions must be "
+                    "strictly ordered by exact identity"
+                )
+            previous_key = key
+            application_height = (
+                None if record.get("application_block_height") is None else
+                _SumeragiV2StatusParser._unsigned(
+                    record.get("application_block_height"),
+                    f"{context}.application_block_height", positive=True,
+                )
+            )
+            application_hash = optional_hash("application_block_hash")
+            if (application_height is None) != (application_hash is None):
+                raise RuntimeError(
+                    f"{context} application block height and hash must appear together"
+                )
+            reservation_count = cls._unsigned(
+                record, "reservation_count", maximum=4096, prefix=context
+            )
+            transaction_count = cls._unsigned(
+                record, "transaction_count", positive=True, maximum=4096,
+                prefix=context,
+            )
+            stage = _SumeragiV2StatusParser._non_empty_string(
+                record.get("highest_durable_stage"),
+                f"{context}.highest_durable_stage",
+            )
+            if stage not in stages:
+                raise RuntimeError(f"{context}.highest_durable_stage has an unknown variant")
+            reason_value = record.get("stuck_reason")
+            reason = (
+                None if reason_value is None else
+                _SumeragiV2StatusParser._non_empty_string(
+                    reason_value, f"{context}.stuck_reason"
+                )
+            )
+            if reason is not None and reason not in reasons:
+                raise RuntimeError(f"{context}.stuck_reason has an unknown variant")
+            expected_reasons = {
+                "reservations_durable": "awaiting_payload_availability",
+                "executable_payload_durable": "awaiting_payload_availability",
+                "payload_availability_certified": "awaiting_lane_certification",
+                "lane_certified": "certified_bundle_unavailable",
+                "certified_bundle_durable": "awaiting_merge_selection",
+                "merge_candidate_durable": "awaiting_global_carrier",
+                "global_carrier_committed": "awaiting_application_receipt",
+                "kura_wsv_application_receipt_durable":
+                    "queue_finalization_unverifiable",
+                "queue_finalized": None,
+                "conflict": "evidence_conflict",
+            }
+            if reason != expected_reasons[stage]:
+                raise RuntimeError(f"{context} stage and stuck reason disagree")
+            if stage != "conflict" and reservation_count != transaction_count:
+                raise RuntimeError(f"{context} reservation and transaction counts disagree")
+            payload_hash = optional_hash("executable_payload_hash")
+            bundle_hash = optional_hash("source_bundle_hash")
+            merge_hash = optional_hash("merge_entry_hash")
+            if stage != "conflict":
+                geometry = {
+                    "reservations_durable": (False, False, False, False),
+                    "executable_payload_durable": (True, False, False, False),
+                    "payload_availability_certified": (True, False, False, False),
+                    "lane_certified": (True, False, False, False),
+                    "certified_bundle_durable": (True, True, False, False),
+                    "merge_candidate_durable": (True, True, True, False),
+                    "global_carrier_committed": (True, True, True, False),
+                    "kura_wsv_application_receipt_durable": (True, True, True, True),
+                    "queue_finalized": (True, True, True, True),
+                }[stage]
+                observed = (
+                    payload_hash is not None,
+                    bundle_hash is not None,
+                    merge_hash is not None,
+                    application_height is not None,
+                )
+                if observed != geometry:
+                    raise RuntimeError(f"{context} evidence does not match durable stage")
+            result.append(SumeragiAutonomousLaneExecution(
+                lane_id=lane_id, dataspace_id=dataspace_id,
+                lane_incarnation=incarnation, lane_block_height=lane_height,
+                lane_block_view=lane_view, proposal_height=proposal_height,
+                proposal_view=proposal_view, proposal_hash=proposal_hash,
+                descriptor_hash=descriptor_hash,
+                executable_payload_hash=payload_hash,
+                source_bundle_hash=bundle_hash,
+                merge_entry_hash=merge_hash,
+                application_block_height=application_height,
+                application_block_hash=application_hash,
+                reservation_count=reservation_count,
+                transaction_count=transaction_count,
+                highest_durable_stage=stage, stuck_reason=reason,
+            ))
         return result
 
     @staticmethod

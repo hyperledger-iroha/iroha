@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Les opérateurs doivent générer des charges utiles pour les embarquements/activités à partir de `sorafs_manifest_stub capacity {declaration,dispute}` et archiver les octets JSON/Norito. вместе с ticket de gouvernance.
+Les opérateurs doivent générer des charges utiles pour les embarquements/activités à partir de `sorafs_manifest_builder capacity {declaration,dispute}` et archiver les octets JSON/Norito. вместе с ticket de gouvernance.
 
 ## Signature des articles
 

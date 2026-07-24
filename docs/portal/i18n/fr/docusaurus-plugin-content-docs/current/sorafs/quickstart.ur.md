@@ -65,12 +65,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 
 ## 3. manifeste بنائیں اور سائن کریں
 
-plan de fragments, alias et signatures de gouvernance comme `sorafs-manifest-stub`
+plan de fragments, alias et signatures de gouvernance comme `sorafs-manifest-builder`
 manifeste میں لپیٹیں۔ Il s'agit d'une charge utile à fichier unique. درخت پیک کرنے
 کے لیے chemin du répertoire دیں (CLI اسے lexicographique ترتیب میں چلتا ہے)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

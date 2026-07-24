@@ -35,7 +35,7 @@ translation_last_reviewed: 2026-02-07
 ## سير عمل القبول
 
 1. **Получить информацию**
-   - CLI: добавлен `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`.
+   - CLI: добавлен `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`.
      لإنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - Результат: установлен размер ставки > 0, установлен чанкер на `profile_id`.
 2. **Вечеринка**
@@ -54,11 +54,11 @@ translation_last_reviewed: 2026-02-07
 | عرض المجال | المهمة | Владелец(и) | حالة |
 |--------|-------|----------|--------|
 | المخطط | `ProviderAdmissionProposalV1` и `ProviderAdmissionEnvelopeV1` и `EndpointAttestationV1` (Norito) и `crates/sorafs_manifest/src/provider_admission.rs`. Введите `sorafs_manifest::provider_admission` в файл .【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Хранение/Управление | ✅ Видео |
-| Открыть CLI | Для `sorafs_manifest_stub` используются: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Инструментальная рабочая группа | ✅ |Вызов CLI для изменения размера файла (`--endpoint-attestation-intermediate`) и количество байт в исходном коде/файле. конверт من تواقيع المجلس أثناء `sign`/`verify`. يمكن للمشغلين توفير أجسام рекламные объявления Установите флажок `--council-signature-public-key` и `--council-signature-file` для проверки.
+| Открыть CLI | Для `sorafs_manifest_builder` используются: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Инструментальная рабочая группа | ✅ |Вызов CLI для изменения размера файла (`--endpoint-attestation-intermediate`) и количество байт в исходном коде/файле. конверт من تواقيع المجلس أثناء `sign`/`verify`. يمكن للمشغلين توفير أجسام рекламные объявления Установите флажок `--council-signature-public-key` и `--council-signature-file` для проверки.
 
 ### Интерфейс командной строки
 
-На сайте `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.- `proposal`
+На сайте `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.- `proposal`
   - Дополнительные сведения: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     И18НИ00000063Х, И18НИ00000064Х, И18НИ00000065Х,
     `--jurisdiction-code=<ISO3166-1>`, а также `--endpoint=<kind:host>`.
@@ -87,7 +87,7 @@ translation_last_reviewed: 2026-02-07
     `--council-signature` и `--revoked-at`/`--notes`. Дайджест CLI для просмотра Norito и `--revocation-out` для JSON Дайджест وعدد التواقيع.
 | تحقق | Он был установлен на Torii и `‎sorafs-node`. Откройте + Интерфейс командной строки.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Сетевые TL/хранилище | ✅ Видео |
 | Сообщение Torii | تمرير المدقق في إدخال реклама في Torii ورفض реклама خارج السياسة وإصدار التليمترية. | Сеть TL | ✅ Видео | Torii в конвертах для конвертов (`torii.sorafs.admission_envelopes_dir`) в дайджесте/обзоре أثناء الإدخال وإبراز تليمترية القبول.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| تجديد | Доступ к интерфейсу командной строки и интерфейсу командной строки для изменения настроек в интерфейсе командной строки. (Определение Runbook и CLI для `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Хранение/Управление | ✅ Видео || تليمترية | تعريف لوحات/تنبيهات `provider_admission` (конверт с надписью مفقود, انتهاء). | Наблюдаемость | 🟠 جار | عداد `torii_sorafs_admission_total{result,reason}` موجود؛ 【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+| تجديد | Доступ к интерфейсу командной строки и интерфейсу командной строки для изменения настроек в интерфейсе командной строки. (Определение Runbook и CLI для `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Хранение/Управление | ✅ Видео || تليمترية | تعريف لوحات/تنبيهات `provider_admission` (конверт с надписью مفقود, انتهاء). | Наблюдаемость | 🟠 جار | عداد `torii_sorafs_admission_total{result,reason}` موجود؛ 【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### دليل التجديد والإلغاء
 
@@ -95,7 +95,7 @@ translation_last_reviewed: 2026-02-07
 1. أنشئ زوج المقترح/advert اللاحق باستخدام `provider-admission proposal` и `provider-admission sign`, `--retention-epoch` обеспечивает ставку/конечные точки.
 2. Нога
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -103,7 +103,7 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   Он был написан в честь президента США/Украины `AdmissionRecord::apply_renewal`, ويصدر `ProviderAdmissionRenewalV1`. 【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   Он был написан в честь президента США/Украины `AdmissionRecord::apply_renewal`, ويصدر `ProviderAdmissionRenewalV1`. 【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Создание конверта для `torii.sorafs.admission_envelopes_dir`, а также для Norito/JSON для файла. Для этого используется хеш-код + эпоха хранения: `docs/source/sorafs/migration_ledger.md`.
 4. Загрузите конверт в папку `torii_sorafs_admission_total{result="accepted",reason="stored"}`.
 5. Установлены светильники القياسية عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) был установлен в Norito.
@@ -111,7 +111,7 @@ translation_last_reviewed: 2026-02-07
 #### إلغاء طارئ
 1. Отправьте конверт в виде конверта:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -121,7 +121,7 @@ translation_last_reviewed: 2026-02-07
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   CLI `ProviderAdmissionRevocationV1`, полученный в результате проверки `verify_revocation_signatures`, дайджест الإلغاء.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   CLI `ProviderAdmissionRevocationV1`, полученный в результате проверки `verify_revocation_signatures`, дайджест الإلغاء.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. Откройте конверт из `torii.sorafs.admission_envelopes_dir`, а также Norito/JSON для кэширования кэша и хеш-кода. محاضر الحوكمة.
 3. راقب `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` для кэширования кэша и рекламы. Он был убит в Миссисипи.
 

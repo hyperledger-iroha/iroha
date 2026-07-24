@@ -31,7 +31,7 @@ ishlab chiqarish CLI yordamchilari va engil tahlil skripti yordamida tuzatish.
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` skripti `sorafs_manifest_stub capacity` ni yaratish uchun chaqiradi:
+`run_cli.sh` skripti `sorafs_manifest_builder capacity` ni yaratish uchun chaqiradi:
 
 - Kvota bo'yicha muzokaralar to'plami uchun deterministik provayder deklaratsiyasi.
 - Muzokaralar stsenariysiga mos keladigan takrorlash tartibi.

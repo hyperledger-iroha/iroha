@@ -166,6 +166,32 @@ pub(crate) fn native_amx_participant_application_role(
     Ok(NativeAmxParticipantApplicationRole::Coordinator)
 }
 
+/// Return whether one exact route incarnation needs separate participant
+/// application evidence in this receipt.
+///
+/// Every leg is classified, even after a match, so malformed or same-route
+/// identity-drift evidence always fails closed.
+pub(crate) fn native_amx_receipt_requires_separate_participant_application_for(
+    receipt: &NativeAmxReceipt,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> Result<bool, &'static str> {
+    let mut matches = false;
+    for leg in &receipt.legs {
+        match native_amx_participant_application_role(receipt, leg)? {
+            NativeAmxParticipantApplicationRole::Coordinator => {}
+            NativeAmxParticipantApplicationRole::SeparateParticipant => {
+                let descriptor = &leg.participant_proposal.descriptor;
+                matches |= descriptor.lane_id == lane_id
+                    && descriptor.dataspace_id == dataspace_id
+                    && descriptor.lane_incarnation == lane_incarnation;
+            }
+        }
+    }
+    Ok(matches)
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
 struct NativeAmxSigningKeyV2 {
     chain_id_hash: Hash,
@@ -2304,12 +2330,13 @@ impl NativeAmxAttestationRequestV2 {
         let settlement_hash =
             iroha_data_model::nexus::compute_settlement_hash(&self.participant_settlement)
                 .map_err(|_| NativeAmxRequestError::ParticipantProposalMismatch)?;
-        let participant_is_coordinator = body.participant_lane_id == body.coordinator_lane_id
-            && body.participant_dataspace_id == body.coordinator_dataspace_id
-            && body.participant_lane_incarnation == body.coordinator_lane_incarnation;
-        let participant_work_matches = if participant_is_coordinator {
-            self.participant_proposal
-                .same_consensus_identity(&self.coordinator_proposal)
+        let participant_is_coordinator_route = body.participant_lane_id == body.coordinator_lane_id
+            && body.participant_dataspace_id == body.coordinator_dataspace_id;
+        let participant_work_matches = if participant_is_coordinator_route {
+            body.participant_lane_incarnation == body.coordinator_lane_incarnation
+                && self
+                    .participant_proposal
+                    .same_consensus_identity(&self.coordinator_proposal)
         } else {
             true
         };
@@ -2367,7 +2394,7 @@ impl NativeAmxAttestationRequestV2 {
             || self.participant_proposal.proposal_hash != body.participant_proposal_hash
             || !participant_work_matches
             || participant_entrypoint_count > 1
-            || (participant_is_coordinator && participant_entrypoint_count != 1)
+            || (participant_is_coordinator_route && participant_entrypoint_count != 1)
             || participant_descriptor.validator_set_hash_version != VALIDATOR_SET_HASH_VERSION_V1
             || participant_descriptor.validator_set_hash != body.participant_validator_set_hash
             || participant_descriptor.validator_set_hash
@@ -2883,6 +2910,7 @@ pub(crate) fn receipt_shape_matches_coordinator_payload(
                     != Some(leg.participant_settlement_hash)
                 || Hash::from(leg.participant_settlement_hash)
                     != prepare.body.participant_settlement_commitment
+                || native_amx_participant_application_role(receipt, leg).is_err()
             {
                 return false;
             }
@@ -3386,7 +3414,9 @@ mod tests {
             coordinator_lane_block_view: 3,
             coordinator_proposal_hash: Hash::new(b"native-amx-v2-coordinator-proposal"),
         };
-        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body.participant_settlement_commitment = body
+            .computed_grouped_participant_settlement_commitment(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         body
     }
 
@@ -3620,8 +3650,9 @@ mod tests {
             Hash::new(b"second-planned-participant-incarnation");
         second_participant.participant_proposal_hash =
             Hash::new(b"second-planned-participant-proposal");
-        second_participant.participant_settlement_commitment =
-            second_participant.computed_participant_settlement_commitment();
+        second_participant.participant_settlement_commitment = second_participant
+            .computed_grouped_participant_settlement_commitment(&[second_participant.source_id])
+            .expect("single-source test fixture settlement is valid");
         let restarted =
             open_signing_guard(root.path(), &base, signer, 32).expect("restart signing guard");
         restarted
@@ -3683,8 +3714,9 @@ mod tests {
         conflicting.tx_entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
             Hash::prehashed(conflicting.source_id),
         );
-        conflicting.participant_settlement_commitment =
-            conflicting.computed_participant_settlement_commitment();
+        conflicting.participant_settlement_commitment = conflicting
+            .computed_grouped_participant_settlement_commitment(&[conflicting.source_id])
+            .expect("single-source test fixture settlement is valid");
         assert_eq!(
             guard.record(&conflicting),
             Err(NativeAmxSigningGuardError::SlotEquivocation)
@@ -4545,7 +4577,9 @@ mod tests {
         };
         participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
         body.participant_proposal_hash = participant_proposal.proposal_hash;
-        let participant_settlement = body.computed_participant_settlement();
+        let participant_settlement = body
+            .computed_grouped_participant_settlement(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment = Hash::from(
             iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
                 .expect("fixture participant settlement hashes"),
@@ -4647,7 +4681,8 @@ mod tests {
         coordinator_participates.plan_legs = overlapping_plan.legs();
         coordinator_participates.participant_settlement = coordinator_participates
             .body
-            .computed_participant_settlement();
+            .computed_grouped_participant_settlement(&[coordinator_participates.body.source_id])
+            .expect("single-source test fixture settlement is valid");
         coordinator_participates
             .body
             .participant_settlement_commitment = Hash::from(
@@ -4660,6 +4695,41 @@ mod tests {
             coordinator_participates.validate_plan_binding(),
             Ok(()),
             "the coordinator route may also own one participant leg"
+        );
+
+        let mut stale_same_route = coordinator_participates.clone();
+        let stale_incarnation = Hash::new(b"stale same-route participant incarnation");
+        stale_same_route.body.participant_lane_incarnation = stale_incarnation;
+        stale_same_route
+            .participant_proposal
+            .descriptor
+            .lane_incarnation = stale_incarnation;
+        stale_same_route
+            .participant_proposal
+            .descriptor
+            .descriptor_hash = stale_same_route
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        stale_same_route.participant_proposal.proposal_hash = stale_same_route
+            .participant_proposal
+            .computed_proposal_hash();
+        stale_same_route.body.participant_proposal_hash =
+            stale_same_route.participant_proposal.proposal_hash;
+        stale_same_route.participant_settlement = stale_same_route
+            .body
+            .computed_grouped_participant_settlement(&[stale_same_route.body.source_id])
+            .expect("stale same-route settlement fixture remains structurally valid");
+        stale_same_route.body.participant_settlement_commitment = Hash::from(
+            iroha_data_model::nexus::compute_settlement_hash(
+                &stale_same_route.participant_settlement,
+            )
+            .expect("stale same-route settlement hashes"),
+        );
+        assert_eq!(
+            stale_same_route.validate_plan_binding(),
+            Err(NativeAmxRequestError::ParticipantProposalMismatch),
+            "a same-route participant cannot drift to another lane incarnation"
         );
 
         let mut omitted_participant = request.clone();

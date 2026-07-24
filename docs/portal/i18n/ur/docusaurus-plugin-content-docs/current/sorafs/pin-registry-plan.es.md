@@ -80,7 +80,7 @@ Norito اسکیموں میں مورچا اور توثیق مددگار جو ان
 | ----------- | ------- | ------------------ |
 | خدمت Torii | `/v1/sorafs/pin` (جمع کروائیں) ، `/v1/sorafs/pin/{cid}` (تلاش) ، `/v1/sorafs/aliases` (فہرست/پابند) ، `/v1/sorafs/replication` (آرڈرز/رسیدیں) کو بے نقاب کریں۔ صفحہ بندی + فلٹرنگ فراہم کریں۔ | نیٹ ورکنگ TL/کور انفرا |
 | تصدیق | ردعمل میں رجسٹری کی اونچائی/ہیش شامل کریں۔ SDKs کے ذریعہ استعمال شدہ تصدیق کا ڈھانچہ Norito شامل کریں۔ | کور انفرا |
-| Cli | `sorafs_manifest_stub` یا ایک نیا CLI `sorafs_pin` `pin submit` ، `alias bind` ، `order issue` ، `registry export` کے ساتھ بڑھاؤ۔ | ٹولنگ ڈبلیو جی |
+| Cli | `sorafs_manifest_builder` یا ایک نیا CLI `sorafs_pin` `pin submit` ، `alias bind` ، `order issue` ، `registry export` کے ساتھ بڑھاؤ۔ | ٹولنگ ڈبلیو جی |
 | SDK | اسکیما Norito سے کلائنٹ بائنڈنگ (زنگ/GO/TS) تیار کریں۔ انضمام کے ٹیسٹ شامل کریں۔ | ٹیمیں SDK |
 
 آپریشنز:

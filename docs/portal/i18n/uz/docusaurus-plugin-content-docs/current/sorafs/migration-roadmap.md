@@ -40,14 +40,14 @@ muhandislik hamohang.
 |------|-----------|-------------|----------|--------|
 | Armatura mashqlari | M0 | `fixtures/sorafs_chunker` bilan mahalliy chunk digestlarni taqqoslaydigan haftalik quruq yugurishlar. `docs/source/sorafs/reports/` ostida hisobotni nashr qilish. | Saqlash provayderlari | `determinism-<date>.md` o'tish/qobiliyatsiz matritsasi bilan. |
 | Imzolarni majburlash | M1 | Imzolar yoki manifest drift bo'lsa, `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` bajarilmaydi. Rivojlanishni bekor qilish PRga biriktirilgan boshqaruvdan voz kechishni talab qiladi. | Asboblar WG | CI jurnali, voz kechish chiptasi havolasi (agar mavjud bo'lsa). |
-| Kutish bayroqlari | M1 | Quvur quvurlari `sorafs_manifest_stub` ga qo'ng'iroq qiladi va chiqishlarni aniq kutadi: | Docs CI | Kutish bayroqlariga havola qiluvchi yangilangan skriptlar (quyidagi buyruq blokiga qarang). |
+| Kutish bayroqlari | M1 | Quvur quvurlari `sorafs_manifest_builder` ga qo'ng'iroq qiladi va chiqishlarni aniq kutadi: | Docs CI | Kutish bayroqlariga havola qiluvchi yangilangan skriptlar (quyidagi buyruq blokiga qarang). |
 | Ro'yxatga olish kitobida birinchi marta mahkamlash | M2 | `sorafs pin propose` va `sorafs pin approve` manifest taqdimotlarini o'rash; CLI standarti `--require-registry`. | Boshqaruv operatsiyalari | Registry CLI audit jurnali, muvaffaqiyatsiz takliflar uchun telemetriya. |
 | Kuzatilish pariteti | M3 | Prometheus/Grafana asboblar paneli ro'yxatga olish kitobi manifestlaridan bo'lak to'plamlari ajralib chiqqanda ogohlantiradi; ogohlantirishlar qo'ng'iroq bo'yicha operatsiyalarga uzatiladi. | Kuzatish mumkinligi | Boshqaruv paneli havolasi, ogohlantirish qoida identifikatorlari, GameDay natijalari. |
 
 #### Kanonik nashriyot buyrug'i
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

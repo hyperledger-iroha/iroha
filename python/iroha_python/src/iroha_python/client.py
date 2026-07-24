@@ -122,6 +122,7 @@ from iroha_torii_client.client import (
     OfflineVerifiedFoldRecordBundleJson,
     OfflineVerifiedFoldStepJson,
     OfflineVerifiedFoldVerifierRecordJson,
+    SumeragiAutonomousLaneExecution as _CanonicalSumeragiAutonomousLaneExecution,
     SumeragiDataspaceCommitmentStatus as _CanonicalSumeragiDataspaceCommitmentStatus,
     SumeragiDiagnosticsStatus as _CanonicalSumeragiDiagnosticsStatus,
     SumeragiLaneCommitmentStatus as _CanonicalSumeragiLaneCommitmentStatus,
@@ -8452,7 +8453,8 @@ class SumeragiNativeAmxReceipt:
             if leg.lane_id == lane_id and leg.dataspace_id == dataspace_id:
                 descriptor = leg.participant_proposal.descriptor
                 if (
-                    leg.lane_incarnation != lane_incarnation
+                    leg.requires_mixed_role_anchor_validation
+                    or leg.lane_incarnation != lane_incarnation
                     or descriptor.lane_incarnation != lane_incarnation
                     or descriptor.lane_block_height != lane_block_height
                     or descriptor.lane_block_view != lane_block_view
@@ -9475,6 +9477,7 @@ class SumeragiDiagnosticsSnapshot:
     native_amx_participant_applications: List[
         _CanonicalSumeragiNativeAmxParticipantApplication
     ]
+    autonomous_lane_executions: List[_CanonicalSumeragiAutonomousLaneExecution]
 
     @classmethod
     def from_payload(
@@ -9499,11 +9502,11 @@ class SumeragiDiagnosticsSnapshot:
             dataspace_commitments=list(canonical.dataspace_commitments),
             lane_settlement_commitments=[
                 SumeragiLaneSettlementCommitment.from_payload(entry)
-                for entry in canonical.lane_settlement_commitments
+                for entry in payload["lane_settlement_commitments"]
             ],
             lane_relay_envelopes=[
                 SumeragiLaneRelayEnvelope.from_payload(entry)
-                for entry in canonical.lane_relay_envelopes
+                for entry in payload["lane_relay_envelopes"]
             ],
             lane_payload_ownerships=copy.deepcopy(
                 canonical.lane_payload_ownerships
@@ -9518,6 +9521,7 @@ class SumeragiDiagnosticsSnapshot:
             native_amx_participant_applications=list(
                 canonical.native_amx_participant_applications
             ),
+            autonomous_lane_executions=list(canonical.autonomous_lane_executions),
         )
 
 

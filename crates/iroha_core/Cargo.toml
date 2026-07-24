@@ -27,6 +27,11 @@ path = "src/bin/kagemusha_recursive_spend_v4_bundle.rs"
 required-features = ["zk-halo2-ipa"]
 
 [[bin]]
+name = "kagemusha_recursive_spend_v4_memory_benchmark"
+path = "src/bin/kagemusha_recursive_spend_v4_memory_benchmark.rs"
+required-features = ["zk-halo2-ipa", "kagemusha-generation-memory-lab"]
+
+[[bin]]
 name = "pk2_bridge_finality_verify"
 path = "src/bin/pk2_bridge_finality_verify.rs"
 
@@ -104,6 +109,13 @@ halo2-dev-tests = []
 # clean ABI-21 candidate before release promotion. This never enables the
 # production proof-backend availability gate.
 kagemusha-candidate-evidence-lab = []
+# Non-shipping, opt-in full compact-generation memory diagnostic. It emits no
+# candidate or release artifacts and never enables the production backend.
+kagemusha-generation-memory-lab = []
+# Bind the candidate generator binary to an exact clean full-source-tree seal.
+# Production candidate builds use the dedicated build helper; ordinary
+# developer and workspace builds intentionally leave this disabled.
+kagemusha-candidate-source-seal = []
 # Compile the large private Sumeragi main-loop unit-test harness. This remains
 # opt-in so plain `cargo test` does not require a ~10 GiB rustc test-harness
 # compile on WSL and memory-constrained developer machines.
@@ -306,6 +318,10 @@ required-features = ["zk-tests"]
 [[test]]
 name = "swift_confidential_unshield_redeem"
 path = "tests/swift_confidential_unshield_redeem.rs"
+
+[[test]]
+name = "kagemusha_artifact_v4_streaming"
+path = "tests/kagemusha_artifact_v4_streaming.rs"
 
 # Grouped integration-test harnesses keep `cargo test` from linking one binary per tests/*.rs file.
 

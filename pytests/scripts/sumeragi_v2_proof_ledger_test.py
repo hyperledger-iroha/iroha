@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import importlib.util
@@ -878,6 +879,11 @@ def build_test_evidence(module, tmp_path: Path):
         formal_dir, tmp_path
     )["sha256"]
     for name in module.RELEASE_PROOF_MODULES:
+        (log_dir / f"{name}.preflight.log").write_text(
+            "frontend summary passed\n"
+            f"{module._tlapm_preflight_marker(name, source_manifest_sha256)}\n",
+            encoding="utf-8",
+        )
         (log_dir / f"{name}.log").write_text(
             "[INFO]: All 1 obligation proved.\n"
             f"{module._tlapm_runner_marker(name, source_manifest_sha256)}\n",
@@ -1133,6 +1139,11 @@ def build_cross_tool_fixture(module, tmp_path: Path):
         formal_dir, tmp_path
     )["sha256"]
     for name in module.RELEASE_PROOF_MODULES:
+        (log_dir / f"{name}.preflight.log").write_text(
+            "frontend summary passed\n"
+            f"{module._tlapm_preflight_marker(name, formal_manifest_sha256)}\n",
+            encoding="utf-8",
+        )
         (log_dir / f"{name}.log").write_text(
             "[INFO]: All 1 obligation proved.\n"
             f"{module._tlapm_runner_marker(name, formal_manifest_sha256)}\n",
@@ -3506,6 +3517,11 @@ def test_cross_tool_evidence_rejects_named_theorem_substitution(tmp_path: Path) 
     def fresh_tlaps_evidence():
         manifest = module._formal_source_manifest(formal_dir, tmp_path)["sha256"]
         for name in module.RELEASE_PROOF_MODULES:
+            (log_dir / f"{name}.preflight.log").write_text(
+                "frontend summary passed\n"
+                f"{module._tlapm_preflight_marker(name, manifest)}\n",
+                encoding="utf-8",
+            )
             (log_dir / f"{name}.log").write_text(
                 "[INFO]: All 1 obligation proved.\n"
                 f"{module._tlapm_runner_marker(name, manifest)}\n",
@@ -17563,14 +17579,14 @@ def test_production_release_inventory_seals_successor_parent_binding(
     (
         (
             Path("docs/formal/sumeragi_v2/PROOF.md"),
+            "yielding the current 515-test, 38-module, 65-leg\ninventory",
             "yielding the current 515-test, 38-module, 64-leg\ninventory",
-            "yielding the current 515-test, 38-module, 63-leg\ninventory",
         ),
         (
             Path("docs/source/sumeragi_v2_liveness.md"),
-            "receipt binds the 64 pre-network corridor legs and\n"
+            "receipt binds the 65 pre-network corridor legs and\n"
             "their exact 515-test inventory",
-            "receipt binds the 63 pre-network corridor legs and\n"
+            "receipt binds the 64 pre-network corridor legs and\n"
             "their exact 515-test inventory",
         ),
     ),
@@ -17635,9 +17651,9 @@ def test_production_release_inventory_rejects_stale_liveness_corridor_claim(
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
+            "  readonly expected_corridor_leg_count=65",
             "  readonly expected_corridor_leg_count=64",
-            "  readonly expected_corridor_leg_count=63",
-            "sealed at sixty-four legs",
+            "sealed at sixty-five legs",
         ),
         (
             Path("scripts/run_sumeragi_v2_release_gates.sh"),
@@ -17783,8 +17799,11 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
 
     fidelity_root = tmp_path / "kura-application-receipt-source-fidelity"
     kura_relative = Path("crates/iroha_core/src/kura.rs")
+    lane_geometry_relative = Path(
+        "crates/iroha_core/src/kura/lane_geometry.rs"
+    )
     release_relative = Path("scripts/run_sumeragi_v2_release_gates.sh")
-    for relative in (kura_relative, release_relative):
+    for relative in (kura_relative, lane_geometry_relative, release_relative):
         destination = fidelity_root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT_DIR / relative, destination)
@@ -18013,16 +18032,149 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert lane_platform_gate < lane_constructor.index(side_effect)
     assert "local_validator.is_some()," in run_inner
     assert "(NodeRole::Observer, _) => Ok(None)" in runner_source
-    assert "let fixed_progress_pairs: [(&Path, &Path, &str); 6]" in lane_geometry_source
-    assert "recovery_directory = refreshed_directory;" in lane_geometry_source
     assert (
-        "BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock"
-        in lane_geometry_source
+        module._kura_retirement_progress_production_source_fidelity_errors(
+            fidelity_root
+        )
+        == []
     )
-    assert (
-        "BoundProgressRecoveryFailure::InvalidData => ErrorKind::InvalidData"
-        in lane_geometry_source
+    lane_geometry_fidelity_path = fidelity_root / lane_geometry_relative
+    canonical_lane_geometry = lane_geometry_fidelity_path.read_text(
+        encoding="utf-8"
     )
+
+    def mutate_lane_geometry_item(
+        item_name: str, old: str, new: str
+    ) -> None:
+        items = module.rust_items(canonical_lane_geometry, item_name)
+        assert len(items) == 1
+        item = items[0]
+        assert item.source.count(old) == 1, (item_name, old)
+        start = canonical_lane_geometry.index(item.source)
+        end = start + len(item.source)
+        lane_geometry_fidelity_path.write_text(
+            canonical_lane_geometry[:start]
+            + item.source.replace(old, new, 1)
+            + canonical_lane_geometry[end:],
+            encoding="utf-8",
+        )
+
+    retirement_item = module.rust_items(
+        canonical_lane_geometry,
+        "ensure_first_release_lane_retirement_admissible_locked",
+    )
+    assert len(retirement_item) == 1
+    retirement_item_source = retirement_item[0].source
+    fixed_pairs_start = retirement_item_source.index(
+        "let fixed_progress_pairs:"
+    )
+    fixed_pairs_end = retirement_item_source.index(
+        "];", fixed_pairs_start
+    ) + len("];")
+    canonical_fixed_pairs = retirement_item_source[
+        fixed_pairs_start:fixed_pairs_end
+    ]
+
+    def mutate_fixed_progress_pairs(old: str, new: str) -> None:
+        assert canonical_fixed_pairs.count(old) == 1, old
+        mutate_lane_geometry_item(
+            "ensure_first_release_lane_retirement_admissible_locked",
+            canonical_fixed_pairs,
+            canonical_fixed_pairs.replace(old, new, 1),
+        )
+
+    mutate_fixed_progress_pairs("; 8]", "; 7]")
+    errors = module._kura_retirement_progress_production_source_fidelity_errors(
+        fidelity_root
+    )
+    assert any(
+        "fixed retirement progress-pair declaration and bound" in error
+        for error in errors
+    ), errors
+    lane_geometry_fidelity_path.write_text(
+        canonical_lane_geometry, encoding="utf-8"
+    )
+
+    for data_name, _index_name, _path_builder, _kind in (
+        module._KURA_RETIREMENT_FIXED_PROGRESS_PAIR_CONTRACTS
+    ):
+        mutate_fixed_progress_pairs(
+            f"&{data_name}", f"&mutated_{data_name}"
+        )
+        errors = (
+            module._kura_retirement_progress_production_source_fidelity_errors(
+                fidelity_root
+            )
+        )
+        assert any(
+            "must preserve exact eight-member artifact membership and order"
+            in error
+            for error in errors
+        ), (data_name, errors)
+        lane_geometry_fidelity_path.write_text(
+            canonical_lane_geometry, encoding="utf-8"
+        )
+
+    mutate_lane_geometry_item(
+        "ensure_first_release_lane_retirement_admissible_locked",
+        "Self::native_amx_application_manifest_paths_for_entry(",
+        "Self::native_amx_participant_receipt_paths_for_entry(",
+    )
+    errors = module._kura_retirement_progress_production_source_fidelity_errors(
+        fidelity_root
+    )
+    assert any(
+        "retirement native_manifest_data/native_manifest_index path binding"
+        in error
+        for error in errors
+    ), errors
+    lane_geometry_fidelity_path.write_text(
+        canonical_lane_geometry, encoding="utf-8"
+    )
+
+    lane_geometry_mutations = (
+        (
+            "ensure_first_release_lane_retirement_admissible_locked",
+            "    &fixed_progress_pairs,\n",
+            "    &fixed_progress_pairs[..6],\n",
+            "all fixed retirement progress pairs must recover before the "
+            "immutable snapshot",
+        ),
+        (
+            "recover_geometry_progress_pairs_before_snapshot",
+            "for &(data_path, index_path, kind) in pairs {",
+            "for &(data_path, index_path, kind) in pairs.iter().take(7) {",
+            "retirement recovery must visit every pair inside the "
+            "authenticated directory",
+        ),
+        (
+            "recover_geometry_progress_pairs_before_snapshot",
+            "BoundProgressRecoveryFailure::RetryableIo => ErrorKind::WouldBlock,",
+            "BoundProgressRecoveryFailure::RetryableIo => ErrorKind::InvalidData,",
+            "retirement recovery failure classification",
+        ),
+        (
+            "recover_geometry_progress_pairs_before_snapshot",
+            "recovery_directory = refreshed_directory;",
+            "let _discarded_directory = refreshed_directory;",
+            "retirement recovery must rebind the authenticated directory "
+            "after every pair",
+        ),
+    )
+    for item_name, old, new, diagnostic in lane_geometry_mutations:
+        mutate_lane_geometry_item(item_name, old, new)
+        errors = (
+            module._kura_retirement_progress_production_source_fidelity_errors(
+                fidelity_root
+            )
+        )
+        assert any(diagnostic in error for error in errors), (
+            diagnostic,
+            errors,
+        )
+        lane_geometry_fidelity_path.write_text(
+            canonical_lane_geometry, encoding="utf-8"
+        )
     new_production_inventory_additions = (
         (
             "kura::lane_geometry::tests::",
@@ -18830,7 +18982,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         receipt_module._PRODUCTION_MODULES
         == module._PRODUCTION_LIVENESS_RELEASE_MODULE_CONTRACTS
     )
-    assert len(receipt_module._corridor_legs()) == 64
+    assert len(receipt_module._corridor_legs()) == 65
     assert receipt_module._production_module_command(
         "parameters::actual::tests"
     ) == (
@@ -19069,12 +19221,12 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
     assert "preflight-chaos-launcher pytest 5" in release_source
     assert "did not run exactly 68 passing tests" in release_source
     assert "preflight-release-identity pytest 68" in release_source
-    assert "did not run exactly 71 passing tests" in release_source
-    assert "preflight-release-bootstrap pytest 71" in release_source
+    assert "did not run exactly 82 passing tests" in release_source
+    assert "preflight-release-bootstrap pytest 82" in release_source
     assert "did not run exactly 37 passing tests" in release_source
     assert "preflight-release-bootstrap-validator pytest 37" in release_source
-    assert "did not run exactly 189 passing tests" in release_source
-    assert "preflight-release-receipt pytest 189" in release_source
+    assert "did not run exactly 221 passing tests" in release_source
+    assert "preflight-release-receipt pytest 221" in release_source
     assert (
         '"preflight-chaos-launcher",\n                "pytest",\n                5,'
         in receipt_source
@@ -19084,7 +19236,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-bootstrap",\n                "pytest",\n                71,'
+        '"preflight-release-bootstrap",\n                "pytest",\n                82,'
         in receipt_source
     )
     assert (
@@ -19092,7 +19244,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         in receipt_source
     )
     assert (
-        '"preflight-release-receipt",\n                "pytest",\n                189,'
+        '"preflight-release-receipt",\n                "pytest",\n                221,'
         in receipt_source
     )
     assert "did not run exactly 1045 passing tests" in release_source
@@ -19138,7 +19290,7 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
         assert test_name in release_source
     assert "taira_soak_contract_files=(" in release_source
     assert "did not run exactly 39 passing tests" in release_source
-    assert "expected_corridor_leg_count=64" in release_source
+    assert "expected_corridor_leg_count=65" in release_source
     for leg_id, command in (
         ("source-sealed-workspace-format", "cargo fmt --all -- --check"),
         (
@@ -19173,6 +19325,71 @@ def test_release_corridor_rejects_network_skips_and_zero_test_filters(
             and receipt_command == command
             for receipt_leg_id, kind, expected_count, receipt_command in receipt_module._corridor_legs()
         )
+    assert (
+        'scripts/nexus/validate_multilane_scaling_evidence.py \\\n'
+        '    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"'
+        in release_source
+    )
+    assert '--expected-source-revision "$release_head_commit"' in release_source
+    assert (
+        '--expected-workspace-source-sha256 "$release_source_manifest_sha256"'
+        in release_source
+    )
+    assert "--expected-validator-sha256" in release_source
+    for expected_flag in (
+        "--expected-trial-harness-sha256",
+        "--expected-configuration-sha256",
+        "--expected-irohad-sha256",
+        "--expected-iroha-cli-sha256",
+        "--expected-repository-root",
+    ):
+        assert expected_flag in release_source
+    assert (
+        '--g12-seed-completion "$nexus_cross_completion_path" \\\n'
+        '  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \\\n'
+        '  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"'
+        in release_source
+    )
+    for expected_flag in (
+        "--expected-scaling-trial-harness-sha256",
+        "--expected-scaling-configuration-sha256",
+        "--expected-scaling-irohad-sha256",
+        "--expected-scaling-iroha-cli-sha256",
+    ):
+        assert expected_flag in release_source
+    scaling_environment = {
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST",
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+    }
+    for environment_contract, assignment_name in (
+        (
+            ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py",
+            "_RUNNER_ENV_ALLOWLIST",
+        ),
+        (
+            ROOT_DIR / "scripts" / "validate_sumeragi_v2_release_bootstrap.py",
+            "_RUNNER_EXTRA_ENV",
+        ),
+    ):
+        tree = ast.parse(environment_contract.read_text(encoding="utf-8"))
+        assignments = [
+            statement
+            for statement in tree.body
+            if isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and statement.targets[0].id == assignment_name
+        ]
+        assert len(assignments) == 1
+        allowlist = ast.literal_eval(assignments[0].value)
+        assert {
+            value
+            for value in allowlist
+            if value.startswith("IROHA_RELEASE_SCALING_")
+        } == scaling_environment
     assert "resolve_java.sh" in formal_launcher_source
     assert '"preflight-formal-launcher"' in receipt_source
     assert 'if [[ "$profile" == "--release" ]]; then' in release_source

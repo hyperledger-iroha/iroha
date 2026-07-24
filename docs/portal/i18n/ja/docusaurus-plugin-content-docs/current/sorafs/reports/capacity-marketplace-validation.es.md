@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-オンボーディング/ディスピュータ コン `sorafs_manifest_stub capacity {declaration,dispute}` およびアーカイブ バイト JSON/Norito の結果は、政府のチケットの取得に役立ちます。
+オンボーディング/ディスピュータ コン `sorafs_manifest_builder capacity {declaration,dispute}` およびアーカイブ バイト JSON/Norito の結果は、政府のチケットの取得に役立ちます。
 
 ## 悪用技術|アーティファクト |ルタ |ブレイク2b-256 |
 |----------|------|---------------|

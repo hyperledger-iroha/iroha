@@ -72,7 +72,7 @@ SF-4 Pin Registry ورابط التسجيل يوضح الالتزامات الو
 |------|-----|-------------|
 | خدمة Torii | `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات) ترقيم الصفحات + التصفية. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | تصديق | تتضمن الاستجابات ارتفاع التسجيل/التجزئة؛ تتضمن بنية شهادة Norito استخدام أدوات تطوير البرمجيات (SDKs) للقراءة. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | `sorafs_manifest_stub` جديد أو جديد `sorafs_pin` CLI مستخدم `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
+| سطر الأوامر | `sorafs_manifest_builder` جديد أو جديد `sorafs_pin` CLI مستخدم `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
 | SDK | مخطط Norito وارتباطات العميل (Rust/Go/TS) تولد ملفات؛ اختبارات التكامل تشمل کریں۔ | فرق SDK |
 
 العمليات:

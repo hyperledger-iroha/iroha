@@ -80,7 +80,7 @@ Rust Norito схемалары және осы жазбаларға қолдау
 |----------|------|----------|
 | Torii қызметі | `/v1/sorafs/pin` (жіберу), `/v1/sorafs/pin/{cid}` (іздеу), `/v1/sorafs/aliases` (тізім/байлау), `/v1/sorafs/replication` (тапсырыстар/түбіртектерді) көрсетіңіз. Беттеу + сүзуді қамтамасыз етіңіз. | Networking TL / Core Infra |
 | Аттестация | Жауаптарға тізілім биіктігін/хэшті қосу; SDK пайдаланатын Norito аттестаттау құрылымын қосыңыз. | Core Infra |
-| CLI | `sorafs_manifest_stub` немесе жаңа `sorafs_pin` CLI кеңейтімі `pin submit`, `alias bind`, `order issue`, `registry export`. | Құралдар WG |
+| CLI | `sorafs_manifest_builder` немесе жаңа `sorafs_pin` CLI кеңейтімі `pin submit`, `alias bind`, `order issue`, `registry export`. | Құралдар WG |
 | SDK | Norito схемасынан клиенттік байланыстыруды (Rust/Go/TS) жасау; интеграция сынақтарын қосыңыз. | SDK командалары |
 
 Операциялар:

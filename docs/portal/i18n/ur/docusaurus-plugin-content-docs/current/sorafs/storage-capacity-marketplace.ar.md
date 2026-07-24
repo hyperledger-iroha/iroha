@@ -58,7 +58,7 @@ SF-2C روڈ میپ ایک کنٹرول شدہ مارکیٹ مہیا کرتا ہ
 - مشترکہ مددگار فراہم کرتا ہے (`CapacityMetadataEntry` ، `PricingScheduleV1` اور لین/اسائنمنٹ/SLA توثیق کرنے والے) تعصب کی کلیدی تصدیق اور غلطی کی اطلاع ہے کہ CI اور بہاو ٹولنگ دوبارہ استعمال کرسکتے ہیں۔ 【CREATS/SORAFS_MANIFEST/SRC/صلاحیت: 230】
 - `PinProviderRegistry` اب `/v1/sorafs/capacity/state` کے ذریعے آن چین اسنیپ شاٹ دکھاتا ہے ، Norito JSON کے پیچھے فراہم کنندہ کے اعلانات اور فیس لیجر اندراجات جمع کرتا ہے۔ لازمی۔ 【کریٹس/اروہ_ٹوری/ایس آر سی/سرفس/رجسٹری۔
 - توثیق کے ٹیسٹ معیاری ہینڈلز ، ڈپلیکیٹ کا پتہ لگانے ، لین کی حدود ، نقل کی نقشہ سازی کے تحفظات ، اور ٹیلی میٹک رینج چیکوں کے نفاذ کا احاطہ کرتے ہیں تاکہ سی آئی میں فوری طور پر رجعتیں ظاہر ہوں۔
-- آپریٹر ٹولز: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` انسانی پڑھنے کے قابل چشمیوں کو معیاری Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹر `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` کے لئے فکسچر تیار کرسکیں اور تصدیق کے ساتھ کمانڈ مقامی۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/capacer.rs: 1】 حوالہ فکسچر `fixtures/sorafs_manifest/replication_order/` (`order_v1.json` ، `order_v1.to`) پر واقع ہیں اور Prometheus
+- آپریٹر ٹولز: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` انسانی پڑھنے کے قابل چشمیوں کو معیاری Norito پے لوڈ ، بیس 64 بلبس اور JSON خلاصے میں تبدیل کرتا ہے تاکہ آپریٹر `/v1/sorafs/capacity/declare` ، `/v1/sorafs/capacity/telemetry` کے لئے فکسچر تیار کرسکیں اور تصدیق کے ساتھ کمانڈ مقامی۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_builder/capacer.rs: 1】 حوالہ فکسچر `fixtures/sorafs_manifest/replication_order/` (`order_v1.json` ، `order_v1.to`) پر واقع ہیں اور Prometheus
 
 ### 2۔ کنٹرول پرت انضمام
 
@@ -145,14 +145,14 @@ SF-2C روڈ میپ ایک کنٹرول شدہ مارکیٹ مہیا کرتا ہ
   گورننس پیکٹ کے آگے۔
 
 ### تنازعہ اور شواہد کو کم کرنا
-- `sorafs_manifest_stub capacity dispute` کے ذریعے تنازعات جمع کروائیں (ٹیسٹ:
+- `sorafs_manifest_builder capacity dispute` کے ذریعے تنازعات جمع کروائیں (ٹیسٹ:
   `cargo test -p sorafs_car --test capacity_cli`) تاکہ پے لوڈ معیاری رہیں۔
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` اور منظوری کے پیکیج چلائیں
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) یہ ثابت کرنے کے لئے کہ تنازعات اور سلیش لامحالہ واپس کردیئے گئے ہیں۔
 - ثبوتوں کو حاصل کرنے اور بڑھانے کے لئے `docs/source/sorafs/dispute_revocation_runbook.md` پر عمل کریں۔ تصدیق کی رپورٹ میں ہڑتال کی منظوری سے رابطہ کریں۔
 
 ### فراہم کنندہ آن بورڈنگ اور باہر نکلیں دھواں ٹیسٹ
-- `sorafs_manifest_stub capacity ...` کے ساتھ AD/ٹیلی میٹرک نوادرات کو دوبارہ تخلیق کریں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) جمع کروانے سے پہلے۔
+- `sorafs_manifest_builder capacity ...` کے ساتھ AD/ٹیلی میٹرک نوادرات کو دوبارہ تخلیق کریں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) جمع کروانے سے پہلے۔
 - Torii (`/v1/sorafs/capacity/declare`) کے ذریعے بھیجیں پھر Grafana کے اسنیپ شاٹس کے ساتھ `/v1/sorafs/capacity/state` پر قبضہ کریں۔ `docs/source/sorafs/capacity_onboarding_runbook.md` پر خارجی راستے پر عمل کریں۔
 - آرکائیو نے `docs/examples/sorafs_capacity_marketplace_validation/` کے اندر نوادرات اور مفاہمت کے نتائج پر دستخط کیے۔
 

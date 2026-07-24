@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Os operadores devem regenerar as cargas úteis de solicitação de integração/disputa com `sorafs_manifest_stub capacity {declaration,dispute}` e arquivar os bytes JSON/Norito resultantes junto com o ticket de governança.
+Os operadores devem regenerar as cargas úteis de solicitação de integração/disputa com `sorafs_manifest_builder capacity {declaration,dispute}` e arquivar os bytes JSON/Norito resultantes junto com o ticket de governança.
 
 ## Artefatos de aprovação
 

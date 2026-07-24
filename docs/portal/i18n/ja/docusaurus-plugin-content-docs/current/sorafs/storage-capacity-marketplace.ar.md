@@ -60,7 +60,7 @@ id: ストレージ容量マーケットプレイス
 - ヘルパー (`CapacityMetadataEntry` و`PricingScheduleV1` レーン/割り当て/SLA) のヘルプ。 CI ダウンストリーム ツールの開発。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` スナップショット `/v1/sorafs/capacity/state` 手数料台帳خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 管理者は、管理者と管理者を処理します。 فحوص نطاق التليمترية حتى تظهر الانحدارات فوراً في CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- 情報: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 仕様、Norito ペイロード、base64 BLOB、JSONフィクスチャを `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` で確認してください。 محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 参考治具 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`。### 2. いいえ。
+- 情報: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` 仕様、Norito ペイロード、base64 BLOB、JSONフィクスチャを `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` で確認してください。 محلي.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 参考治具 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`。### 2. いいえ。
 
 |ああ |所有者 |重要 |
 |------|----------|------|
@@ -147,14 +147,14 @@ id: ストレージ容量マーケットプレイス
   ガバナンス パケット。
 
 ### 論争と証拠の隠蔽
-- 紛争 `sorafs_manifest_stub capacity dispute` (回答:
+- 紛争 `sorafs_manifest_builder capacity dispute` (回答:
   `cargo test -p sorafs_car --test capacity_cli`) ペイロードが 1 つあります。
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` حزم العقوبات
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) 論争とスラッシュを意味します。
 - البع `docs/source/sorafs/dispute_revocation_runbook.md` لالتقاط الأدلة والتصعيد؛ストライキを実行してください。
 
 ### プロバイダーのオンボーディングと終了スモーク テスト
-- アーティファクトの作成/編集、`sorafs_manifest_stub capacity ...` وأعد تشغيل ختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
+- アーティファクトの作成/編集、`sorafs_manifest_builder capacity ...` وأعد تشغيل ختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
 - Torii (`/v1/sorafs/capacity/declare`) と `/v1/sorafs/capacity/state` と Grafana。 `docs/source/sorafs/capacity_onboarding_runbook.md` です。
 - アーティファクトと和解 `docs/examples/sorafs_capacity_marketplace_validation/`。
 

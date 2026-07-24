@@ -31,7 +31,7 @@ istehsal CLI köməkçiləri və yüngül analiz skriptindən istifadə edərək
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` skripti qurmaq üçün `sorafs_manifest_stub capacity`-i çağırır:
+`run_cli.sh` skripti qurmaq üçün `sorafs_manifest_builder capacity`-i çağırır:
 
 - Kvota danışıqları qurğusu üçün deterministik provayder bəyannamələri.
 - Danışıqlar ssenarisinə uyğun təkrarlama sifarişi.

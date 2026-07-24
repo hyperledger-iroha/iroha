@@ -10,22 +10,18 @@ Nexus partitions transaction scheduling and lane-local certification while
 retaining one deterministic, globally ordered WSV. Lanes can be created and
 retired automatically to add horizontal execution capacity, but lane QCs never
 mutate shared state directly. For an accepted embedded autonomous batch, only a
-merge QC bound to a canonical global carrier can bridge its effects into WSV;
-the first release does not originate that form.
+merge QC bound to a canonical global carrier can bridge its effects into WSV.
 
-The first-release runtime does **not** originate autonomous lane execution
-payloads. Local payload construction, reservation handoff, availability/NewView
-collection, and drain-vote collection remain fail-closed and test-only until a
-single durable reservation identity can be carried through the queue, wire,
-lane session, Kura, and global carrier. Nodes still validate and replay an
-already embedded execution batch for chain-history compatibility, and the live
-V2 path retains ordinary global-body lane proposal/vote/QC processing plus
-relay-settlement candidates.
-
-The flow below is the activation contract for autonomous execution, not a claim
-that its producer is enabled in the first release. The exact merge protocol and
-storage crash contract are specified in [Merge ledger](merge_ledger.md).
-Implementation, formal, and release obligations are tracked separately in the
+The production runtime originates reservation-bound autonomous payloads. A
+deterministic height-rotated lane author fsyncs exact FIFO reservation
+identities before queue ownership moves, carries the same ordered bytes through
+lane availability and finality, and makes a certified bundle merge-eligible
+only after it is durable. Losing, timed-out, reconfigured, or retired attempts
+first persist an exact slot retirement and then release those reservations in
+original enqueue order. Effects still execute only through the canonical
+global carrier. The exact merge protocol and storage crash contract are
+specified in [Merge ledger](merge_ledger.md); formal and release evidence are
+tracked separately in the
 [Sumeragi V2 multilane closure ledger](sumeragi_v2_multilane_closure_ledger.md).
 
 ## End-to-end flow
@@ -50,7 +46,10 @@ Implementation, formal, and release obligations are tracked separately in the
 7. The merge entry is staged before ordinary block effects, Kura makes the
    block/entry/carrier durable, and WSV commits the complete deterministic
    overlay atomically.
-8. Transaction queries expose both ordinary and merge-carried transactions,
+8. Only after canonical Kura/WSV application is durable do the exact queue
+   reservations transition through Commit and ForgetCommit; startup reconciles
+   any interrupted suffix idempotently.
+9. Transaction queries expose both ordinary and merge-carried transactions,
    with a proof binding each merge result to the compact carrier.
 
 This separation permits lane committees to progress independently without
@@ -118,11 +117,6 @@ catalog commitment cannot race activation.
 
 ### Scale in
 
-First-release note: the certificate-collection and certificate-dependent
-retirement flow below is an activation contract. Drain-vote ingress is
-decode-only and rejected, so the runtime cannot complete this path from live
-votes; it remains fail-closed rather than retiring without the certificate.
-
 A complete cold window and expired cooldown select the highest active managed
 elastic lane. Selection begins an irreversible drain; it does not remove the
 lane immediately. The committed intent records the exact chain, lane,
@@ -155,9 +149,13 @@ greater than the certificate carrier. At most one lane retires per block, and
 retirement is refused when the candidate:
 
 - owns work in the committing block;
-- has an unmerged admissible relay;
+- has ordinary queued work, live reservations, delayed work, a pending merge
+  entry, or an unmerged admissible relay/certified autonomous bundle;
 - has a certified lane block without a matching global application receipt;
 - has an unrepaired application marker;
+- has an unapplied or unverifiable Native participant control, including a
+  receipt whose finality, manifest proof, index, checkpoint, or application
+  block no longer revalidates;
 - has no exact globally carried drain certificate, or its replicated frontier
   differs from the certified frontier;
 - is outside the managed range, manually owned, malformed, or non-default; or
@@ -179,7 +177,11 @@ failed block or catalog preflight cannot leak a partially created/retired lane.
 On successful retirement, lane-scoped DA cursors and commitments, pin intents,
 verified relays, merge history indexes, queue/session state, public validator
 and economic rows, emergency overrides, AXT replay data, and application
-markers are reset at the same incarnation boundary. Old files remain historical
+markers are reset at the same incarnation boundary. Native participant
+receipts, application manifests/proofs, and route/incarnation latest indexes
+are included in disk accounting, archive validation, retirement, purge, and
+recreation allowlists. Malformed, oversized, temporary, unexpected,
+non-regular, or symlinked evidence fails closed. Old files remain historical
 proof material only where policy requires them; they cannot authorize or route
 new work.
 
@@ -252,38 +254,54 @@ replay.
 ## Native AMX cross-dataspace transactions
 
 Native-AMX control, attestation, and participant-receipt validation remain live
-in the ordinary global-body lane proposal/QC path. The autonomous batch
-construction described below applies only to already embedded history and the
-future activation contract; the first release does not synthesize it. A routing
-plan names its coordinator and every participant leg. The producer must collect
-the required participant prepare/commit QCs; coordinator-only evidence is not
-synthesized. `NativeAmxReceipt.authority_context_height` binds the global
-application context, while each leg retains its lane-local height. Validation
-checks chain, source ID, entrypoint, routing-plan digest, lane/dataspace roles,
-authority height, participant committees, QCs, and duplicate sources before
-state execution.
+in both the ordinary global-body path and reservation-bound autonomous
+payloads. A routing plan names its coordinator and every participant leg. The
+producer must collect the required participant prepare/commit QCs;
+coordinator-only evidence is not synthesized.
+One shared predicate determines whether a receipt leg requires separate
+participant application. Validation, Kura sidecars, State frontiers, startup
+repair, diagnostics, drain checks, and retirement all use it. A coordinator leg
+whose participant route is the same route does not create a separate marker,
+receipt, or application frontier.
+`NativeAmxReceipt.authority_context_height` binds the global application
+context, while each leg retains its lane-local height. Validation checks chain,
+source ID, typed entrypoint hash, routing-plan digest, lane/dataspace roles,
+authority height, participant committees, QCs, grouped bounds, and duplicate
+sources before state execution.
 
 All entrypoints in one merge batch execute in canonical order on one revertible
 overlay. Any divergence in results, settlement evidence, write-set roots, or
 expected post-state hash invalidates the complete candidate.
+The global execution commitment also carries the canonical Native application
+manifest root. Per-route leaves and Merkle proofs bind the active incarnation,
+predecessor, proposal, settlement, ordered sources/results, and application
+block. Kura publishes finality and the manifest before exact receipts and the
+route/incarnation latest index, and advances the participant frontier only
+after all of that evidence is durable. Startup repairs a missing suffix
+idempotently under the sidecar publication guard. After body pruning, a
+QC-authenticated manifest proof is sufficient; legacy hash-only evidence
+remains blocked unless authenticated storage or QC signers recover the
+canonical executed wire.
 
 ## Compact carrier, recovery, and proofs
 
 The full merge entry can be up to 16 MiB; the global block instead carries a
-`CertifiedMergeLedgerReference`. For live non-execution entries, its merge QC
-identifies authenticated sidecar holders. Fetch uses bounded 64-KiB chunks and
-global/per-peer resource caps, while authoritative pending blocks retry through
-holder withholding without a fixed attempt horizon. First-release responders
-do not serve entries carrying `execution_batch`; historical replay of that form
-requires the canonical full entry to be durable already.
+`CertifiedMergeLedgerReference`. Its merge QC identifies authenticated sidecar
+holders for settlement and autonomous execution entries alike. Fetch uses
+bounded 64-KiB chunks and global/per-peer resource caps, while authoritative
+pending blocks retry through holder withholding without a fixed attempt
+horizon. Responders materialize only the exact hash-addressed, height-context
+authenticated entry for which they are a certified holder.
 
 Kura maintains indexed full-entry and carrier stores. A node that restarts with
-a live non-execution compact block can fetch the exact sidecar. An embedded
-historical execution batch replays and reconstructs the same transaction
-history only from its already-durable exact full entry. Torn, oversized,
-non-canonical, conflicting, symlinked, or future-uncommitted storage is
-truncated or rejected according to the crash boundary; incomplete network
-assemblies are never persisted.
+any live compact carrier, including an autonomous execution carrier, can fetch
+the exact bounded sidecar from authenticated merge-QC holders. It re-executes
+the certified entry against the exact current base state and accepts it only
+when ordered results, write set, post-state, and batch hash match. Historical
+execution reconstructs transaction history only from its already-durable exact
+full entry. Torn, oversized, non-canonical, conflicting, symlinked, or
+future-uncommitted storage is truncated or rejected according to the crash
+boundary; incomplete network assemblies are never persisted.
 
 Chain truncation publishes a fsynced prune intent before lowering the durable
 block marker. Carrier/log, commit-roster, WSV-checkpoint, commit-manifest,
@@ -317,11 +335,18 @@ insufficient gas cannot trigger unaccounted carrier-sized work.
 
 ## Status and events
 
-`/v1/sumeragi/status` exposes lane proposals/commitments, relay envelopes,
-payload ownership, committed lane sessions and execution status, configured
-lane/dataspace geometry, and autoscale transition data. Status rows are
-validated before publication and conflicting latest identities remain visible
-as ambiguity rather than being silently collapsed.
+`/v1/sumeragi/status` exposes only the authoritative
+`SumeragiV2Status`. Operational lane evidence is returned separately by
+`/v1/sumeragi/diagnostics`, including proposals/commitments, relay envelopes,
+payload ownership, committed lane sessions, configured lane/dataspace geometry,
+autoscale transition data, and the bounded, route/incarnation-ordered Native
+participant-application vector. The Native evidence records are reconstructed
+from State and Kura evidence; conflicting same-height identities are reported
+as `conflict` rather than silently selected. The bounded
+`autonomous_lane_executions` vector reports restart-stable progress from
+reservation durability through lane certification, merge/carrier application,
+and queue finalization using durable State/Kura plus queue ownership evidence;
+it is evidence, not consensus authority.
 
 The first successful live publication of a globally carried entry emits one
 `MergeLedgerEvent`. Kura/state retries and restart replay are silent, so event
@@ -336,9 +361,9 @@ rows, or stale prior-cycle logs do not prove expansion or safe contraction.
 
 ## Verification matrix
 
-Activation requires the following corridor. Current first-release tests cover
-the replay, validation, crash-recovery, and fail-closed boundaries; they do not
-make the autonomous producer live:
+Production release requires the following corridor. Every gate in this list is
+currently open until fresh artifacts satisfy it; a skipped required test is a
+failure:
 
 - unit tests for router activation/incarnation boundaries, committee and quorum
   authority, lane proposal/QC aggregation, payload recovery, merge
@@ -352,10 +377,25 @@ make the autonomous producer live:
   full intent/certificate/later-retirement cycle, a certified elastic-lane merge
   with one offline/missing-sidecar peer, WSV/query proof convergence, and
   repeated restart idempotency;
-- twelve-peer cross-dataspace/native-AMX integration and soak corridors; and
+- twelve-peer cross-dataspace/native-AMX/autonomous integration with at least
+  three independent four-validator dataspaces, 10/10 fresh deterministic
+  seeds, rotating outages/restarts, scale-out/drain/scale-in/same-ID
+  recreation, full convergence, and zero lost, rejected-after-acceptance, or
+  duplicate transactions;
+- a separate two-hour twelve-peer fault soak;
+- five paired pinned-hardware one-versus-four-lane runs demonstrating at least
+  1.5× median committed throughput and no worse than 1.25× p95 latency at
+  matched offered load, within all configured resource bounds;
 - TLC/Apalache models for autoscale lifecycle, pinned-incarnation authority
   under independent current-roster rotation, merge execution order, and exact
-  merge-carrier safety, each with expected-failure mutations.
+  merge-carrier safety, each with expected-failure mutations; and
+- the prescribed isolated-target, locked/offline focused and SDK suites,
+  formal runners, full workspace build/test, strict workspace Clippy,
+  formatting, and legacy-codec guard.
+
+This architecture description records current behavior, not a claim that the
+four-peer, twelve-peer, soak, scaling, or full-workspace release evidence has
+already passed.
 
 Primary code lives in `crates/iroha_core/src/state.rs`,
 `crates/iroha_core/src/lane_consensus.rs`,

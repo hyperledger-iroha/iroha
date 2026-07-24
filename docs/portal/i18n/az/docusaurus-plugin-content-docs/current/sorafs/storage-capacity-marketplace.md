@@ -63,7 +63,7 @@ ilk buraxılış üçün tələb olunur və onları hərəkətə keçirə bilən
 - Paylaşılan köməkçilər (`PricingScheduleV1`, `PricingScheduleV1`, zolaq/təyinat/SLA təsdiqləyiciləri) CI və aşağı axın alətlərinin təkrar istifadə edə biləcəyi ilə bağlı deterministik açar doğrulama və xəta hesabatını təmin edir.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` indi deterministik Norito arxasında provayder bəyannamələrini və ödəniş kitabçası qeydlərini birləşdirərək `/v1/sorafs/capacity/state` vasitəsilə zəncir üzərindəki görüntünü təqdim edir. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Təsdiqləmə əhatə dairəsi kanonik idarəetmə tətbiqi, dublikatın aşkarlanması, hər zolaqlı sərhədlər, replikasiya təyini qoruyucuları və telemetriya diapazonunun yoxlanılması ilə məşğul olur ki, reqressiyalar dərhal CI-də üzə çıxsın.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator alətləri: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` insan tərəfindən oxuna bilən spesifikasiyaları kanonik Norito faydalı yüklərə, base64 bloblara və JSON xülasələrinə çevirir ki, operatorlar `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` və replikasiya sifarişi ilə yerli düzəlişləri hazırlaya bilsinlər. validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 İstinad qurğuları `fixtures/sorafs_manifest/replication_order/`-də (`order_v1.json`, `order_v1.to`) yaşayır və 00.0.05 vasitəsilə yaradılır.
+- Operator alətləri: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` insan tərəfindən oxuna bilən spesifikasiyaları kanonik Norito faydalı yüklərə, base64 bloblara və JSON xülasələrinə çevirir ki, operatorlar `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` və replikasiya sifarişi ilə yerli düzəlişləri hazırlaya bilsinlər. validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 İstinad qurğuları `fixtures/sorafs_manifest/replication_order/`-də (`order_v1.json`, `order_v1.to`) yaşayır və 00.0.05 vasitəsilə yaradılır.
 
 ### 2. İdarəetmə Təyyarəsinin İnteqrasiyası
 
@@ -155,7 +155,7 @@ həyata keçirilməsi ilə sinxronlaşdırılır.
   idarəetmə paketləri ilə yanaşı.
 
 ### Mübahisə və sübutları kəsmək
-- `sorafs_manifest_stub capacity dispute` vasitəsilə mübahisələri fayl (testlər:
+- `sorafs_manifest_builder capacity dispute` vasitəsilə mübahisələri fayl (testlər:
   `cargo test -p sorafs_car --test capacity_cli`) beləliklə faydalı yüklər kanonik olaraq qalır.
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` və cəzanı işə salın
   suites (`record_capacity_telemetry_penalises_persistent_under_delivery`) mübahisələri sübut etmək və
@@ -164,7 +164,7 @@ həyata keçirilməsi ilə sinxronlaşdırılır.
   Xəbərdarlıq təsdiqlərini təsdiqləmə hesabatına qaytarın.
 
 ### Provayderin işə düşməsi və tüstüdən çıxma testləri
-- `sorafs_manifest_stub capacity ...` ilə bəyannamə/temetriya artefaktlarını bərpa edin və təkrar oxuyun
+- `sorafs_manifest_builder capacity ...` ilə bəyannamə/temetriya artefaktlarını bərpa edin və təkrar oxuyun
   təqdim etməzdən əvvəl CLI testləri (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Torii (`/v1/sorafs/capacity/declare`) vasitəsilə təqdim edin, sonra `/v1/sorafs/capacity/state` plus yazın
   Grafana ekran görüntüləri. `docs/source/sorafs/capacity_onboarding_runbook.md`-də çıxış axını izləyin.

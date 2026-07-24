@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-ペイロードを取得するには、`sorafs_manifest_stub capacity {declaration,dispute}` を使用してください。 JSON/Norito バイトのガバナンス チケットです。
+ペイロードを取得するには、`sorafs_manifest_builder capacity {declaration,dispute}` を使用してください。 JSON/Norito バイトのガバナンス チケットです。
 
 ## Артефакты サインオフ
 

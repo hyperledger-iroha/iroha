@@ -15,7 +15,7 @@ translation_last_reviewed: 2026-02-07
 :::注意规范来源
 :::
 
-本运行手册介绍了如何运行 SF-2c 容量市场模拟套件并可视化结果指标。它使用 `docs/examples/sorafs_capacity_simulation/` 中的确定性装置来验证配额协商、故障转移处理和端到端削减修复。容量有效负载仍使用`sorafs_manifest_stub capacity`；将 `iroha app sorafs toolkit pack` 用于清单/CAR 包装流程。
+本运行手册介绍了如何运行 SF-2c 容量市场模拟套件并可视化结果指标。它使用 `docs/examples/sorafs_capacity_simulation/` 中的确定性装置来验证配额协商、故障转移处理和端到端削减修复。容量有效负载仍使用`sorafs_manifest_builder capacity`；将 `iroha app sorafs toolkit pack` 用于清单/CAR 包装流程。
 
 ## 1. 生成 CLI 工件
 
@@ -24,7 +24,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` 包装 `sorafs_manifest_stub capacity` 以发出 Norito 有效负载、base64 blob、Torii 请求正文以及 JSON 摘要：
+`run_cli.sh` 包装 `sorafs_manifest_builder capacity` 以发出 Norito 有效负载、base64 blob、Torii 请求正文以及 JSON 摘要：
 
 - 参与配额谈判场景的三个提供商声明。
 - 在这些提供者之间分配暂存清单的复制顺序。

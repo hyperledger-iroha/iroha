@@ -85,7 +85,7 @@ SF-4 מספק את חוזה Pin Registry ואת שירותי התשתית התו
 |------|-------|-------|
 | שירות Torii | לחשוף `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). לספק עימוד + סינון. | Networking TL / Core Infra |
 | אטסטציה | לכלול גובה/האש של registry בתשובות; להוסיף מבנה אטסטציה Norito לצריכת SDKs. | Core Infra |
-| CLI | להרחיב `sorafs_manifest_stub` או CLI חדש `sorafs_pin` עם `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | להרחיב `sorafs_manifest_builder` או CLI חדש `sorafs_pin` עם `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | ליצור bindings לקוח (Rust/Go/TS) מסכמת Norito; להוסיף בדיקות אינטגרציה. | SDK Teams |
 
 תפעול:

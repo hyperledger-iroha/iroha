@@ -19,7 +19,7 @@ descrição: Execute o kit de simulação do mercado de capacidade SF-2c com lum
 Esta página reflete `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Gardez as duas cópias sincronizadas junto com o conjunto de documentação Sphinx herité totalmente migrado.
 :::
 
-Este runbook explícito comenta executar o kit de simulação do mercado de capacidade SF-2c e visualizar as métricas resultantes. Ele valida a negociação de cotas, o gerenciamento de failover e a recuperação do corte de combate em combate com auxílio de luminárias determinadas em `docs/examples/sorafs_capacity_simulation/`. As cargas úteis de capacidade são usadas sempre `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` para o fluxo de embalagem manifest/CAR.
+Este runbook explícito comenta executar o kit de simulação do mercado de capacidade SF-2c e visualizar as métricas resultantes. Ele valida a negociação de cotas, o gerenciamento de failover e a recuperação do corte de combate em combate com auxílio de luminárias determinadas em `docs/examples/sorafs_capacity_simulation/`. As cargas úteis de capacidade são usadas sempre `sorafs_manifest_builder capacity`; use `iroha app sorafs toolkit pack` para o fluxo de embalagem manifest/CAR.
 
 ## 1. Gerar artefatos CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsula `sorafs_manifest_stub capacity` para enviar cargas úteis Norito, blobs base64, corpo de solicitação Torii e currículos JSON para:
+`run_cli.sh` encapsula `sorafs_manifest_builder capacity` para enviar cargas úteis Norito, blobs base64, corpo de solicitação Torii e currículos JSON para:
 
 - Três declarações de fornecedores participantes do cenário de negociação de cotas.
 - Uma ordem de replicação que permite o manifesto na encenação entre esses fornecedores.

@@ -80,7 +80,7 @@ esquemas Norito en Rust y los helpers de validacion que respaldan estos registro
 |----------|----------|-----|
 |サービスTorii |エクスポナー `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。プローバー・パギナシオン+フィルトラード。 |ネットワーキング TL / コア インフラ |
 |アテスタシオン | altura/hash del registry en respuestas を含めます。アテスタシオン Norito の SDK を構築します。 |コアインフラ |
-| CLI |エクステンダー `sorafs_manifest_stub` または新しい CLI `sorafs_pin` と `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
+| CLI |エクステンダー `sorafs_manifest_builder` または新しい CLI `sorafs_pin` と `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
 | SDK |クライアントの一般的なバインディング (Rust/Go/TS) の設計 Norito。アグリガーは統合テストを行います。 | SDK チーム |
 
 操作:

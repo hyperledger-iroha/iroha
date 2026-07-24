@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.sdk.consensus
 
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.util.Collections
 import org.hyperledger.iroha.sdk.client.JsonParser
@@ -30,6 +31,9 @@ object NativeAmxV2 {
 
     /** Exact byte length of a BLS-Normal PoP or aggregate signature. */
     const val BLS_PROOF_BYTES: Int = 96
+
+    private val U32_MAX: BigInteger = BigInteger.ONE.shiftLeft(32).subtract(BigInteger.ONE)
+    private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 
     /** Typed prepare/commit phase from the mandatory tagged phase object. */
     enum class Phase(private val wireName: String) {
@@ -117,8 +121,7 @@ object NativeAmxV2 {
                 val items = array(value, path)
                 val bytes = ByteArray(items.size)
                 items.forEachIndexed { index, item ->
-                    val number = unsignedLong(item, "$path[$index]")
-                    require(number <= 0xff) { "$path[$index] must fit in one byte" }
+                    val number = boundedInt(item, "$path[$index]", 0, 0xff)
                     bytes[index] = number.toByte()
                 }
                 return Bytes(bytes)
@@ -129,8 +132,8 @@ object NativeAmxV2 {
     /** Frozen global consensus round. Its view is independent of lane-local views. */
     class Round(
         val contextId: ConsensusHash,
-        val height: Long,
-        val view: Long,
+        val height: BigInteger,
+        val view: BigInteger,
     ) {
         override fun equals(other: Any?): Boolean =
             other is Round &&
@@ -144,30 +147,30 @@ object NativeAmxV2 {
     /** Signed Native AMX V2 participant-attestation body. */
     class AttestationBody internal constructor(
         val round: Round,
-        val epoch: Long,
+        val epoch: BigInteger,
         val chainIdHash: ConsensusHash,
         val sourceId: SourceId,
         val transactionEntrypointHash: TransactionEntrypointHash,
         val planDigest: ConsensusHash,
         val phase: Phase,
         val coordinatorLaneId: Long,
-        val coordinatorDataspaceId: Long,
+        val coordinatorDataspaceId: BigInteger,
         val coordinatorLaneIncarnation: ConsensusHash,
         val participantLaneId: Long,
-        val participantDataspaceId: Long,
+        val participantDataspaceId: BigInteger,
         val participantLaneIncarnation: ConsensusHash,
-        val participantPreviousBlockHeight: Long,
+        val participantPreviousBlockHeight: BigInteger,
         val participantPreviousBlockDescriptorHash: ConsensusHash?,
-        val participantLaneBlockHeight: Long,
-        val participantLaneBlockView: Long,
+        val participantLaneBlockHeight: BigInteger,
+        val participantLaneBlockView: BigInteger,
         val participantProposalHash: ConsensusHash,
         val participantSettlementCommitment: ConsensusHash,
         val participantValidatorSetHash: ConsensusHash,
         val participantValidatorCount: Int,
         val participantMinQuorum: Int,
-        val authorityContextHeight: Long,
-        val plannedCoordinatorBlockHeight: Long,
-        val coordinatorLaneBlockView: Long,
+        val authorityContextHeight: BigInteger,
+        val plannedCoordinatorBlockHeight: BigInteger,
+        val coordinatorLaneBlockView: BigInteger,
         val coordinatorProposalHash: ConsensusHash,
     ) {
         internal fun hasSameIdentity(other: AttestationBody): Boolean =
@@ -253,7 +256,7 @@ object NativeAmxV2 {
         val xorDue: String,
         val xorAfterHaircut: String,
         val xorVariance: String,
-        val timestampMs: Long,
+        val timestampMs: BigInteger,
     ) {
         override fun equals(other: Any?): Boolean =
             other is SettlementReceipt &&
@@ -276,10 +279,10 @@ object NativeAmxV2 {
 
     /** Exact terminal participant settlement certified by a Native AMX leg. */
     class ParticipantSettlement internal constructor(
-        val blockHeight: Long,
+        val blockHeight: BigInteger,
         val laneId: Long,
         val laneIncarnation: ConsensusHash,
-        val dataspaceId: Long,
+        val dataspaceId: BigInteger,
         val transactionCount: Long,
         val totalLocalAmount: String,
         val totalXorDue: String,
@@ -320,17 +323,17 @@ object NativeAmxV2 {
     /** Exact control-only participant lane-block descriptor. */
     class ParticipantDescriptor internal constructor(
         val laneId: Long,
-        val dataspaceId: Long,
+        val dataspaceId: BigInteger,
         val laneIncarnation: ConsensusHash,
-        val proposalHeight: Long,
-        val previousLaneBlockHeight: Long,
+        val proposalHeight: BigInteger,
+        val previousLaneBlockHeight: BigInteger,
         val previousLaneBlockDescriptorHash: ConsensusHash?,
-        val laneBlockHeight: Long,
-        val laneBlockView: Long,
+        val laneBlockHeight: BigInteger,
+        val laneBlockView: BigInteger,
         val subjectHash: ConsensusHash,
         val payloadOwnershipHash: ConsensusHash,
         val rbcInstanceHash: ConsensusHash,
-        acceptedCandidateIndices: List<Long>,
+        acceptedCandidateIndices: List<BigInteger>,
         acceptedTransactionHashes: List<TransactionEntrypointHash>,
         val validatorSetHashVersion: Int,
         val validatorSetHash: ConsensusHash,
@@ -340,7 +343,7 @@ object NativeAmxV2 {
         val qcModeTag: String,
         val descriptorHash: ConsensusHash,
     ) {
-        val acceptedCandidateIndices: List<Long> =
+        val acceptedCandidateIndices: List<BigInteger> =
             Collections.unmodifiableList(acceptedCandidateIndices.toList())
         val acceptedTransactionHashes: List<TransactionEntrypointHash> =
             Collections.unmodifiableList(acceptedTransactionHashes.toList())
@@ -410,7 +413,7 @@ object NativeAmxV2 {
     /** Prepare/Commit proof for one participant route. */
     class Leg internal constructor(
         val laneId: Long,
-        val dataspaceId: Long,
+        val dataspaceId: BigInteger,
         val laneIncarnation: ConsensusHash,
         val participantProposal: ParticipantProposal,
         val participantSettlement: ParticipantSettlement,
@@ -456,11 +459,11 @@ object NativeAmxV2 {
         val chainIdHash: ConsensusHash,
         val planDigest: ConsensusHash,
         val laneId: Long,
-        val dataspaceId: Long,
+        val dataspaceId: BigInteger,
         val laneIncarnation: ConsensusHash,
-        val authorityContextHeight: Long,
-        val laneBlockHeight: Long,
-        val laneBlockView: Long,
+        val authorityContextHeight: BigInteger,
+        val laneBlockHeight: BigInteger,
+        val laneBlockView: BigInteger,
         val coordinatorProposalHash: ConsensusHash,
         legs: List<Leg>,
     ) {
@@ -499,10 +502,10 @@ object NativeAmxV2 {
 
     /** One lane settlement containing an ordered Native AMX source group. */
     class ReceiptGroup internal constructor(
-        val blockHeight: Long,
+        val blockHeight: BigInteger,
         val laneId: Long,
         val laneIncarnation: ConsensusHash,
-        val dataspaceId: Long,
+        val dataspaceId: BigInteger,
         val transactionCount: Long,
         receipts: List<Receipt>,
     ) {
@@ -568,11 +571,11 @@ object NativeAmxV2 {
     private fun parseReceiptGroupValue(value: Any?): ReceiptGroup {
         val path = "native AMX receipt group"
         val record = exactObject(value, GROUP_FIELDS, path)
-        val blockHeight = positiveLong(record["block_height"], "$path.block_height")
+        val blockHeight = positiveU64(record["block_height"], "$path.block_height")
         val laneId = laneId(record["lane_id"], "$path.lane_id")
         val laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation")
-        val dataspaceId = unsignedLong(record["dataspace_id"], "$path.dataspace_id")
-        val transactionCount = unsignedLong(record["tx_count"], "$path.tx_count")
+        val dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id")
+        val transactionCount = sourceCount(record["tx_count"], "$path.tx_count")
         canonicalQuantity(record["total_local_amount"], "$path.total_local_amount")
         canonicalQuantity(record["total_xor_due"], "$path.total_xor_due")
         canonicalQuantity(
@@ -630,17 +633,17 @@ object NativeAmxV2 {
         val chainIdHash = hash(record["chain_id_hash"], "$path.chain_id_hash")
         val planDigest = hash(record["plan_digest"], "$path.plan_digest")
         val laneId = laneId(record["lane_id"], "$path.lane_id")
-        val dataspaceId = unsignedLong(record["dataspace_id"], "$path.dataspace_id")
+        val dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id")
         val laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation")
-        val authorityHeight = positiveLong(
+        val authorityHeight = positiveU64(
             record["authority_context_height"],
             "$path.authority_context_height",
         )
-        val laneBlockHeight = positiveLong(
+        val laneBlockHeight = positiveU64(
             record["lane_block_height"],
             "$path.lane_block_height",
         )
-        val laneBlockView = unsignedLong(record["lane_block_view"], "$path.lane_block_view")
+        val laneBlockView = unsignedU64(record["lane_block_view"], "$path.lane_block_view")
         val coordinatorProposalHash = hash(
             record["coordinator_proposal_hash"],
             "$path.coordinator_proposal_hash",
@@ -677,7 +680,8 @@ object NativeAmxV2 {
             if (leg.laneId == laneId && leg.dataspaceId == dataspaceId) {
                 val descriptor = leg.participantProposal.descriptor
                 require(
-                    descriptor.laneIncarnation == laneIncarnation &&
+                    !leg.requiresMixedRoleAnchorValidation &&
+                        descriptor.laneIncarnation == laneIncarnation &&
                         descriptor.laneBlockHeight == laneBlockHeight &&
                         descriptor.laneBlockView == laneBlockView &&
                         leg.participantProposal.proposalHash == coordinatorProposalHash,
@@ -703,7 +707,7 @@ object NativeAmxV2 {
     private fun parseLeg(value: Any?, path: String): Leg {
         val record = exactObject(value, LEG_FIELDS, path)
         val laneId = laneId(record["lane_id"], "$path.lane_id")
-        val dataspaceId = unsignedLong(record["dataspace_id"], "$path.dataspace_id")
+        val dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id")
         val proposal = parseProposal(record["participant_proposal"], "$path.participant_proposal")
         val settlement = parseParticipantSettlement(
             record["participant_settlement"],
@@ -873,26 +877,26 @@ object NativeAmxV2 {
     private fun parseBody(value: Any?, path: String): AttestationBody {
         val record = exactObject(value, BODY_FIELDS, path)
         val round = parseRound(record["round"], "$path.round")
-        val previousHeight = unsignedLong(
+        val previousHeight = unsignedU64(
             record["participant_previous_block_height"],
             "$path.participant_previous_block_height",
         )
         val previousHash = record["participant_previous_block_descriptor_hash"]?.let {
             hash(it, "$path.participant_previous_block_descriptor_hash")
         }
-        val participantHeight = positiveLong(
+        val participantHeight = positiveU64(
             record["participant_lane_block_height"],
             "$path.participant_lane_block_height",
         )
-        require(previousHeight < Long.MAX_VALUE && previousHeight + 1 == participantHeight) {
+        require(previousHeight.add(BigInteger.ONE) == participantHeight) {
             "$path participant block heights must be contiguous"
         }
-        require((previousHeight == 0L) == (previousHash == null)) {
+        require((previousHeight == BigInteger.ZERO) == (previousHash == null)) {
             "$path participant predecessor hash geometry is inconsistent"
         }
         return AttestationBody(
             round = round,
-            epoch = unsignedLong(record["epoch"], "$path.epoch"),
+            epoch = unsignedU64(record["epoch"], "$path.epoch"),
             chainIdHash = hash(record["chain_id_hash"], "$path.chain_id_hash"),
             sourceId = source(record["source_id"], "$path.source_id"),
             transactionEntrypointHash = entrypoint(
@@ -905,7 +909,7 @@ object NativeAmxV2 {
                 record["coordinator_lane_id"],
                 "$path.coordinator_lane_id",
             ),
-            coordinatorDataspaceId = unsignedLong(
+            coordinatorDataspaceId = unsignedU64(
                 record["coordinator_dataspace_id"],
                 "$path.coordinator_dataspace_id",
             ),
@@ -917,7 +921,7 @@ object NativeAmxV2 {
                 record["participant_lane_id"],
                 "$path.participant_lane_id",
             ),
-            participantDataspaceId = unsignedLong(
+            participantDataspaceId = unsignedU64(
                 record["participant_dataspace_id"],
                 "$path.participant_dataspace_id",
             ),
@@ -928,7 +932,7 @@ object NativeAmxV2 {
             participantPreviousBlockHeight = previousHeight,
             participantPreviousBlockDescriptorHash = previousHash,
             participantLaneBlockHeight = participantHeight,
-            participantLaneBlockView = unsignedLong(
+            participantLaneBlockView = unsignedU64(
                 record["participant_lane_block_view"],
                 "$path.participant_lane_block_view",
             ),
@@ -956,15 +960,15 @@ object NativeAmxV2 {
                 1,
                 MAX_VALIDATORS,
             ),
-            authorityContextHeight = positiveLong(
+            authorityContextHeight = positiveU64(
                 record["authority_context_height"],
                 "$path.authority_context_height",
             ),
-            plannedCoordinatorBlockHeight = positiveLong(
+            plannedCoordinatorBlockHeight = positiveU64(
                 record["planned_coordinator_block_height"],
                 "$path.planned_coordinator_block_height",
             ),
-            coordinatorLaneBlockView = unsignedLong(
+            coordinatorLaneBlockView = unsignedU64(
                 record["coordinator_lane_block_view"],
                 "$path.coordinator_lane_block_view",
             ),
@@ -981,8 +985,8 @@ object NativeAmxV2 {
         require(context.size == 1) { "$path.context_id must be a one-hash tuple" }
         return Round(
             hash(context.single(), "$path.context_id[0]"),
-            positiveLong(record["height"], "$path.height"),
-            unsignedLong(record["view"], "$path.view"),
+            positiveU64(record["height"], "$path.height"),
+            unsignedU64(record["view"], "$path.view"),
         )
     }
 
@@ -1007,7 +1011,7 @@ object NativeAmxV2 {
             path,
             DESCRIPTOR_OPTIONAL_FIELDS,
         )
-        val previousHeight = unsignedLong(
+        val previousHeight = unsignedU64(
             record["previous_lane_block_height"],
             "$path.previous_lane_block_height",
         )
@@ -1016,18 +1020,18 @@ object NativeAmxV2 {
             "previous_lane_block_descriptor_hash",
             "$path.previous_lane_block_descriptor_hash",
         )
-        require((previousHeight == 0L) == (previousHash == null)) {
+        require((previousHeight == BigInteger.ZERO) == (previousHash == null)) {
             "$path predecessor hash geometry is inconsistent"
         }
-        val laneBlockHeight = positiveLong(record["lane_block_height"], "$path.lane_block_height")
-        require(previousHeight < Long.MAX_VALUE && previousHeight + 1 == laneBlockHeight) {
+        val laneBlockHeight = positiveU64(record["lane_block_height"], "$path.lane_block_height")
+        require(previousHeight.add(BigInteger.ONE) == laneBlockHeight) {
             "$path lane block heights must be contiguous"
         }
         val candidateIndices = array(
             record["accepted_candidate_indices"],
             "$path.accepted_candidate_indices",
         ).mapIndexed { index, item ->
-            unsignedLong(item, "$path.accepted_candidate_indices[$index]")
+            unsignedU64(item, "$path.accepted_candidate_indices[$index]")
         }
         val transactionHashes = array(
             record["accepted_transaction_hashes"],
@@ -1081,13 +1085,13 @@ object NativeAmxV2 {
         }
         return ParticipantDescriptor(
             laneId = laneId(record["lane_id"], "$path.lane_id"),
-            dataspaceId = unsignedLong(record["dataspace_id"], "$path.dataspace_id"),
+            dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id"),
             laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation"),
-            proposalHeight = positiveLong(record["proposal_height"], "$path.proposal_height"),
+            proposalHeight = positiveU64(record["proposal_height"], "$path.proposal_height"),
             previousLaneBlockHeight = previousHeight,
             previousLaneBlockDescriptorHash = previousHash,
             laneBlockHeight = laneBlockHeight,
-            laneBlockView = unsignedLong(record["lane_block_view"], "$path.lane_block_view"),
+            laneBlockView = unsignedU64(record["lane_block_view"], "$path.lane_block_view"),
             subjectHash = hash(record["subject_hash"], "$path.subject_hash"),
             payloadOwnershipHash = hash(
                 record["payload_ownership_hash"],
@@ -1129,11 +1133,11 @@ object NativeAmxV2 {
         }
         requireStrictlyOrdered(receipts.map { it.sourceId.value }, "$path.receipts source IDs")
         return ParticipantSettlement(
-            blockHeight = positiveLong(record["block_height"], "$path.block_height"),
+            blockHeight = positiveU64(record["block_height"], "$path.block_height"),
             laneId = laneId(record["lane_id"], "$path.lane_id"),
             laneIncarnation = hash(record["lane_incarnation"], "$path.lane_incarnation"),
-            dataspaceId = unsignedLong(record["dataspace_id"], "$path.dataspace_id"),
-            transactionCount = unsignedLong(record["tx_count"], "$path.tx_count"),
+            dataspaceId = unsignedU64(record["dataspace_id"], "$path.dataspace_id"),
+            transactionCount = sourceCount(record["tx_count"], "$path.tx_count"),
             totalLocalAmount = canonicalQuantity(
                 record["total_local_amount"],
                 "$path.total_local_amount",
@@ -1159,7 +1163,7 @@ object NativeAmxV2 {
             canonicalQuantity(record["xor_due"], "$path.xor_due"),
             canonicalQuantity(record["xor_after_haircut"], "$path.xor_after_haircut"),
             canonicalQuantity(record["xor_variance"], "$path.xor_variance"),
-            unsignedLong(record["timestamp_ms"], "$path.timestamp_ms"),
+            unsignedU64(record["timestamp_ms"], "$path.timestamp_ms"),
         )
     }
 
@@ -1197,8 +1201,10 @@ object NativeAmxV2 {
     }
 
     private fun int(value: Any?, path: String): Int {
-        val parsed = unsignedLong(value, path)
-        require(parsed <= Int.MAX_VALUE) { "$path must fit in a signed 32-bit integer" }
+        val parsed = unsignedU64(value, path)
+        require(parsed <= BigInteger.valueOf(Int.MAX_VALUE.toLong())) {
+            "$path must fit in a signed 32-bit integer"
+        }
         return parsed.toInt()
     }
 
@@ -1209,34 +1215,39 @@ object NativeAmxV2 {
     }
 
     private fun laneId(value: Any?, path: String): Long {
-        val parsed = unsignedLong(value, path)
-        require(parsed <= 0xffff_ffffL) { "$path must fit in an unsigned 32-bit integer" }
+        val parsed = unsignedU64(value, path)
+        require(parsed <= U32_MAX) { "$path must fit in an unsigned 32-bit integer" }
+        return parsed.toLong()
+    }
+
+    private fun sourceCount(value: Any?, path: String): Long =
+        boundedInt(value, path, 1, MAX_GROUP_SOURCES).toLong()
+
+    private fun positiveU64(value: Any?, path: String): BigInteger {
+        val parsed = unsignedU64(value, path)
+        require(parsed.signum() > 0) { "$path must be positive" }
         return parsed
     }
 
-    private fun positiveLong(value: Any?, path: String): Long {
-        val parsed = unsignedLong(value, path)
-        require(parsed > 0) { "$path must be positive" }
-        return parsed
-    }
-
-    private fun unsignedLong(value: Any?, path: String): Long {
+    private fun unsignedU64(value: Any?, path: String): BigInteger {
         require(
             value is Byte ||
                 value is Short ||
                 value is Int ||
                 value is Long ||
-                value is java.math.BigInteger,
+                value is BigInteger,
         ) { "$path must be an integer" }
         val parsed = when (value) {
-            is java.math.BigInteger -> {
-                require(value.bitLength() <= 63) { "$path exceeds the supported integer range" }
-                value.toLong()
-            }
-            is Number -> value.toLong()
+            is BigInteger -> value
+            is Byte -> BigInteger.valueOf(value.toLong())
+            is Short -> BigInteger.valueOf(value.toLong())
+            is Int -> BigInteger.valueOf(value.toLong())
+            is Long -> BigInteger.valueOf(value)
             else -> error("unreachable")
         }
-        require(parsed >= 0) { "$path must be non-negative" }
+        require(parsed.signum() >= 0 && parsed <= U64_MAX) {
+            "$path must fit in an unsigned 64-bit integer"
+        }
         return parsed
     }
 

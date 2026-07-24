@@ -9,7 +9,14 @@ from typing import Any
 
 import pytest
 
-from iroha_python import SumeragiLaneSettlementCommitment, SumeragiNativeAmxPhase
+from iroha_python import (
+    SumeragiDiagnosticsSnapshot,
+    SumeragiLaneSettlementCommitment,
+    SumeragiNativeAmxPhase,
+)
+from iroha_torii_client.client import (
+    SumeragiDiagnosticsStatus as CanonicalSumeragiDiagnosticsStatus,
+)
 
 
 FIXTURE_PATH = (
@@ -88,6 +95,135 @@ def _apply_mutation(document: dict[str, Any], mutation: dict[str, Any]) -> None:
         raise AssertionError(f"unsupported fixture mutation operation: {operation}")
 
 
+def _validate_application_evidence(document: dict[str, Any]) -> None:
+    golden = document["golden"]
+    group = golden["receipt_group"]
+    evidence = golden["application_evidence"]
+    execution = evidence["execution_commitment"]
+    artifacts = evidence["manifest_artifacts"]
+
+    def require(condition: bool, message: str) -> None:
+        if not condition:
+            raise ValueError(message)
+
+    require(execution["native_amx_application_manifest_version"] == 1, "manifest version")
+    require(
+        execution["native_amx_application_manifest_count"] == len(artifacts) == 1,
+        "manifest count",
+    )
+    artifact = artifacts[0]
+    leaf = artifact["leaf"]
+    proof = artifact["proof"]
+    require(artifact["version"] == 1 and leaf["version"] == 1, "artifact version")
+    require(artifact["leaf_index"] == proof["leaf_index"] == 0, "proof position")
+    require(proof["audit_path"] == [], "singleton proof path")
+    require(
+        artifact["manifest_leaf_count"] == 1
+        and artifact["manifest_root"]
+        == execution["native_amx_application_manifest_root"]
+        == artifact["leaf_hash"],
+        "manifest root",
+    )
+    require(
+        leaf["executed_block_wire_hash"] == execution["executed_block_wire_hash"],
+        "executed wire",
+    )
+    require(
+        leaf["predecessor_height"] + 1 == leaf["participant_height"],
+        "participant predecessor",
+    )
+    active = evidence["active_lane_incarnations"]
+    require(
+        active
+        == [
+            {
+                "lane_id": leaf["lane_id"],
+                "dataspace_id": leaf["dataspace_id"],
+                "lane_incarnation": leaf["lane_incarnation"],
+            }
+        ],
+        "active incarnation",
+    )
+    coordinator_route = (group["lane_id"], group["dataspace_id"])
+    require(
+        (leaf["lane_id"], leaf["dataspace_id"]) != coordinator_route,
+        "same-route coordinator must not have separate application evidence",
+    )
+
+    members = leaf["members"]
+    source_ids = [member["source_id"] for member in members]
+    require(
+        source_ids == [receipt["source_id"] for receipt in group["native_amx_receipts"]],
+        "manifest source membership",
+    )
+    require(
+        1 <= len(members) <= 4096
+        and len(source_ids) == len(set(source_ids))
+        and all(
+            left["entrypoint_index"] < right["entrypoint_index"]
+            for left, right in zip(members, members[1:])
+        ),
+        "manifest member geometry",
+    )
+    carrier_entrypoints = set(evidence["carrier_entrypoint_hashes"])
+    for receipt, member in zip(group["native_amx_receipts"], members):
+        leg = next(
+            (
+                candidate
+                for candidate in receipt["legs"]
+                if (
+                    candidate["lane_id"],
+                    candidate["dataspace_id"],
+                )
+                == (leaf["lane_id"], leaf["dataspace_id"])
+            ),
+            None,
+        )
+        require(leg is not None, "manifest route is absent from receipt")
+        assert leg is not None
+        descriptor = leg["participant_proposal"]["descriptor"]
+        require(
+            descriptor["lane_incarnation"] == leaf["lane_incarnation"]
+            and descriptor["lane_block_height"] == leaf["participant_height"]
+            and descriptor["lane_block_view"] == leaf["participant_view"]
+            and descriptor["previous_lane_block_height"] == leaf["predecessor_height"]
+            and descriptor.get("previous_lane_block_descriptor_hash")
+            == leaf.get("predecessor_descriptor_hash")
+            and descriptor["descriptor_hash"] == leaf["descriptor_hash"]
+            and leg["participant_proposal"]["proposal_hash"] == leaf["proposal_hash"]
+            and leg["participant_settlement_hash"] == leaf["settlement_hash"],
+            "manifest participant identity",
+        )
+        body = leg["prepare_qc"]["body"]
+        require(
+            body["source_id"] == member["source_id"]
+            and body["tx_entrypoint_hash"] == member["entrypoint_hash"]
+            and member["entrypoint_index"]
+            in descriptor["accepted_candidate_indices"]
+            and set(descriptor["accepted_transaction_hashes"]) <= carrier_entrypoints,
+            "mixed-role carrier anchor",
+        )
+
+    row = golden["expected_diagnostics"]["native_amx_participant_applications"][0]
+    require(
+        row["lane_id"] == leaf["lane_id"]
+        and row["dataspace_id"] == leaf["dataspace_id"]
+        and row["lane_incarnation"] == leaf["lane_incarnation"]
+        and row["participant_height"] == leaf["participant_height"]
+        and row["participant_view"] == leaf["participant_view"]
+        and row["predecessor_height"] == leaf["predecessor_height"]
+        and row.get("predecessor_descriptor_hash")
+        == leaf.get("predecessor_descriptor_hash")
+        and row["descriptor_hash"] == leaf["descriptor_hash"]
+        and row["proposal_hash"] == leaf["proposal_hash"]
+        and row["settlement_hash"] == leaf["settlement_hash"]
+        and row["source_count"] == len(members)
+        and row["application_block_height"] == leaf["application_block_height"]
+        and row["application_block_hash"] == leaf["application_block_hash"],
+        "diagnostic application identity",
+    )
+
+
 def test_grouped_native_amx_v2_golden_fixture() -> None:
     fixture = _fixture()
     assert fixture["format"] == "iroha-native-amx-v2-grouped"
@@ -135,6 +271,17 @@ def test_grouped_native_amx_v2_golden_fixture() -> None:
     projection = fixture["golden"]["expected_diagnostics"]
     assert projection["lane_settlement_commitments"] == [payload]
     assert projection["native_amx_participant_applications"][0]["source_count"] == 2
+    canonical_diagnostics = CanonicalSumeragiDiagnosticsStatus.from_payload(projection)
+    high_level_diagnostics = SumeragiDiagnosticsSnapshot.from_payload(projection)
+    assert (
+        canonical_diagnostics.native_amx_participant_applications[0].source_count
+        == 2
+    )
+    assert (
+        high_level_diagnostics.native_amx_participant_applications[0].source_count
+        == 2
+    )
+    _validate_application_evidence(fixture)
 
 
 @pytest.mark.parametrize(
@@ -148,7 +295,18 @@ def test_grouped_native_amx_v2_negative_corpus(control: dict[str, Any]) -> None:
     for mutation in control["mutations"]:
         _apply_mutation(fixture, mutation)
 
+    if control["validator"] == "application_evidence":
+        with pytest.raises(ValueError):
+            _validate_application_evidence(fixture)
+        return
+
+    assert control["validator"] == "receipt_group"
+    mutated_group = fixture["golden"]["receipt_group"]
     with pytest.raises((TypeError, ValueError)):
-        SumeragiLaneSettlementCommitment.from_payload(
-            fixture["golden"]["receipt_group"]
-        )
+        SumeragiLaneSettlementCommitment.from_payload(mutated_group)
+    diagnostics = deepcopy(fixture["golden"]["expected_diagnostics"])
+    diagnostics["lane_settlement_commitments"] = [mutated_group]
+    with pytest.raises(RuntimeError):
+        CanonicalSumeragiDiagnosticsStatus.from_payload(diagnostics)
+    with pytest.raises((RuntimeError, TypeError, ValueError)):
+        SumeragiDiagnosticsSnapshot.from_payload(diagnostics)

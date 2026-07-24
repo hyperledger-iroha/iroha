@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-import { ToriiClient } from "../src/toriiClient.js";
+import { ToriiClient as DistToriiClient } from "../dist/toriiClient.js";
+import { ToriiClient as SourceToriiClient } from "../src/toriiClient.js";
 
 const fixtureUrl = new URL(
   "../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json",
@@ -88,8 +89,126 @@ function applyMutation(document, mutation) {
   }
 }
 
-function diagnosticsClient(payload) {
-  return new ToriiClient("https://fixture.invalid", {
+function validateApplicationEvidence(document) {
+  const { golden } = document;
+  const group = golden.receipt_group;
+  const evidence = golden.application_evidence;
+  const execution = evidence.execution_commitment;
+  const artifacts = evidence.manifest_artifacts;
+  assert.equal(execution.native_amx_application_manifest_version, 1);
+  assert.equal(execution.native_amx_application_manifest_count, artifacts.length);
+  assert.equal(artifacts.length, 1);
+
+  const artifact = artifacts[0];
+  const { leaf, proof } = artifact;
+  assert.equal(artifact.version, 1);
+  assert.equal(leaf.version, 1);
+  assert.equal(artifact.leaf_index, 0);
+  assert.equal(proof.leaf_index, 0);
+  assert.deepEqual(proof.audit_path, []);
+  assert.equal(artifact.manifest_leaf_count, 1);
+  assert.equal(
+    artifact.manifest_root,
+    execution.native_amx_application_manifest_root,
+  );
+  assert.equal(artifact.manifest_root, artifact.leaf_hash);
+  assert.equal(
+    leaf.executed_block_wire_hash,
+    execution.executed_block_wire_hash,
+  );
+  assert.equal(leaf.predecessor_height + 1, leaf.participant_height);
+  assert.deepEqual(evidence.active_lane_incarnations, [{
+    lane_id: leaf.lane_id,
+    dataspace_id: leaf.dataspace_id,
+    lane_incarnation: leaf.lane_incarnation,
+  }]);
+  assert.notDeepEqual(
+    [leaf.lane_id, leaf.dataspace_id],
+    [group.lane_id, group.dataspace_id],
+  );
+
+  const members = leaf.members;
+  assert.ok(members.length >= 1 && members.length <= 4096);
+  assert.deepEqual(
+    members.map((member) => member.source_id),
+    group.native_amx_receipts.map((receipt) => receipt.source_id),
+  );
+  assert.equal(
+    new Set(members.map((member) => member.source_id)).size,
+    members.length,
+  );
+  assert.ok(
+    members.every(
+      (member, index) =>
+        index === 0 ||
+        members[index - 1].entrypoint_index < member.entrypoint_index,
+    ),
+  );
+  const carrierEntrypoints = new Set(evidence.carrier_entrypoint_hashes);
+  for (const [index, receipt] of group.native_amx_receipts.entries()) {
+    const member = members[index];
+    const leg = receipt.legs.find(
+      (candidate) =>
+        candidate.lane_id === leaf.lane_id &&
+        candidate.dataspace_id === leaf.dataspace_id,
+    );
+    assert.ok(leg);
+    const descriptor = leg.participant_proposal.descriptor;
+    assert.equal(descriptor.lane_incarnation, leaf.lane_incarnation);
+    assert.equal(descriptor.lane_block_height, leaf.participant_height);
+    assert.equal(descriptor.lane_block_view, leaf.participant_view);
+    assert.equal(
+      descriptor.previous_lane_block_height,
+      leaf.predecessor_height,
+    );
+    assert.equal(
+      descriptor.previous_lane_block_descriptor_hash ?? null,
+      leaf.predecessor_descriptor_hash ?? null,
+    );
+    assert.equal(descriptor.descriptor_hash, leaf.descriptor_hash);
+    assert.equal(leg.participant_proposal.proposal_hash, leaf.proposal_hash);
+    assert.equal(leg.participant_settlement_hash, leaf.settlement_hash);
+    assert.equal(leg.prepare_qc.body.source_id, member.source_id);
+    assert.equal(
+      leg.prepare_qc.body.tx_entrypoint_hash,
+      member.entrypoint_hash,
+    );
+    assert.ok(
+      descriptor.accepted_candidate_indices.includes(member.entrypoint_index),
+    );
+    assert.ok(
+      descriptor.accepted_transaction_hashes.every((hash) =>
+        carrierEntrypoints.has(hash)),
+    );
+  }
+
+  const row = golden.expected_diagnostics.native_amx_participant_applications[0];
+  for (const field of [
+    "lane_id",
+    "dataspace_id",
+    "lane_incarnation",
+    "participant_height",
+    "participant_view",
+    "predecessor_height",
+    "predecessor_descriptor_hash",
+    "descriptor_hash",
+    "proposal_hash",
+    "settlement_hash",
+    "application_block_height",
+    "application_block_hash",
+  ]) {
+    assert.equal(row[field] ?? null, leaf[field] ?? null, field);
+  }
+  assert.equal(row.source_count, members.length);
+}
+
+const clientImplementations = [
+  ["source", SourceToriiClient],
+  ["dist", DistToriiClient],
+];
+
+function diagnosticsClient(payload, Client = SourceToriiClient) {
+  return new Client("https://fixture.invalid", {
     fetchImpl: async (url) => {
       assert.equal(url, "https://fixture.invalid/v1/sumeragi/diagnostics");
       return new Response(JSON.stringify(payload), {
@@ -108,45 +227,65 @@ test("Rust-owned grouped Native AMX v2 golden fixture is accepted", async () => 
     "iroha_data_model::block::consensus",
   );
 
-  const diagnostics = await diagnosticsClient(
-    clone(fixtureDocument.golden.expected_diagnostics),
-  ).getSumeragiDiagnosticsTyped();
-  const group = diagnostics.lane_settlement_commitments[0];
-  assert.equal(group.native_amx_receipts.length, 2);
-  assert.deepEqual(
-    group.native_amx_receipts.map((receipt) => receipt.source_id),
-    fixtureDocument.golden.ordered_source_ids,
-  );
-  for (const receipt of group.native_amx_receipts) {
-    assert.equal(receipt.legs.length, 2);
-    assert.equal(receipt.lane_block_view, 9);
-    for (const leg of receipt.legs) {
-      assert.deepEqual(leg.prepare_qc.body.phase, {
-        phase: "prepare",
-        detail: null,
-      });
-      assert.deepEqual(leg.commit_qc.body.phase, {
-        phase: "commit",
-        detail: null,
-      });
-      assert.equal(leg.prepare_qc.body.round.view, 6);
-      assert.equal(leg.prepare_qc.body.coordinator_lane_block_view, 9);
-      assert.equal(leg.prepare_qc.validator_set.length, 4);
-      assert.ok(
-        leg.prepare_qc.validator_set_pops.every((pop) => pop.length === 96),
-      );
-      assert.equal(leg.prepare_qc.bls_aggregate_signature.length, 96);
-      assert.equal(leg.requires_mixed_role_anchor_validation, false);
-      assert.deepEqual(
-        leg.participant_settlement.receipts.map((entry) => entry.source_id),
-        fixtureDocument.golden.ordered_source_ids,
-      );
+  for (const [implementation, Client] of clientImplementations) {
+    const diagnostics = await diagnosticsClient(
+      clone(fixtureDocument.golden.expected_diagnostics),
+      Client,
+    ).getSumeragiDiagnosticsTyped();
+    const group = diagnostics.lane_settlement_commitments[0];
+    assert.equal(group.native_amx_receipts.length, 2, implementation);
+    assert.deepEqual(
+      group.native_amx_receipts.map((receipt) => receipt.source_id),
+      fixtureDocument.golden.ordered_source_ids,
+      implementation,
+    );
+    for (const receipt of group.native_amx_receipts) {
+      assert.equal(receipt.legs.length, 2, implementation);
+      assert.equal(receipt.lane_block_view, 9, implementation);
+      for (const leg of receipt.legs) {
+        assert.deepEqual(leg.prepare_qc.body.phase, {
+          phase: "prepare",
+          detail: null,
+        }, implementation);
+        assert.deepEqual(leg.commit_qc.body.phase, {
+          phase: "commit",
+          detail: null,
+        }, implementation);
+        assert.equal(leg.prepare_qc.body.round.view, 6, implementation);
+        assert.equal(
+          leg.prepare_qc.body.coordinator_lane_block_view,
+          9,
+          implementation,
+        );
+        assert.equal(leg.prepare_qc.validator_set.length, 4, implementation);
+        assert.ok(
+          leg.prepare_qc.validator_set_pops.every((pop) => pop.length === 96),
+          implementation,
+        );
+        assert.equal(
+          leg.prepare_qc.bls_aggregate_signature.length,
+          96,
+          implementation,
+        );
+        assert.equal(
+          leg.requires_mixed_role_anchor_validation,
+          false,
+          implementation,
+        );
+        assert.deepEqual(
+          leg.participant_settlement.receipts.map((entry) => entry.source_id),
+          fixtureDocument.golden.ordered_source_ids,
+          implementation,
+        );
+      }
     }
+    assert.equal(
+      diagnostics.native_amx_participant_applications[0].source_count,
+      2,
+      implementation,
+    );
   }
-  assert.equal(
-    diagnostics.native_amx_participant_applications[0].source_count,
-    2,
-  );
+  validateApplicationEvidence(fixtureDocument);
 });
 
 test("grouped Native AMX v2 exposes mixed-role anchor deferral", async () => {
@@ -189,12 +328,20 @@ for (const control of fixtureDocument.negative_controls) {
     for (const mutation of control.mutations) {
       applyMutation(document, mutation);
     }
+    if (control.validator === "application_evidence") {
+      assert.throws(() => validateApplicationEvidence(document));
+      return;
+    }
+    assert.equal(control.validator, "receipt_group");
     const diagnostics = clone(document.golden.expected_diagnostics);
     diagnostics.lane_settlement_commitments = [
       document.golden.receipt_group,
     ];
-    await assert.rejects(() =>
-      diagnosticsClient(diagnostics).getSumeragiDiagnosticsTyped(),
-    );
+    for (const [implementation, Client] of clientImplementations) {
+      await assert.rejects(
+        () => diagnosticsClient(diagnostics, Client).getSumeragiDiagnosticsTyped(),
+        implementation,
+      );
+    }
   });
 }

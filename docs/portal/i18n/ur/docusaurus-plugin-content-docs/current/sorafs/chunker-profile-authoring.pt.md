@@ -97,9 +97,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   مجوزہ پیرامیٹرز کے ساتھ منشور اور چیک کی جانچ پڑتال کریں۔
 - `sorafs_manifest_chunk_store --json-out=-` - CHUNK اسٹور کی رپورٹ کو منتقل کریں
   خودکار موازنہ کے لئے stdout.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - کار کے منشور اور منصوبوں کی تصدیق کریں
+- `sorafs_manifest_builder --chunker-profile=<handle>` - کار کے منشور اور منصوبوں کی تصدیق کریں
   کیننیکل ہینڈل پلس عرفیوس کو سرایت کریں۔
-- `sorafs_manifest_stub --plan=-` - پچھلے `chunk_fetch_specs` کو دوبارہ جاری کریں
+- `sorafs_manifest_builder --plan=-` - پچھلے `chunk_fetch_specs` کو دوبارہ جاری کریں
   تبدیلی کے بعد آفسیٹس/ڈائجسٹ چیک کریں۔
 
 تجویز میں کمانڈز (ہضم ، پور کی جڑیں ، ظاہر ہیش) کی پیداوار کو ریکارڈ کریں تاکہ
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

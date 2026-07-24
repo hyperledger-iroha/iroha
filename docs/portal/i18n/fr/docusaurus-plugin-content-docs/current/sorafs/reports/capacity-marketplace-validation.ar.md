@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Vous pouvez utiliser les charges utiles en utilisant JSON/Norito pour `sorafs_manifest_stub capacity {declaration,dispute}`. الناتجة بجانب تذكرة الحوكمة.
+Vous pouvez utiliser les charges utiles en utilisant JSON/Norito pour `sorafs_manifest_builder capacity {declaration,dispute}`. الناتجة بجانب تذكرة الحوكمة.
 
 ## artefacts الموافقة
 

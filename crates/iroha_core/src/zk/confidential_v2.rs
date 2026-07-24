@@ -1114,7 +1114,7 @@ impl ConfidentialPoseidonFieldV3 for halo2_proofs::halo2curves::pasta::Fq {
 }
 
 #[cfg(any(feature = "zk-halo2", feature = "zk-halo2-ipa"))]
-fn confidential_poseidon_hash_v3<F>(domain: u64, inputs: &[F]) -> F
+pub(in crate::zk) fn confidential_poseidon_hash_v3<F>(domain: u64, inputs: &[F]) -> F
 where
     F: ConfidentialPoseidonFieldV3,
 {

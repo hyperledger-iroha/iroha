@@ -14,6 +14,8 @@ cargo fmt --all -- --check
 
 echo "[sorafs-release] shell syntax checks"
 bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
+  scripts/build_release_bundle.sh scripts/build_release_image.sh \
+  scripts/tests/release_manifest_signing_test.sh \
   ci/check_sorafs_reference_ffi_header.sh
 
 echo "[sorafs-release] reference FFI header contract"
@@ -28,11 +30,18 @@ python3 -m pytest -q \
   scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py \
   scripts/tests/build_sorafs_reference_sdk_release_canary_test.py \
   scripts/tests/run_sorafs_reference_sdk_release_evidence_test.py \
+  scripts/tests/release_profile_validation_test.py \
+  scripts/tests/release_manifest_signing_test.py \
+  scripts/tests/generate_release_manifest_test.py \
+  scripts/tests/generate_sorafs_cli_release_manifest_test.py \
+  scripts/tests/publish_plan_test.py \
   scripts/tests/release_sorafs_cli_test.py \
+  scripts/tests/package_sorafs_cli_candidate_test.py \
   scripts/tests/package_sorafs_validate_release_test.py \
-  scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_no_follow_json_reads \
+  scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_validate_release_packager_rejects_symlink_stage_entries \
   scripts/tests/check_sorafs_rollout_gate_contract_test.py::test_sorafs_cli_release_gate_runs_helper_adversarial_tests
+scripts/tests/release_manifest_signing_test.sh
 
 echo "[sorafs-release] clippy sorafs_orchestrator (sorafs_cli)"
 cargo clippy --locked -p sorafs_orchestrator --all-targets -- -D warnings

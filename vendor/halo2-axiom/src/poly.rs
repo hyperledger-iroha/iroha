@@ -180,12 +180,33 @@ impl<F: SerdePrimeField, B> Polynomial<F, B> {
 
     /// Writes polynomial to buffer using `SerdePrimeField::write`.
     pub(crate) fn write<W: io::Write>(&self, writer: &mut W, format: SerdeFormat) {
-        writer
-            .write_all(&(self.values.len() as u32).to_be_bytes())
-            .unwrap();
+        self.write_streaming(writer, format).unwrap();
+    }
+
+    /// Writes a polynomial without consuming it and propagates sink errors.
+    pub(crate) fn write_streaming<W: io::Write>(
+        &self,
+        writer: &mut W,
+        format: SerdeFormat,
+    ) -> io::Result<()> {
+        writer.write_all(&(self.values.len() as u32).to_be_bytes())?;
         for value in self.values.iter() {
-            value.write(writer, format).unwrap();
+            value.write(writer, format)?;
         }
+        Ok(())
+    }
+
+    /// Writes and drops the polynomial as it is serialized.
+    pub(crate) fn write_consuming<W: io::Write>(
+        self,
+        writer: &mut W,
+        format: SerdeFormat,
+    ) -> io::Result<()> {
+        writer.write_all(&(self.values.len() as u32).to_be_bytes())?;
+        for value in self.values {
+            value.write(writer, format)?;
+        }
+        Ok(())
     }
 }
 
@@ -248,6 +269,97 @@ where
             }
         })
         .collect();
+}
+
+/// Batch-inverts owned assigned polynomials without retaining a per-cell
+/// denominator slot.
+///
+/// Each column's rational denominators are collected densely in row order. The
+/// columns themselves are consumed in caller order, so each input allocation
+/// and its temporary denominator storage are released as soon as the matching
+/// field polynomial is produced. Splitting the inversion at column boundaries
+/// does not change any resulting field element.
+pub(crate) fn batch_invert_assigned_consuming<F: Field>(
+    assigned: Vec<Vec<Assigned<F>>>,
+) -> Vec<Polynomial<F, LagrangeCoeff>> {
+    assigned
+        .into_iter()
+        .map(|poly| {
+            let mut assigned_denominators = poly
+                .iter()
+                .filter_map(|value| value.denominator())
+                .collect::<Vec<_>>();
+            assigned_denominators.iter_mut().batch_invert();
+
+            let mut inverted_denominators = assigned_denominators.into_iter();
+            let values = poly
+                .into_iter()
+                .map(|value| match value {
+                    Assigned::Zero => F::ZERO,
+                    Assigned::Trivial(value) => value,
+                    Assigned::Rational(numerator, _) => {
+                        numerator
+                            * inverted_denominators
+                                .next()
+                                .expect("every rational value has an inverted denominator")
+                    }
+                })
+                .collect();
+            debug_assert!(inverted_denominators.next().is_none());
+            Polynomial {
+                values,
+                _marker: PhantomData,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod assigned_conversion_tests {
+    use halo2curves::bn256::Fr;
+
+    use super::{batch_invert_assigned, batch_invert_assigned_consuming};
+    use crate::plonk::Assigned;
+
+    #[test]
+    fn consuming_conversion_matches_borrowed_in_column_row_order() {
+        let assigned = vec![
+            vec![
+                Assigned::Zero,
+                Assigned::Trivial(Fr::from(9)),
+                Assigned::Rational(Fr::from(6), Fr::from(3)),
+                Assigned::Rational(Fr::from(17), Fr::from(0)),
+            ],
+            vec![
+                Assigned::Rational(Fr::from(35), Fr::from(7)),
+                Assigned::Trivial(Fr::from(11)),
+                Assigned::Zero,
+                Assigned::Rational(Fr::from(24), Fr::from(4)),
+            ],
+        ];
+        let borrowed = batch_invert_assigned(
+            assigned
+                .iter()
+                .map(Vec::as_slice)
+                .collect::<Vec<&[Assigned<Fr>]>>(),
+        );
+        let consuming = batch_invert_assigned_consuming(assigned);
+        let expected = vec![
+            vec![Fr::from(0), Fr::from(9), Fr::from(2), Fr::from(0)],
+            vec![Fr::from(5), Fr::from(11), Fr::from(0), Fr::from(6)],
+        ];
+
+        let borrowed = borrowed
+            .iter()
+            .map(|poly| poly.iter().copied().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        let consuming = consuming
+            .iter()
+            .map(|poly| poly.iter().copied().collect::<Vec<_>>())
+            .collect::<Vec<_>>();
+        assert_eq!(borrowed, expected);
+        assert_eq!(consuming, borrowed);
+    }
 }
 
 impl<F: Field> Polynomial<Assigned<F>, LagrangeCoeff> {

@@ -38,7 +38,7 @@ Sidebar_label: تنازع ومنسوخی رن بک
    - استضافة URI (تخزين الكائنات، دبوس SoraFS، أو نقطة نهاية يمكن الوصول إليها Torii)
 3. يمكن لدلو جمع الأدلة أن يكتب مرة واحدة فقط كما هو محفوظ للكتابة.## 3.تنازع جمع کرائیں
 
-1. `sorafs_manifest_stub capacity dispute` لمواصفات JSON:
+1. `sorafs_manifest_builder capacity dispute` لمواصفات JSON:
 
    ```json
    {
@@ -61,7 +61,7 @@ Sidebar_label: تنازع ومنسوخی رن بک
 2. اختصار CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ Sidebar_label: تنازع ومنسوخی رن بک
 
 1. **نافذة النعمة:** تم الإعلان عن التوقع المتوقع مؤخرًا؛ سمحت لك باليس بتثبيت البيانات مما يسمح لك بإكمالها.
 2. **`ProviderAdmissionRevocationV1` اسم:**
-   - يتم استخدام الجهاز باستخدام `sorafs_manifest_stub provider-admission revoke`.
+   - يتم استخدام الجهاز باستخدام `sorafs_manifest_builder provider-admission revoke`.
    - ملخص الخط والإلغاء ویریفائی کریں.
 3. **منسوخی شاع کریں:**
    - منسوخي ريكوئست Torii تم جمعه كريں.
@@ -93,7 +93,7 @@ Sidebar_label: تنازع ومنسوخی رن بک
 
 ## 6. حوالہ جاتی المواد
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - لوحة معلومات إمكانية الملاحظة: `SoraFS / Capacity Providers`

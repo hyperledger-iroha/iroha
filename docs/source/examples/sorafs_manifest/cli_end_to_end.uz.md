@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS CLI manifestining oxirigacha namunasi
 
 Ushbu misol yordamida SoraFS ga o'rnatilgan hujjatlarni nashr etish orqali o'tadi.
-`sorafs_manifest_stub` CLI deterministik bo'linish moslamalari bilan birga
+`sorafs_manifest_builder` CLI deterministik bo'linish moslamalari bilan birga
 SoraFS Arxitektura RFC da tasvirlangan. Oqim manifest avlodni qamrab oladi,
 kutish tekshiruvlari, olib kelish rejasini tekshirish va izlanishni isbotlash mashqlari
 jamoalar bir xil qadamlarni CIga kiritishlari mumkin.
@@ -30,7 +30,7 @@ jamoalar bir xil qadamlarni CIga kiritishlari mumkin.
 ## 1-qadam - Manifest, CAR, imzolar va olish rejasini yarating
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ Pin registri o'rnatilgandan so'ng (migratsiya yo'l xaritasida Milestone M2),
 manifestni CLI orqali yuboring:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

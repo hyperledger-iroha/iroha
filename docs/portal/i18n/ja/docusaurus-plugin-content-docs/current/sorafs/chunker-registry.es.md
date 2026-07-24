@@ -90,8 +90,8 @@ CLI クエリに関する JSON のフラグ (`--json-out`、`--por-json-out`、`
 クライアントの明示的な交渉が必要です (`Accept-Chunker` + `Accept-Digest`)。|コンポネ |エスタード |メモ |
 |----------|----------|----------|
 | `sorafs_manifest_chunk_store` | ✅ ソポルタド |カノニコ + エイリアスを処理し、`--json-out=-` および登録アプリケーション `ensure_charter_compliance()` 経由でレポートを送信します。 |
-| `sorafs_manifest_stub` | ⚠️レティラード |マニフェスト燃料デソルポートのコンストラクタ。米国 `iroha app sorafs toolkit pack` は、CAR/マニフェストと管理に関する `--plan=-` の再検証の決定版です。 |
-| `sorafs_provider_advert_stub` | ⚠️レティラード |オフライン検証のヘルパー。プロバイダーは、`/v1/sorafs/providers` を介してパイプラインの公開パイプラインを広告します。 |
+| `sorafs_manifest_builder` | ⚠️レティラード |マニフェスト燃料デソルポートのコンストラクタ。米国 `iroha app sorafs toolkit pack` は、CAR/マニフェストと管理に関する `--plan=-` の再検証の決定版です。 |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (開発者オーケストレーター) | ✅ ソポルタド | Lee `chunk_fetch_specs`、容量ペイロード `range` と CARv2 のアンサンブル。 |
 | SDK のフィクスチャ (Rust/Go/TS) | ✅ ソポルタド | `export_vectors` 経由のリジェネラーダ。別名リストとコンセホの会社の情報を処理できます。 |
 |ゲートウェイ Torii でのパーファイルのネゴシオン | ✅ ソポルタド | `Accept-Chunker` の完全な文法を実装し、ヘッダー `Content-Chunker` を含めて、ブリッジ CARv1 ソロとダウングレードの説明を説明します。 |
@@ -149,12 +149,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-El manifest stub refleja los mismos datos, lo que es conveniente al automatizar la selección de
+El manifest builder refleja los mismos datos, lo que es conveniente al automatizar la selección de
 `--chunker-profile-id` en pipelines. Ambos CLIs de chunk store también aceptan la forma de handle canónico
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ Cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     「プロファイルID」: 1、
@@ -218,4 +218,4 @@ CARv1+SHA-2 の輸出記録:
   メディアンテ・ラス・プルエバス・プロビスタス。
 * `chunker_registry::lookup_by_profile` 記述子パラメータを確認します
   偶然の一致 `ChunkProfile::DEFAULT` 偶然の発散。
-* ロスマニフェストは、`iroha app sorafs toolkit pack` および `sorafs_manifest_stub` の生成に、レジストリのメタデータを含みます。
+* ロスマニフェストは、`iroha app sorafs toolkit pack` および `sorafs_manifest_builder` の生成に、レジストリのメタデータを含みます。

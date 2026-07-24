@@ -66,7 +66,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-המפעילים צריכים לייצר מחדש payloads של בקשות onboarding/dispute עם `sorafs_manifest_stub capacity {declaration,dispute}` ולארכב את ה-bytes JSON/Norito שנוצרו לצד כרטיס ה-governance.
+המפעילים צריכים לייצר מחדש payloads של בקשות onboarding/dispute עם `sorafs_manifest_builder capacity {declaration,dispute}` ולארכב את ה-bytes JSON/Norito שנוצרו לצד כרטיס ה-governance.
 
 ## artefacts לאישור
 

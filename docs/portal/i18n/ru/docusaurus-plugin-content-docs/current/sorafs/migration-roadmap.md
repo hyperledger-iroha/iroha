@@ -37,14 +37,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |-----|------|----------|----------|-------|
 | Репетиции fixtures | M0 | Еженедельные dry-runs, сравнивающие локальные chunk digests с `fixtures/sorafs_chunker`. Публиковать отчет в `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` с матрицей pass/fail. |
 | Принудить подписи | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` падают при drift подписей или manifests. Dev overrides требуют governance waiver в PR. | Tooling WG | Лог CI, ссылка на waiver ticket (если применимо). |
-| Expectation flags | M1 | Пайплайны вызывают `sorafs_manifest_stub` с явными expectations для фиксации output: | Docs CI | Обновленные скрипты со ссылкой на expectation flags (см. блок команды ниже). |
+| Expectation flags | M1 | Пайплайны вызывают `sorafs_manifest_builder` с явными expectations для фиксации output: | Docs CI | Обновленные скрипты со ссылкой на expectation flags (см. блок команды ниже). |
 | Registry-first pinning | M2 | `sorafs pin propose` и `sorafs pin approve` оборачивают отправку manifest; CLI по умолчанию использует `--require-registry`. | Governance Ops | Registry CLI audit log, телеметрия неудачных предложений. |
 | Observability parity | M3 | Dashboards Prometheus/Grafana предупреждают о расхождении chunk inventory и registry manifests; alert'ы подключены к ops on-call. | Observability | Ссылка на dashboard, IDs правил алертов, результаты GameDay. |
 
 #### Каноническая команда публикации
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

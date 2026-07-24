@@ -167,8 +167,7 @@ self-cert bundle once the new settings deploy.
 
    ```bash
    scripts/sorafs_gateway_self_cert.sh \
-     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
-     --signer gateway-ops@operator \
+     --config /run/sorafs-release/gateway-self-cert.conf \
      --gateway https://gateway.example.com \
      --out artifacts/sorafs_gateway_self_cert
    ```
@@ -398,9 +397,8 @@ with Nexus governance:
 1. Run the self-cert harness:
    ```bash
    scripts/sorafs_gateway_self_cert.sh \
+     --config /run/sorafs-release/gateway-self-cert.conf \
      --gateway https://gateway.example \
-     --signing-key /etc/iroha/sorafs_gateway_tls/gateway_attestor.hex \
-     --signer gateway-ops@operator \
      --out artifacts/sorafs_gateway_self_cert
    ```
 2. Confirm telemetry recovered:

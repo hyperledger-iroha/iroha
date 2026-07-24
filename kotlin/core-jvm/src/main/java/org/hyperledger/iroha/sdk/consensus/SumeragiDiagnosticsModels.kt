@@ -3,9 +3,20 @@
 
 package org.hyperledger.iroha.sdk.consensus
 
+import java.math.BigInteger
 import java.util.Collections
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonEncoder
+import kotlinx.serialization.json.JsonPrimitive
 import org.hyperledger.iroha.sdk.core.util.HashLiteral
 
 /** Maximum number of Native AMX participant-application rows in diagnostics. */
@@ -13,6 +24,7 @@ const val SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: Int = 1_024
 
 /** Maximum grouped source count represented by one Native AMX diagnostics row. */
 const val SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX: Long = 4_096
+const val SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: Int = 128
 
 /** Evidence-derived Native AMX participant application state. */
 @Serializable
@@ -38,31 +50,42 @@ enum class SumeragiNativeAmxParticipantApplicationState {
 @Serializable
 data class SumeragiNativeAmxParticipantApplication(
     @SerialName("lane_id") val laneId: Long,
-    @SerialName("dataspace_id") val dataspaceId: Long,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("dataspace_id")
+    val dataspaceId: BigInteger,
     @SerialName("lane_incarnation") val laneIncarnation: String,
-    @SerialName("participant_height") val participantHeight: Long,
-    @SerialName("participant_view") val participantView: Long,
-    @SerialName("predecessor_height") val predecessorHeight: Long,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("participant_height")
+    val participantHeight: BigInteger,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("participant_view")
+    val participantView: BigInteger,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("predecessor_height")
+    val predecessorHeight: BigInteger,
     @SerialName("predecessor_descriptor_hash") val predecessorDescriptorHash: String? = null,
     @SerialName("descriptor_hash") val descriptorHash: String,
     @SerialName("proposal_hash") val proposalHash: String,
     @SerialName("settlement_hash") val settlementHash: String,
     @SerialName("source_count") val sourceCount: Long,
-    @SerialName("application_block_height") val applicationBlockHeight: Long? = null,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("application_block_height")
+    val applicationBlockHeight: BigInteger? = null,
     @SerialName("application_block_hash") val applicationBlockHash: String? = null,
     val state: SumeragiNativeAmxParticipantApplicationState,
 ) {
     init {
         require(laneId in 0..0xffff_ffffL) { "laneId must be an unsigned 32-bit value" }
-        require(dataspaceId >= 0) { "dataspaceId must be non-negative" }
-        require(participantHeight > 0 && participantView >= 0) {
+        requireU64(dataspaceId, "dataspaceId")
+        requireU64(participantHeight, "participantHeight")
+        requireU64(participantView, "participantView")
+        requireU64(predecessorHeight, "predecessorHeight")
+        require(participantHeight.signum() > 0) {
             "participant height must be positive and view must be non-negative"
         }
         require(
-            predecessorHeight >= 0 &&
-                predecessorHeight < Long.MAX_VALUE &&
-                predecessorHeight + 1 == participantHeight &&
-                (predecessorHeight == 0L) == (predecessorDescriptorHash == null)
+            predecessorHeight.add(BigInteger.ONE) == participantHeight &&
+                (predecessorHeight == BigInteger.ZERO) == (predecessorDescriptorHash == null)
         ) { "Native AMX participant predecessor geometry is inconsistent" }
         require(sourceCount in 1..SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX) {
             "Native AMX participant source count is out of bounds"
@@ -70,8 +93,9 @@ data class SumeragiNativeAmxParticipantApplication(
         require((applicationBlockHeight == null) == (applicationBlockHash == null)) {
             "application block height and hash must appear together"
         }
-        require(applicationBlockHeight == null || applicationBlockHeight > 0) {
-            "application block height must be positive"
+        applicationBlockHeight?.let {
+            requireU64(it, "applicationBlockHeight")
+            require(it.signum() > 0) { "application block height must be positive" }
         }
         if (state == SumeragiNativeAmxParticipantApplicationState.DURABLY_APPLIED) {
             require(applicationBlockHeight != null) {
@@ -127,7 +151,215 @@ class SumeragiNativeAmxParticipantApplications(rows: List<SumeragiNativeAmxParti
     }
 }
 
+@Serializable
+enum class SumeragiAutonomousLaneExecutionStage {
+    @SerialName("reservations_durable") RESERVATIONS_DURABLE,
+    @SerialName("executable_payload_durable") EXECUTABLE_PAYLOAD_DURABLE,
+    @SerialName("payload_availability_certified") PAYLOAD_AVAILABILITY_CERTIFIED,
+    @SerialName("lane_certified") LANE_CERTIFIED,
+    @SerialName("certified_bundle_durable") CERTIFIED_BUNDLE_DURABLE,
+    @SerialName("merge_candidate_durable") MERGE_CANDIDATE_DURABLE,
+    @SerialName("global_carrier_committed") GLOBAL_CARRIER_COMMITTED,
+    @SerialName("kura_wsv_application_receipt_durable") KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+    @SerialName("queue_finalized") QUEUE_FINALIZED,
+    @SerialName("conflict") CONFLICT,
+}
+
+@Serializable
+enum class SumeragiAutonomousLaneExecutionStuckReason {
+    @SerialName("awaiting_payload_availability") AWAITING_PAYLOAD_AVAILABILITY,
+    @SerialName("awaiting_lane_certification") AWAITING_LANE_CERTIFICATION,
+    @SerialName("certified_bundle_unavailable") CERTIFIED_BUNDLE_UNAVAILABLE,
+    @SerialName("awaiting_merge_selection") AWAITING_MERGE_SELECTION,
+    @SerialName("awaiting_global_carrier") AWAITING_GLOBAL_CARRIER,
+    @SerialName("awaiting_application_receipt") AWAITING_APPLICATION_RECEIPT,
+    @SerialName("queue_finalization_unverifiable") QUEUE_FINALIZATION_UNVERIFIABLE,
+    @SerialName("evidence_conflict") EVIDENCE_CONFLICT,
+}
+
+@Serializable
+class SumeragiAutonomousLaneExecution(
+    @SerialName("lane_id") val laneId: Long,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("dataspace_id") val dataspaceId: BigInteger,
+    @SerialName("lane_incarnation") val laneIncarnation: String,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("lane_block_height") val laneBlockHeight: BigInteger,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("lane_block_view") val laneBlockView: BigInteger,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("proposal_height") val proposalHeight: BigInteger,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("proposal_view") val proposalView: BigInteger,
+    @SerialName("proposal_hash") val proposalHash: String,
+    @SerialName("descriptor_hash") val descriptorHash: String,
+    @SerialName("executable_payload_hash") val executablePayloadHash: String? = null,
+    @SerialName("source_bundle_hash") val sourceBundleHash: String? = null,
+    @SerialName("merge_entry_hash") val mergeEntryHash: String? = null,
+    @Serializable(with = SumeragiU64Serializer::class)
+    @SerialName("application_block_height") val applicationBlockHeight: BigInteger? = null,
+    @SerialName("application_block_hash") val applicationBlockHash: String? = null,
+    @SerialName("reservation_count") val reservationCount: Long,
+    @SerialName("transaction_count") val transactionCount: Long,
+    @SerialName("highest_durable_stage")
+    val highestDurableStage: SumeragiAutonomousLaneExecutionStage,
+    @SerialName("stuck_reason") val stuckReason: SumeragiAutonomousLaneExecutionStuckReason? = null,
+) {
+    init {
+        require(laneId in 0..0xffff_ffffL)
+        listOf(dataspaceId, laneBlockHeight, laneBlockView, proposalHeight, proposalView)
+            .forEach { requireU64(it, "autonomous execution coordinate") }
+        require(laneBlockHeight.signum() > 0 && proposalHeight.signum() > 0)
+        require(transactionCount in 1..4_096 && reservationCount in 0..4_096)
+        require((applicationBlockHeight == null) == (applicationBlockHash == null))
+        applicationBlockHeight?.let {
+            requireU64(it, "applicationBlockHeight")
+            require(it.signum() > 0)
+        }
+        listOf(laneIncarnation, proposalHash, descriptorHash).forEach {
+            requireCanonicalNonzeroHash(it, "autonomous execution hash")
+        }
+        listOfNotNull(
+            executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash,
+        ).forEach { requireCanonicalNonzeroHash(it, "autonomous execution optional hash") }
+        val expectedReason = when (highestDurableStage) {
+            SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE,
+            SumeragiAutonomousLaneExecutionStage.EXECUTABLE_PAYLOAD_DURABLE,
+            -> SumeragiAutonomousLaneExecutionStuckReason.AWAITING_PAYLOAD_AVAILABILITY
+            SumeragiAutonomousLaneExecutionStage.PAYLOAD_AVAILABILITY_CERTIFIED ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_LANE_CERTIFICATION
+            SumeragiAutonomousLaneExecutionStage.LANE_CERTIFIED ->
+                SumeragiAutonomousLaneExecutionStuckReason.CERTIFIED_BUNDLE_UNAVAILABLE
+            SumeragiAutonomousLaneExecutionStage.CERTIFIED_BUNDLE_DURABLE ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_MERGE_SELECTION
+            SumeragiAutonomousLaneExecutionStage.MERGE_CANDIDATE_DURABLE ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_GLOBAL_CARRIER
+            SumeragiAutonomousLaneExecutionStage.GLOBAL_CARRIER_COMMITTED ->
+                SumeragiAutonomousLaneExecutionStuckReason.AWAITING_APPLICATION_RECEIPT
+            SumeragiAutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE ->
+                SumeragiAutonomousLaneExecutionStuckReason.QUEUE_FINALIZATION_UNVERIFIABLE
+            SumeragiAutonomousLaneExecutionStage.QUEUE_FINALIZED -> null
+            SumeragiAutonomousLaneExecutionStage.CONFLICT ->
+                SumeragiAutonomousLaneExecutionStuckReason.EVIDENCE_CONFLICT
+        }
+        require(stuckReason == expectedReason)
+        if (highestDurableStage != SumeragiAutonomousLaneExecutionStage.CONFLICT) {
+            require(reservationCount == transactionCount)
+            val hasPayload = executablePayloadHash != null
+            val hasBundle = sourceBundleHash != null
+            val hasMerge = mergeEntryHash != null
+            val hasCarrier = applicationBlockHeight != null
+            val geometryMatches = when (highestDurableStage) {
+                SumeragiAutonomousLaneExecutionStage.RESERVATIONS_DURABLE ->
+                    !hasPayload && !hasBundle && !hasMerge && !hasCarrier
+                SumeragiAutonomousLaneExecutionStage.EXECUTABLE_PAYLOAD_DURABLE,
+                SumeragiAutonomousLaneExecutionStage.PAYLOAD_AVAILABILITY_CERTIFIED,
+                SumeragiAutonomousLaneExecutionStage.LANE_CERTIFIED,
+                -> hasPayload && !hasBundle && !hasMerge && !hasCarrier
+                SumeragiAutonomousLaneExecutionStage.CERTIFIED_BUNDLE_DURABLE ->
+                    hasPayload && hasBundle && !hasMerge && !hasCarrier
+                SumeragiAutonomousLaneExecutionStage.MERGE_CANDIDATE_DURABLE,
+                SumeragiAutonomousLaneExecutionStage.GLOBAL_CARRIER_COMMITTED,
+                -> hasPayload && hasBundle && hasMerge && !hasCarrier
+                SumeragiAutonomousLaneExecutionStage.KURA_WSV_APPLICATION_RECEIPT_DURABLE,
+                SumeragiAutonomousLaneExecutionStage.QUEUE_FINALIZED,
+                -> hasPayload && hasBundle && hasMerge && hasCarrier
+                SumeragiAutonomousLaneExecutionStage.CONFLICT -> true
+            }
+            require(geometryMatches)
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is SumeragiAutonomousLaneExecution &&
+            laneId == other.laneId && dataspaceId == other.dataspaceId &&
+            laneIncarnation == other.laneIncarnation &&
+            laneBlockHeight == other.laneBlockHeight && laneBlockView == other.laneBlockView &&
+            proposalHeight == other.proposalHeight && proposalView == other.proposalView &&
+            proposalHash == other.proposalHash && descriptorHash == other.descriptorHash &&
+            executablePayloadHash == other.executablePayloadHash &&
+            sourceBundleHash == other.sourceBundleHash && mergeEntryHash == other.mergeEntryHash &&
+            applicationBlockHeight == other.applicationBlockHeight &&
+            applicationBlockHash == other.applicationBlockHash &&
+            reservationCount == other.reservationCount && transactionCount == other.transactionCount &&
+            highestDurableStage == other.highestDurableStage && stuckReason == other.stuckReason
+
+    override fun hashCode(): Int = listOf(
+        laneId, dataspaceId, laneIncarnation, laneBlockHeight, laneBlockView,
+        proposalHeight, proposalView, proposalHash, descriptorHash, executablePayloadHash,
+        sourceBundleHash, mergeEntryHash, applicationBlockHeight, applicationBlockHash,
+        reservationCount, transactionCount, highestDurableStage, stuckReason,
+    ).hashCode()
+}
+
+class SumeragiAutonomousLaneExecutions(rows: List<SumeragiAutonomousLaneExecution>) {
+    @JvmField val rows: List<SumeragiAutonomousLaneExecution>
+
+    init {
+        require(rows.size <= SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
+        rows.zipWithNext().forEach { (left, right) ->
+            val leftKey = listOf(
+                BigInteger.valueOf(left.laneId), left.dataspaceId,
+                BigInteger(1, HashLiteral.decode(left.laneIncarnation)),
+                left.laneBlockHeight, left.laneBlockView, left.proposalHeight, left.proposalView,
+                BigInteger(1, HashLiteral.decode(left.proposalHash)),
+            )
+            val rightKey = listOf(
+                BigInteger.valueOf(right.laneId), right.dataspaceId,
+                BigInteger(1, HashLiteral.decode(right.laneIncarnation)),
+                right.laneBlockHeight, right.laneBlockView, right.proposalHeight, right.proposalView,
+                BigInteger(1, HashLiteral.decode(right.proposalHash)),
+            )
+            require(leftKey.zip(rightKey).firstOrNull { it.first != it.second }
+                ?.let { it.first < it.second } == true)
+        }
+        this.rows = Collections.unmodifiableList(rows.toList())
+    }
+}
+
+internal object SumeragiU64Serializer : KSerializer<BigInteger> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("org.hyperledger.iroha.sdk.consensus.UInt64", PrimitiveKind.LONG)
+
+    override fun serialize(encoder: Encoder, value: BigInteger) {
+        val jsonEncoder = encoder as? JsonEncoder
+            ?: throw SerializationException("Sumeragi UInt64 values require JSON encoding")
+        requireU64(value, "Sumeragi UInt64")
+        jsonEncoder.encodeJsonElement(JsonPrimitive(value))
+    }
+
+    override fun deserialize(decoder: Decoder): BigInteger {
+        val jsonDecoder = decoder as? JsonDecoder
+            ?: throw SerializationException("Sumeragi UInt64 values require JSON decoding")
+        val primitive = jsonDecoder.decodeJsonElement() as? JsonPrimitive
+            ?: throw SerializationException("Sumeragi UInt64 value must be a JSON number")
+        if (primitive.isString || !CANONICAL_U64_TOKEN.matches(primitive.content)) {
+            throw SerializationException(
+                "Sumeragi UInt64 value must be an unquoted canonical integer token",
+            )
+        }
+        val value = try {
+            BigInteger(primitive.content)
+        } catch (error: NumberFormatException) {
+            throw SerializationException("Sumeragi UInt64 value is malformed", error)
+        }
+        if (value.signum() < 0 || value > U64_MAX) {
+            throw SerializationException("Sumeragi UInt64 value is out of range")
+        }
+        return value
+    }
+}
+
+private val CANONICAL_U64_TOKEN = Regex("0|[1-9][0-9]*")
+private val U64_MAX: BigInteger = BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE)
 private val CANONICAL_HASH = Regex("^hash:[0-9A-F]{64}#[0-9A-F]{4}$")
+
+private fun requireU64(value: BigInteger, field: String): BigInteger {
+    require(value.signum() >= 0 && value <= U64_MAX) {
+        "$field must fit in an unsigned 64-bit integer"
+    }
+    return value
+}
 
 private fun requireCanonicalNonzeroHash(value: String, field: String) {
     require(CANONICAL_HASH.matches(value)) { "$field must be a canonical Iroha hash literal" }

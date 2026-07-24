@@ -63,7 +63,7 @@ SF-2c 路线图项目引入了一个受监管的市场，其中存储
 - 共享助手（`CapacityMetadataEntry`、`PricingScheduleV1`、通道/分配/SLA 验证器）提供 CI 和下游工具可以重用的确定性密钥验证和错误报告。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` 现在通过 `/v1/sorafs/capacity/state` 呈现链上快照，结合确定性 Norito JSON 后面的提供商声明和费用分类帐条目。【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 验证覆盖范围执行规范句柄执行、重复检测、每通道边界、复制分配保护和遥测范围检查，以便回归立即在 CI 中显现。【crates/sorafs_manifest/src/capacity.rs:792】
-- 操作员工具：`sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` 将人类可读的规范转换为规范的 Norito 有效负载、base64 blob 和 JSON 摘要，以便操作员可以使用本地暂存 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` 和复制顺序固定装置验证。【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】参考夹具位于 `fixtures/sorafs_manifest/replication_order/`（`order_v1.json`、`order_v1.to`）中，并通过 `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 生成。
+- 操作员工具：`sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` 将人类可读的规范转换为规范的 Norito 有效负载、base64 blob 和 JSON 摘要，以便操作员可以使用本地暂存 `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry` 和复制顺序固定装置验证。【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】参考夹具位于 `fixtures/sorafs_manifest/replication_order/`（`order_v1.json`、`order_v1.to`）中，并通过 `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` 生成。
 
 ### 2. 控制平面集成
 
@@ -155,7 +155,7 @@ SF-2c 路线图项目引入了一个受监管的市场，其中存储
   与治理包一起。
 
 ### 争议和削减证据
-- 通过 `sorafs_manifest_stub capacity dispute` 提出争议（测试：
+- 通过 `sorafs_manifest_builder capacity dispute` 提出争议（测试：
   `cargo test -p sorafs_car --test capacity_cli`），因此有效负载保持规范。
 - 运行 `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` 和惩罚
   套件（`record_capacity_telemetry_penalises_persistent_under_delivery`）来证明争议和
@@ -164,7 +164,7 @@ SF-2c 路线图项目引入了一个受监管的市场，其中存储
   将罢工批准链接回验证报告。
 
 ### 提供商入职和退出冒烟测试
-- 使用 `sorafs_manifest_stub capacity ...` 重新生成声明/遥测工件并重播
+- 使用 `sorafs_manifest_builder capacity ...` 重新生成声明/遥测工件并重播
   提交前进行 CLI 测试 (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)。
 - 通过 Torii (`/v1/sorafs/capacity/declare`) 提交，然后捕获 `/v1/sorafs/capacity/state` 加
   Grafana 屏幕截图。按照 `docs/source/sorafs/capacity_onboarding_runbook.md` 中的退出流程进行操作。

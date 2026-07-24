@@ -52,7 +52,7 @@ JSON میں ترتیب وار offsets, لمبائیاں اور fragment digests 
 - کونسل کی دستخطیں اور اختیاری میٹا ڈیٹا (مثلاً ID de compilación) ۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

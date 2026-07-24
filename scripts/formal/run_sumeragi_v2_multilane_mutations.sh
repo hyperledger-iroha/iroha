@@ -91,29 +91,57 @@ run_mutant() {
 
 readonly AUTOSCALE_MODULE="SumeragiV2AutoscaleLifecycle.tla"
 run_mutant autoscale-early-drain "$AUTOSCALE_MODULE" \
-  multilane_autoscale_early_drain_bug.cfg DrainEvidenceInvariant
+  multilane_autoscale_early_drain_bug.cfg MLDrainImpliesNoOwnedWork
 run_mutant autoscale-destroy-before-archive "$AUTOSCALE_MODULE" \
   multilane_autoscale_destroy_before_archive_bug.cfg \
   ArchiveBeforeDestroyInvariant
 run_mutant autoscale-incarnation-reuse "$AUTOSCALE_MODULE" \
-  multilane_autoscale_incarnation_reuse_bug.cfg NoIncarnationReuseInvariant
+  multilane_autoscale_incarnation_reuse_bug.cfg \
+  MLRetirementConsumesExactIncarnation
+run_mutant autoscale-activation-before-storage "$AUTOSCALE_MODULE" \
+  multilane_autoscale_activation_before_storage_bug.cfg \
+  MLActivationAfterAtomicCreate
+run_mutant autoscale-weak-drain-certificate "$AUTOSCALE_MODULE" \
+  multilane_autoscale_weak_drain_certificate_bug.cfg \
+  MLDrainCertificateMonotonic
+run_mutant autoscale-cleanup-by-lane-id "$AUTOSCALE_MODULE" \
+  multilane_autoscale_cleanup_by_lane_id_bug.cfg \
+  MLRetirementConsumesExactIncarnation
 
 readonly NATIVE_MODULE="SumeragiV2NativeApplicationEvidence.tla"
 run_mutant native-frontier-before-sidecars "$NATIVE_MODULE" \
   multilane_native_frontier_before_sidecars_bug.cfg \
-  FrontierPublicationInvariant
+  MLNativeDurabilityPrecedesFrontier
 run_mutant native-hash-only-pruning "$NATIVE_MODULE" \
   multilane_native_hash_only_pruning_bug.cfg \
   PrunedEvidenceVerifiableInvariant
 run_mutant native-same-route-marker "$NATIVE_MODULE" \
-  multilane_native_same_route_marker_bug.cfg SameRouteControlOnlyInvariant
+  multilane_native_same_route_marker_bug.cfg MLSeparateParticipantApplication
+run_mutant native-source-claim-equivocation "$NATIVE_MODULE" \
+  multilane_native_source_claim_equivocation_bug.cfg \
+  MLNativeSourceClaimInjective
+run_mutant native-noncontiguous-route "$NATIVE_MODULE" \
+  multilane_native_noncontiguous_route_bug.cfg \
+  MLNativeContiguousActiveRoute
+run_mutant native-partial-group-application "$NATIVE_MODULE" \
+  multilane_native_partial_group_application_bug.cfg \
+  MLNativeGroupExactCover
+run_mutant native-forged-manifest-leaf "$NATIVE_MODULE" \
+  multilane_native_forged_manifest_leaf_bug.cfg \
+  MLNativeManifestAuthenticates
+run_mutant native-dropped-startup-repair "$NATIVE_MODULE" \
+  multilane_native_dropped_startup_repair_bug.cfg \
+  MLNativeDurabilityPrecedesFrontier
+run_mutant native-ambiguous-latest-index "$NATIVE_MODULE" \
+  multilane_native_ambiguous_latest_index_bug.cfg \
+  MLNativeLatestIndexExact
 
 readonly AUTONOMOUS_MODULE="SumeragiV2AutonomousReservationCarrier.tla"
 run_mutant autonomous-carrier-drift "$AUTONOMOUS_MODULE" \
-  multilane_autonomous_carrier_drift_bug.cfg ExactCarrierIdentityInvariant
+  multilane_autonomous_carrier_drift_bug.cfg MLReservationIdentityStable
 run_mutant autonomous-duplicate-application "$AUTONOMOUS_MODULE" \
   multilane_autonomous_duplicate_application_bug.cfg \
-  AtMostOnceApplicationInvariant
+  MLCarrierExactlyOnce
 run_mutant autonomous-release-after-apply "$AUTONOMOUS_MODULE" \
   multilane_autonomous_release_after_apply_bug.cfg \
   NoReleaseAfterApplicationInvariant
@@ -122,12 +150,27 @@ run_mutant autonomous-release-before-barrier "$AUTONOMOUS_MODULE" \
   ReleaseOrderingInvariant
 run_mutant autonomous-aba-release "$AUTONOMOUS_MODULE" \
   multilane_autonomous_aba_release_bug.cfg \
-  NoStaleIncarnationReleaseInvariant
+  MLRestartOwnershipPartition
 run_mutant autonomous-digest-only-authorization "$AUTONOMOUS_MODULE" \
   multilane_autonomous_digest_only_authorization_bug.cfg \
-  CandidateAuthorizationInvariant
+  MLCertifiedBundleDurable
 run_mutant autonomous-ordinary-anchor-execution "$AUTONOMOUS_MODULE" \
   multilane_autonomous_ordinary_anchor_execution_bug.cfg \
-  ControlOnlyAnchorInvariant
+  MLCarrierExactlyOnce
+run_mutant autonomous-reserve-before-durable "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_reserve_before_durable_bug.cfg \
+  MLReservationIdentityStable
+run_mutant autonomous-noncanonical-merge-prefix "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_noncanonical_merge_prefix_bug.cfg \
+  MLMergeCandidateExactPrefix
+run_mutant autonomous-skip-canonical-reexecution "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_skip_canonical_reexecution_bug.cfg \
+  MLCarrierExactlyOnce
+run_mutant autonomous-restart-drops-ownership "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_restart_drops_ownership_bug.cfg \
+  MLReservationSingleOwner
+run_mutant autonomous-volatile-stage-diagnostics "$AUTONOMOUS_MODULE" \
+  multilane_autonomous_volatile_stage_diagnostics_bug.cfg \
+  MLStageEvidenceMonotonic
 
-echo "[tlc] all 13 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"
+echo "[tlc] all 27 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"

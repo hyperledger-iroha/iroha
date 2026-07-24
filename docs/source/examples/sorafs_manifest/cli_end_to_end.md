@@ -5,7 +5,7 @@ title: "SoraFS Manifest CLI End-to-End Example"
 # SoraFS Manifest CLI End-to-End Example
 
 This example walks through publishing a documentation build to SoraFS using the
-`sorafs_manifest_stub` CLI together with the deterministic chunking fixtures
+`sorafs_manifest_builder` CLI together with the deterministic chunking fixtures
 described in the SoraFS Architecture RFC. The flow covers manifest generation,
 expectation checks, fetch-plan validation, and proof-of-retrieval rehearsal so
 teams can embed the same steps in CI.
@@ -21,7 +21,7 @@ teams can embed the same steps in CI.
 ## Step 1 — Generate manifest, CAR, signatures, and fetch plan
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -82,7 +82,7 @@ Once the Pin Registry is deployed (Milestone M2 in the migration roadmap),
 submit the manifest through the CLI:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

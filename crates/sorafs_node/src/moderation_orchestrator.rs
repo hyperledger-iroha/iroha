@@ -24,7 +24,7 @@ use std::os::unix::fs::{
 
 use iroha_data_model::{
     account::{AccountId, ParsedAccountId},
-    events::data::sorafs::{SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind},
+    events::data::sorafs::SorafsModerationLedgerEventKind,
     isi::{
         InstructionBox,
         sorafs::{
@@ -41,12 +41,8 @@ use iroha_data_model::{
         moderation_ledger::{
             MODERATION_LEDGER_MAX_CANDIDATE_POOL_SIZE_V1, MODERATION_LEDGER_MAX_CHALLENGES_V1,
             MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
-            MODERATION_LEDGER_MAX_REASON_BYTES_V1, ModerationAppealRecordV1,
-            ModerationAppealStatusV1, ModerationCaseRecordV1, ModerationCaseStatusV1,
-            ModerationChallengeDecisionV1, ModerationChallengeRecordV1, ModerationCommitRecordV1,
-            ModerationJurorEligibilityRecordV1, ModerationLedgerPolicyRecord,
-            ModerationLedgerStatusV1, ModerationNoShowRecordV1, ModerationOutcomeRecordV1,
-            ModerationRevealRecordV1, ModerationSortitionError,
+            MODERATION_LEDGER_MAX_REASON_BYTES_V1, ModerationAppealStatusV1,
+            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationSortitionError,
             is_canonical_moderation_identifier_v1, sorafs_moderation_select_panel_v1,
         },
     },
@@ -56,10 +52,14 @@ use rand::{rand_core::TryRngCore as _, rngs::OsRng};
 use sorafs_manifest::pop_credentials::{POP_MEMBERSHIP_PROOF_MAX_BYTES_V1, PopMembershipProofV1};
 use thiserror::Error;
 
+pub use iroha_data_model::sorafs::moderation_ledger::{
+    MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, ModerationFinalizedAppealViewV1,
+    ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
+    ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
+};
+
 /// Checkpoint schema version.
 pub const MODERATION_ORCHESTRATOR_CHECKPOINT_VERSION_V1: u16 = 1;
-/// Finalized snapshot schema version.
-pub const MODERATION_FINALIZED_SNAPSHOT_VERSION_V1: u16 = 1;
 /// Hard ceiling for one canonical native moderation instruction.
 pub const MODERATION_NATIVE_INSTRUCTION_MAX_BYTES_V1: usize = 2 * 1024 * 1024;
 /// Hard ceiling for one persisted orchestrator checkpoint.
@@ -369,116 +369,8 @@ impl ModerationNativeActionV1 {
     }
 }
 
-/// A case and all of its finalized-ledger subrecords from one snapshot.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ModerationFinalizedCaseViewV1 {
-    /// Authoritative case header.
-    pub case: ModerationCaseRecordV1,
-    /// Commit records sorted by canonical juror.
-    pub commits: Vec<ModerationCommitRecordV1>,
-    /// Reveal records sorted by canonical juror.
-    pub reveals: Vec<ModerationRevealRecordV1>,
-    /// Challenges sorted by challenge id.
-    pub challenges: Vec<ModerationChallengeRecordV1>,
-    /// Terminal outcome, when finalized.
-    pub outcome: Option<ModerationOutcomeRecordV1>,
-    /// No-shows sorted by canonical juror.
-    pub no_shows: Vec<ModerationNoShowRecordV1>,
-}
-
-/// An appeal and all pre-activation eligibility state from one finalized view.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ModerationFinalizedAppealViewV1 {
-    /// Authoritative appeal/sortition/activation record.
-    pub appeal: ModerationAppealRecordV1,
-    /// Payload-free eligibility records sorted by canonical juror.
-    pub eligibility: Vec<ModerationJurorEligibilityRecordV1>,
-}
-
-/// A typed moderation event with an unambiguous finalized cursor.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ModerationFinalizedEventV1 {
-    /// Committing block height.
-    pub block_height: u64,
-    /// Committing block hash.
-    pub block_hash: [u8; 32],
-    /// Event index inside the committing block.
-    pub event_index: u32,
-    /// Existing typed native moderation event.
-    pub event: SorafsModerationLedgerEvent,
-}
-
-/// Complete bounded moderation snapshot read from one finalized block.
-#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
-pub struct ModerationFinalizedLedgerSnapshotV1 {
-    /// Schema version.
-    pub version: u16,
-    /// Finalized block height.
-    pub finalized_height: u64,
-    /// Finalized block hash.
-    pub finalized_block_hash: [u8; 32],
-    /// Active policy, when governance has initialized the ledger.
-    pub policy: Option<ModerationLedgerPolicyRecord>,
-    /// Constant-time native counters.
-    pub status: Option<ModerationLedgerStatusV1>,
-    /// Every retained appeal, including nonterminal intake/sortition state.
-    pub appeals: Vec<ModerationFinalizedAppealViewV1>,
-    /// Every retained activated case, including open/challenged cases.
-    pub cases: Vec<ModerationFinalizedCaseViewV1>,
-    /// Bounded typed finalized event window sorted by cursor.
-    pub events: Vec<ModerationFinalizedEventV1>,
-}
-
-impl ModerationFinalizedLedgerSnapshotV1 {
-    /// Return the finalized anchor.
-    #[must_use]
-    pub const fn anchor(&self) -> ModerationFinalizedCursorV1 {
-        ModerationFinalizedCursorV1 {
-            height: self.finalized_height,
-            block_hash: self.finalized_block_hash,
-        }
-    }
-
-    /// Return one appeal by exact case and round.
-    #[must_use]
-    pub fn appeal(
-        &self,
-        case_id: &str,
-        round_id: &str,
-    ) -> Option<&ModerationFinalizedAppealViewV1> {
-        self.appeals
-            .binary_search_by(|entry| {
-                appeal_key(entry).cmp(&(case_id.to_owned(), round_id.to_owned()))
-            })
-            .ok()
-            .map(|index| &self.appeals[index])
-    }
-
-    /// Return one activated case by exact case and round.
-    #[must_use]
-    pub fn case(&self, case_id: &str, round_id: &str) -> Option<&ModerationFinalizedCaseViewV1> {
-        self.cases
-            .binary_search_by(|entry| {
-                case_key(entry).cmp(&(case_id.to_owned(), round_id.to_owned()))
-            })
-            .ok()
-            .map(|index| &self.cases[index])
-    }
-}
-
-/// Finalized block cursor persisted by the orchestrator.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
-)]
-pub struct ModerationFinalizedCursorV1 {
-    /// Finalized block height.
-    pub height: u64,
-    /// Finalized block hash.
-    pub block_hash: [u8; 32],
-}
-
 /// Bounds and durable path for one moderation orchestrator.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModerationOrchestratorConfigV1 {
     /// Absolute private checkpoint path.
     pub checkpoint_path: PathBuf,
@@ -1192,16 +1084,14 @@ impl ModerationOrchestratorV1 {
     #[must_use]
     pub fn events_after(
         &self,
-        after: Option<(u64, u32)>,
+        after: Option<ModerationFinalizedEventCursorV1>,
         limit: usize,
     ) -> Vec<ModerationFinalizedEventV1> {
         self.snapshot().map_or_else(Vec::new, |snapshot| {
             snapshot
                 .events
                 .into_iter()
-                .filter(|event| {
-                    after.is_none_or(|cursor| (event.block_height, event.event_index) > cursor)
-                })
+                .filter(|event| after.is_none_or(|cursor| event.sequence > cursor.sequence))
                 .take(limit.min(self.config.max_events))
                 .collect()
         })
@@ -2029,9 +1919,11 @@ fn validate_finalized_snapshot(
     }
 
     let mut previous_event = None;
-    let mut previous_event_block = None;
+    let mut previous_sequence = None;
+    let mut previous_event_block: Option<(u64, [u8; 32], u32)> = None;
     for event in &snapshot.events {
-        if event.block_height == 0
+        if event.sequence == 0
+            || event.block_height == 0
             || event.block_height > snapshot.finalized_height
             || event.block_hash == [0; 32]
             || *event.event.occurred_at_unix_ms() == 0
@@ -2061,16 +1953,62 @@ fn validate_finalized_snapshot(
                 })?
             }
         }
-        let key = (event.block_height, event.event_index);
+        if previous_sequence.is_some_and(|sequence: u64| {
+            sequence
+                .checked_add(1)
+                .is_none_or(|next| event.sequence != next)
+        }) {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "committed moderation event sequence is not contiguous".to_owned(),
+            ));
+        }
+        let key = (event.sequence, event.block_height, event.event_index);
         require_strict_key_order(&mut previous_event, &key, "events")?;
-        if let Some((height, hash)) = previous_event_block {
-            if height == event.block_height && hash != event.block_hash {
-                return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
-                    "events from one block disagree on the finalized hash".to_owned(),
-                ));
+        if let Some((height, hash, index)) = previous_event_block {
+            match event.block_height.cmp(&height) {
+                std::cmp::Ordering::Less => {
+                    return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                        "committed moderation event block height regressed".to_owned(),
+                    ));
+                }
+                std::cmp::Ordering::Equal => {
+                    if hash != event.block_hash {
+                        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "events from one block disagree on the finalized hash".to_owned(),
+                        ));
+                    }
+                    if index
+                        .checked_add(1)
+                        .is_none_or(|next| event.event_index != next)
+                    {
+                        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "committed moderation event block index is not contiguous".to_owned(),
+                        ));
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    if event.event_index != 0 {
+                        return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                            "committed moderation event did not reset its block index".to_owned(),
+                        ));
+                    }
+                }
             }
         }
-        previous_event_block = Some((event.block_height, event.block_hash));
+        previous_sequence = Some(event.sequence);
+        previous_event_block = Some((event.block_height, event.block_hash, event.event_index));
+    }
+    if let Some(status) = snapshot.status {
+        let latest_event = snapshot.events.last().ok_or_else(|| {
+            ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "initialized moderation snapshot has no committed event suffix".to_owned(),
+            )
+        })?;
+        if *latest_event.event.occurred_at_unix_ms() != status.updated_at_unix_ms {
+            return Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(
+                "latest committed moderation event disagrees with the status timestamp".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -3398,11 +3336,24 @@ mod tests {
     };
 
     use iroha_crypto::{Algorithm, KeyPair};
-    use iroha_data_model::sorafs::moderation_ledger::{
-        MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
-        ModerationAppealIntakeV1, ModerationJurorEligibilityClassV1,
-        ModerationJurorEligibilityRecordV1, ModerationLedgerPolicyV1, ModerationPanelSelectionV1,
-        ModerationPoPRegistrySnapshotV1,
+    use iroha_data_model::{
+        events::data::sorafs::SorafsModerationLedgerEvent,
+        sorafs::{
+            moderation::{
+                SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotContextV1,
+            },
+            moderation_ledger::{
+                MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_CASE_VERSION_V1,
+                MODERATION_LEDGER_POLICY_VERSION_V1, ModerationAppealIntakeV1,
+                ModerationAppealRecordV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
+                ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
+                ModerationLedgerPolicyRecord, ModerationLedgerPolicyV1, ModerationLedgerStatusV1,
+                ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
+                ModerationOutcomeRecordV1, ModerationPanelSelectionV1,
+                ModerationPoPRegistrySnapshotV1, ModerationVoteCountsV1,
+                sorafs_moderation_panel_roster_hash_v1,
+            },
+        },
     };
     use tempfile::TempDir;
 
@@ -3533,6 +3484,12 @@ mod tests {
         delivered: Mutex<Vec<[u8; 32]>>,
     }
 
+    impl MockHandoffSink {
+        fn delivered(&self) -> Vec<[u8; 32]> {
+            self.delivered.lock().expect("handoff sink lock").clone()
+        }
+    }
+
     impl ModerationTerminalHandoffSinkV1 for MockHandoffSink {
         fn deliver(
             &self,
@@ -3600,7 +3557,7 @@ mod tests {
                 policy,
                 policy_digest,
                 activated_at_unix_ms: 1,
-                activated_by: authority,
+                activated_by: authority.clone(),
             }),
             status: Some(ModerationLedgerStatusV1 {
                 updated_at_unix_ms: 1,
@@ -3608,7 +3565,19 @@ mod tests {
             }),
             appeals: Vec::new(),
             cases: Vec::new(),
-            events: Vec::new(),
+            events: vec![ModerationFinalizedEventV1 {
+                sequence: 1,
+                block_height: height,
+                block_hash,
+                event_index: 0,
+                event: SorafsModerationLedgerEvent::new(
+                    SorafsModerationLedgerEventKind::PolicyActivated,
+                    None,
+                    None,
+                    authority,
+                    1,
+                ),
+            }],
         }
     }
 
@@ -3718,7 +3687,7 @@ mod tests {
                     policy: active_policy,
                     policy_digest,
                     activated_at_unix_ms: 1,
-                    activated_by: governance,
+                    activated_by: governance.clone(),
                 }),
                 status: Some(ModerationLedgerStatusV1 {
                     appeal_intakes: 1,
@@ -3732,10 +3701,185 @@ mod tests {
                     eligibility,
                 }],
                 cases: Vec::new(),
-                events: Vec::new(),
+                events: vec![ModerationFinalizedEventV1 {
+                    sequence: 5,
+                    block_height: height,
+                    block_hash,
+                    event_index: 0,
+                    event: SorafsModerationLedgerEvent::new(
+                        SorafsModerationLedgerEventKind::SortitionFinalized,
+                        Some("case-failover".to_owned()),
+                        Some("round-1".to_owned()),
+                        governance,
+                        21,
+                    ),
+                }],
             },
             sortition_digest,
         )
+    }
+
+    fn activated_case_snapshot(
+        height: u64,
+        block_hash: [u8; 32],
+        governance: AccountId,
+    ) -> ModerationFinalizedLedgerSnapshotV1 {
+        let (mut snapshot, _) =
+            awaiting_acceptance_snapshot(height, block_hash, governance.clone());
+        let appeal_view = snapshot.appeals.first_mut().expect("appeal projection");
+        let appeal = &mut appeal_view.appeal;
+        let selection = appeal.selection.clone().expect("panel selection");
+        let mut accepted_jurors = selection.jurors.clone();
+        accepted_jurors.sort_by_key(ToString::to_string);
+        appeal.status = ModerationAppealStatusV1::BallotOpen;
+        appeal.accepted_jurors = accepted_jurors;
+        appeal.activated_at_unix_ms = Some(31);
+
+        let intake = &appeal.intake;
+        let jurors = selection.jurors;
+        let case = ModerationCaseRecordV1 {
+            spec: ModerationCaseSpecV1 {
+                version: MODERATION_LEDGER_CASE_VERSION_V1,
+                context: SoraFsModerationBallotContextV1 {
+                    version: SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+                    case_id: intake.case_id.clone(),
+                    evidence_bundle_digest: intake.evidence_bundle_digest,
+                    appeal_finance_config_version: intake.appeal_finance_config_version.clone(),
+                    panel_roster_hash: sorafs_moderation_panel_roster_hash_v1(
+                        &jurors,
+                        intake.quorum,
+                    ),
+                    policy_reference: intake.policy_reference.clone(),
+                    evidence_uri: intake.evidence_uri.clone(),
+                },
+                round_id: intake.round_id.clone(),
+                jurors,
+                quorum: intake.quorum,
+                commit_deadline_unix_ms: intake.commit_deadline_unix_ms,
+                challenge_deadline_unix_ms: intake.challenge_deadline_unix_ms,
+                reveal_deadline_unix_ms: intake.reveal_deadline_unix_ms,
+                policy_digest: intake.policy_digest,
+            },
+            policy: appeal.policy.clone(),
+            status: ModerationCaseStatusV1::Open,
+            opened_at_unix_ms: 31,
+            opened_by: governance.clone(),
+            commitment_count: 0,
+            reveal_count: 0,
+            challenge_count: 0,
+            challenge_ids: Vec::new(),
+            pending_challenge_count: 0,
+            accepted_challenge_count: 0,
+            expired_challenge_count: 0,
+        };
+        snapshot.cases = vec![ModerationFinalizedCaseViewV1 {
+            case,
+            commits: Vec::new(),
+            reveals: Vec::new(),
+            challenges: Vec::new(),
+            outcome: None,
+            no_shows: Vec::new(),
+        }];
+        snapshot.status = Some(ModerationLedgerStatusV1 {
+            appeal_intakes: 1,
+            eligibility_proofs: 3,
+            panel_selections: 1,
+            assignment_acceptances: 2,
+            open_cases: 1,
+            updated_at_unix_ms: 31,
+            ..ModerationLedgerStatusV1::default()
+        });
+        snapshot.events = vec![ModerationFinalizedEventV1 {
+            sequence: 6,
+            block_height: height,
+            block_hash,
+            event_index: 0,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::CaseActivated,
+                Some("case-failover".to_owned()),
+                Some("round-1".to_owned()),
+                governance,
+                31,
+            ),
+        }];
+        snapshot
+    }
+
+    fn finalized_case_snapshot(
+        mut snapshot: ModerationFinalizedLedgerSnapshotV1,
+        height: u64,
+        block_hash: [u8; 32],
+        governance: AccountId,
+    ) -> ModerationFinalizedLedgerSnapshotV1 {
+        const FINALIZED_AT_UNIX_MS: u64 = 61;
+
+        snapshot.finalized_height = height;
+        snapshot.finalized_block_hash = block_hash;
+        let appeal = &mut snapshot
+            .appeals
+            .first_mut()
+            .expect("appeal projection")
+            .appeal;
+        appeal.status = ModerationAppealStatusV1::Finalized;
+        appeal.finalized_at_unix_ms = Some(FINALIZED_AT_UNIX_MS);
+        let case_view = snapshot.cases.first_mut().expect("case projection");
+        case_view.case.status = ModerationCaseStatusV1::Finalized;
+        let policy_digest = case_view.case.spec.policy_digest;
+        case_view.no_shows = case_view
+            .case
+            .spec
+            .jurors
+            .iter()
+            .cloned()
+            .map(|juror| ModerationNoShowRecordV1 {
+                case_id: "case-failover".to_owned(),
+                round_id: "round-1".to_owned(),
+                juror,
+                kind: ModerationNoShowKindV1::MissingCommit,
+                penalty_points: case_view.case.policy.missing_commit_penalty_points,
+                policy_digest,
+                recorded_at_unix_ms: FINALIZED_AT_UNIX_MS,
+            })
+            .collect();
+        case_view
+            .no_shows
+            .sort_by_key(|record| record.juror.to_string());
+        case_view.outcome = Some(ModerationOutcomeRecordV1 {
+            case_id: "case-failover".to_owned(),
+            round_id: "round-1".to_owned(),
+            kind: ModerationOutcomeKindV1::QuorumNotMet,
+            counts: ModerationVoteCountsV1::default(),
+            votes_total: 0,
+            quorum: case_view.case.spec.quorum,
+            no_show_count: u32::try_from(case_view.no_shows.len()).expect("bounded no-show count"),
+            finalized_at_unix_ms: FINALIZED_AT_UNIX_MS,
+            finalized_by: governance.clone(),
+        });
+        snapshot.status = Some(ModerationLedgerStatusV1 {
+            appeal_intakes: 1,
+            eligibility_proofs: 3,
+            panel_selections: 1,
+            assignment_acceptances: 2,
+            finalized_cases: 1,
+            outcomes: 1,
+            no_shows: u64::try_from(case_view.no_shows.len()).expect("bounded no-show count"),
+            updated_at_unix_ms: FINALIZED_AT_UNIX_MS,
+            ..ModerationLedgerStatusV1::default()
+        });
+        snapshot.events = vec![ModerationFinalizedEventV1 {
+            sequence: 7,
+            block_height: height,
+            block_hash,
+            event_index: 0,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::CaseFinalized,
+                Some("case-failover".to_owned()),
+                Some("round-1".to_owned()),
+                governance,
+                FINALIZED_AT_UNIX_MS,
+            ),
+        }];
+        snapshot
     }
 
     fn config(temp: &TempDir, name: &str) -> ModerationOrchestratorConfigV1 {
@@ -3750,6 +3894,73 @@ mod tests {
             max_submit_attempts: 3,
             checkpoint_max_bytes: 4 * 1024 * 1024,
         }
+    }
+
+    #[test]
+    fn canonical_committed_event_sequence_must_be_contiguous() {
+        let temp = TempDir::new().expect("tempdir");
+        let config = config(&temp, "event-sequence.bin");
+        let authority = account(7);
+        let mut snapshot = snapshot_with_policy(5, [0x55; 32], policy(1), authority.clone());
+        snapshot.events.clear();
+        assert!(matches!(
+            validate_finalized_snapshot(&snapshot, &config),
+            Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
+                if message.contains("no committed event")
+        ));
+        snapshot.events.push(ModerationFinalizedEventV1 {
+            sequence: 7,
+            block_height: 4,
+            block_hash: [0x44; 32],
+            event_index: 0,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::PolicyActivated,
+                None,
+                None,
+                authority.clone(),
+                1,
+            ),
+        });
+        validate_finalized_snapshot(&snapshot, &config).expect("single retained event suffix");
+
+        let mut skipped_block_index = snapshot.clone();
+        skipped_block_index.events.push(ModerationFinalizedEventV1 {
+            sequence: 8,
+            block_height: 4,
+            block_hash: [0x44; 32],
+            event_index: 2,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::PolicyActivated,
+                None,
+                None,
+                authority.clone(),
+                1,
+            ),
+        });
+        assert!(matches!(
+            validate_finalized_snapshot(&skipped_block_index, &config),
+            Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
+                if message.contains("block index")
+        ));
+
+        snapshot.events.push(ModerationFinalizedEventV1 {
+            sequence: 9,
+            block_height: 4,
+            block_hash: [0x44; 32],
+            event_index: 1,
+            event: SorafsModerationLedgerEvent::new(
+                SorafsModerationLedgerEventKind::PolicyActivated,
+                None,
+                None,
+                authority,
+                1,
+            ),
+        });
+        assert!(matches!(
+            validate_finalized_snapshot(&snapshot, &config),
+            Err(ModerationOrchestratorError::InvalidFinalizedSnapshot(message))
+                if message.contains("sequence")
+        ));
     }
 
     fn deps(
@@ -3895,6 +4106,102 @@ mod tests {
         assert_eq!(submitter.calls(), 1);
         assert_eq!(replay.status, ModerationOperationStatusV1::Finalized);
         assert!(replay.replay);
+    }
+
+    #[test]
+    fn terminal_finalization_converges_after_restart_and_split_peer_replay() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let governance = account(99);
+        let open_snapshot = activated_case_snapshot(2, [2; 32], governance.clone());
+        let finalized_snapshot =
+            finalized_case_snapshot(open_snapshot.clone(), 3, [3; 32], governance.clone());
+        let reader = Arc::new(MockSnapshotReader::new(open_snapshot));
+        let submitter = Arc::new(MockSubmitter::new(ModerationSubmissionLookupV1::NotFound {
+            observed_finalized_height: 2,
+        }));
+        let settlement_sink = Arc::new(MockHandoffSink::default());
+        let publication_sink = Arc::new(MockHandoffSink::default());
+        let runtime_deps = || ModerationOrchestratorDepsV1 {
+            submitter: submitter.clone(),
+            snapshot_reader: reader.clone(),
+            settlement_sink: settlement_sink.clone(),
+            publication_sink: publication_sink.clone(),
+        };
+        let first_checkpoint = config(&temp, "terminal-first.norito");
+        let second_checkpoint = config(&temp, "terminal-second.norito");
+        let action = ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
+            "case-failover".to_owned(),
+            "round-1".to_owned(),
+        ));
+
+        let first = ModerationOrchestratorV1::open(first_checkpoint.clone(), runtime_deps())
+            .expect("first orchestrator");
+        let second = ModerationOrchestratorV1::open(second_checkpoint, runtime_deps())
+            .expect("second orchestrator");
+        let first_submit = first
+            .submit(governance.clone(), action.clone(), [0x11; 32])
+            .expect("first terminal submit");
+        let split_peer_submit = second
+            .submit(governance.clone(), action.clone(), [0x22; 32])
+            .expect("split-peer terminal replay");
+        assert_eq!(first_submit.status, ModerationOperationStatusV1::Pending);
+        assert_eq!(
+            split_peer_submit.status,
+            ModerationOperationStatusV1::Pending
+        );
+        assert_eq!(first_submit.operation_id, split_peer_submit.operation_id);
+        assert_eq!(
+            first_submit.transaction_id,
+            split_peer_submit.transaction_id
+        );
+        assert_eq!(submitter.calls(), 1);
+
+        drop(first);
+        reader.replace(finalized_snapshot);
+        let restarted = ModerationOrchestratorV1::open(first_checkpoint, runtime_deps())
+            .expect("restarted orchestrator");
+        restarted
+            .reconcile()
+            .expect("restart reconciles finalized case");
+        second
+            .reconcile()
+            .expect("split peer reconciles finalized case");
+        let restarted_replay = restarted
+            .submit(governance.clone(), action.clone(), [0x11; 32])
+            .expect("restarted finalized replay");
+        let split_peer_replay = second
+            .submit(governance, action, [0x22; 32])
+            .expect("split-peer finalized replay");
+        assert_eq!(
+            restarted_replay.status,
+            ModerationOperationStatusV1::Finalized
+        );
+        assert_eq!(
+            split_peer_replay.status,
+            ModerationOperationStatusV1::Finalized
+        );
+        assert!(restarted_replay.replay);
+        assert!(split_peer_replay.replay);
+        assert_eq!(submitter.calls(), 1);
+
+        let restarted_case = restarted
+            .case("case-failover", "round-1")
+            .expect("restarted case projection");
+        let split_peer_case = second
+            .case("case-failover", "round-1")
+            .expect("split-peer case projection");
+        assert!(restarted_case.outcome.is_some());
+        assert_eq!(
+            norito::to_bytes(&restarted_case).expect("encode restarted projection"),
+            norito::to_bytes(&split_peer_case).expect("encode split-peer projection")
+        );
+        assert_eq!(settlement_sink.delivered().len(), 1);
+        assert_eq!(publication_sink.delivered().len(), 1);
+
+        restarted.reconcile().expect("idempotent restart reconcile");
+        second.reconcile().expect("idempotent split-peer reconcile");
+        assert_eq!(settlement_sink.delivered().len(), 1);
+        assert_eq!(publication_sink.delivered().len(), 1);
     }
 
     #[test]

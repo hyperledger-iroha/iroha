@@ -19,7 +19,7 @@ Sidebar_label: 容量性シミュレーションのランブック
 エスペルハ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` を参照してください。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-Este Runbook は、SF-2C 容量のマーケットプレイスを実行するキットとシミュレーション結果をメトリクス結果として視覚化して説明します。 `docs/examples/sorafs_capacity_simulation/` の OS フィクスチャを決定するために、必要なフェイルオーバーの有効性を確認し、スラッシュの修復メディアを使用します。静電容量の OS ペイロードは、`sorafs_manifest_stub capacity` を使用します。マニフェスト/CAR のエンパコメントに `iroha app sorafs toolkit pack` を使用します。
+Este Runbook は、SF-2C 容量のマーケットプレイスを実行するキットとシミュレーション結果をメトリクス結果として視覚化して説明します。 `docs/examples/sorafs_capacity_simulation/` の OS フィクスチャを決定するために、必要なフェイルオーバーの有効性を確認し、スラッシュの修復メディアを使用します。静電容量の OS ペイロードは、`sorafs_manifest_builder capacity` を使用します。マニフェスト/CAR のエンパコメントに `iroha app sorafs toolkit pack` を使用します。
 
 ## 1. CLI のアーティファトを作成する
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` カプセル化 `sorafs_manifest_stub capacity` パラメータ エミミール ペイロード Norito、BLOB Base64、必要な資料 Torii JSON パラメータの履歴:
+`run_cli.sh` カプセル化 `sorafs_manifest_builder capacity` パラメータ エミミール ペイロード Norito、BLOB Base64、必要な資料 Torii JSON パラメータの履歴:
 
 - 参加者としての交渉の承認を宣言します。
 - ステージング・エンターテイナーのマニフェストを複製するかどうかを決定します。

@@ -41,7 +41,7 @@ SoraFS 架构 RFC 中概述了剩余工作
 ## 入学流程
 
 1. **提案创建**
-   - CLI：添加 `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
+   - CLI：添加 `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …`
      生成 `ProviderAdmissionProposalV1` + 证明包。
    - 验证：确保必填字段、权益 > 0、`profile_id` 中的规范分块器句柄。
 2. **治理认可**
@@ -61,7 +61,7 @@ SoraFS 架构 RFC 中概述了剩余工作
 |面积 |任务|所有者 |状态 |
 |------|------|----------|--------|
 |架构|在 `crates/sorafs_manifest/src/provider_admission.rs` 下定义 `ProviderAdmissionProposalV1`、`ProviderAdmissionEnvelopeV1`、`EndpointAttestationV1` (Norito)。在 `sorafs_manifest::provider_admission` 中实现，带有验证助手。【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 |存储/治理| ✅ 已完成 |
-| CLI 工具 |使用子命令扩展 `sorafs_manifest_stub`：`provider-admission proposal`、`provider-admission sign`、`provider-admission verify`。 |工具工作组 | ✅ |
+| CLI 工具 |使用子命令扩展 `sorafs_manifest_builder`：`provider-admission proposal`、`provider-admission sign`、`provider-admission verify`。 |工具工作组 | ✅ |
 
 CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，发出
 规范提案/信封字节，并在 `sign`/`verify` 期间验证理事会签名。运营商可以
@@ -70,7 +70,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
 
 ### CLI 参考
 
-通过 `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` 运行每个命令。
+通过 `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` 运行每个命令。
 
 - `proposal`
   - 所需标志：`--provider-id=<hex32>`、`--chunker-profile=<namespace.name@semver>`、
@@ -109,7 +109,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
     捕获摘要和签名计数。
 |验证|实现 Torii、网关和 `sorafs-node` 使用的共享验证器。提供单元+CLI集成测试。【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 |网络 TL / 存储 | ✅ 已完成 |
 | Torii 集成 |将验证程序引入 Torii 广告摄取，拒绝不符合策略的广告，发出遥测数据。 |网络 TL | ✅ 已完成 | Torii 现在加载治理信封 (`torii.sorafs.admission_envelopes_dir`)，在摄取期间验证摘要/签名匹配，并显示准入遥测。【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-|续订 |添加续订/撤销架构 + CLI 帮助程序，在文档中发布生命周期指南（请参阅下面的运行手册和中的 CLI 命令） `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 |存储/治理| ✅ 已完成 |
+|续订 |添加续订/撤销架构 + CLI 帮助程序，在文档中发布生命周期指南（请参阅下面的运行手册和中的 CLI 命令） `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 |存储/治理| ✅ 已完成 |
 |遥测|定义 `provider_admission` 仪表板和警报（缺少续订、信封到期）。 |可观察性| 🟠 进行中 |计数器 `torii_sorafs_admission_total{result,reason}` 存在；仪表板/警报待处理。【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### 续订和撤销操作手册
 
@@ -117,7 +117,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
 1. 使用 `provider-admission proposal` 和 `provider-admission sign` 构建后续提案/广告对，增加 `--retention-epoch` 并根据需要更新权益/端点。
 2. 执行  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
    ```
    该命令通过以下方式验证未更改的功能/配置文件字段
    `AdmissionRecord::apply_renewal`，发出 `ProviderAdmissionRenewalV1`，并打印摘要
-   治理日志。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   治理日志。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. 替换 `torii.sorafs.admission_envelopes_dir` 中的先前信封，将更新 Norito/JSON 提交到治理存储库，并将更新哈希 + 保留纪元附加到 `docs/source/sorafs/migration_ledger.md`。
 4. 通知操作员新信封已生效并监控 `torii_sorafs_admission_total{result="accepted",reason="stored"}` 以确认摄入。
 5. 通过 `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` 重新生成并提交规范装置； CI (`ci/check_sorafs_fixtures.sh`) 验证 Norito 输出保持稳定。
@@ -135,7 +135,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
 #### 紧急撤销
 1. 识别受损的信封并发出撤销：
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI 流程现在接受中间证书包 (`--endpoint-attestation-intermediate`)，
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI 对 `ProviderAdmissionRevocationV1` 进行签名，通过以下方式验证签名集
-   `verify_revocation_signatures`，并报告撤销摘要。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   `verify_revocation_signatures`，并报告撤销摘要。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. 从 `torii.sorafs.admission_envelopes_dir` 中取出信封，将撤销 Norito/JSON 分发到准入缓存，并在治理分钟中记录原因哈希。
 3.观看`torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`以确认缓存删除了已撤销的广告；将撤销工件保留在事件回顾中。
 

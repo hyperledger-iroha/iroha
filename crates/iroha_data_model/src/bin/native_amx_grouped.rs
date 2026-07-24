@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeSet, error::Error, fs, path::Path};
 
-use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
+use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, MerkleTree, Signature};
 use iroha_data_model::{
     block::{
         Header as BlockHeader,
@@ -13,12 +13,16 @@ use iroha_data_model::{
             SumeragiNativeAmxParticipantApplication, SumeragiNativeAmxParticipantApplicationState,
             SumeragiPipelineExecutionStatus,
         },
-        consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
+        consensus_v2::{
+            ConsensusRound, ExecutionCommitment, HeightContext, HeightContextId,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION, NativeAmxApplicationManifestLeafV1,
+            NativeAmxApplicationManifestMemberV1,
+        },
     },
     consensus::VALIDATOR_SET_HASH_VERSION_V1,
     nexus::{DataSpaceId, LaneId, compute_settlement_hash},
     peer::PeerId,
-    transaction::TransactionEntrypoint,
+    transaction::{TransactionEntrypoint, TransactionResult},
 };
 use iroha_primitives::numeric::Quantity;
 use norito::json::{self, Value};
@@ -33,6 +37,7 @@ const GROUP_SOURCE_LIMIT: usize = 4_096;
 const VALIDATOR_COUNT: usize = 4;
 const MIN_QUORUM: usize = 3;
 const BLS_PROOF_BYTES: usize = 96;
+const APPLICATION_MANIFEST_LEAF_COUNT: u32 = 1;
 
 #[derive(Clone)]
 struct ParticipantFixture {
@@ -433,12 +438,118 @@ fn diagnostics(
             settlement_hash: remote.settlement_hash,
             source_count: GROUP_SOURCE_COUNT as u64,
             application_block_height: Some(42),
-            application_block_hash: Some(HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-                b"native-amx-v2-grouped-fixture-application-block",
-            ))),
+            application_block_hash: Some(application_block_hash()),
             state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
         }],
+        autonomous_lane_executions: Vec::new(),
     }
+}
+
+fn application_block_hash() -> HashOf<BlockHeader> {
+    HashOf::from_untyped_unchecked(Hash::new(
+        b"native-amx-v2-grouped-fixture-application-block",
+    ))
+}
+
+fn executed_block_wire_hash() -> Hash {
+    Hash::new(b"native-amx-v2-grouped-fixture-executed-block-wire")
+}
+
+fn application_evidence(
+    context: &FixtureContext,
+    remote: &ParticipantFixture,
+) -> Result<Value, Box<dyn Error>> {
+    let descriptor = &remote.proposal.descriptor;
+    let members = context
+        .sources
+        .iter()
+        .copied()
+        .zip(context.entrypoints.iter().copied())
+        .enumerate()
+        .map(
+            |(index, (source_id, entrypoint_hash))| NativeAmxApplicationManifestMemberV1 {
+                entrypoint_index: descriptor.accepted_candidate_indices[index],
+                source_id,
+                entrypoint_hash,
+                result_hash: HashOf::<TransactionResult>::from_untyped_unchecked(Hash::new(
+                    [
+                        b"native-amx-v2-grouped-fixture-result:".as_slice(),
+                        &[u8::try_from(index).expect("fixture member index fits u8")],
+                    ]
+                    .concat(),
+                )),
+            },
+        )
+        .collect::<Vec<_>>();
+    let leaf = NativeAmxApplicationManifestLeafV1 {
+        version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        lane_id: descriptor.lane_id,
+        dataspace_id: descriptor.dataspace_id,
+        lane_incarnation: descriptor.lane_incarnation,
+        participant_height: descriptor.lane_block_height,
+        participant_view: descriptor.lane_block_view,
+        predecessor_height: descriptor.previous_lane_block_height,
+        predecessor_descriptor_hash: descriptor.previous_lane_block_descriptor_hash,
+        descriptor_hash: descriptor.descriptor_hash,
+        proposal_hash: remote.proposal.proposal_hash,
+        settlement_hash: remote.settlement_hash,
+        members,
+        application_block_height: 42,
+        application_block_hash: application_block_hash(),
+        executed_block_wire_hash: executed_block_wire_hash(),
+    };
+    leaf.validate()?;
+    let leaf_hash = HashOf::new(&leaf);
+    let tree = [leaf_hash].into_iter().collect::<MerkleTree<_>>();
+    let typed_root = tree
+        .root()
+        .ok_or("singleton Native AMX manifest must have a root")?;
+    let manifest_root = Hash::from(typed_root);
+    let proof = tree
+        .get_proof(0)
+        .ok_or("singleton Native AMX manifest must have a proof")?;
+    if !proof
+        .clone()
+        .verify(&leaf_hash, &typed_root, usize::BITS as usize - 1)
+    {
+        return Err("generated Native AMX manifest proof does not verify".into());
+    }
+    let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+        Hash::new(b"native-amx-v2-grouped-fixture-parent-state"),
+        Hash::new(b"native-amx-v2-grouped-fixture-post-state"),
+        Hash::new(b"native-amx-v2-grouped-fixture-ordinary-writes"),
+        None,
+        0,
+        NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+        manifest_root,
+        APPLICATION_MANIFEST_LEAF_COUNT,
+        executed_block_wire_hash(),
+    )?;
+    let carrier_entrypoint_hashes = context
+        .entrypoints
+        .iter()
+        .copied()
+        .map(Hash::from)
+        .collect::<Vec<_>>();
+
+    Ok(norito::json!({
+        "active_lane_incarnations": [{
+            "lane_id": (descriptor.lane_id),
+            "dataspace_id": (descriptor.dataspace_id),
+            "lane_incarnation": (descriptor.lane_incarnation),
+        }],
+        "carrier_entrypoint_hashes": (carrier_entrypoint_hashes),
+        "execution_commitment": (execution_commitment),
+        "manifest_artifacts": [{
+            "version": 1,
+            "leaf": (leaf),
+            "leaf_hash": (Hash::from(leaf_hash)),
+            "leaf_index": 0,
+            "proof": (proof),
+            "manifest_root": (manifest_root),
+            "manifest_leaf_count": (APPLICATION_MANIFEST_LEAF_COUNT),
+        }],
+    }))
 }
 
 fn mutation(op: &str, path: &str, value: Option<Value>) -> Value {
@@ -455,12 +566,21 @@ fn mutation(op: &str, path: &str, value: Option<Value>) -> Value {
     }
 }
 
-fn control(id: &str, mutation: Value) -> Value {
+fn controls(id: &str, validator: &str, mutations: Vec<Value>) -> Value {
     norito::json!({
         "id": (id),
         "expectation": "reject",
-        "mutations": [(mutation)],
+        "validator": (validator),
+        "mutations": (mutations),
     })
+}
+
+fn control(id: &str, mutation: Value) -> Value {
+    controls(id, "receipt_group", vec![mutation])
+}
+
+fn evidence_control(id: &str, mutations: Vec<Value>) -> Value {
+    controls(id, "application_evidence", mutations)
 }
 
 #[expect(
@@ -474,6 +594,21 @@ fn negative_controls() -> Vec<Value> {
     let prepare = format!("{first_leg}/prepare_qc");
     let commit = format!("{first_leg}/commit_qc");
     let settlement = format!("{first_leg}/participant_settlement");
+    let same_route_descriptor = format!("{first_leg}/participant_proposal/descriptor");
+    let stale_incarnation = json::to_value(&Hash::new(
+        b"native-amx-v2-negative-stale-participant-incarnation",
+    ))
+    .expect("hash serializes to JSON");
+    let foreign_entrypoint = json::to_value(&Hash::new(
+        b"native-amx-v2-negative-unanchored-mixed-role-entrypoint",
+    ))
+    .expect("hash serializes to JSON");
+    let forged_hash = json::to_value(&Hash::new(b"native-amx-v2-negative-forged-manifest-value"))
+        .expect("hash serializes to JSON");
+    let coordinator_incarnation = json::to_value(&Hash::new(
+        b"native-amx-v2-grouped-fixture-coordinator-incarnation",
+    ))
+    .expect("hash serializes to JSON");
     vec![
         control(
             "flattened_phase",
@@ -673,6 +808,116 @@ fn negative_controls() -> Vec<Value> {
                 )),
             ),
         ),
+        controls(
+            "stale_same_route_incarnation",
+            "receipt_group",
+            vec![
+                mutation(
+                    "replace",
+                    &format!("{same_route_descriptor}/lane_incarnation"),
+                    Some(stale_incarnation.clone()),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{settlement}/lane_incarnation"),
+                    Some(stale_incarnation.clone()),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{prepare}/body/participant_lane_incarnation"),
+                    Some(stale_incarnation.clone()),
+                ),
+                mutation(
+                    "replace",
+                    &format!("{commit}/body/participant_lane_incarnation"),
+                    Some(stale_incarnation.clone()),
+                ),
+            ],
+        ),
+        control(
+            "same_route_coordinator_view_drift",
+            mutation(
+                "replace",
+                &format!("{same_route_descriptor}/lane_block_view"),
+                Some(norito::json!(10)),
+            ),
+        ),
+        control(
+            "same_route_mixed_role_deferral",
+            mutation(
+                "replace",
+                &format!("{same_route_descriptor}/accepted_transaction_hashes/0"),
+                Some(foreign_entrypoint.clone()),
+            ),
+        ),
+        evidence_control(
+            "stale_participant_application_incarnation",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/leaf/lane_incarnation",
+                Some(stale_incarnation),
+            )],
+        ),
+        evidence_control(
+            "same_route_participant_application_marker",
+            vec![
+                mutation(
+                    "replace",
+                    "/golden/application_evidence/manifest_artifacts/0/leaf/lane_id",
+                    Some(norito::json!(7)),
+                ),
+                mutation(
+                    "replace",
+                    "/golden/application_evidence/manifest_artifacts/0/leaf/dataspace_id",
+                    Some(norito::json!(11)),
+                ),
+                mutation(
+                    "replace",
+                    "/golden/application_evidence/manifest_artifacts/0/leaf/lane_incarnation",
+                    Some(coordinator_incarnation),
+                ),
+            ],
+        ),
+        evidence_control(
+            "unanchored_mixed_role_participant",
+            vec![mutation(
+                "replace",
+                "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/accepted_transaction_hashes/0",
+                Some(foreign_entrypoint),
+            )],
+        ),
+        evidence_control(
+            "manifest_root_tampering",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/manifest_root",
+                Some(forged_hash.clone()),
+            )],
+        ),
+        evidence_control(
+            "manifest_proof_path_tampering",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/proof/audit_path",
+                Some(Value::Array(vec![forged_hash.clone()])),
+            )],
+        ),
+        evidence_control(
+            "manifest_proof_position_tampering",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/proof/leaf_index",
+                Some(norito::json!(1)),
+            )],
+        ),
+        evidence_control(
+            "application_block_substitution",
+            vec![mutation(
+                "replace",
+                "/golden/application_evidence/manifest_artifacts/0/leaf/application_block_hash",
+                Some(forged_hash),
+            )],
+        ),
     ]
 }
 
@@ -750,9 +995,11 @@ fn validate_golden(diagnostics: &SumeragiDiagnosticsStatus) -> Result<(), Box<dy
 }
 
 fn document() -> Result<Value, Box<dyn Error>> {
+    let context = fixture_context()?;
     let (commitment, remote) = golden_commitment()?;
     let diagnostics = diagnostics(commitment.clone(), &remote);
     validate_golden(&diagnostics)?;
+    let application_evidence = application_evidence(&context, &remote)?;
     let controls = negative_controls();
     let mut ids = BTreeSet::new();
     for control in &controls {
@@ -789,6 +1036,7 @@ fn document() -> Result<Value, Box<dyn Error>> {
             "ordered_source_ids": (ordered_source_ids),
             "receipt_group": (receipt_group),
             "expected_diagnostics": (expected_diagnostics),
+            "application_evidence": (application_evidence),
         },
         "negative_controls": (controls),
     }))

@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Les opérateurs développent des charges utiles régénératrices de sollicitation d'intégration/de litige avec `sorafs_manifest_stub capacity {declaration,dispute}` et archivent les octets JSON/Norito résultants en même temps que le ticket de gouvernance.
+Les opérateurs développent des charges utiles régénératrices de sollicitation d'intégration/de litige avec `sorafs_manifest_builder capacity {declaration,dispute}` et archivent les octets JSON/Norito résultants en même temps que le ticket de gouvernance.
 
 ## Artefatos de aprovacao
 

@@ -17,7 +17,7 @@ every new provider admission, renewal, or retirement.
 | Role | Responsibilities | Required artefacts |
 |------|------------------|--------------------|
 | Provider | Draft `CapacityDeclarationV1` spec, capture hardware inventory, supply attestation bundles if mandated by `docs/source/sorafs/provider_admission_policy.md`. | `specs/<provider>.json`, hardware affidavit, contact roll. |
-| Storage WG reviewer | Validate schema, run CLI regression, cross-check stake and chunker profile metadata. | CLI logs, `sorafs_manifest_stub` outputs, signed review note. |
+| Storage WG reviewer | Validate schema, run CLI regression, cross-check stake and chunker profile metadata. | CLI logs, `sorafs_manifest_builder` outputs, signed review note. |
 | Governance council | Approve final declaration, record vote ID, and track override/penalty hooks. | Council ballot ID, incident log link. |
 | Treasury/SRE | Confirm dashboards and quota entries, archive reconciliation/export hashes, verify alerts. | Grafana screenshots, `/v1/sorafs/capacity/state` dump, Alertmanager silence log if used. |
 
@@ -41,7 +41,7 @@ helper:
 
 ```bash
 mkdir -p artifacts/sorafs/providers/acme
-sorafs_manifest_stub capacity declaration \
+sorafs_manifest_builder capacity declaration \
   --spec specs/providers/acme.json \
   --json-out artifacts/sorafs/providers/acme/declaration.json \
   --request-out artifacts/sorafs/providers/acme/request.json \
@@ -51,7 +51,7 @@ sorafs_manifest_stub capacity declaration \
 
 This command validates the schema locally and emits every artefact required by
 `/v1/sorafs/capacity/declare`. Store the stdout/stderr in
-`artifacts/sorafs/providers/acme/manifest_stub.log`.
+`artifacts/sorafs/providers/acme/manifest_builder.log`.
 
 ### 2. Run admission smoke tests
 
@@ -115,7 +115,7 @@ dump so SRE can prove telemetry coverage.
 1. **Drain assignments.** Run `iroha app sorafs replication list --status active \
    --provider-id <hex>` until no manifest references remain. Queue reassignment
    ballots for any stragglers before approving retirement.
-2. **Publish final telemetry.** Use `sorafs_manifest_stub capacity telemetry` to
+2. **Publish final telemetry.** Use `sorafs_manifest_builder capacity telemetry` to
    generate the final snapshot and submit it via
    `POST /v1/sorafs/capacity/telemetry`. Record the response and ensure the
    provider’s row in `/v1/sorafs/capacity/state` moves to `status="retiring"` or
@@ -145,7 +145,7 @@ artifacts/sorafs/providers/<provider>/
   state_record.json
   telemetry_final.json              # exit only
   grafana_capacity_health_<ts>.png
-  manifest_stub.log
+  manifest_builder.log
   tests/capacity_cli.log
 docs/examples/sorafs_capacity_marketplace_validation/
   YYYY-MM-DD_<provider>_{onboarding,exit}_signoff.md

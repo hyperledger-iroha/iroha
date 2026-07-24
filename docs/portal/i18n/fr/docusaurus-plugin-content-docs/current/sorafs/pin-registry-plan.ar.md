@@ -79,7 +79,7 @@ Il s'agit d'invariants.
 |--------|--------|--------|
 | خدمة Torii | كشف `/v1/sorafs/pin` (soumettre) ، `/v1/sorafs/pin/{cid}` (recherche) ، `/v1/sorafs/aliases` (liste/liaison) ، `/v1/sorafs/replication` (commandes/reçus). توفير ترقيم + ترشيح. | Mise en réseau TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registre في الاستجابات؛ Utilisez Norito pour les SDK. | Infrastructure de base |
-| CLI | Utilisez `sorafs_manifest_stub` et CLI pour `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
+| CLI | Utilisez `sorafs_manifest_builder` et CLI pour `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Reliures disponibles (Rust/Go/TS) pour Norito؛ اضافة اختبارات تكامل. | Équipes SDK |
 
 العمليات:

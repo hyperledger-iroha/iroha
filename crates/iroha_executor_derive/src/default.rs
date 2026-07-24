@@ -182,7 +182,9 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_register_public_lane_validator(operation: &RegisterPublicLaneValidator)",
         "fn visit_set_lane_relay_emergency_validators(operation: &SetLaneRelayEmergencyValidators)",
         "fn visit_find_sorafs_repair_task(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairTask)",
+        "fn visit_find_sorafs_repair_tasks(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairTasks)",
         "fn visit_find_sorafs_repair_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairStatus)",
+        "fn visit_find_sorafs_repair_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsRepairEvents)",
         "fn visit_find_sorafs_orderbook_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookPolicy)",
         "fn visit_find_sorafs_orderbook_order_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrderById)",
         "fn visit_find_sorafs_orderbook_cancellation_by_order_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookCancellationByOrderId)",
@@ -192,6 +194,9 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_orderbook_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookStatus)",
         "fn visit_find_sorafs_orderbook_orders(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookOrders)",
         "fn visit_find_sorafs_orderbook_receipts(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookReceipts)",
+        "fn visit_find_sorafs_orderbook_trades(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookTrades)",
+        "fn visit_find_sorafs_orderbook_channels(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookChannels)",
+        "fn visit_find_sorafs_orderbook_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsOrderbookEvents)",
         "fn visit_find_sorafs_reserve_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReservePolicy)",
         "fn visit_find_sorafs_reserve_provider_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveProviderById)",
         "fn visit_find_sorafs_reserve_movement_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveMovementById)",
@@ -205,6 +210,8 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_moderation_outcome(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationOutcome)",
         "fn visit_find_sorafs_moderation_no_show(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationNoShow)",
         "fn visit_find_sorafs_moderation_status(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationStatus)",
+        "fn visit_find_sorafs_moderation_snapshot(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationSnapshot)",
+        "fn visit_find_sorafs_moderation_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationEvents)",
     ]
     .into_iter()
     .map(|item| {

@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-01-01
 ./analyze.py --artifacts ./artifacts
 ```
 
-הסקריפט `run_cli.sh` מפעיל `sorafs_manifest_stub capacity` כדי לבנות:
+הסקריפט `run_cli.sh` מפעיל `sorafs_manifest_builder capacity` כדי לבנות:
 
 - הצהרות ספקים דטרמיניסטיות עבור סט ה-fixtures של משא ומתן מכסות.
 - סדר שכפול שתואם את תרחיש המשא ומתן.

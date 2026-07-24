@@ -3,6 +3,7 @@
 
 package org.hyperledger.iroha.android.consensus;
 
+import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -18,6 +19,9 @@ import org.hyperledger.iroha.sdk.consensus.NativeAmxV2;
  * so both SDK surfaces reject exactly the same malformed receipts.
  */
 public final class NativeAmxV2Models {
+  private static final BigInteger U64_MAX =
+      BigInteger.ONE.shiftLeft(Long.SIZE).subtract(BigInteger.ONE);
+
   /** Current coordinated first-release receipt version. */
   public static final int RECEIPT_VERSION = NativeAmxV2.RECEIPT_VERSION;
 
@@ -171,12 +175,12 @@ public final class NativeAmxV2Models {
       return new ConsensusHash(delegate.getContextId());
     }
 
-    public long height() {
-      return delegate.getHeight();
+    public BigInteger height() {
+      return unsigned64(delegate.getHeight(), "round.height");
     }
 
-    public long view() {
-      return delegate.getView();
+    public BigInteger view() {
+      return unsigned64(delegate.getView(), "round.view");
     }
 
     @Override
@@ -202,8 +206,8 @@ public final class NativeAmxV2Models {
       return new Round(delegate.getRound());
     }
 
-    public long epoch() {
-      return delegate.getEpoch();
+    public BigInteger epoch() {
+      return unsigned64(delegate.getEpoch(), "attestation.epoch");
     }
 
     public ConsensusHash chainIdHash() {
@@ -230,8 +234,9 @@ public final class NativeAmxV2Models {
       return delegate.getCoordinatorLaneId();
     }
 
-    public long coordinatorDataspaceId() {
-      return delegate.getCoordinatorDataspaceId();
+    public BigInteger coordinatorDataspaceId() {
+      return unsigned64(
+          delegate.getCoordinatorDataspaceId(), "attestation.coordinator_dataspace_id");
     }
 
     public ConsensusHash coordinatorLaneIncarnation() {
@@ -242,16 +247,19 @@ public final class NativeAmxV2Models {
       return delegate.getParticipantLaneId();
     }
 
-    public long participantDataspaceId() {
-      return delegate.getParticipantDataspaceId();
+    public BigInteger participantDataspaceId() {
+      return unsigned64(
+          delegate.getParticipantDataspaceId(), "attestation.participant_dataspace_id");
     }
 
     public ConsensusHash participantLaneIncarnation() {
       return new ConsensusHash(delegate.getParticipantLaneIncarnation());
     }
 
-    public long participantPreviousBlockHeight() {
-      return delegate.getParticipantPreviousBlockHeight();
+    public BigInteger participantPreviousBlockHeight() {
+      return unsigned64(
+          delegate.getParticipantPreviousBlockHeight(),
+          "attestation.participant_previous_block_height");
     }
 
     public ConsensusHash participantPreviousBlockDescriptorHash() {
@@ -260,12 +268,14 @@ public final class NativeAmxV2Models {
       return value == null ? null : new ConsensusHash(value);
     }
 
-    public long participantLaneBlockHeight() {
-      return delegate.getParticipantLaneBlockHeight();
+    public BigInteger participantLaneBlockHeight() {
+      return unsigned64(
+          delegate.getParticipantLaneBlockHeight(), "attestation.participant_lane_block_height");
     }
 
-    public long participantLaneBlockView() {
-      return delegate.getParticipantLaneBlockView();
+    public BigInteger participantLaneBlockView() {
+      return unsigned64(
+          delegate.getParticipantLaneBlockView(), "attestation.participant_lane_block_view");
     }
 
     public ConsensusHash participantProposalHash() {
@@ -288,16 +298,20 @@ public final class NativeAmxV2Models {
       return delegate.getParticipantMinQuorum();
     }
 
-    public long authorityContextHeight() {
-      return delegate.getAuthorityContextHeight();
+    public BigInteger authorityContextHeight() {
+      return unsigned64(
+          delegate.getAuthorityContextHeight(), "attestation.authority_context_height");
     }
 
-    public long plannedCoordinatorBlockHeight() {
-      return delegate.getPlannedCoordinatorBlockHeight();
+    public BigInteger plannedCoordinatorBlockHeight() {
+      return unsigned64(
+          delegate.getPlannedCoordinatorBlockHeight(),
+          "attestation.planned_coordinator_block_height");
     }
 
-    public long coordinatorLaneBlockView() {
-      return delegate.getCoordinatorLaneBlockView();
+    public BigInteger coordinatorLaneBlockView() {
+      return unsigned64(
+          delegate.getCoordinatorLaneBlockView(), "attestation.coordinator_lane_block_view");
     }
 
     public ConsensusHash coordinatorProposalHash() {
@@ -396,8 +410,8 @@ public final class NativeAmxV2Models {
       return delegate.getXorVariance();
     }
 
-    public long timestampMs() {
-      return delegate.getTimestampMs();
+    public BigInteger timestampMs() {
+      return unsigned64(delegate.getTimestampMs(), "participant_settlement.timestamp_ms");
     }
 
     @Override
@@ -420,8 +434,8 @@ public final class NativeAmxV2Models {
       this.delegate = delegate;
     }
 
-    public long blockHeight() {
-      return delegate.getBlockHeight();
+    public BigInteger blockHeight() {
+      return unsigned64(delegate.getBlockHeight(), "participant_settlement.block_height");
     }
 
     public long laneId() {
@@ -432,8 +446,8 @@ public final class NativeAmxV2Models {
       return new ConsensusHash(delegate.getLaneIncarnation());
     }
 
-    public long dataspaceId() {
-      return delegate.getDataspaceId();
+    public BigInteger dataspaceId() {
+      return unsigned64(delegate.getDataspaceId(), "participant_settlement.dataspace_id");
     }
 
     public long transactionCount() {
@@ -488,20 +502,22 @@ public final class NativeAmxV2Models {
       return delegate.getLaneId();
     }
 
-    public long dataspaceId() {
-      return delegate.getDataspaceId();
+    public BigInteger dataspaceId() {
+      return unsigned64(delegate.getDataspaceId(), "participant_descriptor.dataspace_id");
     }
 
     public ConsensusHash laneIncarnation() {
       return new ConsensusHash(delegate.getLaneIncarnation());
     }
 
-    public long proposalHeight() {
-      return delegate.getProposalHeight();
+    public BigInteger proposalHeight() {
+      return unsigned64(delegate.getProposalHeight(), "participant_descriptor.proposal_height");
     }
 
-    public long previousLaneBlockHeight() {
-      return delegate.getPreviousLaneBlockHeight();
+    public BigInteger previousLaneBlockHeight() {
+      return unsigned64(
+          delegate.getPreviousLaneBlockHeight(),
+          "participant_descriptor.previous_lane_block_height");
     }
 
     public ConsensusHash previousLaneBlockDescriptorHash() {
@@ -510,12 +526,13 @@ public final class NativeAmxV2Models {
       return value == null ? null : new ConsensusHash(value);
     }
 
-    public long laneBlockHeight() {
-      return delegate.getLaneBlockHeight();
+    public BigInteger laneBlockHeight() {
+      return unsigned64(
+          delegate.getLaneBlockHeight(), "participant_descriptor.lane_block_height");
     }
 
-    public long laneBlockView() {
-      return delegate.getLaneBlockView();
+    public BigInteger laneBlockView() {
+      return unsigned64(delegate.getLaneBlockView(), "participant_descriptor.lane_block_view");
     }
 
     public ConsensusHash subjectHash() {
@@ -530,8 +547,12 @@ public final class NativeAmxV2Models {
       return new ConsensusHash(delegate.getRbcInstanceHash());
     }
 
-    public List<Long> acceptedCandidateIndices() {
-      return delegate.getAcceptedCandidateIndices();
+    public List<BigInteger> acceptedCandidateIndices() {
+      final ArrayList<BigInteger> values = new ArrayList<>();
+      for (final Object value : delegate.getAcceptedCandidateIndices()) {
+        values.add(unsigned64(value, "participant_descriptor.accepted_candidate_indices"));
+      }
+      return Collections.unmodifiableList(values);
     }
 
     public List<TransactionEntrypointHash> acceptedTransactionHashes() {
@@ -623,8 +644,8 @@ public final class NativeAmxV2Models {
       return delegate.getLaneId();
     }
 
-    public long dataspaceId() {
-      return delegate.getDataspaceId();
+    public BigInteger dataspaceId() {
+      return unsigned64(delegate.getDataspaceId(), "participant_leg.dataspace_id");
     }
 
     public ConsensusHash laneIncarnation() {
@@ -694,24 +715,24 @@ public final class NativeAmxV2Models {
       return delegate.getLaneId();
     }
 
-    public long dataspaceId() {
-      return delegate.getDataspaceId();
+    public BigInteger dataspaceId() {
+      return unsigned64(delegate.getDataspaceId(), "receipt.dataspace_id");
     }
 
     public ConsensusHash laneIncarnation() {
       return new ConsensusHash(delegate.getLaneIncarnation());
     }
 
-    public long authorityContextHeight() {
-      return delegate.getAuthorityContextHeight();
+    public BigInteger authorityContextHeight() {
+      return unsigned64(delegate.getAuthorityContextHeight(), "receipt.authority_context_height");
     }
 
-    public long laneBlockHeight() {
-      return delegate.getLaneBlockHeight();
+    public BigInteger laneBlockHeight() {
+      return unsigned64(delegate.getLaneBlockHeight(), "receipt.lane_block_height");
     }
 
-    public long laneBlockView() {
-      return delegate.getLaneBlockView();
+    public BigInteger laneBlockView() {
+      return unsigned64(delegate.getLaneBlockView(), "receipt.lane_block_view");
     }
 
     public ConsensusHash coordinatorProposalHash() {
@@ -745,8 +766,8 @@ public final class NativeAmxV2Models {
       this.delegate = delegate;
     }
 
-    public long blockHeight() {
-      return delegate.getBlockHeight();
+    public BigInteger blockHeight() {
+      return unsigned64(delegate.getBlockHeight(), "receipt_group.block_height");
     }
 
     public long laneId() {
@@ -757,8 +778,8 @@ public final class NativeAmxV2Models {
       return new ConsensusHash(delegate.getLaneIncarnation());
     }
 
-    public long dataspaceId() {
-      return delegate.getDataspaceId();
+    public BigInteger dataspaceId() {
+      return unsigned64(delegate.getDataspaceId(), "receipt_group.dataspace_id");
     }
 
     public long transactionCount() {
@@ -823,5 +844,23 @@ public final class NativeAmxV2Models {
       throw new IllegalArgumentException("Native AMX receipt group must be a JSON object");
     }
     return parseReceiptGroup((Map<String, Object>) value);
+  }
+
+  private static BigInteger unsigned64(final Object value, final String field) {
+    final BigInteger parsed;
+    if (value instanceof BigInteger) {
+      parsed = (BigInteger) value;
+    } else if (value instanceof Byte
+        || value instanceof Short
+        || value instanceof Integer
+        || value instanceof Long) {
+      parsed = BigInteger.valueOf(((Number) value).longValue());
+    } else {
+      throw new IllegalArgumentException(field + " must be an integer");
+    }
+    if (parsed.signum() < 0 || parsed.compareTo(U64_MAX) > 0) {
+      throw new IllegalArgumentException(field + " must fit in unsigned 64-bit range");
+    }
+    return parsed;
   }
 }

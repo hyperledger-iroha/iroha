@@ -17,9 +17,11 @@ Options:
                           Soak seed (nexus-cross-dataspace-v1-seed-00..09)
   --cross-dataspace-soak-duration-secs <SECONDS>
                           Fault-soak duration; must be exactly 7200
-  --native-amx-fault-soak Run the ignored rotating-validator Native AMX fault soak
+  --native-amx-fault-soak Run the rotating-validator Native AMX fault soak
   --native-amx-iterations <N>
                           Native AMX soak iterations, 1..100 (default: 10)
+  --multilane-four-peer-release
+                          Run both mandatory non-ignored four-peer release gates
   --target-dir <PATH>     Set CARGO_TARGET_DIR for the test run
   --evidence-dir <PATH>   Persist exact per-run logs and completion accounting
   --fast                  Run cargo via scripts/cargo_fast.sh when available
@@ -47,6 +49,7 @@ PROFILE="debug"
 RUN_SCOPE="case"
 NATIVE_AMX_ITERATIONS=""
 readonly NATIVE_AMX_FAULT_SOAK_TEST="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+readonly AUTOSCALE_FOUR_PEER_RELEASE_TEST="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
 readonly CROSS_DATASPACE_CASE_TEST="nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing"
 readonly CROSS_DATASPACE_FAULT_SOAK_TEST="nexus::cross_dataspace_localnet::cross_dataspace_two_hour_fault_soak_preserves_multilane_application"
 readonly CROSS_DATASPACE_SEED_PREFIX="nexus-cross-dataspace-v1-seed-"
@@ -104,6 +107,14 @@ while [[ $# -gt 0 ]]; do
         exit 2
       fi
       RUN_SCOPE="native-amx"
+      shift
+      ;;
+    --multilane-four-peer-release)
+      if [[ "$RUN_SCOPE" != "case" ]]; then
+        echo "--multilane-four-peer-release cannot be combined with another run scope" >&2
+        exit 2
+      fi
+      RUN_SCOPE="multilane-four-peer"
       shift
       ;;
     --native-amx-iterations)
@@ -205,9 +216,13 @@ if [[ "$RUN_SCOPE" == "cross-fault-soak" ]]; then
     exit 2
   fi
 fi
+if [[ "$RUN_SCOPE" == "multilane-four-peer" && "$PROFILE" != "release" ]]; then
+  echo "--multilane-four-peer-release requires --release" >&2
+  exit 2
+fi
 for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
   case "${extra%%=*}" in
-    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS)
+    IROHA_TEST_NETWORK_BASE_SEED|IROHA_NEXUS_CROSS_REQUIRE_SEED|IROHA_NEXUS_CROSS_FAULT_SOAK_DURATION_SECS|IROHA_MULTILANE_RELEASE_MODE|IROHA_RUN_IGNORED)
       echo "--env may not override reserved cross-dataspace evidence control ${extra%%=*}" >&2
       exit 2
       ;;
@@ -337,7 +352,7 @@ validate_exact_test_log() {
 
 publish_completion_path() {
   local completion_path="$1"
-  local pointer_path="${IROHA_NEXUS_CROSS_COMPLETION_PATH_FILE:-}"
+  local pointer_path="${2:-${IROHA_NEXUS_CROSS_COMPLETION_PATH_FILE:-}}"
   [[ -n "$pointer_path" ]] || return 0
   if [[ -L "$pointer_path" ]]; then
     echo "completion path pointer must not be a symlink: ${pointer_path}" >&2
@@ -347,6 +362,23 @@ publish_completion_path() {
   local pointer_tmp="${pointer_path}.tmp.$$"
   printf '%s\n' "$completion_path" >"$pointer_tmp"
   mv -- "$pointer_tmp" "$pointer_path"
+}
+
+validate_multilane_release_markers() {
+  local test_name="$1"
+  local log_path="$2"
+  if [[ "$(grep -Fxc -- "[multilane-release-gate] started: ${test_name}" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not enter mandatory multilane release mode" >&2
+    return 1
+  fi
+  if [[ "$(grep -Fxc -- "[multilane-release-gate] completed: ${test_name}" "$log_path" || true)" != 1 ]]; then
+    echo "${test_name} did not complete mandatory multilane release mode" >&2
+    return 1
+  fi
+  if grep -Fq -- "developer opt-out" "$log_path"; then
+    echo "${test_name} reported a forbidden developer opt-out in release mode" >&2
+    return 1
+  fi
 }
 
 if [[ "$USE_CARGO_FAST" == true ]]; then
@@ -386,13 +418,20 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     --test native_amx_routing
     --
     --list
-    --ignored
   )
   wait_for_cargo_idle
-  native_amx_ignored_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
+  native_amx_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
+  native_amx_ignored_test_list="$(
+    env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored
+  )"
   if ! grep -Fqx -- "${NATIVE_AMX_FAULT_SOAK_TEST}: test" \
+    <<<"$native_amx_test_list"; then
+    echo "missing required Native AMX fault-soak test: ${NATIVE_AMX_FAULT_SOAK_TEST}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${NATIVE_AMX_FAULT_SOAK_TEST}: test" \
     <<<"$native_amx_ignored_test_list"; then
-    echo "missing required ignored Native AMX fault-soak test: ${NATIVE_AMX_FAULT_SOAK_TEST}" >&2
+    echo "required Native AMX fault-soak test is ignored: ${NATIVE_AMX_FAULT_SOAK_TEST}" >&2
     exit 1
   fi
   CMD=(
@@ -402,7 +441,7 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     "$NATIVE_AMX_FAULT_SOAK_TEST"
     --
     --exact
-    --ignored
+    --show-output
     "${TEST_ARGS[@]}"
   )
   NATIVE_AMX_RUN_LOG="$(mktemp "${TMPDIR:-/tmp}/native-amx-fault-soak.XXXXXX.log")"
@@ -415,7 +454,7 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
   wait_for_cargo_idle
   echo "Command: ${ENV_VARS[*]} ${CMD[*]}"
   set +e
-  env "${ENV_VARS[@]}" "${CMD[@]}" 2>&1 | tee "$NATIVE_AMX_RUN_LOG"
+  env "${ENV_VARS[@]}" IROHA_RUN_IGNORED=1 "${CMD[@]}" 2>&1 | tee "$NATIVE_AMX_RUN_LOG"
   native_amx_pipeline_status=("${PIPESTATUS[@]}")
   set -e
   if ((native_amx_pipeline_status[0] != 0 || native_amx_pipeline_status[1] != 0)); then
@@ -423,6 +462,7 @@ if [[ "$RUN_SCOPE" == "native-amx" ]]; then
     exit 1
   fi
   validate_exact_test_log "$NATIVE_AMX_FAULT_SOAK_TEST" "$NATIVE_AMX_RUN_LOG"
+  validate_multilane_release_markers "$NATIVE_AMX_FAULT_SOAK_TEST" "$NATIVE_AMX_RUN_LOG"
   exit
 fi
 
@@ -438,6 +478,101 @@ if [[ -L "$EVIDENCE_DIR" ]]; then
   exit 1
 fi
 mkdir -p -- "$EVIDENCE_DIR"
+
+if [[ "$RUN_SCOPE" == "multilane-four-peer" ]]; then
+  multilane_completion_pointer="${IROHA_MULTILANE_FOUR_PEER_COMPLETION_PATH_FILE:-}"
+  if [[ -z "$multilane_completion_pointer" ]]; then
+    echo "mandatory four-peer release requires IROHA_MULTILANE_FOUR_PEER_COMPLETION_PATH_FILE" >&2
+    exit 2
+  fi
+  evidence_run_dir="$(mktemp -d "${EVIDENCE_DIR%/}/multilane-four-peer-release.XXXXXX")"
+  runs_path="${evidence_run_dir}/runs.tsv"
+  printf '%s\n' $'target\ttest\tstatus\tlog_sha256\tlog' >"$runs_path"
+  release_specs=(
+    "nexus_and_streaming|${AUTOSCALE_FOUR_PEER_RELEASE_TEST}"
+    "native_amx_routing|${NATIVE_AMX_FAULT_SOAK_TEST}"
+  )
+  if ((${#release_specs[@]} != 2)); then
+    echo "expected exactly two mandatory four-peer multilane release tests" >&2
+    exit 1
+  fi
+  passed_runs=0
+  for spec in "${release_specs[@]}"; do
+    IFS='|' read -r target test_name <<<"$spec"
+    LIST_CMD=(
+      "${CARGO_TEST_CMD[@]}"
+      -p integration_tests
+      --test "$target"
+      --
+      --list
+    )
+    wait_for_cargo_idle
+    test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}")"
+    ignored_test_list="$(env "${ENV_VARS[@]}" "${LIST_CMD[@]}" --ignored)"
+    if [[ "$(grep -Fxc -- "${test_name}: test" <<<"$test_list" || true)" != 1 ]]; then
+      echo "missing or renamed mandatory multilane release test: ${test_name}" >&2
+      exit 1
+    fi
+    if grep -Fqx -- "${test_name}: test" <<<"$ignored_test_list"; then
+      echo "mandatory multilane release test is ignored: ${test_name}" >&2
+      exit 1
+    fi
+
+    run_log="${evidence_run_dir}/${target}.log"
+    CMD=(
+      "${CARGO_TEST_CMD[@]}"
+      -p integration_tests
+      --test "$target"
+      "$test_name"
+      --
+      --exact
+      --show-output
+      "${TEST_ARGS[@]}"
+    )
+    wait_for_cargo_idle
+    echo "Command: ${ENV_VARS[*]} IROHA_MULTILANE_RELEASE_MODE=1 ${CMD[*]}"
+    set +e
+    env "${ENV_VARS[@]}" IROHA_MULTILANE_RELEASE_MODE=1 "${CMD[@]}" \
+      2>&1 | tee "$run_log"
+    run_pipeline_status=("${PIPESTATUS[@]}")
+    set -e
+    if ((run_pipeline_status[0] != 0 || run_pipeline_status[1] != 0)); then
+      echo "mandatory multilane release test failed (cargo=${run_pipeline_status[0]}, tee=${run_pipeline_status[1]}): ${test_name}" >&2
+      exit 1
+    fi
+    validate_exact_test_log "$test_name" "$run_log"
+    validate_multilane_release_markers "$test_name" "$run_log"
+    printf '%s\t%s\tpassed\t%s\t%s\n' \
+      "$target" "$test_name" "$(sha256_file "$run_log")" "$(basename "$run_log")" \
+      >>"$runs_path"
+    ((passed_runs += 1))
+  done
+  if ((passed_runs != 2)); then
+    echo "mandatory multilane four-peer release gates passed ${passed_runs}/2" >&2
+    exit 1
+  fi
+  completion_path="${evidence_run_dir}/COMPLETED.tsv"
+  completion_tmp="${evidence_run_dir}/.COMPLETED.tsv.$$"
+  printf '%s\t%s\n' \
+    schema_version 1 \
+    mode mandatory-four-peer-multilane-release \
+    head_commit "$release_head_commit" \
+    head_tree "$release_head_tree" \
+    source_manifest_sha256 "$release_source_manifest_sha256" \
+    cargo_lock_sha256 "$release_cargo_lock_sha256" \
+    expected_runs 2 \
+    passed_runs "$passed_runs" \
+    failed_runs 0 \
+    skipped_runs 0 \
+    runs_sha256 "$(sha256_file "$runs_path")" \
+    >"$completion_tmp"
+  mv -- "$completion_tmp" "$completion_path"
+  publish_completion_path \
+    "$completion_path" \
+    "$multilane_completion_pointer"
+  echo "[nexus-cross-swap] mandatory four-peer multilane release gates passed 2/2; completion=${completion_path}"
+  exit
+fi
 
 LIST_CMD=(
   "${CARGO_TEST_CMD[@]}"

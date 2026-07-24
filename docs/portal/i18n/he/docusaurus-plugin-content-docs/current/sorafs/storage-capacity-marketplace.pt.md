@@ -63,7 +63,7 @@ os entregaveis exigidos para a primeira release e os divide em trilhas acionavis
 - עוזרים להשוות (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de lane/atribuicao/SLA) validacao deterministica de chaves e report de erro reutilizavel por CI e tooling downstream. [crates/sorafs_manifest/src/capacity.rs:230]
 - `PinProviderRegistry` תצוגה מקדימה או תמונת מצב על-שרשרת דרך `/v1/sorafs/capacity/state`, שילוב של ספקים והכרזות בעלות פנקס חשבונות לפי מאיו של Norito JSON קובע. [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - אכיפת אכיפת קוברטורה דה מטפלת ב-canonicos, deteccao de duplicados, limites por lane, guardas de atribuicao de replicacao e checks de range de telemetria para que regressoes aparecam imediatamente no CI. [crates/sorafs_manifest/src/capacity.rs:792]
-- כלי עבודה עבור מפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` המרת מפרט למידע על מטענים Norito canonicos, blobs base64 ו-JSON קורות חיים עבור מתקנים מכינים להפעלה של `/v1/sorafs/capacity/declare`, I100NI000 חזרות validacao מקומי. [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] Fixtures de referencia vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) I0180 gerados via.
+- כלי עבודה עבור מפעילים: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` המרת מפרט למידע על מטענים Norito canonicos, blobs base64 ו-JSON קורות חיים עבור מתקנים מכינים להפעלה של `/v1/sorafs/capacity/declare`, I100NI000 חזרות validacao מקומי. [crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1] Fixtures de referencia vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) I0180 gerados via.
 
 ### 2. Integracao do plano de control| טארפה | Responsavel(is) | Notas |
 |------|----------------|-------|
@@ -152,7 +152,7 @@ manter os criterios de aceitacao em sync com a implementacao.
   junto com pacotes de governanca.
 
 ### Evidencia de disputa e slashing
-- ארגנו מחלוקות באמצעות `sorafs_manifest_stub capacity dispute` (בדיקות:
+- ארגנו מחלוקות באמצעות `sorafs_manifest_builder capacity dispute` (בדיקות:
   `cargo test -p sorafs_car --test capacity_cli`) para manter מטענים canonicos.
 - בצע את `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e כסוויטות
   de penalidade (`record_capacity_telemetry_penalises_persistent_under_delivery`) para provar
@@ -161,7 +161,7 @@ manter os criterios de aceitacao em sync com a implementacao.
   linke aprovacoes de strike no relatorio de validacao.
 
 ### כניסת ספקים ליציאה מבחני עשן
-- Regenere artefatos de declaracao/telemetria com `sorafs_manifest_stub capacity ...` e rode os
+- Regenere artefatos de declaracao/telemetria com `sorafs_manifest_builder capacity ...` e rode os
   tests de CLI antes da submissao (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Submeta באמצעות Torii (`/v1/sorafs/capacity/declare`) ו-Ccapture `/v1/sorafs/capacity/state` mais
   צילומי מסך עושים Grafana. Siga o fluxo de saida em `docs/source/sorafs/capacity_onboarding_runbook.md`.

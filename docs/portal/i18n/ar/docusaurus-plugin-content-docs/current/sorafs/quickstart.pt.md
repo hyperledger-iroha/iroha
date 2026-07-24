@@ -65,11 +65,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. بناء وتنفيذ بيان
 
 تضمين خطة القطع والأسماء المستعارة وأعضاء الإدارة في بيان
-أوساندو `sorafs-manifest-stub`. الأمر التالي يظهر حمولة ملف واحد؛ مرور
+أوساندو `sorafs-manifest-builder`. الأمر التالي يظهر حمولة ملف واحد؛ مرور
 طريق الدليل لتعبئة شيء ما (CLI لترتيب المعجم).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

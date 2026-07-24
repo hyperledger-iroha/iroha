@@ -14334,6 +14334,7 @@ mod tests {
                 }),
             }],
             native_amx_participant_applications: Vec::new(),
+            autonomous_lane_executions: Vec::new(),
         }
     }
 

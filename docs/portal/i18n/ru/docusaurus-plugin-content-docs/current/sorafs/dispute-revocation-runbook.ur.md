@@ -40,7 +40,7 @@ Sidebar_label: Нажмите здесь, чтобы добавить ссылк
 
 ## 3. تنازع جمع کرائیں
 
-1. `sorafs_manifest_stub capacity dispute` или спецификация JSON:
+1. `sorafs_manifest_builder capacity dispute` или спецификация JSON:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: Нажмите здесь, чтобы добавить ссылк
 2. Возможности CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: Нажмите здесь, чтобы добавить ссылк
 
 1. **Окно благодати:** پالیسی اجازت دے تو закрепленные данные کے انخلا کی اجازت دیں۔
 2. **`ProviderAdmissionRevocationV1` Примечание:**
-   - Для получения дополнительной информации используйте `sorafs_manifest_stub provider-admission revoke`.
+   - Для получения дополнительной информации используйте `sorafs_manifest_builder provider-admission revoke`.
    - دستخط اور дайджест отзыва
 3. **Отличный вариант:**
    - منسوخی ریکوئسٹ Torii کو جمع کریں۔
@@ -95,7 +95,7 @@ Sidebar_label: Нажмите здесь, чтобы добавить ссылк
 
 ## 6. حوالہ جاتی مواد
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
 - `docs/source/sorafs/provider_admission_policy.md` (рабочий процесс отзыва)
 - Панель наблюдения: `SoraFS / Capacity Providers`

@@ -41,7 +41,7 @@ izlənilə bilən mühəndislik vəzifələri.
 ## Qəbul İş axını
 
 1. **Təklifin yaradılması**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` əlavə edin
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` əlavə edin
      `ProviderAdmissionProposalV1` + attestasiya paketi istehsal edir.
    - Təsdiqləmə: tələb olunan sahələri təmin edin, pay > 0, `profile_id`-də kanonik chunker sapı.
 2. **İdarəetmə təsdiqi**
@@ -61,7 +61,7 @@ izlənilə bilən mühəndislik vəzifələri.
 | Ərazi | Tapşırıq | Sahib(lər) | Status |
 |------|------|----------|--------|
 | Sxe | `crates/sorafs_manifest/src/provider_admission.rs` altında `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) təyin edin. Doğrulama köməkçiləri ilə `sorafs_manifest::provider_admission`-də həyata keçirilir.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Saxlama / İdarəetmə | ✅ Tamamlandı |
-| CLI alətləri | `sorafs_manifest_stub`-i alt əmrlərlə genişləndirin: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+| CLI alətləri | `sorafs_manifest_builder`-i alt əmrlərlə genişləndirin: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
 
 CLI axını indi aralıq sertifikat paketlərini (`--endpoint-attestation-intermediate`) qəbul edir, emissiya edir
 kanonik təklif/zərf baytları və `sign`/`verify` zamanı şura imzalarını təsdiqləyir. Operatorlar bilər
@@ -70,7 +70,7 @@ Avtomatlaşdırmaya uyğunluq üçün `--council-signature-file` ilə `--council
 
 ### CLI Referansı
 
-Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` vasitəsilə yerinə yetirin.
+Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` vasitəsilə yerinə yetirin.
 
 - `proposal`
   - Tələb olunan bayraqlar: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-
     həzm və imza sayının tutulması.
 | Doğrulama | Torii, şlüzlər və `sorafs-node` tərəfindən istifadə edilən paylaşılan doğrulayıcını tətbiq edin. Vahid + CLI inteqrasiya testlərini təmin edin.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Şəbəkə TL / Saxlama | ✅ Tamamlandı |
 | Torii inteqrasiya | Doğrulayıcını Torii reklam qəbuluna daxil edin, siyasətdən kənar reklamları rədd edin, telemetriya buraxın. | Şəbəkə TL | ✅ Tamamlandı | Torii indi idarəetmə zərflərini yükləyir (`torii.sorafs.admission_envelopes_dir`), qəbul zamanı həzm/imza uyğunluqlarını yoxlayır və qəbulu üzə çıxarır telemetriya.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.
-| Yenilənmə | Yeniləmə/ləğv etmə sxemi + CLI köməkçiləri əlavə edin, sənədlərdə həyat dövrü bələdçisini dərc edin (aşağıda runbook və CLI əmrlərinə baxın) `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120 Saxlama / İdarəetmə | ✅ Tamamlandı |
+| Yenilənmə | Yeniləmə/ləğv etmə sxemi + CLI köməkçiləri əlavə edin, sənədlərdə həyat dövrü bələdçisini dərc edin (aşağıda runbook və CLI əmrlərinə baxın) `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120 Saxlama / İdarəetmə | ✅ Tamamlandı |
 | Telemetriya | `provider_admission` tablosunu və xəbərdarlıqlarını təyin edin (yenilənmə yoxdur, zərfin müddəti). | Müşahidə qabiliyyəti | 🟠 Davam edir | Sayğac `torii_sorafs_admission_total{result,reason}` mövcuddur; idarə panelləri/silahlar gözləyir.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### Yeniləmə və Ləğvetmə Runbook
 
@@ -117,7 +117,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-
 1. `provider-admission proposal` və `provider-admission sign` ilə davamçı təklif/reklam cütünü yaradın, `--retention-epoch` artırın və tələb olunduqda pay/son nöqtələri yeniləyin.
 2. İcra etmək  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-
    ```
    Komanda dəyişdirilməmiş qabiliyyət/profil sahələrini vasitəsilə təsdiqləyir
    `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` yayır və həzmləri çap edir
-   idarəetmə jurnalı.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   idarəetmə jurnalı.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir`-də əvvəlki zərfi dəyişdirin, Norito/JSON yenilənməsini idarəetmə repozitoriyasına həvalə edin və yenilənmə hashı + saxlama epoxasını `docs/source/sorafs/migration_ledger.md`-ə əlavə edin.
 4. Operatorlara yeni zərfin canlı olduğunu bildirin və qəbulu təsdiqləmək üçün `torii_sorafs_admission_total{result="accepted",reason="stored"}`-ə nəzarət edin.
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` vasitəsilə kanonik qurğuları bərpa edin və icra edin; CI (`ci/check_sorafs_fixtures.sh`) Norito çıxışlarının sabit qalmasını təsdiqləyir.
@@ -135,7 +135,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-
 #### Təcili ləğv
 1. Təhlükəli zərfi müəyyən edin və geri götürün:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ Hər əmri `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` imzalayır, imza dəstini təsdiqləyir
-   `verify_revocation_signatures` və ləğvetmə həzmini bildirir.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
+   `verify_revocation_signatures` və ləğvetmə həzmini bildirir.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
 2. `torii.sorafs.admission_envelopes_dir`-dən zərfi çıxarın, ləğvetmə Norito/JSON-u qəbul keşlərinə paylayın və idarəetmə protokolunda hash səbəbini qeyd edin.
 3. Keşlərin ləğv edilmiş reklamı buraxdığını təsdiqləmək üçün `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`-ə baxın; ləğvetmə artefaktlarını hadisənin retrospektivlərində saxlamaq.
 

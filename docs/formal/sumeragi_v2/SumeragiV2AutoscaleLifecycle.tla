@@ -8,10 +8,13 @@ activation, drain, archival, destruction, and same-ID recreation.
 The production refinement is source-bound separately to
 `StateBlock::maybe_apply_nexus_autoscale`,
 `State::preflight_committed_autoscale_lane_geometry`,
+`State::apply_committed_autoscale_lane_geometry`,
 `State::apply_committed_autoscale_lane_lifecycle`, and
 `State::validate_committed_autoscale_drain_metadata_update` in
-`crates/iroha_core/src/state.rs`.  This finite model is counterexample-search
-evidence only; it does not prove that those Rust transitions refine it.
+`crates/iroha_core/src/state.rs`, plus quorum validation in
+`crates/iroha_core/src/lane_consensus.rs`. This finite model is
+counterexample-search evidence only; it does not prove that those Rust
+transitions refine it.
 ***************************************************************************)
 
 CONSTANTS
@@ -24,7 +27,8 @@ CONSTANTS
 
 LifecycleModes ==
   {"Fixed", "EarlyDrainCertificate", "DestroyBeforeArchive",
-   "ReuseRetiredIncarnation"}
+   "ReuseRetiredIncarnation", "ActivateBeforeStorage",
+   "WeakDrainCertificate", "CleanupByLaneId"}
 
 LifecyclePhases ==
   {"Absent", "Initializing", "Active", "Draining", "Certified", "Archived"}
@@ -55,12 +59,29 @@ VARIABLES
   \* @type: Int;
   retirementCount,
   \* @type: Bool;
-  unsafeDestroy
+  unsafeDestroy,
+  \* @type: Bool;
+  routeVisible,
+  \* @type: Bool;
+  drainCertificateQuorum,
+  \* @type: Bool;
+  drainCertificateAtSignedCommitFloor,
+  \* @type: Bool;
+  drainCloseFenced,
+  \* @type: Bool;
+  retirementCarrierLater,
+  \* @type: Int;
+  retiredExactIncarnation,
+  \* @type: Bool;
+  staleIncarnationAccepted
 
 vars ==
   <<phase, incarnation, storagePrepared, drainBlocked, drainEvidence,
     archiveDurable, retiredIncarnations, everCreated, retirementCount,
-    unsafeDestroy>>
+    unsafeDestroy, routeVisible, drainCertificateQuorum,
+    drainCertificateAtSignedCommitFloor, drainCloseFenced,
+    retirementCarrierLater, retiredExactIncarnation,
+    staleIncarnationAccepted>>
 
 Init ==
   /\ LifecycleConfiguration
@@ -74,6 +95,13 @@ Init ==
   /\ everCreated = FALSE
   /\ retirementCount = 0
   /\ unsafeDestroy = FALSE
+  /\ routeVisible = FALSE
+  /\ drainCertificateQuorum = FALSE
+  /\ drainCertificateAtSignedCommitFloor = FALSE
+  /\ drainCloseFenced = FALSE
+  /\ retirementCarrierLater = FALSE
+  /\ retiredExactIncarnation = 0
+  /\ staleIncarnationAccepted = FALSE
 
 InitializeLane ==
   /\ phase = "Absent"
@@ -85,28 +113,42 @@ InitializeLane ==
        ELSE IF Mode = "ReuseRetiredIncarnation"
             THEN InitialIncarnation
             ELSE RecreatedIncarnation
-  /\ storagePrepared' = TRUE
+  /\ storagePrepared' = (Mode # "ActivateBeforeStorage")
   /\ drainBlocked' = FALSE
   /\ drainEvidence' = FALSE
   /\ archiveDurable' = FALSE
+  /\ routeVisible' = FALSE
+  /\ drainCertificateQuorum' = FALSE
+  /\ drainCertificateAtSignedCommitFloor' = FALSE
+  /\ drainCloseFenced' = FALSE
+  /\ retirementCarrierLater' = FALSE
   /\ UNCHANGED <<retiredIncarnations, everCreated, retirementCount,
-                 unsafeDestroy>>
+                 unsafeDestroy, retiredExactIncarnation,
+                 staleIncarnationAccepted>>
 
 ActivateLane ==
   /\ phase = "Initializing"
-  /\ storagePrepared
+  /\ (storagePrepared \/ Mode = "ActivateBeforeStorage")
   /\ phase' = "Active"
   /\ drainBlocked' = TRUE
+  /\ routeVisible' = TRUE
   /\ UNCHANGED <<incarnation, storagePrepared, drainEvidence,
                  archiveDurable, retiredIncarnations, everCreated,
-                 retirementCount, unsafeDestroy>>
+                 retirementCount, unsafeDestroy, drainCertificateQuorum,
+                 drainCertificateAtSignedCommitFloor, drainCloseFenced,
+                 retirementCarrierLater, retiredExactIncarnation,
+                 staleIncarnationAccepted>>
 
 BeginDrain ==
   /\ phase = "Active"
   /\ phase' = "Draining"
   /\ UNCHANGED <<incarnation, storagePrepared, drainBlocked,
                  drainEvidence, archiveDurable, retiredIncarnations,
-                 everCreated, retirementCount, unsafeDestroy>>
+                 everCreated, retirementCount, unsafeDestroy, routeVisible,
+                 drainCertificateQuorum,
+                 drainCertificateAtSignedCommitFloor, drainCloseFenced,
+                 retirementCarrierLater, retiredExactIncarnation,
+                 staleIncarnationAccepted>>
 
 ClearDrainBlockers ==
   /\ phase = "Draining"
@@ -114,16 +156,25 @@ ClearDrainBlockers ==
   /\ drainBlocked' = FALSE
   /\ UNCHANGED <<phase, incarnation, storagePrepared, drainEvidence,
                  archiveDurable, retiredIncarnations, everCreated,
-                 retirementCount, unsafeDestroy>>
+                 retirementCount, unsafeDestroy, routeVisible,
+                 drainCertificateQuorum,
+                 drainCertificateAtSignedCommitFloor, drainCloseFenced,
+                 retirementCarrierLater, retiredExactIncarnation,
+                 staleIncarnationAccepted>>
 
 CertifyDrain ==
   /\ phase = "Draining"
   /\ (Mode = "EarlyDrainCertificate" \/ ~drainBlocked)
   /\ phase' = "Certified"
   /\ drainEvidence' = TRUE
+  /\ drainCertificateQuorum' = (Mode # "WeakDrainCertificate")
+  /\ drainCertificateAtSignedCommitFloor' = TRUE
+  /\ drainCloseFenced' = TRUE
   /\ UNCHANGED <<incarnation, storagePrepared, drainBlocked,
                  archiveDurable, retiredIncarnations, everCreated,
-                 retirementCount, unsafeDestroy>>
+                 retirementCount, unsafeDestroy, routeVisible,
+                 retirementCarrierLater, retiredExactIncarnation,
+                 staleIncarnationAccepted>>
 
 ArchiveLane ==
   /\ phase = "Certified"
@@ -131,9 +182,13 @@ ArchiveLane ==
   /\ ~drainBlocked
   /\ phase' = "Archived"
   /\ archiveDurable' = TRUE
+  /\ retirementCarrierLater' = TRUE
   /\ UNCHANGED <<incarnation, storagePrepared, drainBlocked,
                  drainEvidence, retiredIncarnations, everCreated,
-                 retirementCount, unsafeDestroy>>
+                 retirementCount, unsafeDestroy, routeVisible,
+                 drainCertificateQuorum,
+                 drainCertificateAtSignedCommitFloor, drainCloseFenced,
+                 retiredExactIncarnation, staleIncarnationAccepted>>
 
 DestroyLane ==
   /\ retirementCount = 0
@@ -146,11 +201,22 @@ DestroyLane ==
   /\ everCreated' = TRUE
   /\ retirementCount' = 1
   /\ unsafeDestroy' = (unsafeDestroy \/ ~archiveDurable)
+  /\ retiredExactIncarnation' =
+       IF Mode = "CleanupByLaneId"
+       THEN IF incarnation = InitialIncarnation
+            THEN RecreatedIncarnation
+            ELSE InitialIncarnation
+       ELSE incarnation
+  /\ staleIncarnationAccepted' = (Mode = "CleanupByLaneId")
   /\ incarnation' = 0
   /\ storagePrepared' = FALSE
   /\ drainBlocked' = FALSE
   /\ drainEvidence' = FALSE
   /\ archiveDurable' = FALSE
+  /\ routeVisible' = FALSE
+  /\ UNCHANGED <<drainCertificateQuorum,
+                 drainCertificateAtSignedCommitFloor, drainCloseFenced,
+                 retirementCarrierLater>>
 
 Next ==
   \/ InitializeLane
@@ -175,6 +241,14 @@ LifecycleTypeInvariant ==
   /\ everCreated \in BOOLEAN
   /\ retirementCount \in 0..1
   /\ unsafeDestroy \in BOOLEAN
+  /\ routeVisible \in BOOLEAN
+  /\ drainCertificateQuorum \in BOOLEAN
+  /\ drainCertificateAtSignedCommitFloor \in BOOLEAN
+  /\ drainCloseFenced \in BOOLEAN
+  /\ retirementCarrierLater \in BOOLEAN
+  /\ retiredExactIncarnation \in
+       {0, InitialIncarnation, RecreatedIncarnation}
+  /\ staleIncarnationAccepted \in BOOLEAN
 
 StorageBeforeActivationInvariant ==
   phase \in {"Active", "Draining", "Certified", "Archived"} =>
@@ -191,12 +265,38 @@ NoIncarnationReuseInvariant ==
   phase \in {"Initializing", "Active", "Draining", "Certified", "Archived"} =>
     incarnation \notin retiredIncarnations
 
+MLActivationAfterAtomicCreate ==
+  routeVisible =>
+    /\ phase \in {"Active", "Draining", "Certified", "Archived"}
+    /\ storagePrepared
+    /\ incarnation # 0
+
+MLDrainImpliesNoOwnedWork == DrainEvidenceInvariant
+
+MLDrainCertificateMonotonic ==
+  /\ (phase \in {"Certified", "Archived"} =>
+       /\ drainCertificateQuorum
+       /\ drainCertificateAtSignedCommitFloor
+       /\ drainCloseFenced)
+  /\ (phase = "Archived" => retirementCarrierLater)
+
+MLRetirementConsumesExactIncarnation ==
+  /\ ArchiveBeforeDestroyInvariant
+  /\ NoIncarnationReuseInvariant
+  /\ (retirementCount = 1 =>
+       /\ retiredExactIncarnation \in retiredIncarnations
+       /\ ~staleIncarnationAccepted)
+
 AutoscaleLifecycleSafetyInvariant ==
   /\ LifecycleTypeInvariant
   /\ StorageBeforeActivationInvariant
   /\ DrainEvidenceInvariant
   /\ ArchiveBeforeDestroyInvariant
   /\ NoIncarnationReuseInvariant
+  /\ MLActivationAfterAtomicCreate
+  /\ MLDrainImpliesNoOwnedWork
+  /\ MLDrainCertificateMonotonic
+  /\ MLRetirementConsumesExactIncarnation
 
 LifecycleSpec == Init /\ [][Next]_vars
 

@@ -38,7 +38,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
 
 ## 3. Подать спор
 
-1. Utilice la especificación JSON para `sorafs_manifest_stub capacity dispute`:
+1. Utilice la especificación JSON para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -61,7 +61,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
 2. Presione CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
 
 ## 4. Эвакуация и отзыв1. **Окно льготы:** уведомите провайдера о грядущем отзыве; разрешите эвакуацию закрепленных данных, когда это допускает политика.
 2. **Generador `ProviderAdmissionRevocationV1`:**
-   - Utilice `sorafs_manifest_stub provider-admission revoke` para una conexión completa.
+   - Utilice `sorafs_manifest_builder provider-admission revoke` para una conexión completa.
    - Проверьте подписи и digerir отзыва.
 3. **Опубликуйте отзыв:**
    - Haga clic en el botón Torii.
@@ -91,7 +91,7 @@ Este rango proporciona la gobernanza de los operadores que pueden proporcionar a
 
 ## 6. Materiales usados
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
 - `docs/source/sorafs/provider_admission_policy.md` (flujo de trabajo отзыва)
 - Дашборд наблюдаемости: `SoraFS / Capacity Providers`

@@ -6398,6 +6398,14 @@ export interface ToriiSumeragiMembershipSnapshot {
 }
 
 /**
+ * Exact protocol `u64` decoded from JSON.
+ *
+ * Values through `Number.MAX_SAFE_INTEGER` remain numbers; larger values are
+ * returned as bigint so typed Sumeragi reads never round wire integers.
+ */
+export type ToriiU64 = number | bigint;
+
+/**
  * Aggregated TEU commitment for a Nexus lane recorded in the latest block.
  */
 export interface ToriiLaneCommitmentSnapshot {
@@ -6430,7 +6438,7 @@ export interface ToriiLaneSettlementReceipt {
   xor_due: string;
   xor_after_haircut: string;
   xor_variance: string;
-  timestamp_ms: number;
+  timestamp_ms: ToriiU64;
 }
 
 export type ToriiLaneLiquidityProfile = Readonly<{
@@ -6452,9 +6460,9 @@ export interface ToriiLaneSwapMetadata {
 }
 
 export interface ToriiNexusFeeScheduleInputs {
-  tx_bytes_len: number;
-  instruction_count: number;
-  gas_used: number;
+  tx_bytes_len: ToriiU64;
+  instruction_count: ToriiU64;
+  gas_used: ToriiU64;
   base_fee: string;
   per_byte_fee: string;
   per_instruction_fee: string;
@@ -6464,9 +6472,9 @@ export interface ToriiNexusFeeScheduleInputs {
 export interface ToriiNexusFeeReceipt {
   version: 1;
   source_id: string;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_id: number;
-  block_height: number;
+  block_height: ToriiU64;
   payer_account_id: string;
   fee_asset_id: string;
   fee_amount: string;
@@ -6480,30 +6488,30 @@ export type ToriiNativeAmxPhase = Readonly<{
 
 export interface ToriiNativeAmxAttestationBody {
   round: ToriiSumeragiV2Round;
-  epoch: number;
+  epoch: ToriiU64;
   chain_id_hash: string;
   source_id: string;
   tx_entrypoint_hash: string;
   plan_digest: string;
   phase: ToriiNativeAmxPhase;
   coordinator_lane_id: number;
-  coordinator_dataspace_id: number;
+  coordinator_dataspace_id: ToriiU64;
   coordinator_lane_incarnation: string;
   participant_lane_id: number;
-  participant_dataspace_id: number;
+  participant_dataspace_id: ToriiU64;
   participant_lane_incarnation: string;
-  participant_previous_block_height: number;
+  participant_previous_block_height: ToriiU64;
   participant_previous_block_descriptor_hash: string | null;
-  participant_lane_block_height: number;
-  participant_lane_block_view: number;
+  participant_lane_block_height: ToriiU64;
+  participant_lane_block_view: ToriiU64;
   participant_proposal_hash: string;
   participant_settlement_commitment: string;
   participant_validator_set_hash: string;
   participant_validator_count: number;
   participant_min_quorum: number;
-  authority_context_height: number;
-  planned_coordinator_block_height: number;
-  coordinator_lane_block_view: number;
+  authority_context_height: ToriiU64;
+  planned_coordinator_block_height: ToriiU64;
+  coordinator_lane_block_view: ToriiU64;
   coordinator_proposal_hash: string;
 }
 
@@ -6519,17 +6527,17 @@ export interface ToriiNativeAmxAttestationQc {
 
 export interface ToriiNativeAmxParticipantLaneBlockDescriptor {
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  proposal_height: number;
-  previous_lane_block_height: number;
+  proposal_height: ToriiU64;
+  previous_lane_block_height: ToriiU64;
   previous_lane_block_descriptor_hash?: string;
-  lane_block_height: number;
-  lane_block_view: number;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
   subject_hash: string;
   payload_ownership_hash: string;
   rbc_instance_hash: string;
-  accepted_candidate_indices: ReadonlyArray<number>;
+  accepted_candidate_indices: ReadonlyArray<ToriiU64>;
   accepted_transaction_hashes: ReadonlyArray<string>;
   validator_set_hash_version: 1;
   validator_set_hash: string;
@@ -6547,7 +6555,7 @@ export interface ToriiNativeAmxParticipantLaneBlockProposal {
 
 export interface ToriiNativeAmxLeg {
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   participant_proposal: Readonly<ToriiNativeAmxParticipantLaneBlockProposal>;
   participant_settlement: Readonly<ToriiLaneSettlementCommitment>;
   participant_settlement_hash: string;
@@ -6561,21 +6569,21 @@ export interface ToriiNativeAmxReceipt {
   chain_id_hash: string;
   plan_digest: string;
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  authority_context_height: number;
-  lane_block_height: number;
-  lane_block_view: number;
+  authority_context_height: ToriiU64;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
   coordinator_proposal_hash: string;
   legs: ReadonlyArray<Readonly<ToriiNativeAmxLeg>>;
 }
 
 export interface ToriiLaneSettlementCommitment {
-  block_height: number;
+  block_height: ToriiU64;
   lane_id: number;
   lane_incarnation: string;
-  dataspace_id: number;
-  tx_count: number;
+  dataspace_id: ToriiU64;
+  tx_count: ToriiU64;
   total_local_amount: string;
   total_xor_due: string;
   total_xor_after_haircut: string;
@@ -6588,21 +6596,21 @@ export interface ToriiLaneSettlementCommitment {
 
 export interface ToriiLaneFastpqProofMaterial {
   proof_digest: string;
-  verified_at_height: number | null;
+  verified_at_height: ToriiU64 | null;
 }
 
 export interface ToriiLaneRelayEnvelope {
   lane_id: number;
   lane_incarnation: string;
-  dataspace_id: number;
-  block_height: number;
+  dataspace_id: ToriiU64;
+  block_height: ToriiU64;
   block_header: Record<string, unknown>;
   qc: Record<string, unknown> | null;
   da_commitment_hash: string | null;
   lane_block_descriptor_hash: string | null;
   settlement_commitment: ToriiLaneSettlementCommitment;
   settlement_hash: string;
-  rbc_bytes_total: number;
+  rbc_bytes_total: ToriiU64;
   manifest_root: string | null;
   fastpq_proof: ToriiLaneFastpqProofMaterial | null;
 }
@@ -7528,8 +7536,8 @@ export type ToriiSumeragiV2BodyState = Readonly<{
 
 export interface ToriiSumeragiV2Round {
   context_id: ToriiSumeragiV2ContextId;
-  height: number;
-  view: number;
+  height: ToriiU64;
+  view: ToriiU64;
 }
 
 export interface ToriiSumeragiV2BlockSubject {
@@ -7577,14 +7585,14 @@ export type ToriiSumeragiV2QuorumCertificateRef = ToriiSumeragiV2QcReference;
 export type ToriiSumeragiV2TimeoutCertificateRef = ToriiSumeragiV2TimeoutReference;
 
 export interface ToriiSumeragiV2HeightContextStatus {
-  epoch: number;
-  epoch_end_height: number;
+  epoch: ToriiU64;
+  epoch_end_height: ToriiU64;
   mode: ToriiSumeragiV2ConsensusMode;
   epoch_seed: ReadonlyArray<number>;
   validator_count: number;
   quorum: Readonly<{
     min_signers: number;
-    total_power: number;
+    total_power: ToriiU64;
   }>;
 }
 
@@ -7593,8 +7601,8 @@ export interface ToriiSumeragiV2CommitQcStatus {
   validator_count: number;
   signer_count: number;
   min_signers: number;
-  signed_power: number;
-  total_power: number;
+  signed_power: ToriiU64;
+  total_power: ToriiU64;
 }
 
 export interface ToriiSumeragiV2VoteQuorumStatus {
@@ -7603,17 +7611,17 @@ export interface ToriiSumeragiV2VoteQuorumStatus {
   subject: ToriiSumeragiV2BlockSubject;
   execution_commitment: ToriiSumeragiV2ExecutionCommitment;
   signer_count: number;
-  signed_power: number;
+  signed_power: ToriiU64;
   min_signers: number;
-  total_power: number;
+  total_power: ToriiU64;
 }
 
 export interface ToriiSumeragiV2TimeoutQuorumStatus {
   round: ToriiSumeragiV2Round;
   signer_count: number;
-  signed_power: number;
+  signed_power: ToriiU64;
   min_signers: number;
-  total_power: number;
+  total_power: ToriiU64;
   certificate_formed: boolean;
 }
 
@@ -7676,9 +7684,9 @@ export interface ToriiSumeragiV2QueueLivenessStatus {
   queue: ToriiSumeragiV2QueueKind;
   depth: number;
   capacity: number;
-  oldest_age_ms: number | null;
+  oldest_age_ms: ToriiU64 | null;
   /** Accumulated eligible dispatches skipped by this queue's oldest item. */
-  service_debt: number;
+  service_debt: ToriiU64;
 }
 
 export type ToriiSumeragiV2ProgressTransition = Readonly<{
@@ -7702,10 +7710,10 @@ export type ToriiSumeragiV2ProgressTransition = Readonly<{
 }>;
 
 export interface ToriiSumeragiV2ProgressTransitionStatus {
-  generation: number;
+  generation: ToriiU64;
   round: ToriiSumeragiV2Round;
   transition: ToriiSumeragiV2ProgressTransition;
-  age_ms: number;
+  age_ms: ToriiU64;
 }
 
 export type ToriiSumeragiV2LivenessBlocker = Readonly<{
@@ -7740,11 +7748,11 @@ export type ToriiSumeragiV2IgnoreReason = Readonly<{
 
 export interface ToriiSumeragiV2IgnoreCount {
   reason: ToriiSumeragiV2IgnoreReason;
-  count: number;
+  count: ToriiU64;
 }
 
 export interface ToriiSumeragiV2LivenessStatus {
-  generation: number;
+  generation: ToriiU64;
   prepare_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
   commit_quorums: ReadonlyArray<ToriiSumeragiV2VoteQuorumStatus>;
   timeout_quorums: ReadonlyArray<ToriiSumeragiV2TimeoutQuorumStatus>;
@@ -7752,7 +7760,7 @@ export interface ToriiSumeragiV2LivenessStatus {
   work: ToriiSumeragiV2WorkStatus;
   queues: ReadonlyArray<ToriiSumeragiV2QueueLivenessStatus>;
   last_progress: ToriiSumeragiV2ProgressTransitionStatus | null;
-  no_progress_age_ms: number;
+  no_progress_age_ms: ToriiU64;
   blocker: ToriiSumeragiV2LivenessBlocker | null;
   ignore_counts: ReadonlyArray<ToriiSumeragiV2IgnoreCount>;
 }
@@ -7780,25 +7788,25 @@ export interface ToriiSumeragiV2TxQueueStatus {
 }
 
 export interface ToriiSumeragiV2OperatorStatus {
-  view_change_install_total: number;
-  busy_deferral_total: number;
+  view_change_install_total: ToriiU64;
+  busy_deferral_total: ToriiU64;
   adapter_queues: ToriiSumeragiV2AdapterQueueStatus;
   tx_queue: ToriiSumeragiV2TxQueueStatus;
 }
 
 export interface ToriiSumeragiLanePayloadOwnership {
-  proposal_height: number;
-  proposal_view: number;
+  proposal_height: ToriiU64;
+  proposal_view: ToriiU64;
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  lane_block_height: number;
-  lane_block_view: number;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
   subject_hash: string;
   qc_mode_tag: string;
-  accepted_candidate_indices: ReadonlyArray<number>;
+  accepted_candidate_indices: ReadonlyArray<ToriiU64>;
   accepted_transaction_hashes: ReadonlyArray<string>;
-  previous_lane_block_height: number;
+  previous_lane_block_height: ToriiU64;
   previous_lane_block_descriptor_hash: string | null;
   lane_block_descriptor_hash: string;
   lane_block_descriptor_validator_set: ReadonlyArray<string>;
@@ -7821,10 +7829,10 @@ export type ToriiSumeragiCommittedLaneExecutionStatus =
 
 export interface ToriiSumeragiCommittedLaneBlock {
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  lane_block_height: number;
-  lane_block_view: number;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
   descriptor_hash: string;
   proposal_hash: string;
   execution_status: ToriiSumeragiCommittedLaneExecutionStatus;
@@ -7841,10 +7849,10 @@ export interface ToriiSumeragiCommittedLaneBlock {
 
 export interface ToriiSumeragiLaneBlockSessionStatus {
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  lane_block_height: number;
-  lane_block_view: number;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
   proposal_hash: string;
   has_proposal: boolean;
   prepare_vote_count: number;
@@ -7861,8 +7869,8 @@ export interface ToriiSumeragiLaneBlockSessionStatus {
 export interface ToriiSumeragiSafetyHaltStatus {
   active: boolean;
   reason: string | null;
-  height: number;
-  epoch: number;
+  height: ToriiU64;
+  epoch: ToriiU64;
   first_block_hash: string | null;
   conflicting_block_hash: string | null;
   first_parent_state_root: string | null;
@@ -7878,16 +7886,16 @@ export interface ToriiSumeragiStatus {
   config_fingerprint: string;
   restart_required: boolean;
   height_context_id: ToriiSumeragiV2ContextId;
-  height: number;
-  view: number;
+  height: ToriiU64;
+  view: ToriiU64;
   phase: ToriiSumeragiV2StatusPhase;
   leader: number;
   locked_prepare_qc: ToriiSumeragiV2QcReference | null;
   highest_prepare_qc: ToriiSumeragiV2QcReference | null;
   last_timeout_certificate: ToriiSumeragiV2TimeoutReference | null;
   body_state: ToriiSumeragiV2BodyState;
-  pending_persistence_id: number | null;
-  last_committed_height: number;
+  pending_persistence_id: ToriiU64 | null;
+  last_committed_height: ToriiU64;
   last_committed_subject: ToriiSumeragiV2BlockSubject | null;
   height_context: ToriiSumeragiV2HeightContextStatus;
   last_commit_qc: ToriiSumeragiV2CommitQcStatus | null;
@@ -7895,51 +7903,51 @@ export interface ToriiSumeragiStatus {
 }
 
 export interface ToriiSumeragiPipelineExecutionStatus {
-  tx_vertices_total: number;
-  tx_edges_total: number;
-  overlay_count_total: number;
-  overlay_instr_total: number;
-  overlay_bytes_total: number;
-  rbc_chunks_total: number;
-  rbc_bytes_total: number;
-  detached_prepared_total: number;
-  detached_merged_total: number;
-  detached_fallback_total: number;
-  detached_fallback_fee_postprocessing_total: number;
-  detached_fallback_user_executor_total: number;
-  detached_fallback_durable_state_total: number;
-  detached_fallback_unsupported_instruction_total: number;
-  detached_fallback_rejected_eval_total: number;
-  detached_fallback_overlay_error_total: number;
-  quarantine_executed_total: number;
+  tx_vertices_total: ToriiU64;
+  tx_edges_total: ToriiU64;
+  overlay_count_total: ToriiU64;
+  overlay_instr_total: ToriiU64;
+  overlay_bytes_total: ToriiU64;
+  rbc_chunks_total: ToriiU64;
+  rbc_bytes_total: ToriiU64;
+  detached_prepared_total: ToriiU64;
+  detached_merged_total: ToriiU64;
+  detached_fallback_total: ToriiU64;
+  detached_fallback_fee_postprocessing_total: ToriiU64;
+  detached_fallback_user_executor_total: ToriiU64;
+  detached_fallback_durable_state_total: ToriiU64;
+  detached_fallback_unsupported_instruction_total: ToriiU64;
+  detached_fallback_rejected_eval_total: ToriiU64;
+  detached_fallback_overlay_error_total: ToriiU64;
+  quarantine_executed_total: ToriiU64;
 }
 
 export interface ToriiSumeragiNposDiagnostics {
-  epoch_length_blocks: number;
-  vrf_commit_deadline_offset: number;
-  vrf_reveal_deadline_offset: number;
+  epoch_length_blocks: ToriiU64;
+  vrf_commit_deadline_offset: ToriiU64;
+  vrf_reveal_deadline_offset: ToriiU64;
   epoch_seed: string;
-  prf_height: number;
-  prf_view: number;
-  vrf_penalty_epoch: number;
-  vrf_committed_no_reveal_total: number;
-  vrf_no_participation_total: number;
-  vrf_late_reveals_total: number;
+  prf_height: ToriiU64;
+  prf_view: ToriiU64;
+  vrf_penalty_epoch: ToriiU64;
+  vrf_committed_no_reveal_total: ToriiU64;
+  vrf_no_participation_total: ToriiU64;
+  vrf_late_reveals_total: ToriiU64;
 }
 
 export interface ToriiSumeragiDiagnosticLaneCommitment {
-  block_height: number;
+  block_height: ToriiU64;
   lane_id: number;
-  tx_count: number;
-  total_chunks: number;
-  rbc_bytes_total: number;
-  teu_total: number;
+  tx_count: ToriiU64;
+  total_chunks: ToriiU64;
+  rbc_bytes_total: ToriiU64;
+  teu_total: ToriiU64;
   block_hash: string;
 }
 
 export interface ToriiSumeragiDiagnosticDataspaceCommitment
   extends ToriiSumeragiDiagnosticLaneCommitment {
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
 }
 
 export interface ToriiSumeragiDiagnosticRuntimeUpgrade {
@@ -7970,32 +7978,75 @@ export type ToriiSumeragiNativeAmxParticipantApplicationState =
 
 export interface ToriiSumeragiNativeAmxParticipantApplication {
   lane_id: number;
-  dataspace_id: number;
+  dataspace_id: ToriiU64;
   lane_incarnation: string;
-  participant_height: number;
-  participant_view: number;
-  predecessor_height: number;
+  participant_height: ToriiU64;
+  participant_view: ToriiU64;
+  predecessor_height: ToriiU64;
   predecessor_descriptor_hash: string | null;
   descriptor_hash: string;
   proposal_hash: string;
   settlement_hash: string;
   source_count: number;
-  application_block_height: number | null;
+  application_block_height: ToriiU64 | null;
   application_block_hash: string | null;
   state: ToriiSumeragiNativeAmxParticipantApplicationState;
 }
 
+export type ToriiSumeragiAutonomousLaneExecutionStage =
+  | "reservations_durable"
+  | "executable_payload_durable"
+  | "payload_availability_certified"
+  | "lane_certified"
+  | "certified_bundle_durable"
+  | "merge_candidate_durable"
+  | "global_carrier_committed"
+  | "kura_wsv_application_receipt_durable"
+  | "queue_finalized"
+  | "conflict";
+
+export type ToriiSumeragiAutonomousLaneExecutionStuckReason =
+  | "awaiting_payload_availability"
+  | "awaiting_lane_certification"
+  | "certified_bundle_unavailable"
+  | "awaiting_merge_selection"
+  | "awaiting_global_carrier"
+  | "awaiting_application_receipt"
+  | "queue_finalization_unverifiable"
+  | "evidence_conflict";
+
+export interface ToriiSumeragiAutonomousLaneExecution {
+  lane_id: number;
+  dataspace_id: ToriiU64;
+  lane_incarnation: string;
+  lane_block_height: ToriiU64;
+  lane_block_view: ToriiU64;
+  proposal_height: ToriiU64;
+  proposal_view: ToriiU64;
+  proposal_hash: string;
+  descriptor_hash: string;
+  executable_payload_hash: string | null;
+  source_bundle_hash: string | null;
+  merge_entry_hash: string | null;
+  application_block_height: ToriiU64 | null;
+  application_block_hash: string | null;
+  reservation_count: number;
+  transaction_count: number;
+  highest_durable_stage: ToriiSumeragiAutonomousLaneExecutionStage;
+  stuck_reason: ToriiSumeragiAutonomousLaneExecutionStuckReason | null;
+}
+
 export interface ToriiSumeragiDiagnostics {
   pipeline_execution: ToriiSumeragiPipelineExecutionStatus;
-  tx_queue_depth: number;
-  tx_queue_capacity: number;
-  tx_queue_retained_bytes: number;
-  tx_queue_max_retained_bytes: number;
+  tx_queue_depth: ToriiU64;
+  tx_queue_capacity: ToriiU64;
+  tx_queue_retained_bytes: ToriiU64;
+  tx_queue_max_retained_bytes: ToriiU64;
   tx_queue_saturated: boolean;
   tx_queue_saturated_by_count: boolean;
   tx_queue_saturated_by_bytes: boolean;
   tx_queue_saturated_by_age: boolean;
-  tx_queue_oldest_queued_age_ms: number;
+  tx_queue_oldest_queued_age_ms: ToriiU64;
   npos: ToriiSumeragiNposDiagnostics | null;
   lane_commitments: ReadonlyArray<ToriiSumeragiDiagnosticLaneCommitment>;
   dataspace_commitments: ReadonlyArray<ToriiSumeragiDiagnosticDataspaceCommitment>;
@@ -8009,6 +8060,9 @@ export interface ToriiSumeragiDiagnostics {
   lane_governance: ReadonlyArray<ToriiSumeragiDiagnosticLaneGovernance>;
   native_amx_participant_applications: ReadonlyArray<
     ToriiSumeragiNativeAmxParticipantApplication
+  >;
+  autonomous_lane_executions: ReadonlyArray<
+    ToriiSumeragiAutonomousLaneExecution
   >;
 }
 

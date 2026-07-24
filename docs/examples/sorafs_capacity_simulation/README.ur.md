@@ -32,7 +32,7 @@ translation_last_reviewed: 2026-01-01
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` script `sorafs_manifest_stub capacity` کو invoke کرتی ہے تاکہ یہ بنائے:
+`run_cli.sh` script `sorafs_manifest_builder capacity` کو invoke کرتی ہے تاکہ یہ بنائے:
 
 - quota negotiation fixture set کے لئے deterministic provider declarations.
 - negotiation scenario کے مطابق replication order.

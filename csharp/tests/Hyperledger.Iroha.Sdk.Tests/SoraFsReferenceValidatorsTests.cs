@@ -275,7 +275,7 @@ public sealed class SoraFsReferenceValidatorsTests
     }
 
     [Fact]
-    public void GovernanceHeadOutcomeMatchesSharedParityFixtureWhenNativeBridgeIsAvailable()
+    public void GovernanceFixturesAndNegativeVectorsMatchNativeReferenceWhenAvailable()
     {
         if (!SoraFsReferenceValidators.IsAvailable())
         {
@@ -287,27 +287,73 @@ public sealed class SoraFsReferenceValidatorsTests
             "Fixtures",
             "sorafs_manifest",
             "governance");
+        var first = File.ReadAllBytes(Path.Combine(fixtureRoot, "dag_block_0_v1.to"));
+        var second = File.ReadAllBytes(Path.Combine(fixtureRoot, "dag_block_1_v1.to"));
         var head = File.ReadAllBytes(Path.Combine(fixtureRoot, "dag_head_v1.to"));
         var blocks = new[]
         {
             new SoraFsGovernanceDagBlockInput(
-                File.ReadAllBytes(Path.Combine(fixtureRoot, "dag_block_0_v1.to")),
+                first,
                 "dag_block_0_v1.to"),
             new SoraFsGovernanceDagBlockInput(
-                File.ReadAllBytes(Path.Combine(fixtureRoot, "dag_block_1_v1.to")),
+                second,
                 "dag_block_1_v1.to"),
         };
         var expected = File.ReadAllText(
             Path.Combine(fixtureRoot, "dag_head_validation_outcome_v1.json"),
             Encoding.UTF8);
 
-        var actual = SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
+        var blockOutcome = SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+            first,
+            "dag_block_0_v1.to",
+            null,
+            123);
+        AssertOutcome(
+            blockOutcome,
+            "Ok",
+            "SFS-OK-000",
+            123,
+            "validation",
+            ("governance_dag_block", "dag_block_0_v1.to"));
+
+        var cidMismatch = SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+            first,
+            null,
+            Enumerable.Repeat((byte)0x7f, 32).ToArray(),
+            123);
+        AssertOutcome(
+            cidMismatch,
+            "Error",
+            "SFS-GOV-004",
+            123,
+            "validation",
+            ("governance_dag_block", "governance-dag-block.to"));
+
+        var headOutcome = SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
             head,
             blocks,
             "dag_head_v1.to",
             123);
+        Assert.Equal(expected, headOutcome);
 
-        Assert.Equal(expected, actual);
+        var reordered = SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
+            head,
+            new[]
+            {
+                new SoraFsGovernanceDagBlockInput(second),
+                new SoraFsGovernanceDagBlockInput(first),
+            },
+            null,
+            123);
+        AssertOutcome(
+            reordered,
+            "Error",
+            "SFS-GOV-006",
+            123,
+            "validation",
+            ("governance_dag_head", "governance-dag-head.to"),
+            ("governance_dag_block", "governance-dag-block-0.to"),
+            ("governance_dag_block", "governance-dag-block-1.to"));
     }
 
     [Fact]
@@ -408,6 +454,29 @@ public sealed class SoraFsReferenceValidatorsTests
             ["generated_at"] = generatedAt,
         };
         return JsonSerializer.Serialize(outcome);
+    }
+
+    private static void AssertOutcome(
+        string json,
+        string expectedStatus,
+        string expectedCode,
+        ulong expectedGeneratedAt,
+        string expectedCategory,
+        params (string Kind, string Path)[] expectedInputs)
+    {
+        using var document = JsonDocument.Parse(json);
+        var outcome = document.RootElement;
+        Assert.Equal(expectedStatus, outcome.GetProperty("status").GetString());
+        Assert.Equal(expectedCode, outcome.GetProperty("code").GetString());
+        Assert.Equal(expectedCategory, outcome.GetProperty("category").GetString());
+        Assert.Equal(expectedGeneratedAt, outcome.GetProperty("generated_at").GetUInt64());
+        var inputs = outcome.GetProperty("inputs");
+        Assert.Equal(expectedInputs.Length, inputs.GetArrayLength());
+        for (var index = 0; index < expectedInputs.Length; index++)
+        {
+            Assert.Equal(expectedInputs[index].Kind, inputs[index].GetProperty("kind").GetString());
+            Assert.Equal(expectedInputs[index].Path, inputs[index].GetProperty("path").GetString());
+        }
     }
 
     private sealed class FakeNativeBoundary : ISoraFsReferenceNativeBoundary

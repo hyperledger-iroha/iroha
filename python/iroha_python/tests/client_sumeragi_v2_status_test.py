@@ -240,6 +240,7 @@ def _healthy_diagnostics() -> dict[str, object]:
                 "state": "durably_applied",
             }
         ],
+        "autonomous_lane_executions": [],
     }
 
 

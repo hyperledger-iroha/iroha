@@ -4,7 +4,7 @@ Replay the multi-provider SoraFS manifest fixture and inject a concrete example
 into the Android codegen assets.
 
 This script:
-1. Runs `sorafs_manifest_stub` against the shared orchestrator fixture to
+1. Runs `sorafs_manifest_builder` against the shared orchestrator fixture to
    generate a fresh manifest report.
 2. Copies the report under `target-codex/android_codegen/sorafs_manifest/`.
 3. Updates the RegisterPinManifest instruction example with a `fixture_example`
@@ -330,7 +330,7 @@ def write_test_council_signing_seed(path: Path) -> None:
         raise ValueError(parent_sync_errors[0])
 
 
-def run_manifest_stub(
+def run_manifest_builder(
     cargo_bin: str,
     payload_path: Path,
     plan_path: Path,
@@ -351,7 +351,7 @@ def run_manifest_stub(
         "--features",
         "cli",
         "--bin",
-        "sorafs_manifest_stub",
+        "sorafs_manifest_builder",
         str(payload_path),
         f"--plan={plan_path}",
         f"--chunker-profile={profile_handle}",
@@ -526,7 +526,7 @@ def main(argv: list[str] | None = None) -> int:
         tmp_manifest = Path(tmpdir) / "manifest.to"
         tmp_council_signing_seed = Path(tmpdir) / "council-signing.seed"
         write_test_council_signing_seed(tmp_council_signing_seed)
-        run_manifest_stub(
+        run_manifest_builder(
             args.cargo_bin,
             payload_path,
             plan_path,

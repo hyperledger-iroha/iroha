@@ -31,7 +31,7 @@ translation_last_reviewed: 2026-02-07
 | استيثاق نقطة النهاية | يجب أن تكون كل نقطة نهاية مُعلنة مدعومة بتقرير شهادة mTLS أو QUIC. | تعريف حمولة Norito `EndpointAttestationV1` وتخزينها لكل نقطة نهاية داخل حزمة قبول. |
 
 ## سير عمل تقبل1. ** إنشاء المقترح **
-   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      إنتاج `ProviderAdmissionProposalV1` + حزمة الاستيثاق.
    - التحقق: ضمان خصوصية، وstake > 0، ومقبض Chunker قياسي في `profile_id`.
 2. ** اعتماد الاتّحاد **
@@ -50,11 +50,11 @@ translation_last_reviewed: 2026-02-07
 | | | المالك (المالكون) | الحالة |
 |--------|-------|----------|--------|
 | Be | تعريف `ProviderAdmissionProposalV1` و`ProviderAdmissionEnvelopeV1` و`EndpointAttestationV1` (Norito) ضمن `crates/sorafs_manifest/src/provider_admission.rs`. مُنفذ داخل `sorafs_manifest::provider_admission` مع مساعدات تحقق.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | التخزين / الحوكمة | ✅ مكتملة |
-| أدوات سطر الأوامر | الأطراف `sorafs_manifest_stub` بأوامر فرعية: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | الأدوات مجموعة العمل | ✅ |مسار CLI يدعم الآن شهادات الوثائق (`--endpoint-attestation-intermediate`) ويدعم البايتات المتقدم للترشيح/الصدر المغلف ويتحقق من مجلس تواقيع خلال `sign`/`verify`. يمكن للمشغلين توفير أجسام الإعلانات مباشرة أو إعادة استخدام الإعلانات موقعة، ويمكن أن تنجح نتائج التواقيع عبر الجمع بين `--council-signature-public-key` و`--council-signature-file` لتسهيل الإيداع.
+| أدوات سطر الأوامر | الأطراف `sorafs_manifest_builder` بأوامر فرعية: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | الأدوات مجموعة العمل | ✅ |مسار CLI يدعم الآن شهادات الوثائق (`--endpoint-attestation-intermediate`) ويدعم البايتات المتقدم للترشيح/الصدر المغلف ويتحقق من مجلس تواقيع خلال `sign`/`verify`. يمكن للمشغلين توفير أجسام الإعلانات مباشرة أو إعادة استخدام الإعلانات موقعة، ويمكن أن تنجح نتائج التواقيع عبر الجمع بين `--council-signature-public-key` و`--council-signature-file` لتسهيل الإيداع.
 
 ### مرجع CLI
 
-نفّذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.-`proposal`
+نفّذ كل أمر عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المطلوب: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وعلى الأقل `--endpoint=<kind:host>` واحد.
@@ -81,7 +81,7 @@ translation_last_reviewed: 2026-02-07
   - يصدر حزمة طوارئ `ProviderAdmissionRevocationV1` لمزود يجب سحب المغلف الخاص به. يلزم `--envelope=<path>`, `--reason=<text>`, توقيع مجلس واحد على الأقل
     `--council-signature`، و`--revoked-at`/`--notes` اختيارية. يوقع CLI ويحقق ملخص الإلغاء، ويكتب حمولة Norito عبر `--revocation-out` ويطبع تقرير JSON بوجود الملخص وعدد التواقيع.
 | التحقق | ينفذ مدقق مشترك يستخدمه Torii والبوابات و`‎sorafs-node`. توفير السيولة وحدة + تكامل CLI.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | الشبكات TL / التخزين | ✅ مكتملة |
-| تكامل Torii | تاجر المرقم في عدد الإعلانات في Torii ورفض الإعلانات خارج السياسة وإصدار التليميترية. | الشبكات TL | ✅ مكتملة | يقوم Torii الآن بتحميل المظاريف الإلكترونية (`torii.sorafs.admission_envelopes_dir`) والتحقق من تطابق الملخص/التوقيع أثناء الاشتراك والبراز التليمتري قبول.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 || التجديد | إضافة مخطط/الإلغاء + مساعدات CLI ونشر دليل دورة الحياة في الوثائق (راجع الـ runbook أدناه وأوامر CLI في `provider-admission renewal`/`revoke`).[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477][docs/source/sorafs/provider_admission_policy.md:120] | التخزين / الحوكمة | ✅ مكتملة |
+| تكامل Torii | تاجر المرقم في عدد الإعلانات في Torii ورفض الإعلانات خارج السياسة وإصدار التليميترية. | الشبكات TL | ✅ مكتملة | يقوم Torii الآن بتحميل المظاريف الإلكترونية (`torii.sorafs.admission_envelopes_dir`) والتحقق من تطابق الملخص/التوقيع أثناء الاشتراك والبراز التليمتري قبول.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 || التجديد | إضافة مخطط/الإلغاء + مساعدات CLI ونشر دليل دورة الحياة في الوثائق (راجع الـ runbook أدناه وأوامر CLI في `provider-admission renewal`/`revoke`).[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477][docs/source/sorafs/provider_admission_policy.md:120] | التخزين / الحوكمة | ✅ مكتملة |
 | التليمترية | تعريف اللوحات/تنبيهات `provider_admission` (تجديد مفقود، انتهاء الظرف). | إمكانية الملاحظة | 🟠 جار | العداد `torii_sorafs_admission_total{result,reason}` موجود؛ لوحات/تنبيهات قيد الانتظار. 【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### دليل الإلغاء والإلغاء
@@ -90,7 +90,7 @@ translation_last_reviewed: 2026-02-07
 1. أنشئ اقتراح الزوج/إعلان اللاحق باستخدام `provider-admission proposal` و`provider-admission sign`، مع زيادة `--retention-epoch` وتحديث الحصة/نقاط النهاية حسب الحاجة.
 2. ينفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -98,13 +98,13 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   يقوم الأمر بالتحقق من ثبات ملكية القدرة/الملف عبر `AdmissionRecord::apply_renewal`، ويصدر `ProviderAdmissionRenewalV1` ويطبع ملخصات للسجل الانضمام.[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477] 【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   يقوم الأمر بالتحقق من ثبات ملكية القدرة/الملف عبر `AdmissionRecord::apply_renewal`، ويصدر `ProviderAdmissionRenewalV1` ويطبع ملخصات للسجل الانضمام.[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477] 【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. استبدال الـ Envelope السابق في `torii.sorafs.admission_envelopes_dir`، وثبّت التجديد Norito/JSON في مستودع الـ تور، وأضف التجزئة الأصلية + فترة الاحتفاظ إلى `docs/source/sorafs/migration_ledger.md`.
 4. أخطر المشغلين بأن الـ Envelope الجديد أصبح نشطا وراقب `torii_sorafs_admission_total{result="accepted",reason="stored"}` لتأكيد الإدخال.
 5. إعادة إنشاء وتثبيت التركيبات عبر `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`؛ CI (`ci/check_sorafs_fixtures.sh`) ويحق له إثبات مخرجات Norito.#### تعطيل طارئ
 1.حدد الـ المغلف المخترق واصدر إلغاء:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -114,7 +114,7 @@ translation_last_reviewed: 2026-02-07
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   يوقع CLI `ProviderAdmissionRevocationV1`، ويتحقق من مجموعة التواقيع عبر `verify_revocation_signatures`، ولم يهضم الإلغاء. 【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   يوقع CLI `ProviderAdmissionRevocationV1`، ويتحقق من مجموعة التواقيع عبر `verify_revocation_signatures`، ولم يهضم الإلغاء. 【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. أزل الـ المغلف من `torii.sorafs.admission_envelopes_dir`، وتوزيع Norito/JSON للإلغاء على ذاكرة التخزين المؤقت، اختراع التجزئة المبدع في محاضر الـتجديد.
 3. راقب `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` لتأكيد أن الكاشات تُسقط إعلان الملغى؛ واحتفظ بآثار الإلغاء في المراجعات.
 

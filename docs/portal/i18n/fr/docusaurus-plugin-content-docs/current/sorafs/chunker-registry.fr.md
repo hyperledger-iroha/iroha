@@ -137,12 +137,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Le manifest stub reflète les mêmes données, ce qui est pratique pour scripter la sélection de
+Le manifest builder reflète les mêmes données, ce qui est pratique pour scripter la sélection de
 `--chunker-profile-id` dans les pipelines. Les deux CLIs de chunk store acceptent aussi la forme de handle canonique
 (`--profile=sorafs.sf1@1.0.0`) afin que les scripts de build évitent de coder en dur des IDs numériques :
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "ID_profil": 1,
@@ -206,4 +206,4 @@ supplémentaires pour la transition mais ne doivent pas remplacer le digest cano
   via les tests fournis.
 * `chunker_registry::lookup_by_profile` affirme que les paramètres du descripteur
   correspondant à `ChunkProfile::DEFAULT` pour éviter toute divergence accidentelle.
-* Les manifestes produits par `iroha app sorafs toolkit pack` et `sorafs_manifest_stub` incluent les métadonnées du registre.
+* Les manifestes produits par `iroha app sorafs toolkit pack` et `sorafs_manifest_builder` incluent les métadonnées du registre.

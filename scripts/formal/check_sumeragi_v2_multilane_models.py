@@ -65,6 +65,39 @@ RUST_DECLARATION_TEMPLATES = {
         r"enum[ \t]+{symbol}\b"
     ),
 }
+RUST_BINDING_KINDS = frozenset((*RUST_DECLARATION_TEMPLATES, "method"))
+EXPECTED_CLOSURE_INVARIANTS = {
+    "SumeragiV2AutoscaleLifecycle": (
+        "MLActivationAfterAtomicCreate",
+        "MLDrainImpliesNoOwnedWork",
+        "MLDrainCertificateMonotonic",
+        "MLRetirementConsumesExactIncarnation",
+    ),
+    "SumeragiV2NativeApplicationEvidence": (
+        "MLSeparateParticipantApplication",
+        "MLNativeSourceClaimInjective",
+        "MLNativeContiguousActiveRoute",
+        "MLNativeGroupExactCover",
+        "MLNativeManifestAuthenticates",
+        "MLNativeDurabilityPrecedesFrontier",
+        "MLNativeLatestIndexExact",
+    ),
+    "SumeragiV2AutonomousReservationCarrier": (
+        "MLReservationSingleOwner",
+        "MLReservationIdentityStable",
+        "MLCertifiedBundleDurable",
+        "MLMergeCandidateExactPrefix",
+        "MLCarrierExactlyOnce",
+        "MLRestartOwnershipPartition",
+        "MLStageEvidenceMonotonic",
+    ),
+}
+FORBIDDEN_PRODUCTION_TOKENS = {
+    (
+        "crates/iroha_core/src/sumeragi/v2_apply.rs",
+        "reconcile_lane_reservation_ownership",
+    ): ("merge_ledger_all_entries",),
+}
 
 
 def _regular_file(path: Path, label: str, errors: list[str]) -> bool:
@@ -175,6 +208,96 @@ def _nonempty_string(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _extract_rust_binding_items(
+    source: str, kind: str, symbol: str
+) -> tuple[str, ...]:
+    """Extract exact free items or `Type::method` items from Rust source."""
+
+    if kind != "method":
+        declaration_re = re.compile(
+            RUST_DECLARATION_TEMPLATES[kind].format(symbol=re.escape(symbol))
+        )
+        return tuple(
+            item
+            for declaration in declaration_re.finditer(source)
+            if (item := _extract_braced_item(source, declaration)) is not None
+        )
+
+    if symbol.count("::") != 1:
+        return ()
+    owner, method = symbol.split("::", 1)
+    if not owner or not method:
+        return ()
+    impl_re = re.compile(
+        rf"(?m)^[ \t]*impl[ \t]+{re.escape(owner)}[ \t]*(?=\{{)"
+    )
+    method_re = re.compile(
+        RUST_DECLARATION_TEMPLATES["fn"].format(symbol=re.escape(method))
+    )
+    items: list[str] = []
+    for impl_declaration in impl_re.finditer(source):
+        impl_item = _extract_braced_item(source, impl_declaration)
+        if impl_item is None:
+            continue
+        for method_declaration in method_re.finditer(impl_item):
+            item = _extract_braced_item(impl_item, method_declaration)
+            if item is not None:
+                items.append(item)
+    return tuple(items)
+
+
+def _validate_mutation_runner(
+    root: Path, models: list[Any], errors: list[str]
+) -> None:
+    """Require the deterministic TLC runner to cover the exact ledger corpus."""
+
+    runner = root / TLC_MUTATION_RUNNER_RELATIVE
+    if not _regular_file(runner, "multilane TLC mutation runner", errors):
+        return
+    if runner.stat().st_mode & 0o111 == 0:
+        errors.append(f"multilane TLC mutation runner must be executable: {runner}")
+    source = runner.read_text(encoding="utf-8")
+    normalized = source.replace("\\\n", " ")
+    call_re = re.compile(
+        r'run_mutant\s+[a-z0-9-]+\s+"?\$[A-Z_]+"?\s+'
+        r"(multilane_[a-z0-9_]+_bug\.cfg)\s+([A-Za-z0-9_]+)"
+    )
+    actual = call_re.findall(normalized)
+    expected: list[tuple[str, str]] = []
+    for model in models:
+        if not isinstance(model, dict):
+            continue
+        mutations = model.get("mutations")
+        if not isinstance(mutations, list):
+            continue
+        for mutation in mutations:
+            if not isinstance(mutation, dict):
+                continue
+            config = mutation.get("config")
+            invariant = mutation.get("invariant")
+            if _nonempty_string(config) and _nonempty_string(invariant):
+                expected.append((config, invariant))
+    if actual != expected:
+        errors.append(
+            f"{runner}: exact ordered mutation calls differ from the "
+            "multilane source-binding ledger"
+        )
+    required_once = (
+        '[[ "$status" -ne 12 ]]',
+        'grep -Fq "Invariant ${invariant} is violated."',
+        'grep -Fq "TLC2 Version 2.19"',
+        f"[tlc] all {len(expected)} multilane mutations produced their exact "
+        "named counterexamples; no deductive proof status was changed",
+    )
+    for token in required_once:
+        count = source.count(token)
+        if count != 1:
+            errors.append(
+                f"{runner}: mutation runner contract must contain {token!r} "
+                f"exactly once, found {count}"
+            )
+
+
 def _apalache_runner_source_errors(source: str) -> list[str]:
     """Validate the exact pinned multilane Apalache runner contract."""
 
@@ -231,19 +354,19 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
   "$AUTOSCALE_MODULE" \\
   multilane_autoscale_lifecycle_fixed.cfg \\
   8 \\
-  "LifecycleTypeInvariant, StorageBeforeActivationInvariant, DrainEvidenceInvariant, ArchiveBeforeDestroyInvariant, NoIncarnationReuseInvariant\"""",
+  "LifecycleTypeInvariant, StorageBeforeActivationInvariant, DrainEvidenceInvariant, ArchiveBeforeDestroyInvariant, NoIncarnationReuseInvariant, MLActivationAfterAtomicCreate, MLDrainImpliesNoOwnedWork, MLDrainCertificateMonotonic, MLRetirementConsumesExactIncarnation\"""",
         """run_positive \\
   native-application-evidence \\
   "$NATIVE_MODULE" \\
   multilane_native_application_evidence_fixed.cfg \\
   5 \\
-  "NativeEvidenceTypeInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant\"""",
+  "NativeEvidenceTypeInvariant, SidecarsRequireManifestInvariant, FrontierPublicationInvariant, PrunedEvidenceVerifiableInvariant, SameRouteControlOnlyInvariant, MLSeparateParticipantApplication, MLNativeSourceClaimInjective, MLNativeContiguousActiveRoute, MLNativeGroupExactCover, MLNativeManifestAuthenticates, MLNativeDurabilityPrecedesFrontier, MLNativeLatestIndexExact\"""",
         """run_positive \\
   autonomous-reservation-carrier \\
   "$AUTONOMOUS_MODULE" \\
   multilane_autonomous_reservation_carrier_fixed.cfg \\
   10 \\
-  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant\"""",
+  "ReservationCarrierTypeInvariant, SingleOwnershipInvariant, ExactCarrierIdentityInvariant, ControlOnlyAnchorInvariant, CandidateAuthorizationInvariant, ReleaseOrderingInvariant, QueueReleaseCompletionInvariant, AtMostOnceApplicationInvariant, NoReleaseAfterApplicationInvariant, NoStaleIncarnationReleaseInvariant, ForgottenOnlyAfterApplicationInvariant, MLReservationSingleOwner, MLReservationIdentityStable, MLCertifiedBundleDurable, MLMergeCandidateExactPrefix, MLCarrierExactlyOnce, MLRestartOwnershipPartition, MLStageEvidenceMonotonic\"""",
     )
     for call in expected_calls:
         if source.count(call) != 1:
@@ -258,9 +381,18 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autoscale_early_drain_bug.cfg",
         "multilane_autoscale_destroy_before_archive_bug.cfg",
         "multilane_autoscale_incarnation_reuse_bug.cfg",
+        "multilane_autoscale_activation_before_storage_bug.cfg",
+        "multilane_autoscale_weak_drain_certificate_bug.cfg",
+        "multilane_autoscale_cleanup_by_lane_id_bug.cfg",
         "multilane_native_frontier_before_sidecars_bug.cfg",
         "multilane_native_hash_only_pruning_bug.cfg",
         "multilane_native_same_route_marker_bug.cfg",
+        "multilane_native_source_claim_equivocation_bug.cfg",
+        "multilane_native_noncontiguous_route_bug.cfg",
+        "multilane_native_partial_group_application_bug.cfg",
+        "multilane_native_forged_manifest_leaf_bug.cfg",
+        "multilane_native_dropped_startup_repair_bug.cfg",
+        "multilane_native_ambiguous_latest_index_bug.cfg",
         "multilane_autonomous_carrier_drift_bug.cfg",
         "multilane_autonomous_duplicate_application_bug.cfg",
         "multilane_autonomous_release_after_apply_bug.cfg",
@@ -268,6 +400,11 @@ def _apalache_runner_source_errors(source: str) -> list[str]:
         "multilane_autonomous_aba_release_bug.cfg",
         "multilane_autonomous_digest_only_authorization_bug.cfg",
         "multilane_autonomous_ordinary_anchor_execution_bug.cfg",
+        "multilane_autonomous_reserve_before_durable_bug.cfg",
+        "multilane_autonomous_noncanonical_merge_prefix_bug.cfg",
+        "multilane_autonomous_skip_canonical_reexecution_bug.cfg",
+        "multilane_autonomous_restart_drops_ownership_bug.cfg",
+        "multilane_autonomous_volatile_stage_diagnostics_bug.cfg",
     ):
         if forbidden in source:
             errors.append(
@@ -423,22 +560,24 @@ def _validate_model(
         return
 
     module_path = formal_dir / f"{module}.tla"
+    module_source: str | None = None
     if _regular_file(module_path, "multilane TLA+ module", errors):
-        source = module_path.read_text(encoding="utf-8")
-        header = MODULE_RE.search(source)
+        module_source = module_path.read_text(encoding="utf-8")
+        header = MODULE_RE.search(module_source)
         if header is None or header.group(1) != module:
             errors.append(f"{module_path}: module header must declare {module}")
-        if not source.rstrip().endswith("===="):
+        if not module_source.rstrip().endswith("===="):
             errors.append(f"{module_path}: module must end with ====")
         obligation_re = re.compile(
             TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(obligation))
         )
-        if obligation_re.search(source) is None:
+        if obligation_re.search(module_source) is None:
             errors.append(
                 f"{module_path}: missing production refinement obligation {obligation}"
             )
 
     positive_path = formal_dir / positive_config
+    positive_source: str | None = None
     if _regular_file(positive_path, "positive multilane TLC config", errors):
         positive_source = positive_path.read_text(encoding="utf-8")
         if not positive_source.startswith("INIT Init\nNEXT Next\n"):
@@ -451,6 +590,7 @@ def _validate_model(
             )
 
     mutations = model.get("mutations")
+    mutation_invariants: list[str] = []
     if not isinstance(mutations, list) or not mutations:
         errors.append(f"{module}: mutations must be a non-empty array")
     else:
@@ -469,6 +609,7 @@ def _validate_model(
             if not _nonempty_string(config) or not _nonempty_string(invariant):
                 errors.append(f"{module}: mutation config/invariant must be non-empty")
                 continue
+            mutation_invariants.append(invariant)
             if config in seen_configs:
                 errors.append(f"{module}: duplicate mutation config {config}")
             seen_configs.add(config)
@@ -484,6 +625,30 @@ def _validate_model(
                 )
             if "_bug.cfg" not in config:
                 errors.append(f"{config_path}: mutation config must end in _bug.cfg")
+
+    expected_invariants = EXPECTED_CLOSURE_INVARIANTS.get(module)
+    if expected_invariants is None:
+        errors.append(f"{module}: no reviewed multilane closure-invariant contract")
+    else:
+        for invariant in expected_invariants:
+            declaration_re = re.compile(
+                TLA_DECLARATION_TEMPLATE.format(symbol=re.escape(invariant))
+            )
+            if module_source is None or declaration_re.search(module_source) is None:
+                errors.append(f"{module_path}: missing closure invariant {invariant}")
+            if (
+                positive_source is None
+                or positive_source.count(f"INVARIANT {invariant}\n") != 1
+            ):
+                errors.append(
+                    f"{positive_path}: closure invariant {invariant} must be "
+                    "checked exactly once"
+                )
+            if invariant not in mutation_invariants:
+                errors.append(
+                    f"{module}: closure invariant {invariant} has no exact "
+                    "named counterexample mutation"
+                )
 
     symbols = model.get("production_symbols")
     if not isinstance(symbols, list) or not symbols:
@@ -508,7 +673,7 @@ def _validate_model(
         tokens = binding.get("required_tokens")
         if (
             not _nonempty_string(relative)
-            or kind not in RUST_DECLARATION_TEMPLATES
+            or kind not in RUST_BINDING_KINDS
             or not _nonempty_string(symbol)
             or not isinstance(tokens, list)
             or not tokens
@@ -527,25 +692,43 @@ def _validate_model(
         if not _regular_file(path, "production binding source", errors):
             continue
         source = path.read_text(encoding="utf-8")
-        declaration_re = re.compile(
-            RUST_DECLARATION_TEMPLATES[kind].format(symbol=re.escape(symbol))
-        )
-        declarations = list(declaration_re.finditer(source))
-        if len(declarations) != 1:
-            errors.append(
-                f"{path}: production symbol {symbol} must have one {kind} "
-                f"declaration, found {len(declarations)}"
+        if kind == "method":
+            items = _extract_rust_binding_items(source, kind, symbol)
+            if len(items) != 1:
+                errors.append(
+                    f"{path}: production symbol {symbol} must have one {kind} "
+                    f"declaration, found {len(items)}"
+                )
+                continue
+            item = items[0]
+        else:
+            declaration_re = re.compile(
+                RUST_DECLARATION_TEMPLATES[kind].format(
+                    symbol=re.escape(symbol)
+                )
             )
-            continue
-        item = _extract_braced_item(source, declarations[0])
-        if item is None:
-            errors.append(f"{path}: cannot extract production item {symbol}")
-            continue
+            declarations = list(declaration_re.finditer(source))
+            if len(declarations) != 1:
+                errors.append(
+                    f"{path}: production symbol {symbol} must have one {kind} "
+                    f"declaration, found {len(declarations)}"
+                )
+                continue
+            item = _extract_braced_item(source, declarations[0])
+            if item is None:
+                errors.append(f"{path}: cannot extract production item {symbol}")
+                continue
         for token in tokens:
             if token not in item:
                 errors.append(
                     f"{path}: production item {symbol} is missing source-binding "
                     f"token {token!r}"
+                )
+        for token in FORBIDDEN_PRODUCTION_TOKENS.get((relative, symbol), ()):
+            if token in item:
+                errors.append(
+                    f"{path}: production item {symbol} contains forbidden "
+                    f"unbounded token {token!r}"
                 )
 
 
@@ -575,8 +758,14 @@ def validate(root: Path = DEFAULT_ROOT) -> tuple[str, ...]:
     modules = [model.get("module") for model in models if isinstance(model, dict)]
     if len(set(modules)) != len(modules):
         errors.append("multilane binding ledger contains duplicate model modules")
+    if set(modules) != set(EXPECTED_CLOSURE_INVARIANTS):
+        errors.append(
+            "multilane binding ledger modules differ from the reviewed "
+            "closure-invariant inventory"
+        )
     for model in models:
         _validate_model(root, formal_dir, model, errors)
+    _validate_mutation_runner(root, models, errors)
     _validate_apalache_gate(root, errors)
     return tuple(errors)
 

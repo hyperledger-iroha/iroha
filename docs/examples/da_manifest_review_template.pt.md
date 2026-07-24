@@ -27,7 +27,7 @@ assinados e os artefatos de CI referenciados abaixo.
 
 ## Verificacao de assinaturas
 - Fonte de coleta do manifesto / ticket de storage: `<hex>`
-- Comando/saida de verificacao: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (trecho de log anexado?)
+- Comando/saida de verificacao: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (trecho de log anexado?)
 - `manifest_blake3` reportado pela ferramenta: `<digest>`
 - `chunk_digest_sha3_256` reportado pela ferramenta: `<digest>`
 - Multihashes dos signatarios do conselho:

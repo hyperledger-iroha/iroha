@@ -63,7 +63,7 @@ SDK). Sobre o nome de usuário e o identificador, prove
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Отправляет PR, содержащий luminárias, предложение, отчет о детерминизме и
@@ -99,14 +99,14 @@ SDK). Sobre o nome de usuário e o identificador, prove
 
 ## Otimização de ferramentas
 
-- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` são fornecidos:
+- `sorafs_manifest_chunk_store` e `sorafs_manifest_builder` são fornecidos:
   - `--list-profiles` para restauração de inspeção.
   - `--promote-profile=<handle>` para geração de bloco canônico,
     use o perfil fornecido.
   - `--json-out=-` para controle de saída em stdout, verificando a configuração
     логи ревью.
 - `ensure_charter_compliance()` é usado por um binário relevante
-  (`manifest_chunk_store`, `provider_advert_stub`). CI тесты должны падать, если
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI тесты должны падать, если
   Novas informações estão disponíveis para você.
 
 ## Documentação

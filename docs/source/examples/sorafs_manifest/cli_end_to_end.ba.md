@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS Манифест CLI-ға тиклем Миҫал
 
 Был миҫал аша атлай аша баҫтырып сығарыу документация төҙөү SoraFS ҡулланып
-`sorafs_manifest_stub` CLI детерминистик өлөштәр менән бергә
+`sorafs_manifest_builder` CLI детерминистик өлөштәр менән бергә
 һүрәтләнгән SoraFS архитектураһы RFC. Ағым ҡаплауҙары быуын күренә,
 көтөү тикшерелгән, ветч-план раҫлау, һәм репетиция репетициялары шулай
 командалары шул уҡ аҙымдарҙы CI индерә ала.
@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 ## 1-се аҙым — генерациялау манифест, CAR, ҡултамғалар, һәм пландар планы
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ CI мөхиттәре өсөн, айырым файҙалы йөк юлдары 
 манифест аша тапшырыу CLI:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

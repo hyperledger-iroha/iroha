@@ -104,9 +104,9 @@ cruzamentos manuais. Em caso de duvida, execute os CLIs de chunk-store e manifes
   digest do manifest e checks PoR com os parametros propostos.
 - `sorafs_manifest_chunk_store --json-out=-` - transmitir o relatorio do chunk-store para
   stdout para comparacoes automatizadas.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - confirmar que manifests e planos CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` - confirmar que manifests e planos CAR
   embutem o handle canonico mais aliases.
-- `sorafs_manifest_stub --plan=-` - reenviar o `chunk_fetch_specs` anterior para
+- `sorafs_manifest_builder --plan=-` - reenviar o `chunk_fetch_specs` anterior para
   verificar offsets/digests apos a mudanca.
 
 Registre a saida dos comandos (digests, raizes PoR, hashes de manifest) na proposta para que
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -156,7 +156,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -361,6 +362,104 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         self.assertEqual(metrics["four_lane_resource_maxima"]["disk_bytes_max"], 2_019)
         self.assertEqual(len(metrics["pairs"]), 5)
 
+    def test_release_binding_accepts_exact_source_workspace_and_validator(self) -> None:
+        validator_path = (
+            self.bundle.root / self.bundle.manifest["validator"]["path"]
+        )
+        metrics = VALIDATOR.validate_evidence(
+            self.bundle.manifest_path,
+            expected_source_revision=self.bundle.identity["software"]["source_revision"],
+            expected_workspace_source_sha256=(
+                self.bundle.identity["software"]["workspace_source_sha256"]
+            ),
+            expected_validator_sha256=digest_file(validator_path),
+        )
+        self.assertEqual(metrics["pair_count"], 5)
+
+    def test_release_binding_rejects_source_workspace_or_validator_drift(self) -> None:
+        expectations = (
+            (
+                {"expected_source_revision": "f" * 40},
+                "source_revision does not match",
+            ),
+            (
+                {"expected_workspace_source_sha256": "f" * 64},
+                "workspace_source_sha256 does not match",
+            ),
+            (
+                {"expected_validator_sha256": "f" * 64},
+                "validator does not match",
+            ),
+        )
+        for arguments, message in expectations:
+            with self.subTest(arguments=arguments):
+                with self.assertRaisesRegex(VALIDATOR.EvidenceError, message):
+                    VALIDATOR.validate_evidence(
+                        self.bundle.manifest_path,
+                        **arguments,
+                    )
+
+    def test_release_trust_anchors_bind_all_executable_measurement_inputs(self) -> None:
+        retained_temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(retained_temporary.cleanup)
+        retained_root = Path(retained_temporary.name).resolve(strict=True)
+        for entry in self.bundle.manifest["tooling"]:
+            archived = self.bundle.root / entry["artifact"]["path"]
+            retained = retained_root.joinpath(
+                *Path(entry["source_path"]).parts
+            )
+            retained.parent.mkdir(parents=True, exist_ok=True)
+            retained.write_bytes(archived.read_bytes())
+        harness = self.bundle.root / self.bundle.manifest["trial_harness"]["path"]
+        configuration = (
+            self.bundle.root / self.bundle.manifest["configuration"]["path"]
+        )
+        expectations = {
+            "expected_trial_harness_sha256": digest_file(harness),
+            "expected_configuration_sha256": digest_file(configuration),
+            "expected_irohad_sha256": self.bundle.identity["software"][
+                "irohad_sha256"
+            ],
+            "expected_iroha_cli_sha256": self.bundle.identity["software"][
+                "iroha_cli_sha256"
+            ],
+            "expected_repository_root": retained_root,
+        }
+        metrics = VALIDATOR.validate_evidence(
+            self.bundle.manifest_path,
+            **expectations,
+        )
+        self.assertEqual(metrics["run_count"], 10)
+
+        for name in (
+            "expected_trial_harness_sha256",
+            "expected_configuration_sha256",
+            "expected_irohad_sha256",
+            "expected_iroha_cli_sha256",
+        ):
+            drifted = dict(expectations)
+            drifted[name] = "f" * 64
+            with self.subTest(name=name):
+                with self.assertRaises(VALIDATOR.EvidenceError):
+                    VALIDATOR.validate_evidence(
+                        self.bundle.manifest_path,
+                        **drifted,
+                    )
+
+        first_tool = self.bundle.manifest["tooling"][0]
+        retained_tool = retained_root.joinpath(
+            *Path(first_tool["source_path"]).parts
+        )
+        retained_tool.write_bytes(b"retained tool drift\n")
+        with self.assertRaisesRegex(
+            VALIDATOR.EvidenceError,
+            "does not match retained repository tool",
+        ):
+            VALIDATOR.validate_evidence(
+                self.bundle.manifest_path,
+                **expectations,
+            )
+
     def test_cli_writes_machine_readable_pass_report(self) -> None:
         report = self.bundle.root / "validation_report.json"
         result = subprocess.run(
@@ -382,6 +481,155 @@ class MultilaneScalingEvidenceValidatorTest(unittest.TestCase):
         self.assertEqual(payload["result"], "pass")
         self.assertEqual(payload["errors"], [])
         self.assertRegex(payload["manifest_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_report_publication_handles_partial_writes_and_is_deterministic(
+        self,
+    ) -> None:
+        directory = self.bundle.root / "report-partial-write"
+        directory.mkdir()
+        report_path = directory / "report.json"
+        report = {"z": [3, 2, 1], "a": {"result": "pass"}}
+        expected = (
+            json.dumps(report, indent=2, sort_keys=True) + "\n"
+        ).encode("utf-8")
+        real_write = os.write
+
+        def partial_write(descriptor: int, data: bytes) -> int:
+            return real_write(descriptor, data[:7])
+
+        with mock.patch.object(VALIDATOR.os, "write", side_effect=partial_write):
+            VALIDATOR._write_report(report_path, report)
+
+        self.assertEqual(report_path.read_bytes(), expected)
+        metadata = report_path.lstat()
+        self.assertTrue(stat.S_ISREG(metadata.st_mode))
+        self.assertEqual(stat.S_IMODE(metadata.st_mode), 0o600)
+        self.assertEqual(metadata.st_nlink, 1)
+        self.assertEqual(list(directory.glob(".gscale-report-*")), [])
+
+    def test_report_publication_rejects_preexisting_stage_symlink(self) -> None:
+        directory = self.bundle.root / "report-stage-symlink"
+        directory.mkdir()
+        report_path = directory / "report.json"
+        victim = directory / "victim"
+        victim.write_bytes(b"do not overwrite\n")
+        token = "a" * 32
+        stage = directory / f".gscale-report-{token}"
+        try:
+            stage.symlink_to(victim)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+
+        with mock.patch.object(VALIDATOR.secrets, "token_hex", return_value=token):
+            with self.assertRaises(FileExistsError):
+                VALIDATOR._write_report(report_path, {"result": "pass"})
+
+        self.assertEqual(victim.read_bytes(), b"do not overwrite\n")
+        self.assertTrue(stage.is_symlink())
+        self.assertFalse(report_path.exists())
+
+    def test_report_publication_never_replaces_destination_or_racer(self) -> None:
+        existing_directory = self.bundle.root / "report-existing"
+        existing_directory.mkdir()
+        existing = existing_directory / "report.json"
+        existing.write_bytes(b"existing\n")
+        with self.assertRaises(FileExistsError):
+            VALIDATOR._write_report(existing, {"result": "pass"})
+        self.assertEqual(existing.read_bytes(), b"existing\n")
+
+        symlink_directory = self.bundle.root / "report-destination-symlink"
+        symlink_directory.mkdir()
+        victim = symlink_directory / "victim"
+        victim.write_bytes(b"victim\n")
+        destination_symlink = symlink_directory / "report.json"
+        try:
+            destination_symlink.symlink_to(victim)
+        except (NotImplementedError, OSError) as error:
+            self.skipTest(f"symlinks unavailable: {error}")
+        with self.assertRaises(FileExistsError):
+            VALIDATOR._write_report(destination_symlink, {"result": "pass"})
+        self.assertEqual(victim.read_bytes(), b"victim\n")
+        self.assertTrue(destination_symlink.is_symlink())
+
+        race_directory = self.bundle.root / "report-race"
+        race_directory.mkdir()
+        raced_destination = race_directory / "report.json"
+        token = "b" * 32
+        stage = race_directory / f".gscale-report-{token}"
+        real_link = os.link
+
+        def race_destination(*args: Any, **kwargs: Any) -> None:
+            raced_destination.write_bytes(b"racer\n")
+            real_link(*args, **kwargs)
+
+        with (
+            mock.patch.object(VALIDATOR.secrets, "token_hex", return_value=token),
+            mock.patch.object(VALIDATOR.os, "link", side_effect=race_destination),
+        ):
+            with self.assertRaises(FileExistsError):
+                VALIDATOR._write_report(raced_destination, {"result": "pass"})
+        self.assertEqual(raced_destination.read_bytes(), b"racer\n")
+        self.assertFalse(stage.exists())
+
+    def test_report_publication_cleans_stage_after_write_or_file_fsync_failure(
+        self,
+    ) -> None:
+        short_directory = self.bundle.root / "report-zero-write"
+        short_directory.mkdir()
+        short_report = short_directory / "report.json"
+        with mock.patch.object(VALIDATOR.os, "write", return_value=0):
+            with self.assertRaisesRegex(OSError, "short write"):
+                VALIDATOR._write_report(short_report, {"result": "pass"})
+        self.assertEqual(list(short_directory.iterdir()), [])
+
+        fsync_directory = self.bundle.root / "report-file-fsync"
+        fsync_directory.mkdir()
+        fsync_report = fsync_directory / "report.json"
+        with mock.patch.object(
+            VALIDATOR.os,
+            "fsync",
+            side_effect=OSError("injected file fsync failure"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected file fsync failure"):
+                VALIDATOR._write_report(fsync_report, {"result": "pass"})
+        self.assertEqual(list(fsync_directory.iterdir()), [])
+
+    def test_report_publication_cleans_owned_paths_after_publish_failure(
+        self,
+    ) -> None:
+        link_directory = self.bundle.root / "report-link-failure"
+        link_directory.mkdir()
+        link_report = link_directory / "report.json"
+        with mock.patch.object(
+            VALIDATOR.os,
+            "link",
+            side_effect=OSError("injected link failure"),
+        ):
+            with self.assertRaisesRegex(OSError, "injected link failure"):
+                VALIDATOR._write_report(link_report, {"result": "pass"})
+        self.assertEqual(list(link_directory.iterdir()), [])
+
+        directory_fsync = self.bundle.root / "report-directory-fsync"
+        directory_fsync.mkdir()
+        fsync_report = directory_fsync / "report.json"
+        real_fsync = os.fsync
+        fsync_calls = 0
+
+        def fail_first_directory_fsync(descriptor: int) -> None:
+            nonlocal fsync_calls
+            fsync_calls += 1
+            if fsync_calls == 2:
+                raise OSError("injected directory fsync failure")
+            real_fsync(descriptor)
+
+        with mock.patch.object(
+            VALIDATOR.os,
+            "fsync",
+            side_effect=fail_first_directory_fsync,
+        ):
+            with self.assertRaisesRegex(OSError, "injected directory fsync failure"):
+                VALIDATOR._write_report(fsync_report, {"result": "pass"})
+        self.assertEqual(list(directory_fsync.iterdir()), [])
 
     def test_requires_exactly_five_complete_pairs(self) -> None:
         self.bundle.manifest["runs"].pop()

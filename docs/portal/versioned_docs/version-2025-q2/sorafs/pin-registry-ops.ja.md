@@ -116,7 +116,7 @@ groups:
    - `iroha app sorafs providers list` を実行し、アドバタイズされた機能がレプリケーション要件と一致していることを確認します。
    - `torii_sorafs_capacity_*` ゲージをチェックして、プロビジョニングされた GiB と PoR の成功を確認します。
 3. **レプリケーションの再割り当て**
-   - バックログ スラック (`stat="avg"`) が 5 エポックを下回った場合、`sorafs_manifest_stub capacity replication-order` 経由で新しい注文を発行します (マニフェスト/CAR パッケージ化は `iroha app sorafs toolkit pack` を使用します)。
+   - バックログ スラック (`stat="avg"`) が 5 エポックを下回った場合、`sorafs_manifest_builder capacity replication-order` 経由で新しい注文を発行します (マニフェスト/CAR パッケージ化は `iroha app sorafs toolkit pack` を使用します)。
    - エイリアスにアクティブなマニフェスト バインディングがない場合はガバナンスに通知します (`torii_sorafs_registry_aliases_total` が予期せずドロップします)。
 4. **結果を文書化**
    - インシデントのメモをタイムスタンプと影響を受けるマニフェスト ダイジェストとともに SoraFS 操作ログに記録します。

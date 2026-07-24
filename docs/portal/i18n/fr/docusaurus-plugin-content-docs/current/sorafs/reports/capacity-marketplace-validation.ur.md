@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Les opérateurs avec `sorafs_manifest_stub capacity {declaration,dispute}` chargent les charges utiles des demandes d'intégration/de contestation et génèrent des octets et des tickets de gouvernance JSON/Norito. ساتھ archives کرنا چاہیے۔
+Les opérateurs avec `sorafs_manifest_builder capacity {declaration,dispute}` chargent les charges utiles des demandes d'intégration/de contestation et génèrent des octets et des tickets de gouvernance JSON/Norito. ساتھ archives کرنا چاہیے۔
 
 ## Artefacts de signature
 

@@ -57,7 +57,7 @@ Exemplo de `chunker_registry::ensure_charter_compliance()`:
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قدّم PR يحتوي على fixtures والمقترح وتقرير الحتمية وتحديثات السجل.
@@ -90,12 +90,12 @@ Exemplo de `chunker_registry::ensure_charter_compliance()`:
    - تتطلب الإزالة, أو الإصلاحات العاجلة تصويتاً بالأغلبية من المجلس.
    - يجب على TWG توثيق خطوات الحد من المخاطر وتحديث سجل الحوادث.
 
-## Ferramentas de ferramentas- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` são:
+## Ferramentas de ferramentas- `sorafs_manifest_chunk_store` e `sorafs_manifest_builder` são:
   - `--list-profiles`.
   - `--promote-profile=<handle>` لتوليد كتلة البيانات المعتمدة المستخدمة عند ترقية ملف.
   - `--json-out=-` é uma opção para stdout, mas não permite que você execute o procedimento.
 - يتم استدعاء `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`, `provider_advert_stub`). Isso é o que acontece com CI إذا كانت
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Isso é o que acontece com CI إذا كانت
   Você pode fazer isso.
 
 ## حفظ السجلات

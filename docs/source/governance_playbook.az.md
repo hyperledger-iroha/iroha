@@ -64,9 +64,9 @@ Baxılan baytlar Parlament zərfinə və SoraFS artefaktına uyğun gəlir. isti
 bu sübutları toplamaq üçün mövcud alətlər:1. Torii (`iroha app da get-blob --storage-ticket <hex>`)-dan manifest paketini əldə edin
    və ya ekvivalent SDK köməkçisi) beləliklə hamı çatdığı eyni baytları hash edir
    şlüzlər.
-2. İmzalanmış zərflə manifest stub təsdiqləyicisini işə salın:
+2. İmzalanmış zərflə manifest builder təsdiqləyicisini işə salın:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

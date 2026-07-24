@@ -6386,8 +6386,8 @@ fn sorafs_paths() -> Map {
         "/v1/sorafs/moderation/ballots/tally".to_owned(),
         Value::Object(json_post_operation(
             "SoraFS",
-            "Finalize a moderation ballot tally.",
-            "Finalize a local SoraFS moderation ballot tally after quorum and reveal-window checks. The request requires canonical app authentication.",
+            "Submit authoritative moderation finalization.",
+            "Submit the native FinalizeSorafsModerationCase instruction through the configured durable transaction orchestrator. Pending requests return 202; finalized replays return the committed case projection. The route fails closed when finalized-chain orchestration is unavailable and never mutates the local ballot runtime.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -16295,6 +16295,9 @@ fn openapi_schemas() -> Map {
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
             .expect("Sumeragi validator bound must fit in an OpenAPI uint64");
+    let max_sumeragi_commit_quorum_groups =
+        u64::try_from(iroha_data_model::block::consensus_v2::MAX_COMMIT_QUORUM_GROUPS_PER_HEIGHT)
+            .expect("Sumeragi Commit quorum-group bound must fit in an OpenAPI uint64");
     let mut schemas = Map::new();
     schemas.extend(sccp_schemas());
     bridge_finality_schemas(&mut schemas);
@@ -18180,6 +18183,98 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "SumeragiAutonomousLaneExecutionStage".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": [
+                "reservations_durable",
+                "executable_payload_durable",
+                "payload_availability_certified",
+                "lane_certified",
+                "certified_bundle_durable",
+                "merge_candidate_durable",
+                "global_carrier_committed",
+                "kura_wsv_application_receipt_durable",
+                "queue_finalized",
+                "conflict"
+            ]
+        }),
+    );
+    schemas.insert(
+        "SumeragiAutonomousLaneExecutionStuckReason".to_owned(),
+        norito::json!({
+            "type": "string",
+            "enum": [
+                "awaiting_payload_availability",
+                "awaiting_lane_certification",
+                "certified_bundle_unavailable",
+                "awaiting_merge_selection",
+                "awaiting_global_carrier",
+                "awaiting_application_receipt",
+                "queue_finalization_unverifiable",
+                "evidence_conflict"
+            ]
+        }),
+    );
+    schemas.insert(
+        "SumeragiAutonomousLaneExecution".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "lane_id", "dataspace_id", "lane_incarnation",
+                "lane_block_height", "lane_block_view", "proposal_height",
+                "proposal_view", "proposal_hash", "descriptor_hash",
+                "reservation_count", "transaction_count", "highest_durable_stage"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "lane_id": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": 4_294_967_295_u64
+                },
+                "dataspace_id": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "lane_incarnation": { "$ref": "#/components/schemas/Hash" },
+                "lane_block_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "lane_block_view": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "proposal_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "proposal_view": {
+                    "type": "integer", "format": "uint64", "minimum": 0
+                },
+                "proposal_hash": { "$ref": "#/components/schemas/Hash" },
+                "descriptor_hash": { "$ref": "#/components/schemas/Hash" },
+                "executable_payload_hash": { "$ref": "#/components/schemas/Hash" },
+                "source_bundle_hash": { "$ref": "#/components/schemas/Hash" },
+                "merge_entry_hash": { "$ref": "#/components/schemas/Hash" },
+                "application_block_height": {
+                    "type": "integer", "format": "uint64", "minimum": 1
+                },
+                "application_block_hash": { "$ref": "#/components/schemas/Hash" },
+                "reservation_count": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 4_096
+                },
+                "transaction_count": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 4_096
+                },
+                "highest_durable_stage": {
+                    "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStage"
+                },
+                "stuck_reason": {
+                    "$ref": "#/components/schemas/SumeragiAutonomousLaneExecutionStuckReason"
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SumeragiDiagnosticsResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -18193,7 +18288,8 @@ fn openapi_schemas() -> Map {
                 "lane_relay_envelopes", "lane_payload_ownerships",
                 "committed_lane_blocks", "lane_block_sessions",
                 "lane_governance_sealed_total", "lane_governance_sealed_aliases",
-                "lane_governance", "native_amx_participant_applications"
+                "lane_governance", "native_amx_participant_applications",
+                "autonomous_lane_executions"
             ],
             "additionalProperties": false,
             "properties": {
@@ -18223,6 +18319,13 @@ fn openapi_schemas() -> Map {
                     "maxItems": 1024,
                     "items": {
                         "$ref": "#/components/schemas/SumeragiNativeAmxParticipantApplication"
+                    }
+                },
+                "autonomous_lane_executions": {
+                    "type": "array",
+                    "maxItems": 128,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiAutonomousLaneExecution"
                     }
                 }
             }
@@ -18360,6 +18463,366 @@ fn openapi_schemas() -> Map {
         }),
     );
     schemas.insert(
+        "SumeragiV2VoteQuorumStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "round", "proposal_round", "subject", "execution_commitment",
+                "signer_count", "signed_power", "min_signers", "total_power"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
+                "execution_commitment": {
+                    "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+                },
+                "signer_count": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": max_sumeragi_validators
+                },
+                "signed_power": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "min_signers": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
+                },
+                "total_power": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2TimeoutQuorumStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "round", "signer_count", "signed_power", "min_signers",
+                "total_power", "certificate_formed"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "signer_count": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": max_sumeragi_validators
+                },
+                "signed_power": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "min_signers": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": max_sumeragi_validators
+                },
+                "total_power": {
+                    "type": "integer", "format": "uint64", "minimum": 1,
+                    "maximum": 18446744073709551615_u64
+                },
+                "certificate_formed": { "type": "boolean" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2OutboundIntentKind".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "proposal", "prepare_vote", "commit_vote", "prepare_qc",
+                        "commit_qc", "timeout_vote", "timeout_certificate"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2OutboundIntentStage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["stage", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "stage": {
+                    "type": "string",
+                    "enum": [
+                        "pending_persistence", "pending_signature", "queued", "sent"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2OutboundIntentStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["kind", "round", "stage"],
+            "additionalProperties": false,
+            "properties": {
+                "kind": { "$ref": "#/components/schemas/SumeragiV2OutboundIntentKind" },
+                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "proposal_round": {
+                    "$ref": "#/components/schemas/SumeragiV2ConsensusRound"
+                },
+                "subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
+                "execution_commitment": {
+                    "$ref": "#/components/schemas/SumeragiV2ExecutionCommitment"
+                },
+                "stage": { "$ref": "#/components/schemas/SumeragiV2OutboundIntentStage" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2LocalWorkStage".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["stage", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "stage": {
+                    "type": "string",
+                    "enum": ["idle", "queued", "running", "complete"]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2WorkStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "candidate", "body_recovery", "body_store", "validation",
+                "application", "successor_height"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "candidate": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" },
+                "body_recovery": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" },
+                "body_store": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" },
+                "validation": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" },
+                "application": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" },
+                "successor_height": { "$ref": "#/components/schemas/SumeragiV2LocalWorkStage" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2QueueKind".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["queue", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "queue": {
+                    "type": "string",
+                    "enum": [
+                        "ingress", "deferred_normal", "deferred_progress",
+                        "deferred_completion", "runtime_normal", "runtime_progress",
+                        "runtime_completion", "effect_completion", "network_ingress",
+                        "effect_dispatch"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2QueueStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["queue", "depth", "capacity", "service_debt"],
+            "additionalProperties": false,
+            "properties": {
+                "queue": { "$ref": "#/components/schemas/SumeragiV2QueueKind" },
+                "depth": {
+                    "type": "integer", "format": "uint32", "minimum": 0,
+                    "maximum": 4294967295_u64
+                },
+                "capacity": {
+                    "type": "integer", "format": "uint32", "minimum": 1,
+                    "maximum": 4294967295_u64
+                },
+                "oldest_age_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "service_debt": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2ProgressTransition".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["transition", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "transition": {
+                    "type": "string",
+                    "enum": [
+                        "proposal_admitted", "body_available", "body_stored",
+                        "body_validated", "prepare_vote_admitted",
+                        "commit_vote_admitted", "timeout_vote_admitted",
+                        "prepare_quorum", "lock_installed", "commit_quorum",
+                        "timeout_certificate_installed", "decision_persisted",
+                        "applied", "successor_height_activated", "recovery_replayed"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2ProgressTransitionStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["generation", "round", "transition", "age_ms"],
+            "additionalProperties": false,
+            "properties": {
+                "generation": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "round": { "$ref": "#/components/schemas/SumeragiV2ConsensusRound" },
+                "transition": {
+                    "$ref": "#/components/schemas/SumeragiV2ProgressTransition"
+                },
+                "age_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2LivenessBlocker".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["blocker", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "blocker": {
+                    "type": "string",
+                    "enum": [
+                        "missing_proposal", "body_unavailable",
+                        "prepare_quorum_missing", "commit_quorum_missing",
+                        "timeout_certificate_missing", "scheduler_starvation",
+                        "application_pending", "local_control_pending"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2IgnoreReason".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["reason", "details"],
+            "additionalProperties": false,
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "wrong_height", "wrong_view", "stale_generation", "busy",
+                        "duplicate", "no_matching_work", "observer", "view_closed",
+                        "already_decided", "recovery_pending", "irrelevant_view",
+                        "unsafe_proposal"
+                    ]
+                },
+                "details": { "type": "null" }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2IgnoreCount".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["reason", "count"],
+            "additionalProperties": false,
+            "properties": {
+                "reason": { "$ref": "#/components/schemas/SumeragiV2IgnoreReason" },
+                "count": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                }
+            }
+        }),
+    );
+    schemas.insert(
+        "SumeragiV2LivenessStatus".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "generation", "prepare_quorums", "commit_quorums",
+                "timeout_quorums", "outbound_intents", "work", "queues",
+                "no_progress_age_ms", "ignore_counts"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "generation": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "prepare_quorums": {
+                    "type": "array", "maxItems": max_sumeragi_validators,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiV2VoteQuorumStatus"
+                    }
+                },
+                "commit_quorums": {
+                    "type": "array", "maxItems": max_sumeragi_commit_quorum_groups,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiV2VoteQuorumStatus"
+                    }
+                },
+                "timeout_quorums": {
+                    "type": "array", "maxItems": max_sumeragi_validators,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiV2TimeoutQuorumStatus"
+                    }
+                },
+                "outbound_intents": {
+                    "type": "array", "maxItems": 7,
+                    "items": {
+                        "$ref": "#/components/schemas/SumeragiV2OutboundIntentStatus"
+                    }
+                },
+                "work": { "$ref": "#/components/schemas/SumeragiV2WorkStatus" },
+                "queues": {
+                    "type": "array", "maxItems": 10,
+                    "items": { "$ref": "#/components/schemas/SumeragiV2QueueStatus" }
+                },
+                "last_progress": {
+                    "$ref": "#/components/schemas/SumeragiV2ProgressTransitionStatus"
+                },
+                "no_progress_age_ms": {
+                    "type": "integer", "format": "uint64", "minimum": 0,
+                    "maximum": 18446744073709551615_u64
+                },
+                "blocker": { "$ref": "#/components/schemas/SumeragiV2LivenessBlocker" },
+                "ignore_counts": {
+                    "type": "array", "maxItems": 12,
+                    "items": { "$ref": "#/components/schemas/SumeragiV2IgnoreCount" }
+                }
+            }
+        }),
+    );
+    schemas.insert(
         "SumeragiStatusResponse".to_owned(),
         norito::json!({
             "type": "object",
@@ -18376,7 +18839,8 @@ fn openapi_schemas() -> Map {
                 "leader",
                 "body_state",
                 "last_committed_height",
-                "height_context"
+                "height_context",
+                "liveness"
             ],
             "additionalProperties": false,
             "properties": {
@@ -18398,7 +18862,8 @@ fn openapi_schemas() -> Map {
                 "last_committed_height": { "type": "integer", "minimum": 0 },
                 "last_committed_subject": { "$ref": "#/components/schemas/SumeragiV2BlockSubject" },
                 "height_context": { "$ref": "#/components/schemas/SumeragiV2HeightContextStatus" },
-                "last_commit_qc": { "$ref": "#/components/schemas/SumeragiV2CommitQcStatus" }
+                "last_commit_qc": { "$ref": "#/components/schemas/SumeragiV2CommitQcStatus" },
+                "liveness": { "$ref": "#/components/schemas/SumeragiV2LivenessStatus" }
             }
         }),
     );
@@ -30800,10 +31265,28 @@ mod tests {
             "SumeragiV2TimeoutCertificateRef",
             "SumeragiV2HeightContextStatus",
             "SumeragiV2CommitQcStatus",
+            "SumeragiV2VoteQuorumStatus",
+            "SumeragiV2TimeoutQuorumStatus",
+            "SumeragiV2OutboundIntentKind",
+            "SumeragiV2OutboundIntentStage",
+            "SumeragiV2OutboundIntentStatus",
+            "SumeragiV2LocalWorkStage",
+            "SumeragiV2WorkStatus",
+            "SumeragiV2QueueKind",
+            "SumeragiV2QueueStatus",
+            "SumeragiV2ProgressTransition",
+            "SumeragiV2ProgressTransitionStatus",
+            "SumeragiV2LivenessBlocker",
+            "SumeragiV2IgnoreReason",
+            "SumeragiV2IgnoreCount",
+            "SumeragiV2LivenessStatus",
             "SumeragiNposDiagnostics",
             "SumeragiPipelineExecutionDiagnostics",
             "SumeragiNativeAmxParticipantApplicationState",
             "SumeragiNativeAmxParticipantApplication",
+            "SumeragiAutonomousLaneExecutionStage",
+            "SumeragiAutonomousLaneExecutionStuckReason",
+            "SumeragiAutonomousLaneExecution",
             "SumeragiLaneCommitment",
             "SumeragiDataspaceCommitment",
             "SumeragiLanePayloadOwnership",
@@ -30886,6 +31369,42 @@ mod tests {
                 Value::from("durably_applied"),
                 Value::from("conflict"),
             ]
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_execution_diagnostics_schema_is_closed_and_bounded() {
+        let schemas = openapi_schemas();
+        let response = schemas
+            .get("SumeragiDiagnosticsResponse")
+            .and_then(Value::as_object)
+            .expect("diagnostics response schema");
+        let executions = response
+            .get("properties")
+            .and_then(Value::as_object)
+            .and_then(|properties| properties.get("autonomous_lane_executions"))
+            .and_then(Value::as_object)
+            .expect("autonomous execution diagnostics vector schema");
+        assert_eq!(executions.get("maxItems"), Some(&Value::from(128_u64)));
+        assert_eq!(
+            executions
+                .get("items")
+                .and_then(Value::as_object)
+                .and_then(|items| items.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SumeragiAutonomousLaneExecution")
+        );
+        let row = schemas
+            .get("SumeragiAutonomousLaneExecution")
+            .and_then(Value::as_object)
+            .expect("autonomous execution row schema");
+        assert_eq!(row.get("additionalProperties"), Some(&Value::from(false)));
+        assert_eq!(
+            row.get("required")
+                .and_then(Value::as_array)
+                .map(|required| required.contains(&Value::from("stuck_reason"))),
+            Some(false),
+            "stuck reason remains optional for a future independently proven terminal stage"
         );
     }
 
@@ -32068,6 +32587,7 @@ mod tests {
         assert!(status_properties.contains_key("last_committed_subject"));
         assert!(status_properties.contains_key("height_context"));
         assert!(status_properties.contains_key("last_commit_qc"));
+        assert!(status_properties.contains_key("liveness"));
         assert!(!status_properties.contains_key("lane_settlement_commitments"));
         assert!(!status_properties.contains_key("lane_relay_envelopes"));
         assert!(!status_properties.contains_key("rbc_status"));
@@ -32121,6 +32641,7 @@ mod tests {
                 "last_commit_qc",
                 "#/components/schemas/SumeragiV2CommitQcStatus",
             ),
+            ("liveness", "#/components/schemas/SumeragiV2LivenessStatus"),
         ] {
             assert_eq!(
                 status_properties
@@ -32136,7 +32657,7 @@ mod tests {
             .get("required")
             .and_then(Value::as_array)
             .expect("status required fields");
-        for field in ["restart_required", "height_context"] {
+        for field in ["restart_required", "height_context", "liveness"] {
             assert!(
                 required.iter().any(|value| value.as_str() == Some(field)),
                 "status must require {field}"

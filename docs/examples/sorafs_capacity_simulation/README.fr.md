@@ -28,7 +28,7 @@ Ce repertoire livre les artefacts reproductibles pour la simulation du marche de
 ./analyze.py --artifacts ./artifacts
 ```
 
-Le script `run_cli.sh` invoque `sorafs_manifest_stub capacity` pour construire:
+Le script `run_cli.sh` invoque `sorafs_manifest_builder capacity` pour construire:
 
 - Des declarations de providers deterministes pour le set de fixtures de negotiation de quotas.
 - Un ordre de replication qui correspond au scenario de negotiation.

@@ -169,7 +169,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     crate::syscalls::SyscallDoc { number: 65571, args: "-", ret: "r10=ptr (&AccountId)", gas: "asset:gas/G_get_auth@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65572, args: "-", ret: "r10=ptr (&NoritoBytes(ContractAddress)) or 0", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65573, args: "-", ret: "r10=ptr (&Blob(entrypoint)) or 0", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
-    crate::syscalls::SyscallDoc { number: 65574, args: "r10=&NoritoBytes(EntrypointArgumentRecordV1), r11=&NoritoBytes(EntrypointArgumentSchemaV1)", ret: "r10=ptr (&Blob(pad:u8 then [u64; word_count]))", gas: "asset:gas/G_argument_decode@ivm.core/v2 + record + schema + output" },
+    crate::syscalls::SyscallDoc { number: 65574, args: "r10=raw &NoritoBytes(EntrypointArgumentRecordV1) or prepared &NoritoBytes(record binding), r11=&NoritoBytes(EntrypointArgumentSchemaV1)", ret: "r10=ptr (&Blob(pad:u8 then [u64; word_count]))", gas: "asset:gas/G_argument_decode@ivm.core/v2 + record + schema + complete materialization" },
     crate::syscalls::SyscallDoc { number: 65575, args: "-", ret: "r10=ptr (&AccountId(contract subject))", gas: "asset:gas/G_sysvar@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65576, args: "r10=&Blob or &NoritoBytes (validated public TLV)", ret: "r10=&NoritoBytes(same payload)", gas: "asset:gas/G_pointer@ivm.core/v2 + bytes" },
     crate::syscalls::SyscallDoc { number: 65584, args: "r10=&Name(prefix), r11=offset:u64, r12=limit:u64 (0..=64)", ret: "r10=ptr (&NoritoBytes(Vec<Name>)), r11=total:u64, r12=count:u64", gas: "asset:gas/G_state_keys@ivm.core/v2 + count + bytes" },

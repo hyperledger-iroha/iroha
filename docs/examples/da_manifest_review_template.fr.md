@@ -27,7 +27,7 @@ avec les payloads Norito signes et les artefacts CI references ci-dessous.
 
 ## Verification des signatures
 - Source de recuperation du manifeste / ticket de stockage: `<hex>`
-- Commande/resultat de verification: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (extrait de log joint?)
+- Commande/resultat de verification: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (extrait de log joint?)
 - `manifest_blake3` rapporte par l'outil: `<digest>`
 - `chunk_digest_sha3_256` rapporte par l'outil: `<digest>`
 - Multihashes des signataires du conseil:

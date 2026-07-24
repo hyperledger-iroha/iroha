@@ -1,7 +1,5 @@
 //! Crash-atomic Kura lane-geometry transitions.
 
-#[cfg(test)]
-use std::io::{Seek, SeekFrom};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -37,6 +35,8 @@ use rustix::fs::{
 ))]
 use rustix::fs::{RenameFlags, renameat_with};
 
+#[cfg(test)]
+use super::SidecarIndexEntry;
 use super::{
     AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX, AUTONOMOUS_LANE_BLOCKS_DATA_FILE,
     AUTONOMOUS_LANE_BLOCKS_INDEX_FILE, AutonomousLaneBlockArtifact, BlockStore,
@@ -47,16 +47,15 @@ use super::{
     LANE_ARTIFACTS_INDEX_FILE, LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE,
     LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE, LANE_BLOCK_EXECUTION_INPUTS_DATA_FILE,
     LANE_BLOCK_EXECUTION_INPUTS_INDEX_FILE, LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE,
-    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LaneBlockApplicationReceiptArtifact,
-    LaneBlockApplicationReceiptArtifactFormat, LaneBlockExecutionInputArtifact,
-    LaneBlockExecutionPreflightArtifact, MergeLedgerCarrierRecord,
+    LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE, LANE_MERGE_APPLICATION_FRONTIER_FILE,
+    LaneBlockApplicationReceiptArtifact, LaneBlockApplicationReceiptArtifactFormat,
+    LaneBlockExecutionInputArtifact, LaneBlockExecutionPreflightArtifact,
+    LaneMergeApplicationFrontierV1, MAX_PENDING_CERTIFIED_MERGE_ENTRIES, MergeLedgerCarrierRecord,
     NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE, NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE,
     NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE, NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE,
     NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE, RecoveredLaneBlockPayload, Result,
     create_dir_all_with_context, sync_dir,
 };
-#[cfg(test)]
-use super::{PIPELINE_INDEX_ENTRY_SIZE, SidecarIndexEntry, SidecarIndexLayout};
 
 const JOURNAL_VERSION: u8 = 6;
 const MARKER_VERSION: u8 = 3;
@@ -92,7 +91,52 @@ const MAX_GEOMETRY_ARCHIVE_ENTRIES: usize = 4_000_000;
 const MAX_LANE_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_BLOCK_STORE_COMMIT_MARKER_BYTES: u64 = 4 * 1024;
 const MAX_LANE_RETIREMENT_ARTIFACT_FILES: usize = 65_536;
-const MAX_LANE_RETIREMENT_WORK_ITEMS: usize = 65_536;
+const MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR: usize = 65_536;
+const LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE: usize = 5;
+const LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE: usize = 2;
+
+/// Bound the aggregate retirement scan without treating legitimate route
+/// multiplicity as corruption.
+///
+/// Each route can retain five ordinary histories (autonomous payload, input,
+/// preflight, certificate, and application receipt), plus two independently
+/// byte-bounded Native evidence histories. Ordinary histories may also contain
+/// the globally bounded pending-merge depth beyond their terminal frontier.
+/// Native append recovery admits at most one entry beyond its compact window.
+fn lane_retirement_aggregate_work_item_limit(
+    route_count: usize,
+    regular_retention: usize,
+    native_retention: usize,
+    pending_work_allowance: usize,
+) -> Option<usize> {
+    let regular_per_route = regular_retention
+        .checked_add(pending_work_allowance)?
+        .checked_mul(LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE)?;
+    let native_per_route = native_retention
+        .checked_add(1)?
+        .checked_mul(LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE)?;
+    route_count.checked_mul(regular_per_route.checked_add(native_per_route)?)
+}
+
+/// Return whether independently byte-pruned Native manifest and receipt
+/// windows still contain a complete receipt suffix.
+///
+/// Manifests are published before receipts and may be smaller, so the retained
+/// manifest window may legitimately include older history. Every retained
+/// receipt must still have its exact manifest, while a newer or interleaved
+/// manifest without a receipt is repair-pending and must block retirement.
+fn native_amx_retained_windows_are_complete(
+    manifest_heights: &BTreeSet<u64>,
+    receipt_heights: &BTreeSet<u64>,
+) -> bool {
+    let Some(oldest_receipt_height) = receipt_heights.iter().next().copied() else {
+        return manifest_heights.is_empty();
+    };
+    receipt_heights.is_subset(manifest_heights)
+        && manifest_heights
+            .iter()
+            .all(|height| receipt_heights.contains(height) || *height < oldest_receipt_height)
+}
 
 fn canonical_autonomous_lane_view_state_height(name: &str) -> Option<u64> {
     let raw_height = name
@@ -1183,6 +1227,91 @@ fn empty_geometry_merge_digest() -> Hash {
     Hash::prehashed(*hasher.finalize().as_bytes())
 }
 
+fn preflight_empty_lane_artifact_directory(path: &Path) -> Result<()> {
+    let before =
+        fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if before.file_type().is_symlink() || !before.is_dir() {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "journal-owned empty block store has an invalid lane-artifact directory",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    let identity = checked_geometry_file_identity(&before, path)?;
+    let directory = File::open(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let opened = directory
+        .metadata()
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !opened.is_dir() || checked_geometry_file_identity(&opened, path)? != identity {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "journal-owned empty block store lane-artifact directory changed while opening",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+
+    #[cfg(all(unix, not(any(target_os = "espidf", target_os = "redox"))))]
+    {
+        let mut entries = Dir::read_from(&directory)
+            .map_err(std::io::Error::from)
+            .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        for entry in &mut entries {
+            let entry = entry
+                .map_err(std::io::Error::from)
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+            if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
+                return Err(Error::IO(
+                    std::io::Error::new(
+                        ErrorKind::InvalidData,
+                        "journal-owned empty block store has a non-empty lane-artifact directory",
+                    ),
+                    path.to_path_buf(),
+                ));
+            }
+        }
+    }
+    #[cfg(not(all(unix, not(any(target_os = "espidf", target_os = "redox")))))]
+    if fs::read_dir(path)
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        .next()
+        .transpose()
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?
+        .is_some()
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "journal-owned empty block store has a non-empty lane-artifact directory",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+
+    let opened_after = directory
+        .metadata()
+        .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    let after = fs::symlink_metadata(path).map_err(|error| Error::IO(error, path.to_path_buf()))?;
+    if !opened_after.is_dir()
+        || checked_geometry_file_identity(&opened_after, path)? != identity
+        || after.file_type().is_symlink()
+        || !after.is_dir()
+        || checked_geometry_file_identity(&after, path)? != identity
+    {
+        return Err(Error::IO(
+            std::io::Error::new(
+                ErrorKind::InvalidData,
+                "journal-owned empty block store lane-artifact directory changed during preflight",
+            ),
+            path.to_path_buf(),
+        ));
+    }
+    Ok(())
+}
+
 fn preflight_empty_block_store_without_marker(
     blocks_path: &Path,
     expected_marker: Option<&LaneGeometryBinding>,
@@ -1198,15 +1327,6 @@ fn preflight_empty_block_store_without_marker(
         let file_type = entry
             .file_type()
             .map_err(|error| Error::IO(error, path.clone()))?;
-        if file_type.is_symlink() || !file_type.is_file() {
-            return Err(Error::IO(
-                std::io::Error::new(
-                    ErrorKind::InvalidData,
-                    "unbound configured primary block store contains an unsafe entry",
-                ),
-                path,
-            ));
-        }
         let name = entry.file_name();
         let name = name.to_str().ok_or_else(|| {
             Error::IO(
@@ -1217,6 +1337,19 @@ fn preflight_empty_block_store_without_marker(
                 path.clone(),
             )
         })?;
+        if name == LANE_ARTIFACTS_DIR_NAME {
+            preflight_empty_lane_artifact_directory(&path)?;
+            continue;
+        }
+        if file_type.is_symlink() || !file_type.is_file() {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "unbound configured primary block store contains an unsafe entry",
+                ),
+                path,
+            ));
+        }
         match name {
             INDEX_FILE_NAME | DATA_FILE_NAME | HASHES_FILE_NAME => {
                 if entry
@@ -4346,6 +4479,18 @@ impl Kura {
             .iter()
             .map(|(lane_id, entry)| (*lane_id, entry.clone()))
             .collect::<Vec<_>>();
+        let aggregate_work_item_limit = lane_retirement_aggregate_work_item_limit(
+            entries.len(),
+            self.roster_sidecar_retention().get(),
+            self.native_amx_participant_evidence_retention().get(),
+            MAX_PENDING_CERTIFIED_MERGE_ENTRIES,
+        )
+        .ok_or_else(|| {
+            self.geometry_error(
+                ErrorKind::InvalidData,
+                "configured lane retirement work-item bound overflows",
+            )
+        })?;
         let mut autonomous = BTreeMap::new();
         let mut inputs = BTreeMap::new();
         let mut preflights = BTreeMap::new();
@@ -4363,10 +4508,10 @@ impl Kura {
                     "lane retirement work-item count overflows",
                 )
             })?;
-            if *current > MAX_LANE_RETIREMENT_WORK_ITEMS {
+            if *current > aggregate_work_item_limit {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
-                    "lane retirement scan exceeds the maximum durable work-item count",
+                    "lane retirement scan exceeds its route/configuration-derived work-item bound",
                 ));
             }
             Ok(())
@@ -4409,6 +4554,8 @@ impl Kura {
                     &entry,
                     &self.store_root,
                 );
+            let merge_application_frontier =
+                Self::lane_merge_application_frontier_path_for_entry(&entry, &self.store_root);
             let fixed_progress_pairs: [(&Path, &Path, &str); 8] = [
                 (
                     &lane_data,
@@ -4447,6 +4594,33 @@ impl Kura {
                     "lane retirement Native AMX participant receipt",
                 ),
             ];
+            if let Some(frontier) =
+                self.decode_lane_merge_application_frontier(&entry, &merge_application_frontier)?
+            {
+                if self
+                    .lane_merge_application_frontier_expected_receipt(&frontier)
+                    .is_none()
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement merge application frontier has no authenticated carrier",
+                    ));
+                }
+                let frontier_identity = LaneRetirementIdentity {
+                    lane_id: frontier.lane_id,
+                    dataspace_id: frontier.dataspace_id,
+                    lane_incarnation: frontier.lane_incarnation,
+                };
+                if retiring.contains(&frontier_identity)
+                    && !self
+                        .compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?
+                {
+                    return Err(self.geometry_error(
+                        ErrorKind::WouldBlock,
+                        "lane retirement resumed terminal auxiliary cleanup; retry to continue",
+                    ));
+                }
+            }
             let lane_artifacts_guard = self.recover_geometry_progress_pairs_before_snapshot(
                 &lane_artifacts,
                 &fixed_progress_pairs,
@@ -4528,6 +4702,7 @@ impl Kura {
                         | NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE
                         | NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE
                         | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
+                        | LANE_MERGE_APPLICATION_FRONTIER_FILE
                 ) {
                     continue;
                 }
@@ -4574,7 +4749,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement autonomous artifact",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4648,7 +4823,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement execution input",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4693,7 +4868,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement execution preflight",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4738,7 +4913,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement certified lane block",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4791,7 +4966,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement application receipt",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4846,7 +5021,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement Native AMX participant manifest",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4866,7 +5041,15 @@ impl Kura {
                             "lane retirement scan found a malformed Native AMX participant manifest",
                         )
                     })?;
-                if manifest.leaf.dataspace_id != entry.dataspace_id
+                if manifest.leaf.lane_id != entry.lane_id
+                    || manifest.leaf.dataspace_id != entry.dataspace_id
+                    || self
+                        .require_active_lane_incarnation(
+                            &entry,
+                            manifest.leaf.lane_incarnation,
+                            manifest.leaf.application_block_height,
+                        )
+                        .is_err()
                     || native_manifests
                         .insert((storage_lane_id, lane_block_height), manifest)
                         .is_some()
@@ -4905,7 +5088,7 @@ impl Kura {
                     self.bound_indexed_sidecar_payload_heights(
                         bound,
                         "lane retirement Native AMX participant receipt",
-                        MAX_LANE_RETIREMENT_WORK_ITEMS,
+                        MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR,
                     )
                 },
             )?;
@@ -4933,7 +5116,9 @@ impl Kura {
                         "lane retirement Native AMX participant receipt has no manifest proof",
                     ));
                 };
-                if descriptor.dataspace_id != entry.dataspace_id
+                if self
+                    .require_active_lane_artifact(&entry, descriptor)
+                    .is_err()
                     || receipt.manifest_artifact_hash != HashOf::new(manifest)
                     || !Self::native_amx_participant_receipt_matches_manifest_leaf(
                         &receipt,
@@ -4949,10 +5134,13 @@ impl Kura {
                     ));
                 }
             }
-            if native_manifest_heights != native_receipt_heights {
+            if !native_amx_retained_windows_are_complete(
+                &native_manifest_heights,
+                &native_receipt_heights,
+            ) {
                 return Err(self.geometry_error(
                     ErrorKind::InvalidData,
-                    "lane retirement Native AMX manifest/receipt height sets differ",
+                    "lane retirement Native AMX manifest/receipt evidence is not a complete retained suffix",
                 ));
             }
             let latest_native_receipt = self
@@ -4968,8 +5156,15 @@ impl Kura {
                     let receipt = native_receipts
                         .get(&(storage_lane_id, latest_height))
                         .expect("latest scanned Native AMX receipt is retained");
-                    if !latest_native_receipt.is_some_and(|latest| latest.matches_receipt(receipt))
-                    {
+                    if !latest_native_receipt.is_some_and(|latest| {
+                        self.require_active_lane_incarnation(
+                            &entry,
+                            latest.lane_incarnation,
+                            latest.application_block_height,
+                        )
+                        .is_ok()
+                            && latest.matches_receipt(receipt)
+                    }) {
                         return Err(self.geometry_error(
                             ErrorKind::InvalidData,
                             "lane retirement Native AMX latest index does not match the highest receipt",
@@ -5562,14 +5757,15 @@ impl Kura {
                     "lane retirement single-route context carries a native AMX receipt",
                 ));
             }
-            if context.native_amx_receipt.as_ref().is_some_and(|receipt| {
-                receipt.legs.iter().any(|leg| {
-                    retiring.iter().any(|identity| {
-                        identity.lane_id == leg.lane_id && identity.dataspace_id == leg.dataspace_id
-                    })
-                })
-            }) {
-                return Ok(true);
+            if let Some(receipt) = context.native_amx_receipt.as_ref() {
+                if native_amx_receipt_targets_retirement(receipt, retiring).map_err(|_| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "lane retirement hinted native AMX application role is invalid",
+                    )
+                })? {
+                    return Ok(true);
+                }
             }
         }
         Ok(false)
@@ -7834,6 +8030,53 @@ impl Kura {
         );
         let native_receipt_latest =
             lane_artifacts.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE);
+        let merge_application_frontier = lane_artifacts.join(LANE_MERGE_APPLICATION_FRONTIER_FILE);
+        if let Some(bytes) = self.read_regular_sidecar_bytes(
+            &merge_application_frontier,
+            &lane_artifacts,
+            super::LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES,
+        )? {
+            let frontier = norito::decode_from_bytes::<LaneMergeApplicationFrontierV1>(&bytes)
+                .map_err(Error::NoritoFrame)?;
+            if norito::to_bytes(&frontier).map_err(Error::NoritoFrame)? != bytes
+                || frontier.version != LaneMergeApplicationFrontierV1::VERSION
+                || frontier.lane_id != binding.lane_id
+                || frontier.lane_incarnation != binding.incarnation
+            {
+                return Err(self.geometry_error(
+                    ErrorKind::InvalidData,
+                    "retired lane merge application frontier is non-canonical or stale",
+                ));
+            }
+            let expected = self
+                .lane_merge_application_frontier_expected_receipt(&frontier)
+                .ok_or_else(|| {
+                    self.geometry_error(
+                        ErrorKind::InvalidData,
+                        "retired lane merge application frontier has no authenticated carrier",
+                    )
+                })?;
+            let release_receipt_hash = Hash::new_from_chunks(&[
+                MERGE_RELEASE_RECEIPT_DOMAIN,
+                expected.encode_framed()?.as_slice(),
+            ]);
+            if !merge_releases.iter().any(|release| {
+                release.lane_id == frontier.lane_id
+                    && release.dataspace_id == frontier.dataspace_id
+                    && release.lane_incarnation == frontier.lane_incarnation
+                    && release.lane_block_height == frontier.lane_block_height
+                    && release.application_block_height == frontier.application_block_height
+                    && release.application_block_hash == frontier.application_block_hash
+                    && release.merge_entry_hash == frontier.merge_entry_hash
+                    && release.merge_epoch_id == frontier.merge_epoch_id
+                    && release.receipt_hash == release_receipt_hash
+            }) {
+                return Err(self.geometry_error(
+                    ErrorKind::WouldBlock,
+                    "retired lane merge application frontier is not snapshot-proven",
+                ));
+            }
+        }
 
         let mut autonomous_view_states = BTreeSet::new();
         for (raw_name, snapshot) in &artifact_snapshot {
@@ -7893,6 +8136,7 @@ impl Kura {
                     | NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE
                     | NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE
                     | NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE
+                    | LANE_MERGE_APPLICATION_FRONTIER_FILE
             ) {
                 continue;
             }
@@ -8097,10 +8341,13 @@ impl Kura {
                 )
             },
         )?;
-        if native_manifest_heights != native_receipt_heights {
+        if !native_amx_retained_windows_are_complete(
+            &native_manifest_heights,
+            &native_receipt_heights,
+        ) {
             return Err(self.geometry_error(
                 ErrorKind::InvalidData,
-                "retired Native AMX manifest/receipt height sets differ",
+                "retired Native AMX manifest/receipt evidence is not a complete retained suffix",
             ));
         }
         let mut latest_native_receipt = None;
@@ -8930,108 +9177,6 @@ impl Kura {
                 })
     }
 
-    #[cfg(test)]
-    fn geometry_retirement_sidecar_payload_heights(
-        &self,
-        data_path: &Path,
-        index_path: &Path,
-    ) -> Result<BTreeSet<u64>> {
-        self.geometry_indexed_sidecar_payload_heights_bounded(
-            data_path,
-            index_path,
-            MAX_LANE_RETIREMENT_WORK_ITEMS,
-        )
-    }
-
-    #[cfg(test)]
-    fn geometry_indexed_sidecar_payload_heights_bounded(
-        &self,
-        data_path: &Path,
-        index_path: &Path,
-        max_entries: usize,
-    ) -> Result<BTreeSet<u64>> {
-        let data_exists = self.validate_path_kind(data_path, false)?;
-        let index_exists = self.validate_path_kind(index_path, false)?;
-        if !data_exists && !index_exists {
-            return Ok(BTreeSet::new());
-        }
-        if data_exists != index_exists {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retired lane indexed sidecar is only partially present",
-            ));
-        }
-        let data =
-            File::open(data_path).map_err(|error| Error::IO(error, data_path.to_path_buf()))?;
-        self.verify_open_geometry_file(data_path, &data)?;
-        let data_len = data
-            .metadata()
-            .map_err(|error| Error::IO(error, data_path.to_path_buf()))?
-            .len();
-        let mut index =
-            File::open(index_path).map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-        self.verify_open_geometry_file(index_path, &index)?;
-        let index_len = index
-            .metadata()
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
-            .len();
-        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|message| {
-            self.geometry_error_owned(
-                ErrorKind::InvalidData,
-                format!("retired lane sidecar index is malformed: {message}"),
-            )
-        })?;
-        if layout.aligned_len != index_len
-            || usize::try_from(layout.entry_count).unwrap_or(usize::MAX) > max_entries
-        {
-            return Err(self.geometry_error(
-                ErrorKind::InvalidData,
-                "retired lane sidecar index is misaligned or oversized",
-            ));
-        }
-        let mut heights = BTreeSet::new();
-        index
-            .seek(SeekFrom::Start(layout.entries_offset))
-            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for offset in 0..layout.entry_count {
-            index
-                .read_exact(&mut encoded)
-                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
-            let entry = SidecarIndexEntry::from_bytes(encoded);
-            if entry.len == 0 {
-                continue;
-            }
-            let end = entry.offset.checked_add(entry.len).ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "retired lane sidecar payload range overflows",
-                )
-            })?;
-            if end > data_len {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "retired lane sidecar payload points past its data file",
-                ));
-            }
-            let height = layout.base_height.checked_add(offset).ok_or_else(|| {
-                self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "retired lane sidecar height overflows",
-                )
-            })?;
-            if height == 0 || !heights.insert(height) {
-                return Err(self.geometry_error(
-                    ErrorKind::InvalidData,
-                    "retired lane sidecar has a zero or duplicate height",
-                ));
-            }
-        }
-        self.verify_open_geometry_file(index_path, &index)?;
-        self.verify_open_geometry_file(data_path, &data)?;
-        Ok(heights)
-    }
-
     fn regular_geometry_archive_tree_bytes(root: &Path) -> Result<u64> {
         let mut bytes = 0_u64;
         let mut entries_seen = 0_usize;
@@ -9335,6 +9480,7 @@ impl Kura {
         let accounting_mutation = self.begin_total_disk_usage_mutation();
         let mut store = BlockStore::new(&blocks);
         store.create_files_if_they_do_not_exist()?;
+        create_dir_all_with_context(&Self::lane_artifact_dir(&blocks))?;
         self.sync_geometry_path_contents(&blocks, true)?;
         let after = Self::block_store_bytes(&blocks)?;
         self.update_disk_usage_delta(before, after);
@@ -9543,6 +9689,26 @@ impl Kura {
             ));
         }
         Ok(())
+    }
+
+    /// Return the exact active incarnation and activation height under the
+    /// caller-held geometry lock.
+    pub(super) fn active_lane_incarnation_marker(
+        &self,
+        entry: &LaneConfigEntry,
+    ) -> Result<(Hash, u64)> {
+        let path = entry.blocks_dir(&self.store_root).join(MARKER_FILE_NAME);
+        let marker = self.read_lane_marker(&path)?;
+        if marker.version != MARKER_VERSION || marker.lane_id != entry.lane_id {
+            return Err(Error::IO(
+                std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "active lane marker has the wrong route identity",
+                ),
+                path,
+            ));
+        }
+        Ok((marker.incarnation, marker.activation_height))
     }
 
     /// Install the exact active lane marker required by an isolated test fixture.
@@ -12113,6 +12279,23 @@ fn validate_geometry_journal_relative_path(
     Ok(())
 }
 
+fn native_amx_receipt_targets_retirement(
+    receipt: &iroha_data_model::block::consensus::NativeAmxReceipt,
+    retiring: &BTreeSet<LaneRetirementIdentity>,
+) -> std::result::Result<bool, &'static str> {
+    let mut targets_retirement = false;
+    for identity in retiring {
+        targets_retirement |=
+            crate::native_amx::native_amx_receipt_requires_separate_participant_application_for(
+                receipt,
+                identity.lane_id,
+                identity.dataspace_id,
+                identity.lane_incarnation,
+            )?;
+    }
+    Ok(targets_retirement)
+}
+
 fn lane_payload_targets_retirement(
     payload: &crate::lane_consensus::LaneExecutablePayloadV1,
     retiring: &BTreeSet<LaneRetirementIdentity>,
@@ -12125,6 +12308,9 @@ fn lane_payload_targets_retirement(
     }) {
         return true;
     }
+    if payload.routing_plans.len() != payload.native_amx_receipts.len() {
+        return true;
+    }
     payload
         .routing_plans
         .iter()
@@ -12132,21 +12318,25 @@ fn lane_payload_targets_retirement(
         .any(|(plan, receipt)| {
             let (crate::queue::RoutingPlan::NativeAmx(plan), Some(receipt)) = (plan, receipt)
             else {
-                return false;
+                return !matches!(
+                    (plan, receipt),
+                    (crate::queue::RoutingPlan::Single(_), None)
+                );
             };
-            plan.participants
-                .iter()
-                .zip(&receipt.legs)
-                .any(|(planned, leg)| {
-                    planned.route.lane_id == leg.lane_id
-                        && planned.route.dataspace_id == leg.dataspace_id
-                        && retiring.iter().any(|identity| {
-                            identity.lane_id == leg.lane_id
-                                && identity.dataspace_id == leg.dataspace_id
-                                && identity.lane_incarnation
-                                    == leg.prepare_qc.body.participant_lane_incarnation
-                        })
-                })
+            if receipt.plan_digest != plan.plan_digest
+                || receipt.legs.len() != plan.participants.len()
+                || receipt
+                    .legs
+                    .iter()
+                    .zip(&plan.participants)
+                    .any(|(leg, planned)| {
+                        leg.lane_id != planned.route.lane_id
+                            || leg.dataspace_id != planned.route.dataspace_id
+                    })
+            {
+                return true;
+            }
+            native_amx_receipt_targets_retirement(receipt, retiring).unwrap_or(true)
         })
 }
 
@@ -12465,7 +12655,7 @@ mod tests {
             },
         },
     };
-    use iroha_crypto::{Algorithm, KeyPair, Signature, bls_normal_pop_prove};
+    use iroha_crypto::{Algorithm, KeyPair, MerkleTree, Signature, bls_normal_pop_prove};
     use iroha_data_model::{
         ChainId, Level,
         block::{
@@ -12476,7 +12666,13 @@ mod tests {
                 NativeAmxAttestationQcV2, NativeAmxLegRecordV2, NativeAmxPhase, NativeAmxReceipt,
                 SumeragiLanePayloadOwnership,
             },
-            consensus_v2::{ConsensusRound, HeightContext, HeightContextId},
+            consensus_v2::{
+                BlockSubject, ConsensusMode, ConsensusRound, DataAvailabilityLayout, DualQuorum,
+                ExecutionCommitment, GlobalPhase, HeightContext, HeightContextId,
+                NativeAmxApplicationManifestLeafV1, NativeAmxApplicationManifestMemberV1,
+                PROTOCOL_VERSION, PayloadEncoding, QuorumCertificate, ValidatorPower,
+                finality::V2FinalityArtifact,
+            },
         },
         consensus::VALIDATOR_SET_HASH_VERSION_V1,
         isi::Log,
@@ -12496,7 +12692,11 @@ mod tests {
     use super::*;
     use crate::{
         block::BlockBuilder,
-        kura::CertifiedLaneBlockArtifact,
+        kura::{
+            CertifiedLaneBlockArtifact, CommitManifest,
+            NativeAmxParticipantApplicationManifestArtifactV1,
+            NativeAmxParticipantApplicationReceiptArtifact, SidecarIndexOrigin,
+        },
         lane_consensus::{
             CommittedLaneBlockSession, LaneBlockVoteV1, aggregate_lane_block_votes_to_qc,
         },
@@ -12506,6 +12706,74 @@ mod tests {
     // Keep the authenticated archive payload comfortably larger than the checkpoint sidecar.
     // This makes the net disk-reclamation assertion independent of small encoding-size changes.
     const GC_PAYLOAD_LEN: usize = 16 * 1024;
+
+    #[test]
+    fn native_amx_retained_windows_require_a_complete_receipt_suffix() {
+        assert!(native_amx_retained_windows_are_complete(
+            &BTreeSet::from([7, 8, 9, 10]),
+            &BTreeSet::from([9, 10]),
+        ));
+        assert!(!native_amx_retained_windows_are_complete(
+            &BTreeSet::from([7, 9, 10]),
+            &BTreeSet::from([8, 9, 10]),
+        ));
+        assert!(!native_amx_retained_windows_are_complete(
+            &BTreeSet::from([8, 9, 10, 11]),
+            &BTreeSet::from([9, 10]),
+        ));
+        assert!(!native_amx_retained_windows_are_complete(
+            &BTreeSet::from([8]),
+            &BTreeSet::new(),
+        ));
+        assert!(native_amx_retained_windows_are_complete(
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        ));
+    }
+
+    #[test]
+    fn retirement_work_bound_scales_with_routes_and_configured_retention() {
+        for (routes, retention) in [(4_usize, 4_096_usize), (1_024, 512)] {
+            let diagnostic_suffix = routes
+                * retention
+                * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
+                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE);
+            assert!(
+                diagnostic_suffix > 65_536,
+                "fixture must exceed the retired fixed aggregate cap"
+            );
+            let limit = lane_retirement_aggregate_work_item_limit(
+                routes,
+                retention,
+                retention,
+                MAX_PENDING_CERTIFIED_MERGE_ENTRIES,
+            )
+            .expect("valid route/configuration bound");
+            let expected = routes
+                * (LANE_RETIREMENT_REGULAR_SIDECARS_PER_ROUTE
+                    * (retention + MAX_PENDING_CERTIFIED_MERGE_ENTRIES)
+                    + LANE_RETIREMENT_NATIVE_SIDECARS_PER_ROUTE * (retention + 1));
+            assert_eq!(limit, expected);
+            assert!(
+                limit >= diagnostic_suffix,
+                "correctly compacted diagnostic suffix must fit the aggregate scan bound"
+            );
+        }
+        assert!(
+            lane_retirement_aggregate_work_item_limit(
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+                usize::MAX,
+            )
+            .is_none(),
+            "hostile configuration arithmetic must fail closed on overflow"
+        );
+        assert_eq!(
+            MAX_LANE_RETIREMENT_WORK_ITEMS_PER_SIDECAR, 65_536,
+            "aggregate scaling must not weaken the per-sidecar corruption cap"
+        );
+    }
 
     /// Temporary directory whose exposed path uses the same canonical spelling as Kura.
     ///
@@ -13250,6 +13518,17 @@ mod tests {
         view_state: PathBuf,
     }
 
+    struct NativeAmxArchiveFixture {
+        geometry: RetiredGeometryFixture,
+        archived_blocks: PathBuf,
+        binding: LaneGeometryBinding,
+        manifest_data: PathBuf,
+        manifest_index: PathBuf,
+        receipt_data: PathBuf,
+        receipt_index: PathBuf,
+        latest_index: PathBuf,
+    }
+
     fn prepare_retired_geometry_archive(kura: &Kura, root: &Path) -> RetiredGeometryFixture {
         let (initial, extended) = initial_and_extended_configs();
         let (initial_incarnations, initial_activations) = initial_geometry();
@@ -13448,6 +13727,371 @@ mod tests {
             )),
         };
         (kura, fixture)
+    }
+
+    fn native_amx_archive_finality(
+        block: &SignedBlock,
+        execution_commitment: ExecutionCommitment,
+    ) -> V2FinalityArtifact {
+        let mut keypairs = (0_u8..4)
+            .map(|index| {
+                KeyPair::try_from_seed(
+                    vec![0xD0_u8.saturating_add(index); 32],
+                    Algorithm::BlsNormal,
+                )
+                .expect("derive deterministic Native archive finality key")
+            })
+            .collect::<Vec<_>>();
+        keypairs.sort_by(|left, right| {
+            PeerId::new(left.public_key().clone()).cmp(&PeerId::new(right.public_key().clone()))
+        });
+        let roster = keypairs
+            .iter()
+            .map(|keypair| ValidatorPower {
+                validator: PeerId::new(keypair.public_key().clone()),
+                power: 1,
+            })
+            .collect::<Vec<_>>();
+        let height = block.header().height().get();
+        assert_eq!(height, 1, "Native archive fixture uses one global block");
+        let context = HeightContext {
+            chain_id: ChainId::from("native-amx-lane-archive-test"),
+            protocol_version: PROTOCOL_VERSION,
+            height,
+            epoch: 0,
+            epoch_end_height: 100,
+            next_epoch_snapshot: None,
+            mode: ConsensusMode::Permissioned,
+            parent_commit_qc: None,
+            snapshot_bootstrap: None,
+            quorum: DualQuorum::from_roster(&roster).expect("valid Native archive quorum"),
+            roster,
+            nexus_amx_context_hash: Hash::new(b"Native archive AMX context"),
+            da_layout: DataAvailabilityLayout {
+                encoding: PayloadEncoding::Plain,
+                chunk_size_bytes: 1_024,
+                data_shards: 0,
+                parity_shards: 0,
+                max_payload_size_bytes: 4_096,
+                max_chunk_count: 4,
+            },
+            leader_seed: [0x6D; 32],
+        };
+        let subject = BlockSubject {
+            parent_block_hash: block.header().prev_block_hash(),
+            block_hash: block.hash(),
+            payload_hash: block
+                .canonical_proposal_wire_hash()
+                .expect("hash Native archive proposal wire"),
+        };
+        let round = ConsensusRound {
+            context_id: context.id(),
+            height,
+            view: block.header().view_change_index(),
+        };
+        let mut commit_qc = QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: GlobalPhase::Commit,
+            subject,
+            execution_commitment,
+            signers: vec![0, 1, 2],
+            aggregate_signature: vec![1],
+        };
+        let preimage = commit_qc
+            .signer_preimage(&context, 0)
+            .expect("construct Native archive finality signer preimage");
+        let signatures = commit_qc
+            .signers
+            .iter()
+            .map(|index| {
+                Signature::try_new(
+                    keypairs[usize::try_from(*index).expect("fixture signer index")].private_key(),
+                    &preimage,
+                )
+                .expect("sign Native archive finality vote")
+                .payload()
+                .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let signature_refs = signatures.iter().map(Vec::as_slice).collect::<Vec<_>>();
+        commit_qc.aggregate_signature =
+            iroha_crypto::bls_normal_aggregate_signatures(&signature_refs)
+                .expect("aggregate Native archive finality votes");
+        let validator_set_pops = keypairs
+            .iter()
+            .map(|keypair| {
+                bls_normal_pop_prove(keypair.private_key())
+                    .expect("derive Native archive finality PoP")
+            })
+            .collect();
+        let artifact = V2FinalityArtifact::new(context, subject, commit_qc, validator_set_pops);
+        artifact
+            .verify()
+            .expect("Native archive finality fixture is valid");
+        artifact
+    }
+
+    fn prepare_native_amx_archive(root: &Path) -> (Arc<Kura>, NativeAmxArchiveFixture) {
+        let (initial, extended) = retirement_test_configs();
+        let (extended_incarnations, mut extended_activations) = retirement_test_geometry();
+        extended_activations.insert(LaneId::new(1), 0);
+        let initial_incarnations =
+            BTreeMap::from([(LaneId::SINGLE, extended_incarnations[&LaneId::SINGLE])]);
+        let initial_activations =
+            BTreeMap::from([(LaneId::SINGLE, extended_activations[&LaneId::SINGLE])]);
+        let (kura, _, _) = open_published_retirement_kura(
+            root,
+            &initial,
+            &extended,
+            &initial_incarnations,
+            &extended_incarnations,
+            &initial_activations,
+            &extended_activations,
+        );
+        let retiring_lane = LaneId::new(1);
+        let retiring_entry = extended
+            .entry(retiring_lane)
+            .expect("Native archive participant lane")
+            .clone();
+        let retiring_incarnation = extended_incarnations[&retiring_lane];
+
+        let mut proposal = certified_geometry_lane_block(
+            retiring_lane,
+            retiring_entry.dataspace_id,
+            retiring_incarnation,
+            1,
+        )
+        .proposal;
+        proposal.descriptor.proposal_height = 1;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        crate::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("valid Native archive participant proposal");
+
+        let block: SignedBlock = BlockBuilder::new(Vec::<AcceptedTransaction<'static>>::new())
+            .chain(0, None)
+            .sign(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key())
+            .unpack(|_| {})
+            .into();
+        let block = Arc::new(block);
+        kura.store_block(Arc::clone(&block))
+            .expect("persist Native archive application block");
+
+        let source_id = [0xA7; Hash::LENGTH];
+        let result = TransactionResult(TransactionResultInner::Ok(DataTriggerSequence::new()));
+        let entrypoint_hash = HashOf::<TransactionEntrypoint>::from_untyped_unchecked(
+            proposal.descriptor.accepted_transaction_hashes[0],
+        );
+        let settlement = LaneBlockCommitment {
+            block_height: proposal.descriptor.lane_block_height,
+            lane_id: proposal.descriptor.lane_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            tx_count: 1,
+            total_local_amount: "0".parse().expect("zero quantity"),
+            total_xor_due: "0".parse().expect("zero quantity"),
+            total_xor_after_haircut: "0".parse().expect("zero quantity"),
+            total_xor_variance: "0".parse().expect("zero quantity"),
+            swap_metadata: None,
+            receipts: vec![iroha_data_model::block::consensus::LaneSettlementReceipt {
+                source_id,
+                local_amount: "0".parse().expect("zero quantity"),
+                xor_due: "0".parse().expect("zero quantity"),
+                xor_after_haircut: "0".parse().expect("zero quantity"),
+                xor_variance: "0".parse().expect("zero quantity"),
+                timestamp_ms: 1,
+            }],
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let settlement_hash = iroha_data_model::nexus::compute_settlement_hash(&settlement)
+            .expect("hash Native archive settlement");
+        let executed_block_wire_hash = block
+            .executed_block_wire_hash()
+            .expect("hash Native archive executed block wire");
+        let leaf = NativeAmxApplicationManifestLeafV1 {
+            version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: proposal.descriptor.lane_id,
+            dataspace_id: proposal.descriptor.dataspace_id,
+            lane_incarnation: proposal.descriptor.lane_incarnation,
+            participant_height: proposal.descriptor.lane_block_height,
+            participant_view: proposal.descriptor.lane_block_view,
+            predecessor_height: proposal.descriptor.previous_lane_block_height,
+            predecessor_descriptor_hash: proposal.descriptor.previous_lane_block_descriptor_hash,
+            descriptor_hash: proposal.descriptor.descriptor_hash,
+            proposal_hash: proposal.proposal_hash,
+            settlement_hash,
+            members: vec![NativeAmxApplicationManifestMemberV1 {
+                entrypoint_index: proposal.descriptor.accepted_candidate_indices[0],
+                source_id,
+                entrypoint_hash,
+                result_hash: result.hash(),
+            }],
+            application_block_height: 1,
+            application_block_hash: block.hash(),
+            executed_block_wire_hash,
+        };
+        leaf.validate()
+            .expect("valid Native archive application manifest leaf");
+        let tree = [HashOf::new(&leaf)].into_iter().collect::<MerkleTree<_>>();
+        let manifest_root = tree
+            .root()
+            .map(Hash::from)
+            .expect("one-leaf Native archive manifest root");
+        let execution_commitment = ExecutionCommitment::new_with_native_amx_application_manifest(
+            Hash::new(b"Native archive parent state"),
+            Hash::new(b"Native archive post state"),
+            Hash::new(b"Native archive ordinary writes"),
+            None,
+            0,
+            iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            manifest_root,
+            1,
+            executed_block_wire_hash,
+        )
+        .expect("valid Native archive execution commitment");
+        let finality = native_amx_archive_finality(block.as_ref(), execution_commitment);
+        let _ = kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist Native archive finality");
+        let checkpoint_hash = Hash::new(b"Native archive WSV checkpoint");
+        kura.store_wsv_checkpoint(1, block.hash(), checkpoint_hash)
+            .expect("persist Native archive WSV checkpoint");
+        kura.store_commit_manifest(
+            CommitManifest::new(1, block.hash(), None, None, checkpoint_hash, None)
+                .with_authenticated_v2_commit_authority(&finality),
+        )
+        .expect("persist Native archive commit manifest");
+
+        let finality_artifact_hash = HashOf::new(&finality);
+        let manifest = NativeAmxParticipantApplicationManifestArtifactV1 {
+            version: NativeAmxParticipantApplicationManifestArtifactV1::VERSION,
+            leaf,
+            leaf_index: 0,
+            proof: tree.get_proof(0).expect("one-leaf Native archive proof"),
+            manifest_root,
+            manifest_leaf_count: 1,
+            finality_artifact_hash,
+        };
+        Kura::validate_native_amx_participant_application_manifest_artifact(&manifest)
+            .expect("validate Native archive manifest artifact");
+        let receipt = NativeAmxParticipantApplicationReceiptArtifact {
+            version: NativeAmxParticipantApplicationReceiptArtifact::VERSION,
+            participant_proposal: proposal,
+            participant_settlement: settlement,
+            participant_settlement_hash: settlement_hash,
+            application_block_height: 1,
+            application_block_hash: block.hash(),
+            executed_block_wire_hash,
+            finality_artifact_hash,
+            manifest_artifact_hash: HashOf::new(&manifest),
+            source_ids: vec![source_id],
+            entrypoint_indices: vec![0],
+            entrypoint_hashes: vec![entrypoint_hash],
+            result_hashes: vec![result.hash()],
+            results: vec![result],
+        };
+        Kura::validate_native_amx_participant_application_receipt_artifact(&receipt)
+            .expect("validate Native archive receipt artifact");
+
+        let (manifest_data, manifest_index) =
+            Kura::native_amx_application_manifest_paths_for_entry(&retiring_entry, root);
+        assert!(Kura::append_indexed_sidecar(
+            &manifest_data,
+            &manifest_index,
+            1,
+            &manifest
+                .encode_framed()
+                .expect("encode Native archive manifest"),
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            FsyncMode::Always,
+            Some(kura.native_amx_participant_evidence_retention()),
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        let (receipt_data, receipt_index) =
+            Kura::native_amx_participant_receipt_paths_for_entry(&retiring_entry, root);
+        assert!(Kura::append_indexed_sidecar(
+            &receipt_data,
+            &receipt_index,
+            1,
+            &receipt
+                .encode_framed()
+                .expect("encode Native archive receipt"),
+            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            FsyncMode::Always,
+            Some(kura.native_amx_participant_evidence_retention()),
+            SidecarIndexOrigin::FirstWrite,
+        ));
+        assert_eq!(
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("publish Native archive latest index"),
+            1
+        );
+        assert!(
+            kura.native_amx_participant_application_drain_evidence(&receipt)
+                .is_some(),
+            "complete Native archive fixture must revalidate as drain evidence"
+        );
+
+        kura.apply_lane_geometry_transition(
+            &extended,
+            &initial,
+            &extended_incarnations,
+            &initial_incarnations,
+            &extended_activations,
+            &initial_activations,
+            &BTreeSet::new(),
+        )
+        .expect("archive durably applied Native participant evidence");
+        kura.mark_lane_geometry_catalog_published(
+            &initial,
+            &initial_incarnations,
+            &initial_activations,
+            None,
+        )
+        .expect("publish Native participant retirement");
+        let journal = kura
+            .read_lane_geometry_journal()
+            .expect("Native archive geometry journal");
+        let retirement_transition = journal.records.last().expect("retirement transition");
+        let archive_root = root
+            .join("retired/lane_geometry")
+            .join(hex::encode(retirement_transition.transition_id.as_ref()));
+        let binding = retirement_transition
+            .operations
+            .iter()
+            .find_map(|operation| {
+                (operation.lane_id == retiring_lane)
+                    .then_some(operation.previous.as_ref())
+                    .flatten()
+            })
+            .expect("retired Native participant binding")
+            .clone();
+        let archived_blocks = archive_root.join("lane_0000000001/previous_blocks");
+        let lane_artifacts = archived_blocks.join(LANE_ARTIFACTS_DIR_NAME);
+        (
+            kura,
+            NativeAmxArchiveFixture {
+                geometry: RetiredGeometryFixture {
+                    initial,
+                    extended,
+                    initial_incarnations,
+                    initial_activations,
+                    extended_incarnations,
+                    extended_activations,
+                    archive_root,
+                },
+                archived_blocks,
+                binding,
+                manifest_data: lane_artifacts.join(NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE),
+                manifest_index: lane_artifacts.join(NATIVE_AMX_APPLICATION_MANIFESTS_INDEX_FILE),
+                receipt_data: lane_artifacts.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE),
+                receipt_index: lane_artifacts.join(NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE),
+                latest_index: lane_artifacts
+                    .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_FILE),
+            },
+        )
     }
 
     fn durable_geometry_snapshot_identity(kura: &Kura, height: u64) -> (HashOf<BlockHeader>, Hash) {
@@ -13948,9 +14592,12 @@ mod tests {
             coordinator_lane_block_view: descriptor.lane_block_view,
             coordinator_proposal_hash: coordinator_proposal.proposal_hash,
         };
-        prepare_body.participant_settlement_commitment =
-            prepare_body.computed_participant_settlement_commitment();
-        let participant_settlement = prepare_body.computed_participant_settlement();
+        prepare_body.participant_settlement_commitment = prepare_body
+            .computed_grouped_participant_settlement_commitment(&[prepare_body.source_id])
+            .expect("single-source test fixture settlement is valid");
+        let participant_settlement = prepare_body
+            .computed_grouped_participant_settlement(&[prepare_body.source_id])
+            .expect("single-source test fixture settlement is valid");
         let participant_settlement_hash =
             iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
                 .expect("geometry participant settlement hashes");
@@ -14097,6 +14744,67 @@ mod tests {
         )
         .expect("geometry autonomous retirement payload");
         (chain_id_hash, epoch, payload)
+    }
+
+    #[test]
+    fn native_amx_retirement_targets_exact_participant_incarnation_and_fails_closed() {
+        let producer = crate::kura::checked_keypair_with_algorithm(Algorithm::BlsNormal);
+        let coordinator_incarnation = Hash::new(b"retirement-classifier-coordinator");
+        let participant_lane_id = LaneId::new(7);
+        let participant_dataspace_id = DataSpaceId::new(9);
+        let participant_incarnation = Hash::new(b"retirement-classifier-participant-a");
+        let recreated_incarnation = Hash::new(b"retirement-classifier-participant-b");
+        let (_, _, payload) = autonomous_retirement_payload(
+            coordinator_incarnation,
+            participant_lane_id,
+            participant_dataspace_id,
+            participant_incarnation,
+            &producer,
+        );
+        let receipt = payload.native_amx_receipts[0]
+            .as_ref()
+            .expect("native AMX retirement receipt");
+        let exact = BTreeSet::from([LaneRetirementIdentity {
+            lane_id: participant_lane_id,
+            dataspace_id: participant_dataspace_id,
+            lane_incarnation: participant_incarnation,
+        }]);
+        let recreated = BTreeSet::from([LaneRetirementIdentity {
+            lane_id: participant_lane_id,
+            dataspace_id: participant_dataspace_id,
+            lane_incarnation: recreated_incarnation,
+        }]);
+        assert_eq!(
+            native_amx_receipt_targets_retirement(receipt, &exact),
+            Ok(true)
+        );
+        assert_eq!(
+            native_amx_receipt_targets_retirement(receipt, &recreated),
+            Ok(false),
+            "incarnation-A evidence must not ABA-block incarnation B"
+        );
+        assert!(lane_payload_targets_retirement(&payload, &exact));
+        assert!(!lane_payload_targets_retirement(&payload, &recreated));
+
+        let mut malformed = payload.clone();
+        malformed.native_amx_receipts[0]
+            .as_mut()
+            .expect("native AMX retirement receipt")
+            .legs[0]
+            .prepare_qc
+            .body
+            .participant_lane_incarnation = Hash::new(b"malformed retirement participant");
+        assert!(
+            lane_payload_targets_retirement(&malformed, &recreated),
+            "internally inconsistent participant evidence must fail closed"
+        );
+
+        let mut misaligned = payload;
+        misaligned.native_amx_receipts.clear();
+        assert!(
+            lane_payload_targets_retirement(&misaligned, &recreated),
+            "routing/receipt vector misalignment must fail closed"
+        );
     }
 
     #[test]
@@ -15583,6 +16291,56 @@ mod tests {
         .expect("same-authority replay resumes its pre-rename seal");
         kura.require_complete_geometry_binding_at(updated, &live_blocks, &live_merge)
             .expect("created lane is live after same-authority replay");
+        let live_lane_artifacts = live_blocks.join(LANE_ARTIFACTS_DIR_NAME);
+        let lane_artifacts_metadata = fs::symlink_metadata(&live_lane_artifacts)
+            .expect("created lane artifact directory metadata");
+        assert!(
+            lane_artifacts_metadata.is_dir() && !lane_artifacts_metadata.file_type().is_symlink(),
+            "lane creation must publish a direct lane-artifact directory before activation"
+        );
+        assert!(
+            fs::read_dir(&live_lane_artifacts)
+                .expect("read created lane artifact directory")
+                .next()
+                .is_none(),
+            "a newly activated lane must start with an empty artifact namespace"
+        );
+        let unexpected_artifact = live_lane_artifacts.join("unexpected.norito");
+        fs::write(&unexpected_artifact, b"foreign").expect("inject foreign lane artifact");
+        let error = preflight_empty_block_store_without_marker(&live_blocks, Some(updated), true)
+            .expect_err("unexpected lane-artifact contents must fail empty-image preflight");
+        assert_geometry_io_error(
+            &error,
+            ErrorKind::InvalidData,
+            "journal-owned empty block store has a non-empty lane-artifact directory",
+        );
+        fs::remove_file(unexpected_artifact).expect("restore empty lane artifact directory");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+
+            let displaced = root.join("displaced-direct-lane-artifacts");
+            let outside = root.join("outside-lane-artifacts");
+            fs::create_dir(&outside).expect("create outside lane artifact directory");
+            fs::rename(&live_lane_artifacts, &displaced)
+                .expect("displace direct lane artifact directory");
+            symlink(&outside, &live_lane_artifacts).expect("inject lane artifact symlink");
+            let error =
+                preflight_empty_block_store_without_marker(&live_blocks, Some(updated), true)
+                    .expect_err(
+                        "symlinked lane-artifact namespace must fail empty-image preflight",
+                    );
+            assert_geometry_io_error(
+                &error,
+                ErrorKind::InvalidData,
+                "journal-owned empty block store has an invalid lane-artifact directory",
+            );
+            fs::remove_file(&live_lane_artifacts).expect("remove lane artifact symlink");
+            fs::rename(displaced, &live_lane_artifacts)
+                .expect("restore direct lane artifact directory");
+            fs::remove_dir(outside).expect("remove outside lane artifact directory");
+        }
         assert_eq!(
             kura.read_lane_geometry_journal().expect("journal").records[0].phase,
             LaneGeometryPhase::CatalogPublished
@@ -18937,6 +19695,180 @@ mod tests {
             .resume_proven_lane_geometry_archive_gc()
             .expect("resume proven GC after repair");
         assert_eq!(resumed.removed_archive_roots, 1);
+    }
+
+    #[test]
+    fn native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling() {
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let (kura, fixture) = prepare_native_amx_archive(&root);
+        let sibling = root.join("operator-sibling.keep");
+        fs::write(&sibling, b"retain across Native archive GC").expect("seed non-archive sibling");
+
+        let native_paths = [
+            &fixture.manifest_data,
+            &fixture.manifest_index,
+            &fixture.receipt_data,
+            &fixture.receipt_index,
+            &fixture.latest_index,
+        ];
+        for path in native_paths {
+            assert!(
+                path.is_file(),
+                "recognized Native archive evidence is retained: {}",
+                path.display()
+            );
+        }
+        kura.ensure_archived_lane_work_released_for_test(
+            &fixture.archived_blocks,
+            &fixture.binding,
+            &[],
+        )
+        .expect("exact Native manifest, receipt, and latest index are terminal");
+
+        let recognized_bytes = native_paths
+            .into_iter()
+            .map(|path| {
+                fs::metadata(path)
+                    .expect("Native archive artifact metadata")
+                    .len()
+            })
+            .sum::<u64>();
+        let archived_bytes = Kura::regular_geometry_archive_tree_bytes(&fixture.archived_blocks)
+            .expect("account authenticated Native archive bytes");
+        assert!(
+            archived_bytes >= recognized_bytes && recognized_bytes > 0,
+            "archive accounting must include Native manifest, receipt, and latest-index bytes"
+        );
+
+        durable_geometry_snapshot_identity(&kura, 20);
+        kura.refresh_disk_usage_bytes()
+            .expect("refresh usage with Native evidence archive");
+        let usage_before = kura
+            .kura_disk_usage_bytes()
+            .expect("exact usage before Native archive GC");
+        kura.fail_next_lane_geometry_gc_at_stage_for_test(GC_FAIL_AFTER_COMPACTION_INTENT);
+        checkpoint_retired_geometry(&kura, &fixture.geometry, 20)
+            .expect_err("leave the Native archive under a durable snapshot-proven GC intent");
+        assert!(
+            fixture.geometry.archive_root.exists(),
+            "the injected boundary must preserve Native evidence for purge replay"
+        );
+        assert!(
+            kura.purge_retired_segments()
+                .expect("budget purge revalidates exact Native archive evidence"),
+            "budget purge must resume the snapshot-proven Native archive deletion"
+        );
+        assert!(!fixture.geometry.archive_root.exists());
+        let usage_after = kura
+            .kura_disk_usage_bytes()
+            .expect("exact usage after Native archive GC");
+        assert!(
+            usage_after < usage_before,
+            "removing the Native evidence archive must reduce accounted disk usage"
+        );
+        assert_eq!(
+            kura.disk_usage.load(std::sync::atomic::Ordering::Relaxed),
+            usage_after,
+            "Native archive GC must publish exact post-removal disk accounting"
+        );
+        assert_eq!(
+            fs::read(&sibling).expect("non-archive sibling retained"),
+            b"retain across Native archive GC",
+            "authenticated Native archive purge must remain path-scoped"
+        );
+    }
+
+    #[test]
+    fn native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence() {
+        for corruption in ["malformed", "truncated", "oversized"] {
+            let temp = TempDir::new().expect("temporary directory");
+            let root = temp.path().join(corruption);
+            let (kura, fixture) = prepare_native_amx_archive(&root);
+            let sibling = root.join("operator-sibling.keep");
+            fs::write(&sibling, b"retain while Native evidence is repaired")
+                .expect("seed non-archive sibling");
+            match corruption {
+                "malformed" => {
+                    fs::write(&fixture.latest_index, b"malformed Native latest index")
+                        .expect("corrupt Native latest index");
+                }
+                "truncated" => {
+                    let mut bytes =
+                        fs::read(&fixture.receipt_index).expect("read Native receipt index");
+                    assert!(bytes.pop().is_some(), "receipt index fixture is non-empty");
+                    fs::write(&fixture.receipt_index, bytes)
+                        .expect("truncate Native receipt index");
+                }
+                "oversized" => {
+                    let file = OpenOptions::new()
+                        .write(true)
+                        .truncate(true)
+                        .open(&fixture.latest_index)
+                        .expect("open Native latest index for oversize corruption");
+                    file.set_len(
+                        u64::try_from(
+                            crate::kura::NATIVE_AMX_PARTICIPANT_RECEIPTS_LATEST_INDEX_MAX_BYTES
+                                .saturating_add(1),
+                        )
+                        .expect("Native latest-index limit fits u64"),
+                    )
+                    .expect("extend Native latest index beyond its hard limit");
+                }
+                _ => unreachable!("enumerated corruption"),
+            }
+
+            let result = kura.ensure_archived_lane_work_released_for_test(
+                &fixture.archived_blocks,
+                &fixture.binding,
+                &[],
+            );
+            assert!(
+                result.is_err(),
+                "{corruption} Native evidence must fail archive validation"
+            );
+            assert!(
+                fixture.geometry.archive_root.exists(),
+                "{corruption} Native evidence must pin the archive for repair"
+            );
+            assert_eq!(
+                fs::read(&sibling).expect("non-archive sibling retained"),
+                b"retain while Native evidence is repaired",
+                "failed Native validation must not mutate a sibling"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn native_amx_archive_gc_rejects_symlinked_evidence_without_following_it() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new().expect("temporary directory");
+        let root = temp.path().join("kura");
+        let outside = temp.path().join("operator-owned-native-manifest");
+        fs::write(&outside, b"operator-owned").expect("outside Native sentinel");
+        let (kura, fixture) = prepare_native_amx_archive(&root);
+        fs::remove_file(&fixture.manifest_data).expect("remove canonical Native manifest data");
+        symlink(&outside, &fixture.manifest_data).expect("install Native manifest symlink");
+
+        kura.ensure_archived_lane_work_released_for_test(
+            &fixture.archived_blocks,
+            &fixture.binding,
+            &[],
+        )
+        .expect_err("a symlinked Native manifest must fail closed");
+        assert_eq!(
+            fs::read(&outside).expect("outside Native sentinel retained"),
+            b"operator-owned"
+        );
+        assert!(
+            fs::symlink_metadata(&fixture.manifest_data)
+                .expect("Native manifest symlink remains for operator repair")
+                .file_type()
+                .is_symlink()
+        );
+        assert!(fixture.geometry.archive_root.exists());
     }
 
     #[test]

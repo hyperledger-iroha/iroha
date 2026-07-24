@@ -11,7 +11,15 @@ use super::{Coeff, ExtendedLagrangeCoeff, LagrangeCoeff, Polynomial, Rotation};
 
 use group::ff::{BatchInvert, Field, WithSmallOrderMulGroup};
 
-use std::{collections::HashMap, marker::PhantomData};
+use std::{marker::PhantomData, sync::OnceLock};
+
+#[derive(Clone, Debug)]
+struct FftDataSlot<F: Field> {
+    len: usize,
+    omega: F,
+    omega_inv: F,
+    data: OnceLock<FFTData<F>>,
+}
 
 /// This structure contains precomputed constants and other details needed for
 /// performing operations on an evaluation domain of size $2^k$ and an extended
@@ -33,8 +41,10 @@ pub struct EvaluationDomain<F: Field> {
     t_evaluations: Vec<F>,
     barycentric_weight: F,
 
-    // Recursive stuff
-    fft_data: HashMap<usize, FFTData<F>>,
+    // Recursive FFT tables. The base-domain table is used by the prover and is
+    // built eagerly; larger tables are initialized only by transforms that
+    // actually use the corresponding recursive FFT.
+    fft_data: Vec<FftDataSlot<F>>,
 }
 
 impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
@@ -136,11 +146,24 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
 
         let omega_inv = omegas_inv[0];
         let extended_omega_inv = *omegas_inv.last().unwrap();
-        let mut fft_data = HashMap::new();
+        let mut fft_data = Vec::with_capacity(omegas.len());
         for (i, (omega, omega_inv)) in omegas.into_iter().zip(omegas_inv).enumerate() {
             let intermediate_k = k as usize + i;
             let len = 1usize << intermediate_k;
-            fft_data.insert(len, FFTData::<F>::new(len, omega, omega_inv));
+            let data = OnceLock::new();
+            if i == 0 {
+                assert!(
+                    data.set(FFTData::<F>::new(len, omega, omega_inv))
+                        .is_ok(),
+                    "base-domain FFT data is initialized exactly once"
+                );
+            }
+            fft_data.push(FftDataSlot {
+                len,
+                omega,
+                omega_inv,
+                data,
+            });
         }
 
         EvaluationDomain {
@@ -608,8 +631,11 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
     }
 
     fn ifft(&self, a: &mut Vec<F>, omega_inv: F, log_n: u32, divisor: F) {
-        let fft_data = self.get_fft_data(a.len());
-        crate::fft::parallel::fft(a, omega_inv, log_n, fft_data, true);
+        // This backend computes its own twiddles and intentionally ignores
+        // FFTData. Passing an empty value avoids materializing a large recursive
+        // table for inverse-only extended-domain transforms.
+        let unused_fft_data = FFTData::default();
+        crate::fft::parallel::fft(a, omega_inv, log_n, &unused_fft_data, true);
         // self.fft_inner(a, omega_inv, log_n, true);
         parallelize(a, |a, _| {
             for a in a {
@@ -746,9 +772,15 @@ impl<F: WithSmallOrderMulGroup<3>> EvaluationDomain<F> {
 
     /// Get the private `fft_data`
     pub fn get_fft_data(&self, l: usize) -> &FFTData<F> {
-        self.fft_data
-            .get(&l)
-            .expect("log_2(l) must be in k..=extended_k")
+        let slot = l
+            .is_power_of_two()
+            .then(|| l.ilog2())
+            .and_then(|log_l| log_l.checked_sub(self.k))
+            .and_then(|offset| self.fft_data.get(offset as usize))
+            .filter(|slot| slot.len == l)
+            .expect("log_2(l) must be in k..=extended_k");
+        slot.data
+            .get_or_init(|| FFTData::<F>::new(slot.len, slot.omega, slot.omega_inv))
     }
 }
 
@@ -819,6 +851,80 @@ fn extended_to_coeff_retains_extended_length() {
     assert!(
         quotient_len < coeffs.len(),
         "expected extended domain to exceed quotient length"
+    );
+}
+
+#[test]
+fn evaluation_domain_eagerly_initializes_only_base_fft_data() {
+    use halo2curves::pasta::pallas::Scalar;
+
+    let domain = EvaluationDomain::<Scalar>::new(4, 3);
+
+    assert_eq!(
+        domain
+            .fft_data
+            .iter()
+            .map(|slot| (slot.len, slot.data.get().is_some()))
+            .collect::<Vec<_>>(),
+        vec![(8, true), (16, false), (32, false)]
+    );
+}
+
+#[test]
+fn extended_inverse_transform_does_not_initialize_recursive_fft_data() {
+    use halo2curves::pasta::pallas::Scalar;
+
+    let domain = EvaluationDomain::<Scalar>::new(4, 3);
+    let coefficients = domain.extended_to_coeff(domain.empty_extended());
+
+    assert_eq!(coefficients, vec![Scalar::ZERO; 32]);
+    assert_eq!(
+        domain
+            .fft_data
+            .iter()
+            .map(|slot| slot.data.get().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, false, false]
+    );
+}
+
+#[test]
+fn extended_forward_transform_initializes_only_requested_fft_data() {
+    use halo2curves::pasta::pallas::Scalar;
+
+    let domain = EvaluationDomain::<Scalar>::new(4, 3);
+    let polynomial =
+        domain.coeff_from_vec((0_u64..8).map(Scalar::from).collect::<Vec<Scalar>>());
+
+    let extended = domain.coeff_to_extended(&polynomial);
+    let parts = domain.coeff_to_extended_parts(&polynomial);
+    let extended_from_parts = domain.lagrange_vec_to_extended(parts);
+
+    assert_eq!(extended.values, extended_from_parts.values);
+    assert_eq!(
+        domain
+            .fft_data
+            .iter()
+            .map(|slot| slot.data.get().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+}
+
+#[test]
+fn intermediate_fft_data_is_initialized_on_explicit_request() {
+    use halo2curves::pasta::pallas::Scalar;
+
+    let domain = EvaluationDomain::<Scalar>::new(4, 3);
+
+    assert_eq!(domain.get_fft_data(16).get_n(), 16);
+    assert_eq!(
+        domain
+            .fft_data
+            .iter()
+            .map(|slot| slot.data.get().is_some())
+            .collect::<Vec<_>>(),
+        vec![true, true, false]
     );
 }
 

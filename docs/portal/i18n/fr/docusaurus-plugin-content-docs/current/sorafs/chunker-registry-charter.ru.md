@@ -61,7 +61,7 @@ SDK). En fixant l'alias et la poignée de l'investisseur, vérifiez
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Ouvrir les relations publiques, les calendriers, les avant-premières, la recherche de détails et
@@ -97,14 +97,14 @@ SDK). En fixant l'alias et la poignée de l'investisseur, vérifiez
 
 ## Organisation de l'outillage
 
-- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` pré-installés :
+- `sorafs_manifest_chunk_store` et `sorafs_manifest_builder` pré-installés :
   - `--list-profiles` pour l'inspection du restaurant.
   - `--promote-profile=<handle>` pour la génération de blocs canoniques,
     utilisé pour le profil du producteur.
   - `--json-out=-` pour les sorties de courant sur la sortie standard, en fonction de la consommation d'eau
     logi ревью.
 - `ensure_charter_compliance()` s'applique aux connecteurs binaires pertinents
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests должны падать, если
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI tests должны падать, если
   новые записи нарушают хартию.## Documentation
 
 - Prenez toutes les mesures de détection dans `docs/source/sorafs/reports/`.

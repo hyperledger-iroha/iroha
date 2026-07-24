@@ -806,6 +806,8 @@ const LANE_BLOCK_EXECUTION_PREFLIGHTS_DATA_FILE: &str = "execution_preflights.no
 const LANE_BLOCK_EXECUTION_PREFLIGHTS_INDEX_FILE: &str = "execution_preflights.index";
 const LANE_BLOCK_APPLICATION_RECEIPTS_DATA_FILE: &str = "application_receipts.norito";
 const LANE_BLOCK_APPLICATION_RECEIPTS_INDEX_FILE: &str = "application_receipts.index";
+const LANE_MERGE_APPLICATION_FRONTIER_FILE: &str = "merge_application_frontier_v1.norito";
+const LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES: usize = 8 * 1024;
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE: &str = "native_amx_participant_receipts.norito";
 const NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE: &str = "native_amx_participant_receipts.index";
 const NATIVE_AMX_APPLICATION_MANIFESTS_DATA_FILE: &str = "native_amx_application_manifests.norito";
@@ -849,6 +851,25 @@ const PENDING_MERGE_ENTRIES_DIR: &str = "pending_merge_entries";
 const MAX_PENDING_CERTIFIED_MERGE_ENTRIES: usize = 1_024;
 /// Aggregate bound for uncommitted certified merge sidecars.
 const MAX_PENDING_CERTIFIED_MERGE_BYTES: usize = 256 * 1024 * 1024;
+/// Aggregate payload-byte bound for one retained Native AMX manifest or
+/// receipt sidecar file.
+///
+/// Reuse the existing bounded-sidecar budget instead of multiplying the
+/// default 512-entry retention by the 256 MiB canonical block ceiling (which
+/// would admit a 128 GiB sparse file at startup). Window compaction always
+/// retains the newest payload, so the current WSV/drain frontier remains
+/// revalidatable even when unusually large receipts reduce historical depth.
+const MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES: u64 =
+    MAX_PENDING_CERTIFIED_MERGE_BYTES as u64;
+/// Startup allowance for one fsynced Native evidence append whose window
+/// compaction did not finish before a crash.
+///
+/// The stable retained file remains capped by
+/// [`MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES`]. The generic append
+/// protocol durably extends data before publishing/compacting the index, so
+/// recovery must admit at most one additional individually bounded payload.
+const MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES: u64 =
+    MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES + STRICT_INIT_MAX_BLOCK_BYTES;
 const MERGE_CARRIERS_DIR: &str = "merge_carriers";
 const MERGE_CARRIER_MAX_BYTES: usize = 4 * 1024;
 const PRUNE_INTENT_FILE_NAME: &str = "prune_intent.norito";
@@ -2274,6 +2295,10 @@ impl MergeLedgerLog {
         self.entries.clone()
     }
 
+    fn latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
+        self.entries.iter().rev().take(limit).cloned().collect()
+    }
+
     fn contains_hash(&mut self, hash: HashOf<MergeLedgerEntry>) -> bool {
         #[cfg(test)]
         {
@@ -2305,6 +2330,25 @@ impl MergeLedgerLog {
     #[cfg(test)]
     fn latest_execution_heights(&self) -> BTreeMap<(LaneId, DataSpaceId, Hash), u64> {
         self.latest_execution_heights.clone()
+    }
+
+    fn latest_execution_height(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> Option<u64> {
+        self.latest_execution_heights
+            .get(&(lane_id, dataspace_id, lane_incarnation))
+            .copied()
+    }
+
+    fn has_execution_for_route(&self, lane_id: LaneId, dataspace_id: DataSpaceId) -> bool {
+        self.latest_execution_heights
+            .keys()
+            .any(|(candidate_lane, candidate_dataspace, _)| {
+                *candidate_lane == lane_id && *candidate_dataspace == dataspace_id
+            })
     }
 
     fn entry_by_hash(
@@ -2419,6 +2463,29 @@ impl MergeLedgerLog {
             .collect::<Vec<_>>();
         self.entries.reverse();
         Ok(entries)
+    }
+
+    fn validate_indexed_file_length(&mut self) -> Result<()> {
+        self.recover_failed_append_tail()?;
+        let Some(file) = self.file.as_mut() else {
+            return Ok(());
+        };
+        let indexed_len = self
+            .frames_by_epoch
+            .last_key_value()
+            .map_or(0, |(_, frame)| {
+                frame
+                    .frame_offset
+                    .saturating_add(4)
+                    .saturating_add(u64::from(frame.payload_len))
+            });
+        let actual_len = file.try_io(|inner| inner.metadata().map(|metadata| metadata.len()))?;
+        if actual_len != indexed_len {
+            return Err(Error::MergeCarrierConflict(format!(
+                "merge ledger length changed after index construction: indexed {indexed_len}, actual {actual_len}"
+            )));
+        }
+        Ok(())
     }
 
     fn load_entries(
@@ -4082,6 +4149,7 @@ impl Kura {
             if block_count > 0 {
                 let _ = kura.commit_manifest(block_count as u64)?;
             }
+            kura.repair_lane_merge_application_frontiers_on_startup()?;
             kura.rebuild_autonomous_lane_route_latest_attempt_indexes_on_startup()?;
             kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()?;
         }
@@ -5661,6 +5729,16 @@ impl Kura {
     /// Retention window for roster sidecars stored alongside blocks.
     #[must_use]
     pub fn roster_sidecar_retention(&self) -> NonZeroUsize {
+        self.roster_sidecar_retention
+    }
+
+    /// Shared bounded-history budget for durable per-route Native AMX evidence.
+    ///
+    /// Native manifests and receipts use the existing operator-configured Kura
+    /// sidecar retention rather than introducing an environment-only or
+    /// consensus-divergent limit. One extra entry may exist transiently while
+    /// a strict append is being compacted or recovered.
+    fn native_amx_participant_evidence_retention(&self) -> NonZeroUsize {
         self.roster_sidecar_retention
     }
 
@@ -9739,13 +9817,30 @@ impl Kura {
     pub(crate) fn pending_certified_merge_entries(
         &self,
     ) -> Result<Vec<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
+        self.pending_certified_merge_entries_bounded(MAX_PENDING_CERTIFIED_MERGE_ENTRIES)
+    }
+
+    /// Return at most `limit` deterministic pending merge sidecars.
+    ///
+    /// Directory shape and aggregate metadata remain fail-closed under the
+    /// protocol hard limits, while only the selected canonical files are
+    /// decoded and cloned. This keeps operator diagnostics proportional to
+    /// their response budget instead of the larger pending-sidecar budget.
+    pub(crate) fn pending_certified_merge_entries_bounded(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<(HashOf<MergeLedgerEntry>, MergeLedgerEntry)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
         self.ensure_prune_recovery_not_required()?;
         let entries = {
             let _guard = self.sidecar_lock.lock();
             self.ensure_prune_recovery_not_required()?;
             let (paths, _) = self.pending_merge_entry_paths_unlocked()?;
-            let mut entries = Vec::with_capacity(paths.len());
-            for path in paths {
+            let bounded = limit.min(MAX_PENDING_CERTIFIED_MERGE_ENTRIES);
+            let mut entries = Vec::with_capacity(paths.len().min(bounded));
+            for path in paths.into_iter().take(bounded) {
                 let Some(entry) = self.read_pending_merge_entry_path(&path, None)? else {
                     continue;
                 };
@@ -9770,11 +9865,12 @@ impl Kura {
     /// work for one exact active lane incarnation.
     ///
     /// The underlying scan is bounded by the pending-entry count and byte
-    /// limits. Malformed autonomous routing bytes, or a matching route without
-    /// one unique historical active-lane binding, conservatively count as work,
-    /// so drain certification never treats unverifiable evidence as empty. A
-    /// certificate-only entry is the closure carrier itself and owns no lane
-    /// work; counting it here would make its own admission impossible.
+    /// limits. Malformed autonomous routing bytes, misaligned Native receipts,
+    /// or a matching route without one unique historical active-lane binding
+    /// conservatively count as work, so drain certification never treats
+    /// unverifiable evidence as empty. A certificate-only entry is the closure
+    /// carrier itself and owns no lane work; counting it here would make its own
+    /// admission impossible.
     pub(crate) fn pending_certified_merge_work_for_lane(
         &self,
         lane_id: LaneId,
@@ -9792,12 +9888,41 @@ impl Kura {
                 }) || entry.execution_batch.as_ref().is_some_and(|batch| {
                     batch.lanes.iter().any(|execution| {
                         let descriptor = &execution.proposal.descriptor;
+                        let origin = &execution.origin_proposal.descriptor;
+                        let entry_count = execution.entrypoints.len();
                         (descriptor.lane_id == lane_id
                             && descriptor.dataspace_id == dataspace_id
                             && descriptor.lane_incarnation == lane_incarnation)
-                            || execution.routing_plans.iter().any(|encoded| {
-                                norito::decode_from_bytes::<crate::queue::RoutingPlan>(encoded)
-                                    .map_or(true, |plan| {
+                            || (origin.lane_id == lane_id
+                                && origin.dataspace_id == dataspace_id
+                                && origin.lane_incarnation == lane_incarnation)
+                            || descriptor.lane_id != origin.lane_id
+                            || descriptor.dataspace_id != origin.dataspace_id
+                            || descriptor.lane_incarnation != origin.lane_incarnation
+                            || execution.entrypoint_hashes.len() != entry_count
+                            || execution.reservation_keys.len() != entry_count
+                            || execution.routing_plans.len() != entry_count
+                            || execution.native_amx_receipts.len() != entry_count
+                            || execution.result_hashes.len() != entry_count
+                            || execution.results.len() != entry_count
+                            || execution
+                                .routing_plans
+                                .iter()
+                                .zip(&execution.native_amx_receipts)
+                                .any(|(encoded, receipt)| {
+                                    let Ok(plan) = norito::decode_from_bytes::<
+                                        crate::queue::RoutingPlan,
+                                    >(encoded)
+                                    else {
+                                        return true;
+                                    };
+                                    let coordinator = plan.coordinator_leg().route;
+                                    if coordinator.lane_id != origin.lane_id
+                                        || coordinator.dataspace_id != origin.dataspace_id
+                                    {
+                                        return true;
+                                    }
+                                    let route_carries_incarnation =
                                         plan.legs().into_iter().any(|leg| {
                                             if leg.route.lane_id != lane_id
                                                 || leg.route.dataspace_id != dataspace_id
@@ -9817,23 +9942,52 @@ impl Kura {
                                                 return true;
                                             }
                                             binding.incarnation == lane_incarnation
-                                        })
-                                    })
-                            })
-                            || execution
-                                .native_amx_receipts
-                                .iter()
-                                .flatten()
-                                .any(|receipt| {
-                                    (receipt.lane_id == lane_id
-                                        && receipt.dataspace_id == dataspace_id
-                                        && receipt.lane_incarnation == lane_incarnation)
-                                        || receipt.legs.iter().any(|leg| {
-                                            let participant = &leg.participant_proposal.descriptor;
-                                            leg.lane_id == lane_id
-                                                && leg.dataspace_id == dataspace_id
-                                                && participant.lane_incarnation == lane_incarnation
-                                        })
+                                        });
+                                    let participant_carries_incarnation = match (&plan, receipt) {
+                                        (crate::queue::RoutingPlan::Single(_), None) => false,
+                                        (
+                                            crate::queue::RoutingPlan::NativeAmx(native_plan),
+                                            Some(receipt),
+                                        ) => {
+                                            if receipt.plan_digest != plan.digest()
+                                                || receipt.lane_id != origin.lane_id
+                                                || receipt.dataspace_id != origin.dataspace_id
+                                                || receipt.lane_incarnation
+                                                    != origin.lane_incarnation
+                                                || receipt.authority_context_height
+                                                    != origin.proposal_height
+                                                || receipt.lane_block_height
+                                                    != origin.lane_block_height
+                                                || receipt.lane_block_view
+                                                    != origin.lane_block_view
+                                                || receipt.coordinator_proposal_hash
+                                                    != execution.origin_proposal.proposal_hash
+                                                || receipt.legs.len()
+                                                    != native_plan.participants.len()
+                                                || receipt.legs.iter().zip(&native_plan.participants).any(
+                                                    |(leg, planned)| {
+                                                        leg.lane_id
+                                                            != planned.route.lane_id
+                                                            || leg.dataspace_id
+                                                                != planned.route.dataspace_id
+                                                    },
+                                                )
+                                            {
+                                                true
+                                            } else {
+                                                crate::native_amx::native_amx_receipt_requires_separate_participant_application_for(
+                                                    receipt,
+                                                    lane_id,
+                                                    dataspace_id,
+                                                    lane_incarnation,
+                                                )
+                                                .unwrap_or(true)
+                                            }
+                                        }
+                                        _ => true,
+                                    };
+                                    route_carries_incarnation
+                                        || participant_carries_incarnation
                                 })
                     })
                 })
@@ -10040,6 +10194,33 @@ impl Kura {
         entries
     }
 
+    /// Snapshot at most `limit` newest cached merge-ledger entries, newest first.
+    ///
+    /// Unlike [`Self::merge_ledger_snapshot`], diagnostic callers can use this
+    /// accessor without cloning an operator-configured cache of arbitrary size.
+    #[must_use]
+    pub fn merge_ledger_latest_snapshot(&self, limit: usize) -> Vec<MergeLedgerEntry> {
+        if limit == 0
+            || self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Vec::new();
+        }
+        let merge_log = self.merge_log.lock();
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Vec::new();
+        }
+        let entries = merge_log.latest_snapshot(limit);
+        if self.prune_recovery_is_required()
+            || self.canonical_storage_poisoned.load(Ordering::Acquire)
+        {
+            return Vec::new();
+        }
+        entries
+    }
+
     /// Read every durable merge-ledger entry in chronological order.
     ///
     /// # Errors
@@ -10055,6 +10236,86 @@ impl Kura {
         self.ensure_prune_recovery_not_required()?;
         self.ensure_canonical_storage_not_poisoned()?;
         Ok(entries)
+    }
+
+    /// Resolve exact queue reservations for a bounded set of committed transaction hashes.
+    ///
+    /// The lookup reuses Kura's canonical transaction-to-block index, requires one unique carrier
+    /// height per requested hash, and authenticates that carrier's exact merge sidecar through the
+    /// existing carrier and merge-frame indexes. Work and temporary memory are therefore
+    /// proportional to `requested`, never to complete merge history.
+    ///
+    /// # Errors
+    /// Returns an error when the durable log changed after index construction, an indexed frame is
+    /// malformed, or one transaction has ambiguous committed reservation evidence.
+    pub(crate) fn committed_merge_queue_reservations(
+        &self,
+        requested: &BTreeSet<HashOf<SignedTransaction>>,
+    ) -> Result<BTreeMap<HashOf<SignedTransaction>, LaneQueueReservationKeyV1>> {
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        self.merge_log.lock().validate_indexed_file_length()?;
+        let mut requested_by_height =
+            BTreeMap::<NonZeroUsize, BTreeSet<HashOf<SignedTransaction>>>::new();
+        {
+            let transaction_index = self.transaction_entrypoint_index.lock();
+            self.ensure_prune_recovery_not_required()?;
+            self.ensure_canonical_storage_not_poisoned()?;
+            if !transaction_index.complete {
+                return Err(Error::MergeCarrierConflict(
+                    "canonical transaction index is incomplete during reservation recovery"
+                        .to_owned(),
+                ));
+            }
+            for transaction_hash in requested {
+                let mut heights = transaction_index
+                    .heights_by_transaction
+                    .get(transaction_hash)
+                    .into_iter()
+                    .flatten()
+                    .copied();
+                let Some(height) = heights.next() else {
+                    continue;
+                };
+                if heights.next().is_some() {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "committed transaction {transaction_hash} has multiple canonical carrier heights"
+                    )));
+                }
+                requested_by_height
+                    .entry(height)
+                    .or_default()
+                    .insert(*transaction_hash);
+            }
+        }
+
+        let mut reservations = BTreeMap::new();
+        for (height, hashes) in requested_by_height {
+            let Some(entry) = self.get_merge_entry_by_carrier_height(height)? else {
+                continue;
+            };
+            for (transaction_hash, reservation) in
+                crate::state::certified_merge_queue_reservations(&entry).map_err(|error| {
+                    Error::MergeCarrierConflict(format!(
+                        "indexed committed merge reservations are invalid: {error}"
+                    ))
+                })?
+            {
+                if !hashes.contains(&transaction_hash) {
+                    continue;
+                }
+                if let Some(existing) = reservations.insert(transaction_hash, reservation)
+                    && existing != reservation
+                {
+                    return Err(Error::MergeCarrierConflict(format!(
+                        "committed merge history binds transaction {transaction_hash} to conflicting reservations"
+                    )));
+                }
+            }
+        }
+        self.ensure_prune_recovery_not_required()?;
+        self.ensure_canonical_storage_not_poisoned()?;
+        Ok(reservations)
     }
 
     /// Return the latest committed lane-local execution height for every active
@@ -18019,6 +18280,273 @@ impl Kura {
         Ok(Some(layout))
     }
 
+    fn validate_indexed_sidecar_storage_bound(
+        data_path: &Path,
+        index_path: &Path,
+        max_entries: u64,
+        kind: &'static str,
+    ) -> Result<()> {
+        let max_data_len = max_entries
+            .checked_mul(STRICT_INIT_MAX_BLOCK_BYTES)
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(format!(
+                    "{kind} startup aggregate data byte bound overflows"
+                ))
+            })?
+            .min(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES);
+        match std::fs::symlink_metadata(data_path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata)
+                {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "{kind} data is not a single-link regular no-follow file"
+                    )));
+                }
+                if metadata.len() > max_data_len {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "{kind} data exceeds the bounded startup aggregate byte budget"
+                    )));
+                }
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(Error::IO(error, data_path.to_path_buf())),
+        }
+
+        let index_len = match std::fs::symlink_metadata(index_path) {
+            Ok(metadata) => {
+                if metadata.file_type().is_symlink()
+                    || !metadata.file_type().is_file()
+                    || !Self::sidecar_is_single_link(&metadata)
+                {
+                    return Err(Error::PruneIntentConflict(format!(
+                        "{kind} index is not a single-link regular no-follow file"
+                    )));
+                }
+                metadata.len()
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(Error::IO(error, index_path.to_path_buf())),
+        };
+        let max_index_len = INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+            .checked_add(
+                max_entries
+                    .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+                    .ok_or_else(|| {
+                        Error::PruneIntentConflict(format!(
+                            "{kind} startup index entry bound overflows"
+                        ))
+                    })?,
+            )
+            .ok_or_else(|| {
+                Error::PruneIntentConflict(format!("{kind} startup index byte bound overflows"))
+            })?;
+        if index_len > max_index_len {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} index exceeds the bounded startup entry budget"
+            )));
+        }
+        let mut index = Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
+            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
+            Error::PruneIntentConflict(format!("{kind} index layout is malformed: {reason}"))
+        })?;
+        if layout.entry_count > max_entries {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} index exceeds the bounded startup entry budget"
+            )));
+        }
+        Ok(())
+    }
+
+    fn indexed_sidecar_payload_heights_bounded(
+        index_path: &Path,
+        max_entries: u64,
+        kind: &'static str,
+    ) -> Result<BTreeSet<u64>> {
+        let mut index =
+            match Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None) {
+                Ok(index) => index,
+                Err(error) if error.kind() == ErrorKind::NotFound => return Ok(BTreeSet::new()),
+                Err(error) => return Err(Error::IO(error, index_path.to_path_buf())),
+            };
+        let index_len = index
+            .metadata()
+            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
+            .len();
+        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
+            Error::PruneIntentConflict(format!("{kind} index layout is malformed: {reason}"))
+        })?;
+        if layout.aligned_len != index_len || layout.entry_count > max_entries {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} index changed after bounded startup validation"
+            )));
+        }
+        index
+            .seek(SeekFrom::Start(layout.entries_offset))
+            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+        let mut heights = BTreeSet::new();
+        let mut encoded = [0_u8; PIPELINE_INDEX_ENTRY_SIZE];
+        for relative in 0..layout.entry_count {
+            index
+                .read_exact(&mut encoded)
+                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+            if SidecarIndexEntry::from_bytes(encoded).len == 0 {
+                continue;
+            }
+            let height = layout.base_height.checked_add(relative).ok_or_else(|| {
+                Error::PruneIntentConflict(format!("{kind} indexed height overflows"))
+            })?;
+            heights.insert(height);
+        }
+        Ok(heights)
+    }
+
+    /// Resolve only mechanically attributable generic indexed-sidecar crash
+    /// residue before Native startup evidence is interpreted.
+    ///
+    /// The generic writer makes the data append durable before publishing its
+    /// index entry, and retention rewrites use the temporary index as their
+    /// commit marker. Therefore an unindexed data suffix may be truncated and a
+    /// complete bounded rewrite may be promoted without interpreting any
+    /// Native payload. Malformed ranges, incomplete authoritative pairs, and
+    /// unsafe paths remain hard failures in the strict validator that follows.
+    fn recover_native_amx_indexed_sidecar_startup_residue(
+        data_path: &Path,
+        index_path: &Path,
+        max_entries: u64,
+        kind: &'static str,
+    ) -> Result<()> {
+        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)?;
+
+        let temp_data_path = data_path.with_extension("norito.tmp");
+        let temp_index_path = index_path.with_extension("index.tmp");
+        let path_exists_safely = |path: &Path| -> Result<bool> {
+            match std::fs::symlink_metadata(path) {
+                Ok(metadata) => {
+                    if metadata.file_type().is_symlink()
+                        || !metadata.file_type().is_file()
+                        || !Self::sidecar_is_single_link(&metadata)
+                    {
+                        return Err(Error::PruneIntentConflict(format!(
+                            "{kind} startup recovery artifact is not a single-link regular no-follow file"
+                        )));
+                    }
+                    Ok(true)
+                }
+                Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+                Err(error) => Err(Error::IO(error, path.to_path_buf())),
+            }
+        };
+        let temp_data_exists = path_exists_safely(&temp_data_path)?;
+        let temp_index_exists = path_exists_safely(&temp_index_path)?;
+        if temp_index_exists {
+            let recovery_data_path = if temp_data_exists {
+                &temp_data_path
+            } else {
+                data_path
+            };
+            Self::validate_indexed_sidecar_storage_bound(
+                recovery_data_path,
+                &temp_index_path,
+                max_entries,
+                kind,
+            )?;
+            if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+                return Err(Error::PruneIntentConflict(format!(
+                    "{kind} bounded startup rewrite recovery failed"
+                )));
+            }
+        } else if temp_data_exists {
+            // The temporary index is the rewrite commit marker. A lone data
+            // temporary is unpublished and is therefore safe to discard.
+            std::fs::remove_file(&temp_data_path)
+                .map_err(|error| Error::IO(error, temp_data_path.clone()))?;
+            if let Some(parent) = temp_data_path.parent() {
+                sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+            }
+        }
+        if path_exists_safely(&temp_data_path)? || path_exists_safely(&temp_index_path)? {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} startup recovery left an unresolved temporary artifact"
+            )));
+        }
+
+        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)?;
+        let data_exists = path_exists_safely(data_path)?;
+        let index_exists = path_exists_safely(index_path)?;
+        if index_exists && !data_exists {
+            let mut index =
+                Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
+                    .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+            let index_len = index
+                .metadata()
+                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
+                .len();
+            let layout =
+                SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
+                    Error::PruneIntentConflict(format!(
+                        "{kind} index-only startup residue is malformed: {reason}"
+                    ))
+                })?;
+            if layout.aligned_len == index_len && layout.entry_count == 0 {
+                drop(index);
+                std::fs::remove_file(index_path)
+                    .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+                if let Some(parent) = index_path.parent() {
+                    sync_dir(parent).map_err(|error| Error::IO(error, parent.to_path_buf()))?;
+                }
+                return Ok(());
+            }
+            // A non-empty index without its payload is not mechanically
+            // recoverable. Leave it intact for strict pair validation below.
+            return Ok(());
+        }
+        if !data_exists || !index_exists {
+            return Ok(());
+        }
+
+        let data = Self::open_direct_sidecar_file_in_namespace(data_path, false, false, None)
+            .map_err(|error| Error::IO(error, data_path.to_path_buf()))?;
+        let mut index = Self::open_direct_sidecar_file_in_namespace(index_path, false, false, None)
+            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+        let index_len = index
+            .metadata()
+            .map_err(|error| Error::IO(error, index_path.to_path_buf()))?
+            .len();
+        let layout = SidecarIndexLayout::read_from(&mut index, index_len).map_err(|reason| {
+            Error::PruneIntentConflict(format!(
+                "{kind} startup index residue is malformed: {reason}"
+            ))
+        })?;
+        if layout.entry_count > max_entries {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} startup index exceeds its bounded recovery entry budget"
+            )));
+        }
+        if layout.aligned_len != index_len {
+            index
+                .set_len(layout.aligned_len)
+                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+            sync_indexed_sidecar_index(&index)
+                .map_err(|error| Error::IO(error, index_path.to_path_buf()))?;
+        }
+        if !Self::repair_unindexed_sidecar_tail(
+            &data, &mut index, layout, data_path, index_path, kind,
+        ) {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} has unsafe or ambiguous append residue"
+            )));
+        }
+        if !Self::sync_indexed_sidecar_barriers(data_path, index_path, kind) {
+            return Err(Error::PruneIntentConflict(format!(
+                "{kind} startup append-residue durability barrier failed"
+            )));
+        }
+        Self::validate_indexed_sidecar_storage_bound(data_path, index_path, max_entries, kind)
+    }
+
     fn rename_prune_sidecar_temp(
         &self,
         temp_path: &Path,
@@ -21543,6 +22071,20 @@ enum IndexedSidecarRewrite {
         retention: NonZeroUsize,
         pinned_height: Option<u64>,
     },
+    /// Advance the based-index window together with the retained payloads.
+    ///
+    /// This is reserved for evidence whose configured retention is also its
+    /// hard startup scan bound. Generic pipeline sidecars retain their
+    /// historical zero slots for compatibility.
+    RetainNewestWindow {
+        retention: NonZeroUsize,
+    },
+    /// Discard only the authenticated terminal prefix while retaining a
+    /// configured diagnostic window and every later (possibly pending) slot.
+    RetainAfterTerminalFrontier {
+        terminal_height: u64,
+        retention: NonZeroUsize,
+    },
     TruncateToHeight(u64),
 }
 
@@ -21968,6 +22510,62 @@ pub struct LaneBlockApplicationReceiptArtifact {
         Option<HashOf<iroha_data_model::block::consensus::LaneBlockCommitment>>,
 }
 
+/// Versioned durable cursor proving a contiguous lane-local prefix reached the
+/// canonical global merge carrier.
+///
+/// The cursor is published only after the exact application receipt is
+/// durability-attested. It lets Kura compact append histories without
+/// retaining a lifetime-sized startup or retirement scan. Every field is
+/// reconstructed from the QC-authenticated merge entry and carrier before the
+/// cursor can authorize compaction or archive validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
+struct LaneMergeApplicationFrontierV1 {
+    version: u8,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+    proposal_height: u64,
+    lane_block_height: u64,
+    lane_block_descriptor_hash: Hash,
+    proposal_hash: Hash,
+    merge_epoch_id: u64,
+    merge_entry_hash: HashOf<MergeLedgerEntry>,
+    application_block_height: u64,
+    application_block_hash: HashOf<BlockHeader>,
+    receipt_hash: HashOf<LaneBlockApplicationReceiptArtifact>,
+}
+
+impl LaneMergeApplicationFrontierV1 {
+    const VERSION: u8 = 1;
+
+    fn from_receipt(receipt: &LaneBlockApplicationReceiptArtifact) -> Option<Self> {
+        if receipt.format != LaneBlockApplicationReceiptArtifactFormat::MergeExecution {
+            return None;
+        }
+        let descriptor = &receipt.proposal.descriptor;
+        Some(Self {
+            version: Self::VERSION,
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_descriptor_hash: descriptor.descriptor_hash,
+            proposal_hash: receipt.proposal.proposal_hash,
+            merge_epoch_id: receipt.merge_epoch_id?,
+            merge_entry_hash: receipt.merge_entry_hash?,
+            application_block_height: receipt.merge_carrier_block_height?,
+            application_block_hash: receipt.merge_carrier_block_hash?,
+            receipt_hash: HashOf::new(receipt),
+        })
+    }
+
+    fn matches_receipt(&self, receipt: &LaneBlockApplicationReceiptArtifact) -> bool {
+        Self::from_receipt(receipt).as_ref() == Some(self)
+    }
+}
+
 /// Per-route Native AMX application leaf and its QC-authenticated Merkle proof.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
 #[norito(deny_unknown_fields)]
@@ -22054,14 +22652,18 @@ struct NativeAmxParticipantReceiptLatestIndexV1 {
 
 /// Startup-only classification for the highest Native AMX participant receipt.
 ///
-/// Runtime readers never accept `PendingTipMetadata`: they continue to require
-/// the complete checkpoint/commit-manifest join. Startup may rebuild the
-/// bounded latest pointer for this state solely so the interrupted canonical
-/// tip can reach the runner's local apply-recovery pipeline.
+/// Runtime readers never accept either pending state: they continue to require
+/// the complete manifest/finality/checkpoint/commit-manifest join. Startup may
+/// rebuild the bounded latest pointer for `PendingTipMetadata` solely so the
+/// interrupted canonical tip can reach the runner's local apply-recovery
+/// pipeline. A missing manifest is weaker: its structurally valid receipt is
+/// retained for exact comparison during repair, but never promoted to the
+/// derived latest pointer until the QC-authenticated manifest is restored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum NativeAmxParticipantReceiptStartupEvidence {
     DurablyApplied,
     PendingTipMetadata,
+    PendingManifestRepair,
 }
 
 impl NativeAmxParticipantReceiptLatestIndexV1 {
@@ -22513,6 +23115,14 @@ impl Kura {
     ) -> PathBuf {
         Self::lane_artifact_dir(&entry.blocks_dir(store_root))
             .join(AUTONOMOUS_LANE_ROUTE_LATEST_ATTEMPT_FILE)
+    }
+
+    fn lane_merge_application_frontier_path_for_entry(
+        entry: &LaneConfigEntry,
+        store_root: &Path,
+    ) -> PathBuf {
+        Self::lane_artifact_dir(&entry.blocks_dir(store_root))
+            .join(LANE_MERGE_APPLICATION_FRONTIER_FILE)
     }
 
     fn hash_path_component(hash: &Hash) -> String {
@@ -26948,7 +27558,94 @@ impl Kura {
             let Some(latest) = latest else {
                 continue;
             };
+            let frontier_path =
+                Self::lane_merge_application_frontier_path_for_entry(&entry, &self.store_root);
+            if self
+                .decode_lane_merge_application_frontier(&entry, &frontier_path)?
+                .is_some_and(|frontier| {
+                    frontier.lane_incarnation == latest.lane_incarnation
+                        && latest.lane_block_height <= frontier.lane_block_height
+                })
+            {
+                continue;
+            }
             self.publish_autonomous_lane_route_latest_attempt_locked(&entry, &latest)?;
+        }
+        Ok(())
+    }
+
+    /// Revalidate or reconstruct each active route's terminal merge cursor and
+    /// finish any prefix compaction interrupted after receipt durability.
+    fn repair_lane_merge_application_frontiers_on_startup(&self) -> Result<()> {
+        let _prune_guard = self.prune_lock.lock();
+        self.ensure_prune_recovery_not_required()?;
+        self.durable_mutation_authorized()?;
+        let _canonical_chain_guard = self.canonical_chain_lock.lock();
+        let _geometry_guard = self.lane_geometry_lock.lock();
+        let entries = self
+            .lane_storage_entries
+            .lock()
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
+        let _sidecar_guard = self.sidecar_lock.lock();
+        for entry in entries {
+            let frontier_path =
+                Self::lane_merge_application_frontier_path_for_entry(&entry, &self.store_root);
+            let frontier = if let Some(frontier) =
+                self.decode_lane_merge_application_frontier(&entry, &frontier_path)?
+            {
+                if self
+                    .lane_merge_application_frontier_expected_receipt(&frontier)
+                    .is_none()
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        frontier_path,
+                        "startup lane merge application frontier has no authenticated merge carrier",
+                    ));
+                }
+                Some(frontier)
+            } else {
+                if !self
+                    .merge_log
+                    .lock()
+                    .has_execution_for_route(entry.lane_id, entry.dataspace_id)
+                {
+                    continue;
+                }
+                let (incarnation, _) = self.active_lane_incarnation_marker(&entry)?;
+                let latest_height = self.merge_log.lock().latest_execution_height(
+                    entry.lane_id,
+                    entry.dataspace_id,
+                    incarnation,
+                );
+                let Some(latest_height) = latest_height else {
+                    continue;
+                };
+                let (data_path, index_path) =
+                    Self::lane_block_application_receipt_paths_for_entry(&entry, &self.store_root);
+                let receipt = self
+                    .read_lane_block_application_receipt_from_paths_durability_attested_locked(
+                        entry.lane_id,
+                        latest_height,
+                        &data_path,
+                        &index_path,
+                        true,
+                    );
+                let Some(receipt) = receipt.filter(|receipt| {
+                    receipt.proposal.descriptor.lane_incarnation == incarnation
+                        && self.lane_block_application_receipt_matches_merge_log(receipt)
+                }) else {
+                    // A durable merge entry may legitimately be ahead of WSV
+                    // application. State repair will publish the receipt and
+                    // cursor after replaying its exact carrier.
+                    continue;
+                };
+                self.publish_lane_merge_application_frontier_locked(&entry, &receipt)?
+            };
+            if let Some(frontier) = frontier {
+                self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
+            }
         }
         Ok(())
     }
@@ -28522,6 +29219,19 @@ impl Kura {
             )
         {
             if existing == *artifact {
+                if !Self::prune_indexed_sidecars_to_retention_window(
+                    &data_path,
+                    &index_path,
+                    self.native_amx_participant_evidence_retention(),
+                    NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to compact existing Native AMX participant application manifest retention window",
+                        ),
+                        data_path,
+                    ));
+                }
                 if let Some(before_bytes) = before_bytes
                     && let Ok(after_bytes) =
                         Self::sidecar_tracked_bytes(&data_path, &index_path, None)
@@ -28543,19 +29253,41 @@ impl Kura {
             ));
         }
         let payload = artifact.encode_framed()?;
+        if u64::try_from(payload.len()).map_or(true, |len| len > STRICT_INIT_MAX_BLOCK_BYTES) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "Native AMX participant manifest exceeds the strict indexed-sidecar payload budget",
+            ));
+        }
+        // Native evidence is a publication barrier, not a best-effort pipeline
+        // sidecar: the later receipt/latest pointer and WSV frontier may only
+        // become visible after this exact manifest pair is durable.
         if !Self::append_indexed_sidecar(
             &data_path,
             &index_path,
             leaf.participant_height,
             &payload,
             NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            self.sidecar_fsync_mode(),
+            FsyncMode::Always,
             None,
             SidecarIndexOrigin::FirstWrite,
         ) {
             return Err(Error::IO(
                 std::io::Error::other(
                     "failed to persist Native AMX participant application manifest",
+                ),
+                data_path,
+            ));
+        }
+        if !Self::prune_indexed_sidecars_to_retention_window(
+            &data_path,
+            &index_path,
+            self.native_amx_participant_evidence_retention(),
+            NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to compact Native AMX participant application manifest retention window",
                 ),
                 data_path,
             ));
@@ -28828,6 +29560,19 @@ impl Kura {
             )
         {
             if existing == *artifact {
+                if !Self::prune_indexed_sidecars_to_retention_window(
+                    &data_path,
+                    &index_path,
+                    self.native_amx_participant_evidence_retention(),
+                    NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+                ) {
+                    return Err(Error::IO(
+                        std::io::Error::other(
+                            "failed to compact existing Native AMX participant receipt retention window",
+                        ),
+                        data_path,
+                    ));
+                }
                 self.persist_native_amx_participant_receipt_latest_index_locked(
                     &entry,
                     artifact,
@@ -28857,18 +29602,40 @@ impl Kura {
             ));
         }
         let payload = artifact.encode_framed()?;
+        if u64::try_from(payload.len()).map_or(true, |len| len > STRICT_INIT_MAX_BLOCK_BYTES) {
+            return Err(Self::invalid_lane_artifact_error(
+                data_path,
+                "Native AMX participant receipt exceeds the strict indexed-sidecar payload budget",
+            ));
+        }
+        // The latest pointer is synchronously replaced below. Force the
+        // authoritative receipt pair to disk first even when ordinary Kura
+        // sidecars use the default batched fsync policy.
         if !Self::append_indexed_sidecar(
             &data_path,
             &index_path,
             lane_block_height,
             &payload,
             NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            self.sidecar_fsync_mode(),
+            FsyncMode::Always,
             None,
             SidecarIndexOrigin::FirstWrite,
         ) {
             return Err(Error::IO(
                 std::io::Error::other("failed to persist Native AMX participant receipt"),
+                data_path,
+            ));
+        }
+        if !Self::prune_indexed_sidecars_to_retention_window(
+            &data_path,
+            &index_path,
+            self.native_amx_participant_evidence_retention(),
+            NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+        ) {
+            return Err(Error::IO(
+                std::io::Error::other(
+                    "failed to compact Native AMX participant receipt retention window",
+                ),
                 data_path,
             ));
         }
@@ -29244,6 +30011,35 @@ impl Kura {
         (confirmed == artifact && !self.prune_recovery_is_required()).then_some(artifact)
     }
 
+    /// Revalidate the receipt fields available without its manifest against
+    /// authenticated finality and the durable canonical block identity.
+    ///
+    /// The caller holds `prune_lock`, `canonical_chain_lock`,
+    /// `lane_geometry_lock`, and `sidecar_lock`, in that order.
+    fn native_amx_participant_receipt_matches_available_finality_under_startup_guards(
+        &self,
+        receipt: &NativeAmxParticipantApplicationReceiptArtifact,
+    ) -> bool {
+        let Ok(Some((_, finality, _))) = self
+            .v2_finality_artifact_with_archive_under_prune_and_canonical_guards(
+                receipt.application_block_height,
+            )
+        else {
+            return false;
+        };
+        let execution = finality.commit_qc.execution_commitment;
+        let Ok(height) = usize::try_from(receipt.application_block_height) else {
+            return false;
+        };
+        let Some(height) = NonZeroUsize::new(height) else {
+            return false;
+        };
+        finality.block_hash == receipt.application_block_hash
+            && HashOf::new(&finality) == receipt.finality_artifact_hash
+            && execution.executed_block_wire_hash == receipt.executed_block_wire_hash
+            && self.get_durable_block_hash(height) == Some(receipt.application_block_hash)
+    }
+
     /// Classify one structurally decoded receipt against the startup evidence
     /// boundary without acquiring another Kura lock.
     ///
@@ -29255,6 +30051,7 @@ impl Kura {
         receipt: &NativeAmxParticipantApplicationReceiptArtifact,
         manifest_data_path: &Path,
         manifest_index_path: &Path,
+        manifest_payload_heights: &BTreeSet<u64>,
         exact_durable_tip: u64,
     ) -> Result<NativeAmxParticipantReceiptStartupEvidence> {
         let invalid = |message| {
@@ -29267,15 +30064,28 @@ impl Kura {
         if descriptor.lane_id != entry.lane_id || descriptor.dataspace_id != entry.dataspace_id {
             return Err(invalid("targets another active route"));
         }
-        let manifest = self
-            .read_native_amx_participant_application_manifest_from_paths_locked(
-                entry,
-                descriptor.lane_block_height,
-                manifest_data_path,
-                manifest_index_path,
-                false,
-            )
-            .ok_or_else(|| invalid("is missing its exact manifest leaf and proof"))?;
+        let manifest = self.read_native_amx_participant_application_manifest_from_paths_locked(
+            entry,
+            descriptor.lane_block_height,
+            manifest_data_path,
+            manifest_index_path,
+            false,
+        );
+        let Some(manifest) = manifest else {
+            if manifest_payload_heights.contains(&descriptor.lane_block_height) {
+                return Err(invalid(
+                    "contains a malformed or identity-conflicting manifest leaf or proof",
+                ));
+            }
+            if !self.native_amx_participant_receipt_matches_available_finality_under_startup_guards(
+                receipt,
+            ) {
+                return Err(invalid(
+                    "is missing its exact manifest and does not match authenticated finality",
+                ));
+            }
+            return Ok(NativeAmxParticipantReceiptStartupEvidence::PendingManifestRepair);
+        };
         if manifest.leaf.lane_incarnation != descriptor.lane_incarnation
             || HashOf::new(&manifest) != receipt.manifest_artifact_hash
             || manifest.finality_artifact_hash != receipt.finality_artifact_hash
@@ -29337,9 +30147,11 @@ impl Kura {
     /// route/incarnation pointer. Complete post-apply metadata is normally
     /// required; the sole exact durable tip may instead have no metadata or
     /// only an unbound WSV checkpoint while its local apply is recovered.
-    /// Unresolved temporaries, every below-tip metadata gap, partial
-    /// publication, malformed or unbacked pointers, and unsafe authoritative
-    /// sidecar paths fail closed.
+    /// Mechanically attributable append/rewrite residue is repaired before
+    /// interpretation. Every below-tip metadata gap, malformed or conflicting
+    /// evidence, and unsafe authoritative sidecar path still fails closed.
+    /// Structurally valid missing manifest/receipt publication is left pending
+    /// for State-driven reconstruction from the authenticated carrier.
     pub(crate) fn rebuild_native_amx_participant_receipt_latest_indexes_on_startup(
         &self,
     ) -> Result<usize> {
@@ -29371,6 +30183,9 @@ impl Kura {
                 );
             let before_bytes =
                 Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
+            let native_history_entry_bound =
+                u64::try_from(self.native_amx_participant_evidence_retention().get())?
+                    .saturating_add(1);
 
             for path in [
                 &data_path,
@@ -29395,23 +30210,28 @@ impl Kura {
                 }
             }
 
-            for temporary in [
-                data_path.with_extension("norito.tmp"),
-                index_path.with_extension("index.tmp"),
-                manifest_data_path.with_extension("norito.tmp"),
-                manifest_index_path.with_extension("index.tmp"),
-                latest_index_path.with_extension("norito.tmp"),
-            ] {
-                match std::fs::symlink_metadata(&temporary) {
-                    Ok(_) => {
-                        return Err(Self::invalid_lane_artifact_error(
-                            temporary,
-                            "Native AMX latest-index reconstruction found an unresolved temporary artifact",
-                        ));
-                    }
-                    Err(error) if error.kind() == ErrorKind::NotFound => {}
-                    Err(error) => return Err(Error::IO(error, temporary)),
+            Self::recover_native_amx_indexed_sidecar_startup_residue(
+                &data_path,
+                &index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            )?;
+            Self::recover_native_amx_indexed_sidecar_startup_residue(
+                &manifest_data_path,
+                &manifest_index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            )?;
+            let unexpected_latest_temporary = latest_index_path.with_extension("norito.tmp");
+            match std::fs::symlink_metadata(&unexpected_latest_temporary) {
+                Ok(_) => {
+                    return Err(Self::invalid_lane_artifact_error(
+                        unexpected_latest_temporary,
+                        "Native AMX latest-index reconstruction found an unexpected temporary pointer artifact",
+                    ));
                 }
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Err(error) => return Err(Error::IO(error, unexpected_latest_temporary)),
             }
             if let Some(directory) = latest_index_path.parent() {
                 let directory_entries = std::fs::read_dir(directory)
@@ -29432,7 +30252,19 @@ impl Kura {
                 }
             }
 
-            let layout = Self::validate_indexed_sidecar_pair(
+            Self::validate_indexed_sidecar_storage_bound(
+                &data_path,
+                &index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            )?;
+            Self::validate_indexed_sidecar_storage_bound(
+                &manifest_data_path,
+                &manifest_index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            )?;
+            let _receipt_layout = Self::validate_indexed_sidecar_pair(
                 &data_path,
                 &index_path,
                 u64::MAX,
@@ -29448,11 +30280,17 @@ impl Kura {
                 true,
                 true,
             )?;
-            let latest_height = layout.and_then(|layout| {
-                layout
-                    .height_range()
-                    .and_then(|range| range.into_iter().next_back())
-            });
+            let receipt_payload_heights = Self::indexed_sidecar_payload_heights_bounded(
+                &index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+            )?;
+            let manifest_payload_heights = Self::indexed_sidecar_payload_heights_bounded(
+                &manifest_index_path,
+                native_history_entry_bound,
+                NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+            )?;
+            let latest_height = receipt_payload_heights.last().copied();
             let expected_receipt = latest_height
                 .map(|lane_block_height| {
                     self.read_native_amx_participant_application_receipt_from_paths_locked(
@@ -29470,14 +30308,51 @@ impl Kura {
                     })
                 })
                 .transpose()?;
-            if let Some(receipt) = expected_receipt.as_ref() {
-                self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
-                    &entry,
-                    receipt,
-                    &manifest_data_path,
-                    &manifest_index_path,
-                    exact_durable_tip,
-                )?;
+            let expected_startup_evidence = expected_receipt
+                .as_ref()
+                .map(|receipt| {
+                    self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
+                        &entry,
+                        receipt,
+                        &manifest_data_path,
+                        &manifest_index_path,
+                        &manifest_payload_heights,
+                        exact_durable_tip,
+                    )
+                })
+                .transpose()?;
+            let expected_can_publish = !matches!(
+                expected_startup_evidence,
+                Some(NativeAmxParticipantReceiptStartupEvidence::PendingManifestRepair)
+            );
+
+            if let Some(manifest_height) = manifest_payload_heights.last().copied()
+                && latest_height.is_none_or(|receipt_height| manifest_height > receipt_height)
+            {
+                let manifest = self
+                    .read_native_amx_participant_application_manifest_from_paths_locked(
+                        &entry,
+                        manifest_height,
+                        &manifest_data_path,
+                        &manifest_index_path,
+                        false,
+                    )
+                    .ok_or_else(|| {
+                        Self::invalid_lane_artifact_error(
+                            manifest_data_path.clone(),
+                            "Native AMX participant manifest-only startup evidence is malformed or identity-conflicting",
+                        )
+                    })?;
+                if !self
+                    .native_amx_participant_application_manifest_matches_available_finality_under_prune_and_canonical_guards(
+                        &manifest,
+                    )
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        manifest_data_path.clone(),
+                        "Native AMX participant manifest-only startup evidence conflicts with authenticated finality",
+                    ));
+                }
             }
             let expected = expected_receipt
                 .as_ref()
@@ -29485,59 +30360,90 @@ impl Kura {
                 .transpose()?;
             let current = self
                 .decode_native_amx_participant_receipt_latest_index(&entry, &latest_index_path)?;
+            if let Some(current) = current {
+                let canonical_height = usize::try_from(current.application_block_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new);
+                if self
+                    .require_active_lane_incarnation(
+                        &entry,
+                        current.lane_incarnation,
+                        current.application_block_height,
+                    )
+                    .is_err()
+                    || canonical_height.and_then(|height| self.get_durable_block_hash(height))
+                        != Some(current.application_block_hash)
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        latest_index_path,
+                        "Native AMX participant latest index targets a stale incarnation or non-canonical application block",
+                    ));
+                }
+            }
 
             match (expected, current) {
                 (Some(expected), Some(current)) if current != expected => {
-                    let current_receipt = self
-                        .read_native_amx_participant_application_receipt_from_paths_locked(
-                            &entry,
-                            current.lane_block_height,
-                            &data_path,
-                            &index_path,
-                            false,
-                        )
-                        .filter(|receipt| current.matches_receipt(receipt))
-                        .ok_or_else(|| {
-                            Self::invalid_lane_artifact_error(
-                                latest_index_path.clone(),
-                                "Native AMX participant latest index is conflicting or unbacked",
+                    if !receipt_payload_heights.contains(&current.lane_block_height) {
+                        iroha_logger::warn!(
+                            lane = %entry.lane_id.as_u32(),
+                            dataspace = entry.dataspace_id.as_u64(),
+                            lane_block_height = current.lane_block_height,
+                            "Native AMX derived latest pointer is awaiting authoritative receipt repair"
+                        );
+                    } else {
+                        let current_receipt = self
+                            .read_native_amx_participant_application_receipt_from_paths_locked(
+                                &entry,
+                                current.lane_block_height,
+                                &data_path,
+                                &index_path,
+                                false,
                             )
-                        })?;
-                    if current.lane_block_height >= expected.lane_block_height {
-                        return Err(Self::invalid_lane_artifact_error(
-                            latest_index_path,
-                            "Native AMX participant latest index conflicts with exact durable application evidence",
-                        ));
-                    }
-                    if self
-                        .classify_native_amx_latest_receipt_evidence_under_startup_guards(
+                            .ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    data_path.clone(),
+                                    "Native AMX participant receipt referenced by the latest pointer is malformed",
+                                )
+                            })?;
+                        if !current.matches_receipt(&current_receipt)
+                            || current.lane_block_height >= expected.lane_block_height
+                        {
+                            return Err(Self::invalid_lane_artifact_error(
+                                latest_index_path,
+                                "Native AMX participant latest index conflicts with exact durable application evidence",
+                            ));
+                        }
+                        self.classify_native_amx_latest_receipt_evidence_under_startup_guards(
                             &entry,
                             &current_receipt,
                             &manifest_data_path,
                             &manifest_index_path,
+                            &manifest_payload_heights,
                             exact_durable_tip,
                         )
-                        .is_err()
-                    {
-                        return Err(Self::invalid_lane_artifact_error(
-                            latest_index_path,
-                            "Native AMX participant latest index conflicts with exact durable application evidence",
-                        ));
+                        .map_err(|_| {
+                            Self::invalid_lane_artifact_error(
+                                latest_index_path.clone(),
+                                "Native AMX participant latest index conflicts with exact durable application evidence",
+                            )
+                        })?;
+                        if expected_can_publish {
+                            let receipt = expected_receipt.as_ref().ok_or_else(|| {
+                                Self::invalid_lane_artifact_error(
+                                    data_path.clone(),
+                                    "Native AMX participant highest receipt disappeared during startup reconstruction",
+                                )
+                            })?;
+                            self.persist_native_amx_participant_receipt_latest_index_locked(
+                                &entry,
+                                receipt,
+                                &latest_index_path,
+                            )?;
+                            rebuilt = rebuilt.saturating_add(1);
+                        }
                     }
-                    let receipt = expected_receipt.as_ref().ok_or_else(|| {
-                        Self::invalid_lane_artifact_error(
-                            data_path.clone(),
-                            "Native AMX participant highest receipt disappeared during startup reconstruction",
-                        )
-                    })?;
-                    self.persist_native_amx_participant_receipt_latest_index_locked(
-                        &entry,
-                        receipt,
-                        &latest_index_path,
-                    )?;
-                    rebuilt = rebuilt.saturating_add(1);
                 }
-                (Some(expected), None) => {
+                (Some(expected), None) if expected_can_publish => {
                     let receipt = expected_receipt.as_ref().ok_or_else(|| {
                         Self::invalid_lane_artifact_error(
                             data_path.clone(),
@@ -29552,15 +30458,54 @@ impl Kura {
                     )?;
                     rebuilt = rebuilt.saturating_add(1);
                 }
+                (Some(_), None) => {
+                    iroha_logger::warn!(
+                        lane = %entry.lane_id.as_u32(),
+                        dataspace = entry.dataspace_id.as_u64(),
+                        "Native AMX receipt is awaiting manifest repair before latest-pointer publication"
+                    );
+                }
                 (Some(_), Some(_)) | (None, None) => {}
-                (None, Some(_)) => {
-                    return Err(Self::invalid_lane_artifact_error(
-                        latest_index_path,
-                        "Native AMX participant latest index has no authoritative receipt",
-                    ));
+                (None, Some(current)) => {
+                    iroha_logger::warn!(
+                        lane = %entry.lane_id.as_u32(),
+                        dataspace = entry.dataspace_id.as_u64(),
+                        lane_block_height = current.lane_block_height,
+                        "Native AMX derived latest pointer is awaiting authoritative receipt repair"
+                    );
                 }
             }
 
+            // Compact only after every retained authoritative identity has
+            // passed startup validation. Malformed or conflicting evidence
+            // therefore remains intact when startup fails closed.
+            for (bounded_data_path, bounded_index_path, bounded_kind) in [
+                (
+                    &data_path,
+                    &index_path,
+                    NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
+                ),
+                (
+                    &manifest_data_path,
+                    &manifest_index_path,
+                    NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
+                ),
+            ] {
+                if bounded_data_path.exists()
+                    && bounded_index_path.exists()
+                    && !Self::prune_indexed_sidecars_to_retention_window(
+                        bounded_data_path,
+                        bounded_index_path,
+                        self.native_amx_participant_evidence_retention(),
+                        bounded_kind,
+                    )
+                {
+                    return Err(Self::invalid_lane_artifact_error(
+                        bounded_index_path.to_path_buf(),
+                        format!("{bounded_kind} startup retention-window compaction failed"),
+                    ));
+                }
+            }
             let after_bytes =
                 Self::sidecar_tracked_bytes(&data_path, &index_path, Some(&latest_index_path))?;
             self.update_disk_usage_delta(before_bytes, after_bytes);
@@ -29665,9 +30610,11 @@ impl Kura {
 
     /// Persist test-fixture lane-application receipts for a WSV-applied merge entry.
     ///
-    /// This writer is retained only for historical merge-settlement tests. The
-    /// production first-release path reads and authenticates certified receipts
-    /// but does not generate autonomous merge-execution receipts.
+    /// This explicit-carrier writer is retained only for historical
+    /// merge-settlement tests. Production uses
+    /// [`Self::persist_merge_lane_block_application_receipts_from_committed_log`]
+    /// after State has proved that the exact committed merge execution already
+    /// reached WSV.
     #[cfg(test)]
     pub(crate) fn persist_merge_lane_block_application_receipts(
         &self,
@@ -29956,6 +30903,11 @@ impl Kura {
                         data_path,
                     ));
                 }
+                if let Some(frontier) =
+                    self.publish_lane_merge_application_frontier_locked(&entry, artifact)?
+                {
+                    self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
+                }
                 return Ok(());
             }
             if self
@@ -30051,6 +31003,11 @@ impl Kura {
         }
         if accounting_complete {
             accounting_mutation.finish();
+        }
+        if let Some(frontier) =
+            self.publish_lane_merge_application_frontier_locked(&entry, artifact)?
+        {
+            self.compact_lane_histories_through_merge_frontier_locked(&entry, &frontier)?;
         }
         Ok(())
     }
@@ -30437,6 +31394,330 @@ impl Kura {
                 self.lane_block_application_receipt_matches_merge_log(artifact)
             }
         }
+    }
+
+    fn lane_merge_application_frontier_expected_receipt(
+        &self,
+        frontier: &LaneMergeApplicationFrontierV1,
+    ) -> Option<LaneBlockApplicationReceiptArtifact> {
+        if frontier.version != LaneMergeApplicationFrontierV1::VERSION
+            || frontier.lane_block_height == 0
+            || frontier.application_block_height == 0
+        {
+            return None;
+        }
+        let entry = self
+            .merge_log
+            .lock()
+            .entry_by_hash(frontier.merge_entry_hash)
+            .ok()
+            .flatten()?;
+        if entry.epoch_id != frontier.merge_epoch_id {
+            return None;
+        }
+        let carrier = self
+            .merge_carrier_for_entry(frontier.merge_entry_hash)
+            .ok()
+            .flatten()?;
+        if carrier
+            != (MergeLedgerCarrierRecord {
+                version: 1,
+                entry_hash: frontier.merge_entry_hash,
+                epoch_id: frontier.merge_epoch_id,
+                block_height: frontier.application_block_height,
+                block_hash: frontier.application_block_hash,
+            })
+        {
+            return None;
+        }
+        let batch = entry.execution_batch.as_ref()?;
+        let execution = batch.lanes.iter().find(|execution| {
+            let descriptor = &execution.proposal.descriptor;
+            descriptor.lane_id == frontier.lane_id
+                && descriptor.dataspace_id == frontier.dataspace_id
+                && descriptor.lane_incarnation == frontier.lane_incarnation
+                && descriptor.proposal_height == frontier.proposal_height
+                && descriptor.lane_block_height == frontier.lane_block_height
+                && descriptor.descriptor_hash == frontier.lane_block_descriptor_hash
+                && execution.proposal.proposal_hash == frontier.proposal_hash
+        })?;
+        let expected = LaneBlockApplicationReceiptArtifact::new_merge_execution(
+            &entry,
+            batch,
+            execution,
+            Self::merge_lane_block_artifact(execution),
+            carrier.block_height,
+            carrier.block_hash,
+        );
+        frontier.matches_receipt(&expected).then_some(expected)
+    }
+
+    fn decode_lane_merge_application_frontier(
+        &self,
+        entry: &LaneConfigEntry,
+        path: &Path,
+    ) -> Result<Option<LaneMergeApplicationFrontierV1>> {
+        let parent = path.parent().ok_or_else(|| {
+            Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "lane merge application frontier has no parent directory",
+            )
+        })?;
+        let Some(bytes) = self.read_regular_sidecar_bytes(
+            path,
+            parent,
+            LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES,
+        )?
+        else {
+            return Ok(None);
+        };
+        let frontier = norito::decode_from_bytes::<LaneMergeApplicationFrontierV1>(&bytes)
+            .map_err(Error::NoritoFrame)?;
+        if norito::to_bytes(&frontier).map_err(Error::NoritoFrame)? != bytes
+            || frontier.version != LaneMergeApplicationFrontierV1::VERSION
+            || frontier.lane_id != entry.lane_id
+            || frontier.dataspace_id != entry.dataspace_id
+            || self
+                .require_active_lane_incarnation(
+                    entry,
+                    frontier.lane_incarnation,
+                    frontier.proposal_height,
+                )
+                .is_err()
+            || frontier.proposal_height == 0
+            || frontier.lane_block_height == 0
+            || frontier.application_block_height == 0
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                path.to_path_buf(),
+                "lane merge application frontier is non-canonical or targets another incarnation",
+            ));
+        }
+        Ok(Some(frontier))
+    }
+
+    fn publish_lane_merge_application_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        receipt: &LaneBlockApplicationReceiptArtifact,
+    ) -> Result<Option<LaneMergeApplicationFrontierV1>> {
+        let Some(frontier) = LaneMergeApplicationFrontierV1::from_receipt(receipt) else {
+            return Ok(None);
+        };
+        let path = Self::lane_merge_application_frontier_path_for_entry(entry, &self.store_root);
+        let current = self.decode_lane_merge_application_frontier(entry, &path)?;
+        if let Some(current) = current {
+            if current == frontier || current.lane_block_height > frontier.lane_block_height {
+                return Ok(Some(current));
+            }
+            if current.lane_id != frontier.lane_id
+                || current.dataspace_id != frontier.dataspace_id
+                || current.lane_incarnation != frontier.lane_incarnation
+                || (current.lane_block_height == frontier.lane_block_height && current != frontier)
+            {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "lane merge application frontier conflicts at the same route or height",
+                ));
+            }
+        }
+        let bytes = norito::to_bytes(&frontier).map_err(Error::NoritoFrame)?;
+        if bytes.is_empty() || bytes.len() > LANE_MERGE_APPLICATION_FRONTIER_MAX_BYTES {
+            return Err(Self::invalid_lane_artifact_error(
+                path,
+                "lane merge application frontier exceeds its hard byte limit",
+            ));
+        }
+        let before = Self::file_len_or_zero(&path)?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        self.write_atomic_synced_replace(&path, &bytes)?;
+        let after = Self::file_len_or_zero(&path)?;
+        self.update_disk_usage_delta(before, after);
+        accounting_mutation.finish();
+        Ok(Some(frontier))
+    }
+
+    fn autonomous_auxiliary_lane_height(name: &str) -> Option<u64> {
+        fn one_height(name: &str, prefix: &str) -> Option<u64> {
+            let raw = name
+                .strip_prefix(prefix)?
+                .strip_prefix('_')?
+                .strip_suffix(".norito")?;
+            let height = raw.parse::<u64>().ok()?;
+            (height != 0 && name == format!("{prefix}_{height:020}.norito")).then_some(height)
+        }
+        fn two_heights(name: &str, prefix: &str) -> Option<u64> {
+            let raw = name
+                .strip_prefix(prefix)?
+                .strip_prefix('_')?
+                .strip_suffix(".norito")?;
+            let (lane_height, proposal_height) = raw.split_once('_')?;
+            let lane_height = lane_height.parse::<u64>().ok()?;
+            let proposal_height = proposal_height.parse::<u64>().ok()?;
+            (lane_height != 0
+                && proposal_height != 0
+                && name == format!("{prefix}_{lane_height:020}_{proposal_height:020}.norito"))
+            .then_some(lane_height)
+        }
+        one_height(name, AUTONOMOUS_LANE_BLOCK_VIEW_STATE_PREFIX)
+            .or_else(|| one_height(name, AUTONOMOUS_LANE_BLOCK_LATEST_ATTEMPT_PREFIX))
+            .or_else(|| two_heights(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_PREFIX))
+            .or_else(|| two_heights(name, AUTONOMOUS_LANE_BLOCK_ATTEMPT_VIEW_PREFIX))
+    }
+
+    fn remove_terminal_autonomous_auxiliary_files_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        terminal_height: u64,
+    ) -> Result<bool> {
+        // Reuse the configured sidecar maintenance window as the per-pass
+        // mutation budget. The merge frontier and synced unlinks are the
+        // durable cursor, so this bounds each pass without bounding lifetime
+        // history.
+        self.remove_terminal_autonomous_auxiliary_files_with_budget_locked(
+            entry,
+            terminal_height,
+            self.roster_sidecar_retention.get(),
+        )
+    }
+
+    fn remove_terminal_autonomous_auxiliary_files_with_budget_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        terminal_height: u64,
+        removal_budget: usize,
+    ) -> Result<bool> {
+        if removal_budget == 0 {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root)),
+                "lane terminal auxiliary cleanup requires a non-zero mutation budget",
+            ));
+        }
+        let directory = Self::lane_artifact_dir(&entry.blocks_dir(&self.store_root));
+        let directory_entries =
+            std::fs::read_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        let accounting_mutation = self.begin_total_disk_usage_mutation();
+        let mut removed_bytes = 0_u64;
+        let mut removed_any = false;
+        let mut complete = true;
+        let mut removals = 0_usize;
+        for directory_entry in directory_entries {
+            let directory_entry =
+                directory_entry.map_err(|error| Error::IO(error, directory.clone()))?;
+            let path = directory_entry.path();
+            let metadata =
+                std::fs::symlink_metadata(&path).map_err(|error| Error::IO(error, path.clone()))?;
+            if metadata.file_type().is_symlink() {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "lane terminal auxiliary-file cleanup found a symlink",
+                ));
+            }
+            let file_name = directory_entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if Self::autonomous_auxiliary_lane_height(name)
+                .is_none_or(|height| height > terminal_height)
+            {
+                continue;
+            }
+            if !metadata.file_type().is_file() || !Self::sidecar_is_single_link(&metadata) {
+                return Err(Self::invalid_lane_artifact_error(
+                    path,
+                    "lane terminal auxiliary artifact is not a single-link regular file",
+                ));
+            }
+            std::fs::remove_file(&path).map_err(|error| Error::IO(error, path))?;
+            removed_bytes = removed_bytes.saturating_add(metadata.len());
+            removed_any = true;
+            removals = removals.saturating_add(1);
+            if removals >= removal_budget {
+                complete = false;
+                break;
+            }
+        }
+
+        let route_latest =
+            Self::autonomous_lane_route_latest_attempt_path_for_entry(entry, &self.store_root);
+        if let Some(pointer) = self.read_autonomous_lane_route_latest_attempt_locked(entry)?
+            && pointer.lane_block_height <= terminal_height
+        {
+            let bytes = Self::file_len_or_zero(&route_latest)?;
+            std::fs::remove_file(&route_latest)
+                .map_err(|error| Error::IO(error, route_latest.clone()))?;
+            removed_bytes = removed_bytes.saturating_add(bytes);
+            removed_any = true;
+        }
+        if removed_any {
+            sync_dir(&directory).map_err(|error| Error::IO(error, directory))?;
+            self.sub_disk_usage_bytes(removed_bytes);
+        }
+        accounting_mutation.finish();
+        Ok(complete)
+    }
+
+    fn compact_lane_histories_through_merge_frontier_locked(
+        &self,
+        entry: &LaneConfigEntry,
+        frontier: &LaneMergeApplicationFrontierV1,
+    ) -> Result<bool> {
+        if self
+            .lane_merge_application_frontier_expected_receipt(frontier)
+            .is_none()
+        {
+            return Err(Self::invalid_lane_artifact_error(
+                Self::lane_merge_application_frontier_path_for_entry(entry, &self.store_root),
+                "lane merge application frontier does not match its merge entry and carrier",
+            ));
+        }
+        let retention = self.roster_sidecar_retention;
+        let pairs = [
+            (
+                Self::lane_artifact_paths_for_entry(entry, &self.store_root),
+                LaneBlockArtifact::FORMAT_LABEL,
+            ),
+            (
+                Self::autonomous_lane_block_paths_for_entry(entry, &self.store_root),
+                AutonomousLaneBlockArtifact::FORMAT_LABEL,
+            ),
+            (
+                Self::lane_block_execution_input_paths_for_entry(entry, &self.store_root),
+                LaneBlockExecutionInputArtifact::FORMAT_LABEL,
+            ),
+            (
+                Self::lane_block_execution_preflight_paths_for_entry(entry, &self.store_root),
+                LaneBlockExecutionPreflightArtifact::FORMAT_LABEL,
+            ),
+            (
+                Self::certified_lane_block_paths_for_entry(entry, &self.store_root),
+                CertifiedLaneBlockArtifact::FORMAT_LABEL,
+            ),
+            (
+                Self::lane_block_application_receipt_paths_for_entry(entry, &self.store_root),
+                LaneBlockApplicationReceiptArtifact::FORMAT_LABEL,
+            ),
+        ];
+        for ((data_path, index_path), kind) in pairs {
+            let before = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+            let accounting_mutation = self.begin_total_disk_usage_mutation();
+            if !Self::prune_indexed_sidecars_through_terminal_frontier(
+                &data_path,
+                &index_path,
+                frontier.lane_block_height,
+                retention,
+                kind,
+            ) {
+                return Err(Self::invalid_lane_artifact_error(
+                    data_path,
+                    format!("{kind} terminal-frontier compaction failed"),
+                ));
+            }
+            let after = Self::sidecar_tracked_bytes(&data_path, &index_path, None)?;
+            self.update_disk_usage_delta(before, after);
+            accounting_mutation.finish();
+        }
+        self.remove_terminal_autonomous_auxiliary_files_locked(entry, frontier.lane_block_height)
     }
 
     fn lane_block_application_receipt_matches_merge_log(
@@ -30927,14 +32208,6 @@ impl Kura {
             payload_hash.as_ref(),
         ]);
         (HashOf::from_untyped_unchecked(synthetic), 0)
-    }
-
-    #[cfg(test)]
-    fn lane_block_payload_artifact_and_block(
-        &self,
-        proposal: &LaneBlockProposalV1,
-    ) -> Result<(LaneBlockArtifact, Arc<SignedBlock>), LaneBlockPayloadAvailability> {
-        self.lane_block_payload_artifact_and_block_with_sidecar_repair(proposal, true)
     }
 
     fn lane_block_payload_artifact_and_block_with_sidecar_repair(
@@ -36131,6 +37404,50 @@ impl Kura {
         )
     }
 
+    fn prune_indexed_sidecars_to_retention_window(
+        data_path: &Path,
+        index_path: &Path,
+        retention: NonZeroUsize,
+        kind: &str,
+    ) -> bool {
+        if !data_path.exists() && !index_path.exists() {
+            return true;
+        }
+        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+            return false;
+        }
+        Self::rewrite_indexed_sidecars(
+            data_path,
+            index_path,
+            IndexedSidecarRewrite::RetainNewestWindow { retention },
+            kind,
+        )
+    }
+
+    fn prune_indexed_sidecars_through_terminal_frontier(
+        data_path: &Path,
+        index_path: &Path,
+        terminal_height: u64,
+        retention: NonZeroUsize,
+        kind: &str,
+    ) -> bool {
+        if !data_path.exists() && !index_path.exists() {
+            return true;
+        }
+        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+            return false;
+        }
+        Self::rewrite_indexed_sidecars(
+            data_path,
+            index_path,
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier {
+                terminal_height,
+                retention,
+            },
+            kind,
+        )
+    }
+
     fn truncate_indexed_sidecars_to_height(
         data_path: &Path,
         index_path: &Path,
@@ -36196,7 +37513,19 @@ impl Kura {
             );
         }
         let total_entries = layout.entry_count;
-        let (keep_from, output_entries, pinned_height, operation) = match rewrite {
+        let terminal_prefix_rewrite = matches!(
+            rewrite,
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier { .. }
+        );
+        let (
+            mut keep_from,
+            mut source_start,
+            mut output_entries,
+            mut output_base_height,
+            pinned_height,
+            operation,
+            window_data_byte_limit,
+        ) = match rewrite {
             IndexedSidecarRewrite::RetainNewest {
                 retention,
                 pinned_height,
@@ -36207,9 +37536,68 @@ impl Kura {
                 }
                 (
                     total_entries.saturating_sub(retention_u64),
+                    0,
                     total_entries,
+                    layout.base_height,
                     pinned_height,
                     "retention prune",
+                    None,
+                )
+            }
+            IndexedSidecarRewrite::RetainNewestWindow { retention } => {
+                let retention_u64 = retention.get() as u64;
+                let source_start = total_entries.saturating_sub(retention_u64);
+                let Some(output_base_height) = layout.base_height.checked_add(source_start) else {
+                    iroha_logger::warn!(
+                        base_height = layout.base_height,
+                        source_start,
+                        ?index_path,
+                        kind,
+                        "sidecar retention-window base height overflows"
+                    );
+                    return false;
+                };
+                (
+                    source_start,
+                    source_start,
+                    retention_u64,
+                    output_base_height,
+                    None,
+                    "retention-window prune",
+                    Some(MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_FILE_BYTES),
+                )
+            }
+            IndexedSidecarRewrite::RetainAfterTerminalFrontier {
+                terminal_height,
+                retention,
+            } => {
+                let first_retained_height = terminal_height
+                    .saturating_sub(retention.get() as u64)
+                    .saturating_add(1);
+                if layout.base_height >= first_retained_height {
+                    return true;
+                }
+                let source_start = first_retained_height
+                    .saturating_sub(layout.base_height)
+                    .min(total_entries);
+                let Some(output_base_height) = layout.base_height.checked_add(source_start) else {
+                    iroha_logger::warn!(
+                        base_height = layout.base_height,
+                        source_start,
+                        ?index_path,
+                        kind,
+                        "terminal sidecar retention base height overflows"
+                    );
+                    return false;
+                };
+                (
+                    source_start,
+                    source_start,
+                    total_entries.saturating_sub(source_start),
+                    output_base_height,
+                    None,
+                    "terminal-frontier prune",
+                    None,
                 )
             }
             IndexedSidecarRewrite::TruncateToHeight(height) => {
@@ -36221,24 +37609,54 @@ impl Kura {
                 if output_entries == total_entries {
                     return true;
                 }
-                (0, output_entries, None, "rollback truncation")
+                (
+                    0,
+                    0,
+                    output_entries,
+                    layout.base_height,
+                    None,
+                    "rollback truncation",
+                    None,
+                )
             }
         };
 
-        let entries_capacity = match usize::try_from(total_entries) {
+        let entries_to_read = if terminal_prefix_rewrite {
+            output_entries
+        } else {
+            total_entries
+        };
+        let entries_capacity = match usize::try_from(entries_to_read) {
             Ok(capacity) => capacity,
             Err(err) => {
                 iroha_logger::warn!(
                     ?err,
-                    total_entries,
+                    entries_to_read,
                     ?index_path,
                     kind,
-                    "sidecar index entry count exceeds usize during prune"
+                    "sidecar retained entry count exceeds usize during prune"
                 );
                 return false;
             }
         };
-        if let Err(err) = index.seek(SeekFrom::Start(layout.entries_offset)) {
+        let vector_base = if terminal_prefix_rewrite {
+            source_start
+        } else {
+            0
+        };
+        let Some(entries_offset) = vector_base
+            .checked_mul(PIPELINE_INDEX_ENTRY_SIZE_U64)
+            .and_then(|offset| layout.entries_offset.checked_add(offset))
+        else {
+            iroha_logger::warn!(
+                vector_base,
+                ?index_path,
+                kind,
+                "sidecar retained index offset overflows during prune"
+            );
+            return false;
+        };
+        if let Err(err) = index.seek(SeekFrom::Start(entries_offset)) {
             iroha_logger::warn!(
                 ?err,
                 ?index_path,
@@ -36249,12 +37667,62 @@ impl Kura {
         }
         let mut entries = Vec::with_capacity(entries_capacity);
         let mut entry_buf = [0u8; PIPELINE_INDEX_ENTRY_SIZE];
-        for _ in 0..total_entries {
+        for _ in 0..entries_to_read {
             if let Err(err) = index.read_exact(&mut entry_buf) {
                 iroha_logger::warn!(?err, ?index_path, kind, "failed to read sidecar index");
                 return false;
             }
             entries.push(SidecarIndexEntry::from_bytes(entry_buf));
+        }
+        if let Some(byte_limit) = window_data_byte_limit {
+            let Ok(count_start) = usize::try_from(source_start.saturating_sub(vector_base)) else {
+                return false;
+            };
+            let mut byte_start = entries.len();
+            let mut retained_bytes = 0_u64;
+            for idx in (count_start..entries.len()).rev() {
+                let Some(next_bytes) = retained_bytes.checked_add(entries[idx].len) else {
+                    return false;
+                };
+                if next_bytes > byte_limit {
+                    break;
+                }
+                retained_bytes = next_bytes;
+                byte_start = idx;
+            }
+            if entries
+                .get(byte_start..)
+                .is_none_or(|retained| retained.iter().all(|entry| entry.len == 0))
+                && entries
+                    .get(count_start..)
+                    .is_some_and(|window| window.iter().any(|entry| entry.len > 0))
+            {
+                iroha_logger::warn!(
+                    byte_limit,
+                    ?index_path,
+                    kind,
+                    "newest Native AMX evidence payload does not fit its aggregate retention budget"
+                );
+                return false;
+            }
+            let Ok(byte_start) = u64::try_from(byte_start) else {
+                iroha_logger::warn!(
+                    ?index_path,
+                    kind,
+                    "Native AMX evidence retention-window start exceeds u64"
+                );
+                return false;
+            };
+            source_start = vector_base.saturating_add(byte_start);
+            keep_from = source_start;
+            output_entries = total_entries.saturating_sub(source_start);
+            let Some(window_base_height) = layout.base_height.checked_add(source_start) else {
+                return false;
+            };
+            output_base_height = window_base_height;
+            if source_start == 0 {
+                return true;
+            }
         }
 
         let mut data = match std::fs::File::open(data_path) {
@@ -36271,6 +37739,33 @@ impl Kura {
                 return false;
             }
         };
+        if terminal_prefix_rewrite {
+            let skip =
+                usize::try_from(source_start.saturating_sub(vector_base)).unwrap_or(usize::MAX);
+            let take = usize::try_from(output_entries).unwrap_or(usize::MAX);
+            for entry in entries.iter().skip(skip).take(take) {
+                if entry.len == 0 {
+                    continue;
+                }
+                if entry.len > STRICT_INIT_MAX_BLOCK_BYTES
+                    || usize::try_from(entry.len).is_err()
+                    || entry
+                        .offset
+                        .checked_add(entry.len)
+                        .is_none_or(|end| end > data_len)
+                {
+                    iroha_logger::warn!(
+                        offset = entry.offset,
+                        len = entry.len,
+                        data_len,
+                        ?index_path,
+                        kind,
+                        "refusing terminal compaction with a malformed retained sidecar entry"
+                    );
+                    return false;
+                }
+            }
+        }
 
         // Keep temp paths distinct: `.with_extension("tmp")` would collapse
         // `*.norito` and `*.index` into the same `*.tmp` filename.
@@ -36300,9 +37795,9 @@ impl Kura {
                 return false;
             }
         };
-        if layout.is_based()
+        if output_base_height > SidecarIndexLayout::LEGACY_BASE_HEIGHT
             && let Err(err) =
-                new_index.write_all(&SidecarIndexLayout::base_header(layout.base_height))
+                new_index.write_all(&SidecarIndexLayout::base_header(output_base_height))
         {
             iroha_logger::warn!(
                 ?err,
@@ -36315,13 +37810,16 @@ impl Kura {
 
         let mut new_offset = 0u64;
         let empty_entry = SidecarIndexEntry { offset: 0, len: 0 }.to_bytes();
-        for (idx, entry) in entries
+        for (vector_idx, entry) in entries
             .iter()
-            .take(usize::try_from(output_entries).unwrap_or(usize::MAX))
             .enumerate()
+            .skip(usize::try_from(source_start.saturating_sub(vector_base)).unwrap_or(usize::MAX))
+            .take(usize::try_from(output_entries).unwrap_or(usize::MAX))
         {
-            let entry_height = layout.base_height.saturating_add(idx as u64);
-            let retained_by_policy = (idx as u64) >= keep_from
+            let absolute_idx =
+                vector_base.saturating_add(u64::try_from(vector_idx).unwrap_or(u64::MAX));
+            let entry_height = layout.base_height.saturating_add(absolute_idx);
+            let retained_by_policy = absolute_idx >= keep_from
                 || pinned_height.is_some_and(|height| height == entry_height);
             if !retained_by_policy || entry.len == 0 {
                 if let Err(err) = new_index.write_all(&empty_entry) {
@@ -36343,6 +37841,14 @@ impl Kura {
                     kind,
                     "sidecar payload length exceeds limit during prune; dropping entry"
                 );
+                if terminal_prefix_rewrite {
+                    iroha_logger::warn!(
+                        ?index_path,
+                        kind,
+                        "refusing terminal compaction that would drop a retained sidecar entry"
+                    );
+                    return false;
+                }
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
                         ?err,
@@ -36362,6 +37868,14 @@ impl Kura {
                     kind,
                     "sidecar payload length exceeds usize during prune; dropping entry"
                 );
+                if terminal_prefix_rewrite {
+                    iroha_logger::warn!(
+                        ?index_path,
+                        kind,
+                        "refusing terminal compaction that would drop a retained sidecar entry"
+                    );
+                    return false;
+                }
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
                         ?err,
@@ -36382,6 +37896,14 @@ impl Kura {
                     kind,
                     "sidecar payload range overflow during prune; dropping entry"
                 );
+                if terminal_prefix_rewrite {
+                    iroha_logger::warn!(
+                        ?index_path,
+                        kind,
+                        "refusing terminal compaction that would drop a retained sidecar entry"
+                    );
+                    return false;
+                }
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
                         ?err,
@@ -36401,6 +37923,14 @@ impl Kura {
                     kind,
                     "sidecar payload past data file during prune; dropping entry"
                 );
+                if terminal_prefix_rewrite {
+                    iroha_logger::warn!(
+                        ?index_path,
+                        kind,
+                        "refusing terminal compaction that would drop a retained sidecar entry"
+                    );
+                    return false;
+                }
                 if let Err(err) = new_index.write_all(&empty_entry) {
                     iroha_logger::warn!(
                         ?err,
@@ -36643,13 +38173,17 @@ impl Kura {
             }
         }
 
-        let retained = output_entries
-            .saturating_sub(keep_from)
-            .saturating_add(u64::from(pinned_height.is_some_and(|height| {
-                height
-                    .checked_sub(layout.base_height)
-                    .is_some_and(|relative| relative < output_entries && relative < keep_from)
-            })));
+        let retained = if matches!(rewrite, IndexedSidecarRewrite::RetainNewestWindow { .. }) {
+            output_entries
+        } else {
+            output_entries
+                .saturating_sub(keep_from)
+                .saturating_add(u64::from(pinned_height.is_some_and(|height| {
+                    height
+                        .checked_sub(layout.base_height)
+                        .is_some_and(|relative| relative < output_entries && relative < keep_from)
+                })))
+        };
         let pruned = total_entries.saturating_sub(retained);
         iroha_logger::debug!(
             kind,
@@ -41855,7 +43389,13 @@ mod tests {
             .iter()
             .map(|result| Hash::from(result.hash()))
             .collect::<Vec<_>>();
-        let validator_set = Vec::<PeerId>::new();
+        let validator = KeyPair::try_from_seed(vec![0xD1; 32], Algorithm::BlsNormal)
+            .expect("derive deterministic Kura merge-index fixture validator");
+        let validator_set = vec![PeerId::new(validator.public_key().clone())];
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("fixture validator count fits u32");
+        let min_quorum = DualQuorum::count_threshold(validator_count)
+            .expect("non-empty fixture validator set has a quorum");
         let lane_incarnation = Hash::new(b"kura-index-refresh-lane-incarnation");
         let mut descriptor = LaneBlockDescriptorV1 {
             lane_id: LaneId::SINGLE,
@@ -41874,8 +43414,8 @@ mod tests {
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set: validator_set.clone(),
-            validator_count: 0,
-            min_quorum: 0,
+            validator_count,
+            min_quorum,
             qc_mode_tag: "kura-index-refresh-test".to_owned(),
             descriptor_hash: Hash::prehashed([0; Hash::LENGTH]),
         };
@@ -41886,6 +43426,8 @@ mod tests {
             payload_block_hint: None,
         };
         proposal.proposal_hash = proposal.computed_proposal_hash();
+        crate::lane_consensus::validate_lane_block_proposal(&proposal)
+            .expect("merge-index fixture proposal must satisfy production ingress validation");
         let lane_qc = |phase| LaneBlockQcV1 {
             body: proposal.vote_body(phase),
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -41976,6 +43518,115 @@ mod tests {
         let mut entry = sample_merge_entry(1);
         entry.execution_batch = Some(batch);
         entry
+    }
+
+    fn merge_entry_with_indexed_reservation(
+        epoch: u64,
+        salt: u8,
+    ) -> (
+        MergeLedgerEntry,
+        HashOf<SignedTransaction>,
+        LaneQueueReservationKeyV1,
+    ) {
+        let entrypoint =
+            offline_top_up_entrypoint_for_index([salt; 32], [salt.saturating_add(1); 32]);
+        let accepted =
+            AcceptedTransaction::new_unchecked_entrypoint(Cow::Owned(entrypoint.clone()));
+        let transaction_hash = accepted.hash();
+        let mut entry = merge_entry_with_indexed_entrypoint(entrypoint.clone());
+        entry.epoch_id = epoch;
+        let execution = entry
+            .execution_batch
+            .as_mut()
+            .and_then(|batch| batch.lanes.first_mut())
+            .expect("reservation fixture has one execution");
+        let descriptor = &execution.proposal.descriptor;
+        let routing_plan = RoutingPlan::single(crate::queue::RoutingDecision::new(
+            descriptor.lane_id,
+            descriptor.dataspace_id,
+        ));
+        let reservation = LaneQueueReservationKeyV1 {
+            version: LaneQueueReservationKeyV1::VERSION,
+            signed_transaction_hash: transaction_hash,
+            entrypoint_hash: entrypoint.hash(),
+            routing_plan_digest: routing_plan.digest(),
+            coordinator_leg: routing_plan.coordinator_leg(),
+            lane_id: descriptor.lane_id,
+            dataspace_id: descriptor.dataspace_id,
+            lane_incarnation: descriptor.lane_incarnation,
+            proposal_height: descriptor.proposal_height,
+            lane_block_height: descriptor.lane_block_height,
+            lane_block_view: descriptor.lane_block_view,
+            reservation_owner_hash: Hash::new([salt]),
+            proposal_identity_hash: execution.proposal.proposal_hash,
+        };
+        execution.reservation_keys = vec![
+            norito::to_bytes(&reservation).expect("encode canonical indexed reservation fixture"),
+        ];
+        execution.routing_plans =
+            vec![norito::to_bytes(&routing_plan).expect("encode canonical routing fixture")];
+        (entry, transaction_hash, reservation)
+    }
+
+    fn store_indexed_reservation_carrier(
+        kura: &Kura,
+        salt: u8,
+    ) -> (
+        HashOf<SignedTransaction>,
+        LaneQueueReservationKeyV1,
+        MergeLedgerFrameIndex,
+    ) {
+        let mut blocks = DummyBlocks::new();
+        let genesis = blocks.next();
+        let raw_carrier = blocks.next();
+        let (mut entry, transaction_hash, reservation) =
+            merge_entry_with_indexed_reservation(1, salt);
+        let batch = entry
+            .execution_batch
+            .as_mut()
+            .expect("reservation fixture has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        let descriptor = batch
+            .lanes
+            .first()
+            .expect("reservation fixture has one lane execution")
+            .proposal
+            .descriptor
+            .clone();
+        let lane_entry = kura
+            .lane_storage_entry(descriptor.lane_id)
+            .expect("reservation fixture targets an active lane");
+        kura.install_lane_incarnation_marker_for_test(&lane_entry, descriptor.lane_incarnation, 0)
+            .expect("install reservation fixture lane incarnation");
+        let mut executed_carrier = raw_carrier.as_ref().clone();
+        attach_ok_results_to_block(&mut executed_carrier);
+        let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut entry);
+        assert!(
+            carrier.has_results(),
+            "a canonical reservation carrier must contain execution results"
+        );
+        assert_eq!(
+            carrier.results().count(),
+            carrier.external_entrypoints_cloned().count(),
+            "the reservation carrier must contain one result per ordinary entrypoint"
+        );
+        assert_eq!(
+            entry
+                .execution_batch
+                .as_ref()
+                .expect("reservation fixture has an execution batch")
+                .application_block_header,
+            crate::merge::merge_application_header_from_carrier(&carrier.header()),
+            "the reservation batch must bind the canonical stripped carrier header"
+        );
+        kura.store_block(genesis)
+            .expect("store reservation genesis");
+        kura.store_block_with_merge_entry(carrier, &entry)
+            .expect("store reservation merge carrier");
+        let frame = kura.merge_log.lock().frames_by_epoch[&1];
+        (transaction_hash, reservation, frame)
     }
 
     fn v2_finality_fixture_keys() -> Vec<KeyPair> {
@@ -47264,12 +48915,123 @@ mod tests {
         );
         let entrypoint = offline_top_up_entrypoint_for_index([0x71; 32], [0x72; 32]);
         let mut retired_entry = merge_entry_with_indexed_entrypoint(entrypoint);
-        retired_entry
+        let execution = retired_entry
+            .execution_batch
+            .as_ref()
+            .and_then(|batch| batch.lanes.first())
+            .expect("merge execution fixture");
+        let origin = execution.origin_proposal.clone();
+        let mut participant_descriptor = origin.descriptor.clone();
+        participant_descriptor.lane_id = target_lane;
+        participant_descriptor.dataspace_id = target_dataspace;
+        participant_descriptor.lane_incarnation = retired_incarnation;
+        participant_descriptor.descriptor_hash = participant_descriptor.computed_descriptor_hash();
+        let mut participant_proposal = LaneBlockProposalV1 {
+            descriptor: participant_descriptor,
+            proposal_hash: Hash::prehashed([0; Hash::LENGTH]),
+            payload_block_hint: None,
+        };
+        participant_proposal.proposal_hash = participant_proposal.computed_proposal_hash();
+        let participant_settlement = LaneBlockCommitment {
+            block_height: participant_proposal.descriptor.lane_block_height,
+            lane_id: target_lane,
+            lane_incarnation: retired_incarnation,
+            dataspace_id: target_dataspace,
+            tx_count: 0,
+            total_local_amount: "0".parse().expect("valid settlement quantity"),
+            total_xor_due: "0".parse().expect("valid settlement quantity"),
+            total_xor_after_haircut: "0".parse().expect("valid settlement quantity"),
+            total_xor_variance: "0".parse().expect("valid settlement quantity"),
+            swap_metadata: None,
+            receipts: Vec::new(),
+            nexus_fee_receipts: Vec::new(),
+            native_amx_receipts: Vec::new(),
+        };
+        let participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("participant settlement hashes");
+        let participant_validator_set = Vec::<PeerId>::new();
+        let participant_validator_set_hash = HashOf::new(&participant_validator_set);
+        let source_id = [0x73; Hash::LENGTH];
+        let mut prepare_body = iroha_data_model::block::consensus::NativeAmxAttestationBodyV2 {
+            round: iroha_data_model::block::consensus_v2::ConsensusRound {
+                context_id: HeightContextId(HashOf::from_untyped_unchecked(Hash::new(
+                    b"pending-route-native-context",
+                ))),
+                height: origin.descriptor.proposal_height,
+                view: origin.descriptor.lane_block_view,
+            },
+            epoch: 1,
+            chain_id_hash: execution.autonomous_chain_id_hash,
+            source_id,
+            tx_entrypoint_hash: execution.entrypoints[0].hash(),
+            plan_digest: routing_plan.digest(),
+            phase: iroha_data_model::block::consensus::NativeAmxPhase::Prepare,
+            coordinator_lane_id: origin.descriptor.lane_id,
+            coordinator_dataspace_id: origin.descriptor.dataspace_id,
+            coordinator_lane_incarnation: origin.descriptor.lane_incarnation,
+            participant_lane_id: target_lane,
+            participant_dataspace_id: target_dataspace,
+            participant_lane_incarnation: retired_incarnation,
+            participant_previous_block_height: participant_proposal
+                .descriptor
+                .previous_lane_block_height,
+            participant_previous_block_descriptor_hash: participant_proposal
+                .descriptor
+                .previous_lane_block_descriptor_hash,
+            participant_lane_block_height: participant_proposal.descriptor.lane_block_height,
+            participant_lane_block_view: participant_proposal.descriptor.lane_block_view,
+            participant_proposal_hash: participant_proposal.proposal_hash,
+            participant_settlement_commitment: Hash::from(participant_settlement_hash),
+            participant_validator_set_hash,
+            participant_validator_count: 0,
+            participant_min_quorum: 0,
+            authority_context_height: origin.descriptor.proposal_height,
+            planned_coordinator_block_height: origin.descriptor.lane_block_height,
+            coordinator_lane_block_view: origin.descriptor.lane_block_view,
+            coordinator_proposal_hash: origin.proposal_hash,
+        };
+        let native_qc = |body| iroha_data_model::block::consensus::NativeAmxAttestationQcV2 {
+            body,
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set_hash: participant_validator_set_hash,
+            validator_set: participant_validator_set.clone(),
+            validator_set_pops: Vec::new(),
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        };
+        let prepare_qc = native_qc(prepare_body);
+        prepare_body.phase = iroha_data_model::block::consensus::NativeAmxPhase::Commit;
+        let commit_qc = native_qc(prepare_body);
+        let receipt = NativeAmxReceipt {
+            version: 2,
+            source_id,
+            chain_id_hash: execution.autonomous_chain_id_hash,
+            plan_digest: routing_plan.digest(),
+            lane_id: origin.descriptor.lane_id,
+            dataspace_id: origin.descriptor.dataspace_id,
+            lane_incarnation: origin.descriptor.lane_incarnation,
+            authority_context_height: origin.descriptor.proposal_height,
+            lane_block_height: origin.descriptor.lane_block_height,
+            lane_block_view: origin.descriptor.lane_block_view,
+            coordinator_proposal_hash: origin.proposal_hash,
+            legs: vec![iroha_data_model::block::consensus::NativeAmxLegRecordV2 {
+                lane_id: target_lane,
+                dataspace_id: target_dataspace,
+                participant_proposal,
+                participant_settlement,
+                participant_settlement_hash,
+                prepare_qc,
+                commit_qc,
+            }],
+        };
+        let execution = retired_entry
             .execution_batch
             .as_mut()
             .and_then(|batch| batch.lanes.first_mut())
-            .expect("merge execution fixture")
-            .routing_plans = vec![routing_plan.encode()];
+            .expect("merge execution fixture");
+        execution.routing_plans = vec![routing_plan.encode()];
+        execution.native_amx_receipts = vec![Some(receipt)];
         retired_entry
             .active_lanes
             .push(iroha_data_model::merge::MergeLaneBinding {
@@ -47301,6 +49063,50 @@ mod tests {
                 )
                 .expect("scan recreated incarnation"),
             "an old-incarnation sidecar must not ABA-block the recreated lane"
+        );
+
+        let mut malformed_entry = retired_entry.clone();
+        malformed_entry
+            .execution_batch
+            .as_mut()
+            .and_then(|batch| batch.lanes.first_mut())
+            .expect("merge execution fixture")
+            .routing_plans = vec![vec![0xFF]];
+        let malformed_kura = Kura::blank_kura_for_testing();
+        malformed_kura
+            .persist_pending_certified_merge_entry(&malformed_entry)
+            .expect("persist malformed-routing drain fixture");
+        assert!(
+            malformed_kura
+                .pending_certified_merge_work_for_lane(
+                    target_lane,
+                    target_dataspace,
+                    recreated_incarnation,
+                )
+                .expect("scan malformed routing fixture"),
+            "undecodable routing evidence must fail closed"
+        );
+
+        let mut missing_receipt_entry = retired_entry.clone();
+        missing_receipt_entry
+            .execution_batch
+            .as_mut()
+            .and_then(|batch| batch.lanes.first_mut())
+            .expect("merge execution fixture")
+            .native_amx_receipts = vec![None];
+        let missing_receipt_kura = Kura::blank_kura_for_testing();
+        missing_receipt_kura
+            .persist_pending_certified_merge_entry(&missing_receipt_entry)
+            .expect("persist missing-receipt drain fixture");
+        assert!(
+            missing_receipt_kura
+                .pending_certified_merge_work_for_lane(
+                    target_lane,
+                    target_dataspace,
+                    recreated_incarnation,
+                )
+                .expect("scan missing receipt fixture"),
+            "Native routing without its aligned receipt must fail closed"
         );
 
         let mut unbound_entry = retired_entry.clone();
@@ -47374,6 +49180,25 @@ mod tests {
             .pending_certified_merge_entries()
             .expect("pending merge store remains readable");
         assert_eq!(pending.len(), 2);
+        let bounded = kura
+            .pending_certified_merge_entries_bounded(1)
+            .expect("bounded pending merge diagnostics remain readable");
+        assert_eq!(bounded.len(), 1);
+        assert!(
+            [current_hash, stale_hash].contains(&bounded[0].0),
+            "bounded selection must retain one exact authenticated sidecar"
+        );
+        assert_eq!(
+            kura.pending_certified_merge_entries_bounded(1)
+                .expect("repeat bounded pending merge diagnostics"),
+            bounded,
+            "bounded selection must be deterministic"
+        );
+        assert!(
+            kura.pending_certified_merge_entries_bounded(0)
+                .expect("zero bounded pending merge diagnostics")
+                .is_empty()
+        );
         assert!(
             pending
                 .iter()
@@ -47588,6 +49413,200 @@ mod tests {
                 .expect("merge entry at carrier height");
             assert_eq!(resolved.canonical_hash(), expected.canonical_hash());
         }
+    }
+
+    #[test]
+    fn committed_merge_reservation_lookup_reconstructs_from_canonical_indexes_after_restart() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&dir, nonzero!(2_usize));
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+        let (transaction_hash, reservation, _) =
+            store_indexed_reservation_carrier(kura.as_ref(), 0x61);
+        assert_eq!(
+            kura.committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
+                .expect("resolve live indexed reservation"),
+            BTreeMap::from([(transaction_hash, reservation)])
+        );
+        drop(kura);
+
+        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
+        for height in 1..=2 {
+            reopened
+                .get_block(NonZeroUsize::new(height).expect("non-zero fixture height"))
+                .expect("hydrate canonical transaction index after restart");
+        }
+        reopened.reset_merge_query_read_counters_for_test();
+        assert_eq!(
+            reopened
+                .committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
+                .expect("resolve restarted indexed reservation"),
+            BTreeMap::from([(transaction_hash, reservation)])
+        );
+        let (full_history_scans, _, indexed_lookups) =
+            reopened.merge_query_read_counters_for_test();
+        assert_eq!(
+            full_history_scans, 0,
+            "reservation lookup must not materialize merge history"
+        );
+        assert_eq!(
+            indexed_lookups, 1,
+            "reservation lookup must decode only its exact carrier sidecar"
+        );
+    }
+
+    #[test]
+    fn merge_frontier_startup_requires_geometry_only_after_committed_execution() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&dir, nonzero!(2_usize));
+        let lane_config = RuntimeLaneConfig::default();
+
+        let (fresh, _) = Kura::new(&config, &lane_config).expect("open fresh Kura");
+        let entry = fresh
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("fresh primary lane storage entry");
+        let marker_path = entry
+            .blocks_dir(&fresh.store_root)
+            .join(".lane-incarnation.norito");
+        assert!(
+            !marker_path.exists(),
+            "a fresh unauthenticated test route starts without execution geometry"
+        );
+        drop(fresh);
+
+        let (kura, _) = Kura::new(&config, &lane_config)
+            .expect("a fresh route without frontier or execution may reopen");
+        let _ = store_indexed_reservation_carrier(kura.as_ref(), 0x62);
+        assert!(
+            kura.merge_log
+                .lock()
+                .has_execution_for_route(entry.lane_id, entry.dataspace_id),
+            "fixture must commit an autonomous merge execution before removing geometry"
+        );
+        assert!(
+            marker_path.is_file(),
+            "the committed-execution fixture must install its exact incarnation marker"
+        );
+        fs::remove_file(&marker_path).expect("remove exact committed-execution geometry");
+        sync_dir(
+            marker_path
+                .parent()
+                .expect("lane incarnation marker has a parent"),
+        )
+        .expect("sync missing-geometry crash image");
+        drop(kura);
+
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("committed execution without its exact geometry must fail closed"),
+            Err(error) => error,
+        };
+        assert!(
+            matches!(
+                &error,
+                Error::IO(source, path)
+                    if source.kind() == ErrorKind::NotFound && path == &marker_path
+            ),
+            "startup must identify the missing lane-incarnation geometry: {error}"
+        );
+    }
+
+    #[test]
+    fn committed_merge_reservation_lookup_fails_closed_on_log_mutation() {
+        for mutation in ["corrupt", "truncate", "oversize"] {
+            let dir = TempDir::new().expect("tempdir");
+            let config = kura_config_for_dir(&dir, nonzero!(2_usize));
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+            let (transaction_hash, _, frame) =
+                store_indexed_reservation_carrier(kura.as_ref(), 0x71);
+            let path = kura.active_merge_path.lock().clone();
+            let mut file = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .open(&path)
+                .expect("open merge log for mutation");
+            match mutation {
+                "corrupt" => {
+                    let offset = frame
+                        .frame_offset
+                        .saturating_add(4)
+                        .saturating_add(u64::from(frame.payload_len))
+                        .saturating_sub(1);
+                    file.seek(SeekFrom::Start(offset))
+                        .expect("seek reservation frame tail");
+                    let mut byte = [0u8; 1];
+                    file.read_exact(&mut byte).expect("read reservation frame");
+                    byte[0] ^= 0x80;
+                    file.seek(SeekFrom::Start(offset))
+                        .expect("rewind reservation frame");
+                    file.write_all(&byte).expect("corrupt reservation frame");
+                }
+                "truncate" => {
+                    file.set_len(
+                        frame
+                            .frame_offset
+                            .saturating_add(4)
+                            .saturating_add(u64::from(frame.payload_len))
+                            .saturating_sub(1),
+                    )
+                    .expect("truncate reservation frame");
+                }
+                "oversize" => {
+                    file.seek(SeekFrom::End(0)).expect("seek merge log tail");
+                    let oversized =
+                        u32::try_from(MAX_MERGE_LEDGER_ENTRY_BYTES + 1).expect("limit fits u32");
+                    file.write_all(&oversized.to_le_bytes())
+                        .expect("append oversized frame length");
+                    file.set_len(
+                        frame
+                            .frame_offset
+                            .saturating_add(4)
+                            .saturating_add(u64::from(frame.payload_len))
+                            .saturating_add(4)
+                            .saturating_add(u64::from(oversized)),
+                    )
+                    .expect("materialize oversized sparse tail");
+                }
+                _ => unreachable!("fixed mutation table"),
+            }
+            file.sync_all().expect("sync merge log mutation");
+
+            assert!(
+                kura.committed_merge_queue_reservations(&BTreeSet::from([transaction_hash]))
+                    .is_err(),
+                "reservation lookup must fail closed after {mutation}"
+            );
+        }
+    }
+
+    #[test]
+    fn committed_merge_reservation_lookup_requires_complete_unique_transaction_index() {
+        let dir = TempDir::new().expect("tempdir");
+        let config = kura_config_for_dir(&dir, nonzero!(2_usize));
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("open Kura");
+        let (transaction_hash, _, _) = store_indexed_reservation_carrier(kura.as_ref(), 0x81);
+        let requested = BTreeSet::from([transaction_hash]);
+
+        kura.transaction_entrypoint_index.lock().complete = false;
+        assert!(
+            kura.committed_merge_queue_reservations(&requested).is_err(),
+            "an incomplete canonical transaction index must fail closed"
+        );
+
+        {
+            let mut index = kura.transaction_entrypoint_index.lock();
+            index.complete = true;
+            index
+                .heights_by_transaction
+                .get_mut(&transaction_hash)
+                .expect("fixture transaction is indexed")
+                .insert(nonzero!(3_usize));
+        }
+        assert!(
+            kura.committed_merge_queue_reservations(&requested).is_err(),
+            "multiple canonical carrier heights must fail closed"
+        );
     }
 
     #[test]
@@ -50491,6 +52510,23 @@ mod tests {
         assert_eq!(snapshot.len(), 2);
         assert_eq!(snapshot[0].epoch_id, 2);
         assert_eq!(snapshot[1].epoch_id, 3);
+        assert_eq!(
+            kura.merge_ledger_latest_snapshot(1)
+                .iter()
+                .map(|entry| entry.epoch_id)
+                .collect::<Vec<_>>(),
+            vec![3],
+            "bounded diagnostics must clone only the newest requested suffix"
+        );
+        assert_eq!(
+            kura.merge_ledger_latest_snapshot(2)
+                .iter()
+                .map(|entry| entry.epoch_id)
+                .collect::<Vec<_>>(),
+            vec![3, 2],
+            "bounded diagnostics suffixes are newest-first and deterministic"
+        );
+        assert!(kura.merge_ledger_latest_snapshot(0).is_empty());
     }
 
     #[test]
@@ -58684,7 +60720,35 @@ mod tests {
 
         let mut blocks = DummyBlocks::new();
         let parent = blocks.next();
-        let carrier = next_merge_carrier(&mut blocks, &mut merge_entry);
+        let raw_carrier = blocks.next();
+        let batch = merge_entry
+            .execution_batch
+            .as_mut()
+            .expect("merge receipt fixture has an execution batch");
+        batch.application_block_header =
+            crate::merge::merge_application_header_from_carrier(&raw_carrier.header());
+        batch.batch_hash = crate::merge::merge_execution_batch_hash(batch);
+        let mut executed_carrier = raw_carrier.as_ref().clone();
+        attach_ok_results_to_block(&mut executed_carrier);
+        let carrier = bind_merge_entry_to_carrier(Arc::new(executed_carrier), &mut merge_entry);
+        assert!(
+            carrier.has_results(),
+            "a canonical merge receipt carrier must contain execution results"
+        );
+        assert_eq!(
+            carrier.results().count(),
+            carrier.external_entrypoints_cloned().count(),
+            "the merge receipt carrier must contain one result per ordinary entrypoint"
+        );
+        assert_eq!(
+            merge_entry
+                .execution_batch
+                .as_ref()
+                .expect("merge receipt fixture has an execution batch")
+                .application_block_header,
+            crate::merge::merge_application_header_from_carrier(&carrier.header()),
+            "the merge receipt batch must bind the canonical stripped carrier header"
+        );
         let carrier_height = carrier.header().height().get();
         let carrier_hash = carrier.hash();
         kura.store_block(parent)
@@ -58705,6 +60769,18 @@ mod tests {
             .expect("read merge receipt")
             .format,
             LaneBlockApplicationReceiptArtifactFormat::MergeExecution,
+        );
+        let frontier_path =
+            Kura::lane_merge_application_frontier_path_for_entry(lane_entry, &kura.store_root());
+        let frontier = kura
+            .decode_lane_merge_application_frontier(lane_entry, &frontier_path)
+            .expect("decode merge application frontier")
+            .expect("merge receipt must publish its terminal frontier");
+        assert_eq!(frontier.lane_block_height, descriptor.lane_block_height);
+        assert!(
+            kura.lane_merge_application_frontier_expected_receipt(&frontier)
+                .is_some(),
+            "the compact cursor must revalidate against the exact merge entry and carrier"
         );
         kura.first_release_lane_retirement_admissible_for_test(
             descriptor.lane_id,
@@ -58750,15 +60826,9 @@ mod tests {
         );
         drop(kura);
 
-        let (reopened, _) = Kura::new(&config, &lane_config).expect("reopen Kura");
         assert!(
-            reopened
-                .read_lane_block_application_receipt(
-                    descriptor.lane_id,
-                    descriptor.lane_block_height,
-                )
-                .is_none(),
-            "restart must preserve the recreated marker boundary for merge receipts",
+            Kura::new(&config, &lane_config).is_err(),
+            "restart must fail closed when a recreated active directory still contains the old incarnation's terminal frontier",
         );
     }
 
@@ -63238,6 +65308,235 @@ mod tests {
     }
 
     #[test]
+    fn native_amx_retention_window_advances_base_and_bounds_index() {
+        let temp_dir = TempDir::new().expect("temporary sidecar directory");
+        let data_path = temp_dir
+            .path()
+            .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_DATA_FILE);
+        let index_path = temp_dir
+            .path()
+            .join(NATIVE_AMX_PARTICIPANT_RECEIPTS_INDEX_FILE);
+        let retention = NonZeroUsize::new(2).expect("non-zero Native evidence retention");
+
+        for height in 41_u64..=44 {
+            let payload =
+                norito::to_bytes(&DummySidecar { height }).expect("encode dummy Native evidence");
+            assert!(Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                height,
+                &payload,
+                "dummy Native AMX evidence",
+                FsyncMode::Always,
+                None,
+                SidecarIndexOrigin::FirstWrite,
+            ));
+            assert!(Kura::prune_indexed_sidecars_to_retention_window(
+                &data_path,
+                &index_path,
+                retention,
+                "dummy Native AMX evidence",
+            ));
+        }
+
+        let mut index = std::fs::File::open(&index_path).expect("open compact Native index");
+        let index_len = index.metadata().expect("compact index metadata").len();
+        let layout = SidecarIndexLayout::read_from(&mut index, index_len)
+            .expect("decode compact Native index layout");
+        assert_eq!(layout.base_height, 43);
+        assert_eq!(layout.entry_count, retention.get() as u64);
+        assert_eq!(
+            index_len,
+            INDEXED_SIDECAR_BASE_HEADER_SIZE_U64
+                + u64::try_from(retention.get()).expect("retention fits u64")
+                    * PIPELINE_INDEX_ENTRY_SIZE_U64,
+            "Native retention must bound historical index slots as well as payload bytes"
+        );
+        for height in 41_u64..=42 {
+            assert!(
+                Kura::read_indexed_sidecar_from_paths(
+                    height,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "dummy Native AMX evidence",
+                )
+                .is_none(),
+                "height {height} must be outside the retained Native window"
+            );
+        }
+        for height in 43_u64..=44 {
+            assert_eq!(
+                Kura::read_indexed_sidecar_from_paths(
+                    height,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "dummy Native AMX evidence",
+                ),
+                Some(DummySidecar { height }),
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_frontier_compaction_retains_every_later_pending_slot() {
+        let temp_dir = TempDir::new().expect("temporary sidecar directory");
+        let data_path = temp_dir.path().join("terminal-history.norito");
+        let index_path = temp_dir.path().join("terminal-history.index");
+        let retention = NonZeroUsize::new(32).expect("non-zero terminal retention");
+
+        for height in 1_u64..=600 {
+            let payload =
+                norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+            assert!(Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                height,
+                &payload,
+                "dummy terminal lane history",
+                FsyncMode::Always,
+                None,
+                SidecarIndexOrigin::FirstWrite,
+            ));
+        }
+        assert!(Kura::prune_indexed_sidecars_through_terminal_frontier(
+            &data_path,
+            &index_path,
+            550,
+            retention,
+            "dummy terminal lane history",
+        ));
+
+        let mut index = std::fs::File::open(&index_path).expect("open compact terminal index");
+        let index_len = index
+            .metadata()
+            .expect("compact terminal index metadata")
+            .len();
+        let layout = SidecarIndexLayout::read_from(&mut index, index_len)
+            .expect("decode compact terminal index layout");
+        assert_eq!(layout.base_height, 519);
+        assert_eq!(layout.entry_count, 82);
+        assert!(
+            Kura::read_indexed_sidecar_from_paths(
+                518,
+                &data_path,
+                &index_path,
+                norito::decode_from_bytes::<DummySidecar>,
+                "dummy terminal lane history",
+            )
+            .is_none()
+        );
+        for height in [519_u64, 550, 551, 600] {
+            assert_eq!(
+                Kura::read_indexed_sidecar_from_paths(
+                    height,
+                    &data_path,
+                    &index_path,
+                    norito::decode_from_bytes::<DummySidecar>,
+                    "dummy terminal lane history",
+                ),
+                Some(DummySidecar { height }),
+                "terminal diagnostics and every post-frontier slot must survive"
+            );
+        }
+    }
+
+    #[test]
+    fn terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot() {
+        let temp_dir = TempDir::new().expect("temporary sidecar directory");
+        let data_path = temp_dir.path().join("terminal-malformed.norito");
+        let index_path = temp_dir.path().join("terminal-malformed.index");
+        for height in 1_u64..=3 {
+            let payload =
+                norito::to_bytes(&DummySidecar { height }).expect("encode dummy lane history");
+            assert!(Kura::append_indexed_sidecar(
+                &data_path,
+                &index_path,
+                height,
+                &payload,
+                "dummy malformed terminal history",
+                FsyncMode::Always,
+                None,
+                SidecarIndexOrigin::FirstWrite,
+            ));
+        }
+        let mut index = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&index_path)
+            .expect("open terminal index for corruption");
+        index
+            .seek(SeekFrom::Start(2 * PIPELINE_INDEX_ENTRY_SIZE_U64 + 8_u64))
+            .expect("seek to pending entry length");
+        index
+            .write_all(&STRICT_INIT_MAX_BLOCK_BYTES.saturating_add(1).to_le_bytes())
+            .expect("forge oversized pending entry");
+        index.sync_all().expect("sync forged pending entry");
+        drop(index);
+        let corrupted_index = std::fs::read(&index_path).expect("read forged index");
+        let original_data = std::fs::read(&data_path).expect("read original data");
+
+        assert!(
+            !Kura::prune_indexed_sidecars_through_terminal_frontier(
+                &data_path,
+                &index_path,
+                2,
+                NonZeroUsize::new(1).expect("non-zero retention"),
+                "dummy malformed terminal history",
+            ),
+            "terminal compaction must fail closed instead of dropping a later pending slot"
+        );
+        assert_eq!(
+            std::fs::read(&index_path).expect("read preserved forged index"),
+            corrupted_index
+        );
+        assert_eq!(
+            std::fs::read(&data_path).expect("read preserved data"),
+            original_data
+        );
+        assert!(!data_path.with_extension("norito.tmp").exists());
+        assert!(!index_path.with_extension("index.tmp").exists());
+    }
+
+    #[test]
+    fn terminal_auxiliary_cleanup_resumes_after_each_mutation_budget() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let lane = lane_config.primary();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let artifact_dir = Kura::lane_artifact_dir(&lane.blocks_dir(temp_dir.path()));
+        std::fs::create_dir_all(&artifact_dir).expect("create lane artifact directory");
+        let paths = (1_u64..=3)
+            .map(|height| {
+                Kura::autonomous_lane_block_view_state_path_for_entry(lane, temp_dir.path(), height)
+            })
+            .collect::<Vec<_>>();
+        for path in &paths {
+            std::fs::write(path, []).expect("stage terminal auxiliary file");
+        }
+
+        let _guard = kura.sidecar_lock.lock();
+        assert!(
+            !kura
+                .remove_terminal_autonomous_auxiliary_files_with_budget_locked(lane, 3, 2)
+                .expect("first bounded cleanup pass"),
+            "exhausting a per-pass budget must request resumption, not fail permanently"
+        );
+        assert_eq!(
+            paths.iter().filter(|path| path.exists()).count(),
+            1,
+            "the first pass must durably remove exactly its mutation budget"
+        );
+        assert!(
+            kura.remove_terminal_autonomous_auxiliary_files_with_budget_locked(lane, 3, 2)
+                .expect("resumed bounded cleanup pass"),
+            "a later pass must finish the remaining terminal namespace"
+        );
+        assert!(paths.iter().all(|path| !path.exists()));
+    }
+
+    #[test]
     fn native_amx_manifest_artifact_rejects_leaf_or_proof_tampering() {
         let leaf = NativeAmxApplicationManifestLeafV1 {
             version: iroha_data_model::block::consensus_v2::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
@@ -63469,8 +65768,8 @@ mod tests {
                 .encode_framed()
                 .expect("encode Native AMX manifest"),
             NativeAmxParticipantApplicationManifestArtifactV1::FORMAT_LABEL,
-            kura.sidecar_fsync_mode(),
-            None,
+            FsyncMode::Always,
+            Some(kura.native_amx_participant_evidence_retention()),
             SidecarIndexOrigin::FirstWrite,
         ));
         let (receipt_data_path, receipt_index_path) =
@@ -63481,8 +65780,8 @@ mod tests {
             1,
             &receipt.encode_framed().expect("encode Native AMX receipt"),
             NativeAmxParticipantApplicationReceiptArtifact::FORMAT_LABEL,
-            kura.sidecar_fsync_mode(),
-            None,
+            FsyncMode::Always,
+            Some(kura.native_amx_participant_evidence_retention()),
             SidecarIndexOrigin::FirstWrite,
         ));
         receipt
@@ -63522,6 +65821,248 @@ mod tests {
                 "unexpected startup error: {error}"
             );
         }
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning() {
+        for artifact_kind in ["manifest", "receipt"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.roster_sidecar_retention =
+                NonZeroUsize::new(2).expect("small Native history test bound");
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let (data_path, index_path) = match artifact_kind {
+                "manifest" => {
+                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
+                }
+                "receipt" => {
+                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                }
+                _ => unreachable!(),
+            };
+            drop(kura);
+
+            fs::write(&data_path, []).expect("stage empty hostile Native data file");
+            let hostile_entries = config.roster_sidecar_retention.get().saturating_add(2);
+            fs::write(
+                &index_path,
+                vec![0_u8; hostile_entries.saturating_mul(PIPELINE_INDEX_ENTRY_SIZE)],
+            )
+            .expect("stage oversized aligned Native append index");
+
+            let error = match Kura::new(&config, &lane_config) {
+                Ok(_) => panic!("startup must reject an oversized {artifact_kind} append index"),
+                Err(error) => error,
+            };
+            assert!(
+                error.to_string().contains("bounded startup entry budget"),
+                "unexpected {artifact_kind} startup bound error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning() {
+        for artifact_kind in ["manifest", "receipt"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let mut config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            config.roster_sidecar_retention =
+                NonZeroUsize::new(2).expect("small Native history test bound");
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let (data_path, _) = match artifact_kind {
+                "manifest" => {
+                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
+                }
+                "receipt" => {
+                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                }
+                _ => unreachable!(),
+            };
+            drop(kura);
+
+            let max_entries = u64::try_from(config.roster_sidecar_retention.get())
+                .expect("retention fits u64")
+                .saturating_add(1);
+            let configured_entry_budget = max_entries
+                .checked_mul(STRICT_INIT_MAX_BLOCK_BYTES)
+                .expect("configured entry budget");
+            assert!(
+                configured_entry_budget > MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES,
+                "the focused test must exercise the tighter aggregate startup sidecar budget"
+            );
+            let hostile_len = MAX_NATIVE_AMX_PARTICIPANT_EVIDENCE_STARTUP_BYTES
+                .checked_add(1)
+                .expect("test aggregate byte bound");
+            fs::File::create(&data_path)
+                .expect("create sparse hostile Native data file")
+                .set_len(hostile_len)
+                .expect("size sparse hostile Native data file");
+
+            let error = match Kura::new(&config, &lane_config) {
+                Ok(_) => panic!("startup must reject oversized {artifact_kind} aggregate data"),
+                Err(error) => error,
+            };
+            assert!(
+                error
+                    .to_string()
+                    .contains("bounded startup aggregate byte budget"),
+                "unexpected {artifact_kind} aggregate bound error: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_truncates_unindexed_append_tail() {
+        for artifact_kind in ["manifest", "receipt"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            let (data_path, _) = match artifact_kind {
+                "manifest" => {
+                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
+                }
+                "receipt" => {
+                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                }
+                _ => unreachable!(),
+            };
+            let indexed_len = fs::metadata(&data_path)
+                .expect("Native evidence data metadata")
+                .len();
+            drop(kura);
+
+            let mut data = fs::OpenOptions::new()
+                .append(true)
+                .open(&data_path)
+                .expect("open Native evidence data for crash residue");
+            data.write_all(b"durable payload written before its index entry")
+                .expect("append unindexed crash residue");
+            data.sync_data().expect("sync unindexed crash residue");
+            drop(data);
+            assert!(fs::metadata(&data_path).expect("residue metadata").len() > indexed_len);
+
+            let (_reopened, _) = Kura::new(&config, &lane_config)
+                .expect("startup must mechanically recover an unindexed append tail");
+            assert_eq!(
+                fs::metadata(&data_path)
+                    .expect("repaired Native evidence data metadata")
+                    .len(),
+                indexed_len,
+                "{artifact_kind} startup repair must truncate only the unindexed suffix"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_leaves_missing_evidence_repair_pending() {
+        for missing_kind in ["manifest", "receipt"] {
+            let temp_dir = TempDir::new().expect("temporary Kura directory");
+            let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+            let lane_config = RuntimeLaneConfig::default();
+            let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+            let entry = kura
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("primary lane storage entry");
+            let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+            kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+                .expect("publish exact derived latest pointer");
+            let latest_path = Kura::native_amx_participant_receipt_latest_index_path_for_entry(
+                &entry,
+                &kura.store_root,
+            );
+            let (missing_data_path, missing_index_path) = match missing_kind {
+                "manifest" => {
+                    Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root)
+                }
+                "receipt" => {
+                    Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root)
+                }
+                _ => unreachable!(),
+            };
+            fs::remove_file(&missing_data_path).expect("remove interrupted Native data file");
+            fs::remove_file(&missing_index_path).expect("remove interrupted Native index file");
+            drop(kura);
+
+            let (reopened, _) = Kura::new(&config, &lane_config)
+                .expect("missing structurally valid Native evidence must remain repair-pending");
+            let reopened_entry = reopened
+                .lane_storage_entry(LaneId::SINGLE)
+                .expect("reopened primary lane storage entry");
+            let latest = reopened
+                .decode_native_amx_participant_receipt_latest_index(&reopened_entry, &latest_path)
+                .expect("decode retained repair-pending latest pointer")
+                .expect("repair-pending latest pointer remains structurally valid");
+            assert_eq!(
+                latest.lane_block_height,
+                receipt.participant_proposal.descriptor.lane_block_height
+            );
+            assert_eq!(
+                reopened.latest_native_amx_participant_application_receipt_matching(
+                    receipt.participant_proposal.descriptor.lane_id,
+                    receipt.participant_proposal.descriptor.dataspace_id,
+                    receipt.participant_proposal.descriptor.lane_incarnation,
+                    |_| true,
+                ),
+                None,
+                "repair-pending {missing_kind} must never satisfy strict runtime evidence"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_latest_index_startup_rejects_present_invalid_manifest_proof() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        let (manifest_data_path, manifest_index_path) =
+            Kura::native_amx_application_manifest_paths_for_entry(&entry, &kura.store_root);
+        let mut manifest = kura
+            .read_native_amx_participant_application_manifest_from_paths_locked(
+                &entry,
+                1,
+                &manifest_data_path,
+                &manifest_index_path,
+                false,
+            )
+            .expect("read valid Native manifest fixture");
+        manifest.manifest_root = Hash::new(b"forged startup Native manifest root");
+        fs::write(
+            &manifest_data_path,
+            manifest
+                .encode_framed()
+                .expect("encode proof-invalid Native manifest"),
+        )
+        .expect("overwrite Native manifest with proof-invalid bytes");
+        drop(kura);
+
+        let error = match Kura::new(&config, &lane_config) {
+            Ok(_) => panic!("startup must reject a present proof-invalid Native manifest"),
+            Err(error) => error,
+        };
+        assert!(
+            error.to_string().contains("malformed")
+                || error.to_string().contains("manifest")
+                || error.to_string().contains("proof"),
+            "unexpected proof-invalid startup error: {error}"
+        );
     }
 
     #[test]
@@ -63693,6 +66234,39 @@ mod tests {
     }
 
     #[test]
+    fn native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation() {
+        let temp_dir = TempDir::new().expect("temporary Kura directory");
+        let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
+        let lane_config = RuntimeLaneConfig::default();
+        let (kura, _) = Kura::new(&config, &lane_config).expect("initialize Kura");
+        let entry = kura
+            .lane_storage_entry(LaneId::SINGLE)
+            .expect("primary lane storage entry");
+        let receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
+        kura.rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
+            .expect("publish exact Native AMX latest index");
+        let old_incarnation = receipt.participant_proposal.descriptor.lane_incarnation;
+        let recreated_incarnation = Hash::new(b"Native AMX retirement ABA incarnation B");
+        assert_ne!(old_incarnation, recreated_incarnation);
+        kura.install_lane_incarnation_marker_for_test(&entry, recreated_incarnation, 0)
+            .expect("recreate the same lane route with incarnation B");
+
+        let error = kura
+            .first_release_lane_retirement_admissible_for_test(
+                entry.lane_id,
+                entry.dataspace_id,
+                recreated_incarnation,
+            )
+            .expect_err("incarnation-A Native evidence in incarnation-B storage must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("stale or duplicate Native AMX participant manifest identity"),
+            "unexpected ABA retirement error: {error}"
+        );
+    }
+
+    #[test]
     fn native_amx_latest_index_rebuild_accepts_only_narrow_pending_tip_metadata() {
         for pending_shape in ["metadata absent", "unbound checkpoint"] {
             let temp_dir = TempDir::new().expect("temporary Kura directory");
@@ -63764,7 +66338,6 @@ mod tests {
     #[test]
     fn native_amx_latest_index_rebuild_rejects_partial_or_below_tip_metadata() {
         for invalid_shape in [
-            "missing manifest evidence",
             "manifest without checkpoint",
             "missing published commit manifest",
             "below-tip metadata gap",
@@ -63778,15 +66351,6 @@ mod tests {
                 .expect("primary lane storage entry");
             let _receipt = install_native_amx_latest_index_evidence_fixture(&kura, &entry);
             match invalid_shape {
-                "missing manifest evidence" => {
-                    let (data_path, index_path) =
-                        Kura::native_amx_application_manifest_paths_for_entry(
-                            &entry,
-                            &kura.store_root,
-                        );
-                    fs::remove_file(data_path).expect("remove manifest data");
-                    fs::remove_file(index_path).expect("remove manifest index");
-                }
                 "manifest without checkpoint" => kura
                     .remove_wsv_checkpoint_without_binding_for_tests(1)
                     .expect("remove checkpoint"),
@@ -63827,7 +66391,7 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_latest_index_rebuild_rejects_unresolved_temp() {
+    fn native_amx_latest_index_startup_discards_unpublished_rewrite_data_temp() {
         let temp_dir = TempDir::new().expect("temporary Kura directory");
         let config = kura_config_for_dir(&temp_dir, BLOCKS_IN_MEMORY);
         let lane_config = RuntimeLaneConfig::default();
@@ -63839,13 +66403,13 @@ mod tests {
             Kura::native_amx_participant_receipt_paths_for_entry(&entry, &kura.store_root);
         let temporary = data_path.with_extension("norito.tmp");
         fs::write(&temporary, b"incomplete receipt append").expect("stage unresolved temp");
+        drop(kura);
 
-        let error = kura
-            .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
-            .expect_err("unresolved receipt temp must fail closed");
+        let (_reopened, _) = Kura::new(&config, &lane_config)
+            .expect("a lone unpublished rewrite data temp is mechanically recoverable");
         assert!(
-            error.to_string().contains("temporary"),
-            "unexpected temp error: {error}"
+            !temporary.exists(),
+            "startup must durably discard the unpublished rewrite data temp"
         );
     }
 
@@ -63878,7 +66442,9 @@ mod tests {
             .rebuild_native_amx_participant_receipt_latest_indexes_on_startup()
             .expect_err("conflicting latest pointer must fail closed");
         assert!(
-            error.to_string().contains("conflicting") || error.to_string().contains("unbacked"),
+            error.to_string().contains("conflicting")
+                || error.to_string().contains("unbacked")
+                || error.to_string().contains("non-canonical"),
             "unexpected conflict error: {error}"
         );
     }

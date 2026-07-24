@@ -38,7 +38,7 @@ Sidebar_label: Ранбук споров وملاحظات
 
 ## 3. مارس الرياضة
 
-1. قم بإدراج مواصفات JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. قم بإدراج مواصفات JSON لـ `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -61,7 +61,7 @@ Sidebar_label: Ранбук споров وملاحظات
 2. قم بتثبيت CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Sidebar_label: Ранбук споров وملاحظات
 
 ## 4. الإخلاء والإخلاء1. **الكلمات الرئيسية:** قم بمقدمة الرسالة الكبيرة; قم بإنهاء عمليات الإخلاء المزعجة عندما يؤدي ذلك إلى دعم السياسة.
 2. **الهندسة `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` بسعر رائع.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` بسعر رائع.
    - التحقق من الوصفة والخلاصة.
 3. **أنشر الملاحظة:**
    - قم بإجراء التحقيق في Torii.
@@ -91,7 +91,7 @@ Sidebar_label: Ранбук споров وملاحظات
 
 ## 6. مواد مناسبة
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 -`docs/source/sorafs/storage_capacity_marketplace.md` (مباشر)
 - `docs/source/sorafs/provider_admission_policy.md` (ملاحظة سير العمل)
 - مراقبة لوحة البيانات: `SoraFS / Capacity Providers`

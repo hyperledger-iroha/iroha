@@ -86,7 +86,7 @@ Tests :
 |-----------|------|----------|
 | Service Torii | Exposer `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Fournir pagination + filtrage. | Networking TL / Core Infra |
 | Attestation | Inclure la hauteur/hash du registry dans les réponses ; ajouter une structure d'attestation Norito consommée par les SDKs. | Core Infra |
-| CLI | Étendre `sorafs_manifest_stub` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | Étendre `sorafs_manifest_builder` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Générer des bindings client (Rust/Go/TS) depuis le schéma Norito ; ajouter des tests d'intégration. | SDK Teams |
 
 Opérations :

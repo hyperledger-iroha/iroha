@@ -88,9 +88,9 @@ I18NF0000004X
   soundigest digest, གྲོས་འཆར་བཀོད་ཡོད་པའི་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ PoR ཞིབ་དཔྱད་འབདཝ་ཨིན།
 - `sorafs_manifest_chunk_store --json-out=-` – ཆ་ཤས་ཚོང་ཁང་གི་སྙན་ཞུ་འདི་ ༡.
   རང་བཞིན་ག་བསྡུར་གྱི་དོན་ལུ་ stdout ཨིན།
-- `sorafs_manifest_stub --chunker-profile=<handle>` – གསལ་སྟོན་དང་ CAR ངེས་གཏན་བཟོཝ་ཨིན།
+- `sorafs_manifest_builder --chunker-profile=<handle>` – གསལ་སྟོན་དང་ CAR ངེས་གཏན་བཟོཝ་ཨིན།
   འཆར་གཞི་ཚུ་གིས་ ཁྲིམས་ལུགས་དང་མཐུན་པའི་ལགཔ་དང་ མིང་གཞན་ཚུ་ བཙུགས་ཡོདཔ་ཨིན།
-- `sorafs_manifest_stub --plan=-` – ཧེ་མའི་`chunk_fetch_specs` ལུ་ལོག་འཐུས།
+- `sorafs_manifest_builder --plan=-` – ཧེ་མའི་`chunk_fetch_specs` ལུ་ལོག་འཐུས།
   in offsets བདེན་དཔྱད་འབད་ནི་ལུ་ བསྒྱུར་བཅོས་འབད་བའི་ཤུལ་ལས་ བཞུ་ནི།
 
 གྲོས་འཆར་ནང་ བརྡ་བཀོད་ཨའུཊི་པུཊི་ (བཞུ་ནི་ པོ་ཨར་ རྩ་བ་, གསལ་སྟོན་ཧེ་ཤེ) དྲན་ཐོ་བཀོད།
@@ -131,7 +131,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -140,7 +140,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

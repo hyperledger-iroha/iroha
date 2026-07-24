@@ -7,7 +7,8 @@ Usage: package_docs_portal_sorafs.sh [options]
 
 Builds the developer portal, regenerates OpenAPI + Norito artefacts, emits
 CycloneDX SBOMs, and packages the portal, OpenAPI, and SBOM payloads into
-SoraFS-ready CARs + manifests. Optionally signs each manifest with Sigstore.
+SoraFS-ready CARs + content manifests. Release authenticity is applied later to
+the aggregate release manifest through the governed Ed25519/HSM release path.
 
 Options:
   --out DIR                   Output directory (default artifacts/devportal/sorafs/<timestamp>)
@@ -24,16 +25,16 @@ Options:
   --skip-sync-openapi         Skip npm run sync-openapi (for offline environments)
   --skip-sbom                 Skip SBOM generation/packaging steps
   --proof                     Run sorafs_cli proof verify for each artifact
-  --sign                      Sign manifests via sorafs_cli manifest sign
-  --sigstore-provider NAME    Identity token provider (requires --sigstore-audience)
-  --sigstore-audience AUD     Identity token audience (requires --sigstore-provider)
-  --sigstore-token-env VAR    Env var containing the Sigstore OIDC token (default SIGSTORE_ID_TOKEN)
   -h, --help                  Show this help text
 
 Examples:
   ./ci/package_docs_portal_sorafs.sh
-  ./ci/package_docs_portal_sorafs.sh --sign --sigstore-provider=github-actions --sigstore-audience=sorafs-devportal
+  ./ci/package_docs_portal_sorafs.sh --proof
   ./ci/package_docs_portal_sorafs.sh --skip-build --skip-sbom --out artifacts/devportal/sorafs/manual
+
+This packager does not sign release artifacts. Pass its outputs into the
+canonical release pipeline, then sign the aggregate release manifest with
+`scripts/release_sorafs_cli.sh`.
 USAGE
 }
 
@@ -73,10 +74,6 @@ PIN_RETENTION="${DOCS_PORTAL_PIN_RETENTION_EPOCH:-14}"
 SORA_CLI_BIN="${DOCS_PORTAL_SORAFS_CLI:-}"
 SKIP_BUILD=0
 GENERATE_SBOM=1
-RUN_SIGN=0
-SIGSTORE_PROVIDER="${DOCS_PORTAL_SIGSTORE_PROVIDER:-}"
-SIGSTORE_AUDIENCE="${DOCS_PORTAL_SIGSTORE_AUDIENCE:-}"
-SIGSTORE_TOKEN_ENV="${DOCS_PORTAL_SIGSTORE_TOKEN_ENV:-SIGSTORE_ID_TOKEN}"
 RUN_SYNC_OPENAPI=1
 RUN_PROOF=0
 
@@ -138,22 +135,6 @@ while [[ $# -gt 0 ]]; do
             RUN_PROOF=1
             shift
             ;;
-        --sign)
-            RUN_SIGN=1
-            shift
-            ;;
-        --sigstore-provider)
-            SIGSTORE_PROVIDER="$2"
-            shift 2
-            ;;
-        --sigstore-audience)
-            SIGSTORE_AUDIENCE="$2"
-            shift 2
-            ;;
-        --sigstore-token-env)
-            SIGSTORE_TOKEN_ENV="$2"
-            shift 2
-            ;;
         -h|--help)
             usage
             exit 0
@@ -165,15 +146,6 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
-
-if [[ -n "$SIGSTORE_PROVIDER" && -z "$SIGSTORE_AUDIENCE" ]]; then
-    log "error: --sigstore-provider requires --sigstore-audience"
-    exit 1
-fi
-if [[ -z "$SIGSTORE_PROVIDER" && -n "$SIGSTORE_AUDIENCE" ]]; then
-    log "error: --sigstore-audience requires --sigstore-provider"
-    exit 1
-fi
 
 require_tool python3
 
@@ -189,13 +161,6 @@ OUT_DIR="$(abs_path "$OUT_DIR")"
 mkdir -p "$OUT_DIR"
 mkdir -p "${REPO_ROOT}/artifacts/devportal/sorafs"
 ln -sfn "$OUT_DIR" "${REPO_ROOT}/artifacts/devportal/sorafs/latest"
-
-if [[ "$RUN_SIGN" -eq 1 ]]; then
-    if [[ -z "${!SIGSTORE_TOKEN_ENV:-}" ]]; then
-        log "error: --sign requested but \$${SIGSTORE_TOKEN_ENV} is empty"
-        exit 1
-    fi
-fi
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then
     require_tool npm
@@ -280,8 +245,6 @@ pack_payload() {
     local manifest_path="$6"
     local manifest_json="$7"
     local proof_path="$8"
-    local bundle_path="$9"
-    local signature_path="${10}"
 
     log "packing ${label} payload from ${input_path}"
     local car_args=(
@@ -319,29 +282,9 @@ pack_payload() {
         log "skipping proof verification for ${label} (--proof not supplied)"
     fi
 
-    local signed_bundle=""
-    local signed_sig=""
-    if [[ "$RUN_SIGN" -eq 1 ]]; then
-        signed_bundle="${bundle_path}"
-        signed_sig="${signature_path}"
-        local sign_args=(
-            "manifest" "sign"
-            "--manifest=${manifest_path}"
-            "--chunk-plan=${plan_path}"
-            "--bundle-out=${signed_bundle}"
-            "--signature-out=${signed_sig}"
-            "--identity-token-env=${SIGSTORE_TOKEN_ENV}"
-        )
-        if [[ -n "$SIGSTORE_PROVIDER" ]]; then
-            sign_args+=("--identity-token-provider=${SIGSTORE_PROVIDER}")
-            sign_args+=("--identity-token-audience=${SIGSTORE_AUDIENCE}")
-        fi
-        run_cli "${sign_args[@]}"
-    fi
-
-    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
+    printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n" \
         "$label" "$input_path" "$car_path" "$plan_path" "$summary_path" \
-        "$manifest_path" "$manifest_json" "$proof_summary" "${signed_bundle}" "${signed_sig}" \
+        "$manifest_path" "$manifest_json" "$proof_summary" \
         >>"$SUMMARY_TMP"
 }
 
@@ -351,8 +294,6 @@ PORTAL_SUMMARY="${OUT_DIR}/portal.car.json"
 PORTAL_MANIFEST="${OUT_DIR}/portal.manifest.to"
 PORTAL_MANIFEST_JSON="${OUT_DIR}/portal.manifest.json"
 PORTAL_PROOF="${OUT_DIR}/portal.proof.json"
-PORTAL_BUNDLE="${OUT_DIR}/portal.manifest.bundle.json"
-PORTAL_SIG="${OUT_DIR}/portal.manifest.sig"
 
 pack_payload \
     "portal" \
@@ -362,9 +303,7 @@ pack_payload \
     "$PORTAL_SUMMARY" \
     "$PORTAL_MANIFEST" \
     "$PORTAL_MANIFEST_JSON" \
-    "$PORTAL_PROOF" \
-    "$PORTAL_BUNDLE" \
-    "$PORTAL_SIG"
+    "$PORTAL_PROOF"
 
 OPENAPI_CAR="${OUT_DIR}/openapi.car"
 OPENAPI_PLAN="${OUT_DIR}/openapi.plan.json"
@@ -372,8 +311,6 @@ OPENAPI_SUMMARY="${OUT_DIR}/openapi.car.json"
 OPENAPI_MANIFEST="${OUT_DIR}/openapi.manifest.to"
 OPENAPI_MANIFEST_JSON="${OUT_DIR}/openapi.manifest.json"
 OPENAPI_PROOF="${OUT_DIR}/openapi.proof.json"
-OPENAPI_BUNDLE="${OUT_DIR}/openapi.manifest.bundle.json"
-OPENAPI_SIG="${OUT_DIR}/openapi.manifest.sig"
 
 pack_payload \
     "openapi" \
@@ -383,9 +320,7 @@ pack_payload \
     "$OPENAPI_SUMMARY" \
     "$OPENAPI_MANIFEST" \
     "$OPENAPI_MANIFEST_JSON" \
-    "$OPENAPI_PROOF" \
-    "$OPENAPI_BUNDLE" \
-    "$OPENAPI_SIG"
+    "$OPENAPI_PROOF"
 
 if [[ -n "$PORTAL_SBOM" && -s "$PORTAL_SBOM" ]]; then
     PORTAL_SBOM_CAR="${OUT_DIR}/portal.sbom.car"
@@ -394,8 +329,6 @@ if [[ -n "$PORTAL_SBOM" && -s "$PORTAL_SBOM" ]]; then
     PORTAL_SBOM_MANIFEST="${OUT_DIR}/portal.sbom.manifest.to"
     PORTAL_SBOM_MANIFEST_JSON="${OUT_DIR}/portal.sbom.manifest.json"
     PORTAL_SBOM_PROOF="${OUT_DIR}/portal.sbom.proof.json"
-    PORTAL_SBOM_BUNDLE="${OUT_DIR}/portal.sbom.manifest.bundle.json"
-    PORTAL_SBOM_SIG="${OUT_DIR}/portal.sbom.manifest.sig"
 
     pack_payload \
         "portal-sbom" \
@@ -405,9 +338,7 @@ if [[ -n "$PORTAL_SBOM" && -s "$PORTAL_SBOM" ]]; then
         "$PORTAL_SBOM_SUMMARY" \
         "$PORTAL_SBOM_MANIFEST" \
         "$PORTAL_SBOM_MANIFEST_JSON" \
-        "$PORTAL_SBOM_PROOF" \
-        "$PORTAL_SBOM_BUNDLE" \
-        "$PORTAL_SBOM_SIG"
+        "$PORTAL_SBOM_PROOF"
 else
     log "portal SBOM skipped; no SBOM file present"
 fi
@@ -419,8 +350,6 @@ if [[ -n "$OPENAPI_SBOM" && -s "$OPENAPI_SBOM" ]]; then
     OPENAPI_SBOM_MANIFEST="${OUT_DIR}/openapi.sbom.manifest.to"
     OPENAPI_SBOM_MANIFEST_JSON="${OUT_DIR}/openapi.sbom.manifest.json"
     OPENAPI_SBOM_PROOF="${OUT_DIR}/openapi.sbom.proof.json"
-    OPENAPI_SBOM_BUNDLE="${OUT_DIR}/openapi.sbom.manifest.bundle.json"
-    OPENAPI_SBOM_SIG="${OUT_DIR}/openapi.sbom.manifest.sig"
 
     pack_payload \
         "openapi-sbom" \
@@ -430,9 +359,7 @@ if [[ -n "$OPENAPI_SBOM" && -s "$OPENAPI_SBOM" ]]; then
         "$OPENAPI_SBOM_SUMMARY" \
         "$OPENAPI_SBOM_MANIFEST" \
         "$OPENAPI_SBOM_MANIFEST_JSON" \
-        "$OPENAPI_SBOM_PROOF" \
-        "$OPENAPI_SBOM_BUNDLE" \
-        "$OPENAPI_SBOM_SIG"
+        "$OPENAPI_SBOM_PROOF"
 else
     log "openapi SBOM skipped; no SBOM file present"
 fi
@@ -489,8 +416,6 @@ for raw in read_summary_lines_no_follow(summary_path):
         manifest_path,
         manifest_json,
         proof_path,
-        bundle_path,
-        signature_path,
     ) = raw.split("\t")
     artifacts.append(
         {
@@ -502,8 +427,6 @@ for raw in read_summary_lines_no_follow(summary_path):
             "manifest": maybe_rel(manifest_path),
             "manifest_json": maybe_rel(manifest_json),
             "proof": maybe_rel(proof_path),
-            "bundle": maybe_rel(bundle_path) if bundle_path else None,
-            "signature": maybe_rel(signature_path) if signature_path else None,
         }
     )
 

@@ -14,7 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _copy_workflows(target: Path) -> None:
-    for relative in automation.WORKFLOWS:
+    for relative in (*automation.WORKFLOWS, *automation.RELEASE_DOCUMENTS):
         source = REPO_ROOT / relative
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +63,43 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
             ".github/workflows/sorafs-cli-release.yml",
             "grype-version: v0.112.0",
         ),
-        (".github/workflows/sorafs-fixtures-nightly.yml", "bash ci/check_sorafs_fixtures.sh"),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Rebuild deterministic platform archive and run clean-consumer smoke",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Stage source release scan evidence",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "docs/portal/docs/sorafs/release-rollback-yank.md "
+            "artifacts/sorafs-cli/ROLLBACK-YANK.md",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/build_release_bundle.sh"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "scripts/tests/release_profile_validation_test.py"',
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Verify the protected external Ed25519 manifest tuple",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            "name: Verify authenticated release-manifest candidate binding before provenance",
+        ),
+        (
+            ".github/workflows/sorafs-cli-release.yml",
+            '- "docs/source/release_dual_track_automation_plan*.md"',
+        ),
+        (
+            ".github/workflows/sorafs-fixtures-nightly.yml",
+            "bash ci/check_sorafs_fixtures.sh",
+        ),
         (
             ".github/workflows/sorafs-fixtures-nightly.yml",
             "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16",
@@ -229,6 +265,195 @@ def test_validate_release_automation_rejects_signing_inventory_drift(
         automation.validate_release_automation(tmp_path)
 
 
+def test_validate_release_automation_rejects_promotion_auth_bypass(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source.replace(
+            "needs: [release-gate, package, verify-release-auth]",
+            "needs: [release-gate, package]",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="release promotion must depend on protected Ed25519",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_alternate_promotion_job(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    workflow.write_text(
+        workflow.read_text(encoding="utf-8")
+        + "\n"
+        + "  bypass-promotion:\n"
+        + "    runs-on: ubuntu-latest\n"
+        + "    steps: []\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="job inventory must be exactly"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("original", "replacement", "message"),
+    [
+        (
+            "environment: sorafs-release-authentication",
+            "environment: unprotected-release",
+            "protected release-authentication environment",
+        ),
+        (
+            "runs-on: [self-hosted, linux, x64, sorafs-release-auth]",
+            "runs-on: ubuntu-latest",
+            "protected self-hosted release-auth runner",
+        ),
+        (
+            "SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: "
+            "${{ vars.SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}",
+            "SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ''",
+            "missing an explicit protected public tuple",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_unprotected_auth_configuration(
+    tmp_path: Path,
+    original: str,
+    replacement: str,
+    message: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    assert original in source
+    workflow.write_text(source.replace(original, replacement, 1), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_signing_in_auth_job(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "python3 scripts/release_manifest_signing.py verify"
+    assert source.count(marker) == 2
+    workflow.write_text(
+        source.replace(
+            marker,
+            "python3 scripts/release_manifest_signing.py sign",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="verification-only"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_oidc_in_auth_job(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    anchor = (
+        "  verify-release-auth:\n"
+        "    if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
+        "|| inputs.sign_artifacts }}\n"
+    )
+    assert anchor in source
+    workflow.write_text(
+        source.replace(
+            anchor,
+            anchor + "    # id-token: write must never enter this job\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="OIDC and provenance authority"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_private_key_in_auth_job(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    anchor = (
+        "    env:\n"
+        "      SORAFS_RELEASE_SIGNATURE_PATH: "
+        "${{ vars.SORAFS_RELEASE_SIGNATURE_PATH }}\n"
+    )
+    assert anchor in source
+    workflow.write_text(
+        source.replace(
+            anchor,
+            "    env:\n"
+            "      SORAFS_RELEASE_PRIVATE_KEY_PATH: "
+            "${{ vars.SORAFS_RELEASE_PRIVATE_KEY_PATH }}\n"
+            "      SORAFS_RELEASE_SIGNATURE_PATH: "
+            "${{ vars.SORAFS_RELEASE_SIGNATURE_PATH }}\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must not receive private signing material"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_private_key_in_promotion_job(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    anchor = (
+        "  sign:\n"
+        "    if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
+        "|| inputs.sign_artifacts }}\n"
+    )
+    assert anchor in source
+    workflow.write_text(
+        source.replace(
+            anchor,
+            anchor
+            + "    env:\n"
+            + "      SORAFS_ED25519_PRIVATE_KEY_PATH: /run/forbidden.key\n",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="must not receive private signing material"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_promotion_candidate_binding_bypass(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    marker = "python3 scripts/generate_sorafs_cli_release_manifest.py check"
+    assert source.count(marker) == 2
+    second = source.index(marker, source.index(marker) + 1)
+    workflow.write_text(
+        source[:second] + marker.replace(" check", " create") + source[second + len(marker) :],
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="reconcile the downloaded authenticated manifest"):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_validate_release_automation_requires_five_checksum_manifests(
     tmp_path: Path,
 ) -> None:
@@ -287,6 +512,81 @@ def test_validate_release_automation_rejects_platform_scan_after_checksums(
         automation.validate_release_automation(tmp_path)
 
 
+def test_validate_release_automation_rejects_archive_replay_after_checksums(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    workflow.write_text(
+        source.replace(
+            "name: Rebuild deterministic platform archive and run clean-consumer smoke",
+            "name: Temporarily moved deterministic platform archive",
+            1,
+        ).replace(
+            "name: Upload unsigned release candidate",
+            "name: Rebuild deterministic platform archive and run clean-consumer smoke\n"
+            "      - name: Upload unsigned release candidate",
+            1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="out of order"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_rejects_run_specific_scan_before_archive(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    archive_name = (
+        "name: Rebuild deterministic platform archive and run clean-consumer smoke"
+    )
+    scan_name = "name: Stage source release scan evidence"
+    workflow.write_text(
+        source.replace(archive_name, "name: Temporary swap", 1)
+        .replace(scan_name, archive_name, 1)
+        .replace("name: Temporary swap", scan_name, 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="out of order"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_two_candidate_builds(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    first = "python3 scripts/package_sorafs_cli_candidate.py"
+    assert source.count(first) == 2
+    workflow.write_text(
+        source.replace(first, "python3 removed-packager.py", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="built exactly twice"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_archive_and_manifest_comparisons(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    workflow = tmp_path / ".github/workflows/sorafs-cli-release.yml"
+    source = workflow.read_text(encoding="utf-8")
+    replay_compare = 'cmp \\\n            "${first_out}/${package_name}'
+    assert source.count(replay_compare) == 2
+    workflow.write_text(
+        source.replace(replay_compare, 'true \\\n            "${first_out}/${package_name}', 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="replay comparisons"):
+        automation.validate_release_automation(tmp_path)
+
+
 def test_validate_release_automation_rejects_reference_package_after_platform_sbom(
     tmp_path: Path,
 ) -> None:
@@ -330,6 +630,82 @@ def test_validate_release_automation_rejects_checksum_verification_after_signing
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="out of order"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "marker"),
+    [
+        (
+            "docs/portal/sidebars.js",
+            "'sorafs/release-rollback-yank'",
+        ),
+        (
+            "docs/portal/docs/sorafs/runbooks-index.md",
+            "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
+        ),
+        (
+            "docs/source/sorafs_release_pipeline_plan.md",
+            "exactly the five expected target-triple checksum manifests",
+        ),
+        (
+            "docs/portal/docs/sorafs/release-rollback-yank.md",
+            "`cargo yank --vers <version> <crate>`",
+        ),
+        (
+            "docs/portal/docs/sorafs/release-rollback-yank.md",
+            "GitHub CLI artifacts",
+        ),
+        (
+            "docs/portal/docs/sorafs/developer-releases.md",
+            "all five native candidate archives",
+        ),
+        (
+            "docs/examples/sorafs_release_notes.md",
+            "## Rollback / Yank Record",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_release_document_drift(
+    tmp_path: Path, relative: str, marker: str
+) -> None:
+    _copy_workflows(tmp_path)
+    document = tmp_path / relative
+    source = document.read_text(encoding="utf-8")
+    assert marker in source
+    document.write_text(source.replace(marker, "removed", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="release-document contract marker"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("relative", "stale_claim"),
+    [
+        ("docs/source/sorafs_release_pipeline_plan.md", "via cross"),
+        (
+            "docs/source/sorafs_release_pipeline_plan.md",
+            "exactly the three expected platform checksum manifests",
+        ),
+        (
+            "docs/portal/docs/sorafs/developer-releases.md",
+            "git tag -s sorafs-v",
+        ),
+        (
+            "docs/portal/docs/sorafs/developer-releases.md",
+            "invokes the script above",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_stale_release_document_claims(
+    tmp_path: Path, relative: str, stale_claim: str
+) -> None:
+    _copy_workflows(tmp_path)
+    document = tmp_path / relative
+    document.write_text(
+        document.read_text(encoding="utf-8") + f"\n{stale_claim}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="stale release-document claim"):
         automation.validate_release_automation(tmp_path)
 
 

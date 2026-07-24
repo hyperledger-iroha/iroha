@@ -66,7 +66,7 @@ as ferramentas existentes para coletar essas evidências:1. Obtenha o pacote de 
    os portais.
 2. Execute o verificador de stub de manifesto com o envelope assinado:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

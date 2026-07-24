@@ -97,7 +97,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
 ```
 
 - Pass `--chunk-fetch-plan-out=path` to persist the canonical `chunk_fetch_specs` JSON so
-  other tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest stub.
+  other tools (or `sorafs_fetch`) can reuse the plan without invoking the manifest builder.
 - Pass `--chunk-dir-out=dir` to persist deterministic `chunk_00000.bin` payload
   files through the same disk-backed chunk sink used by `ChunkStore`; the target
   directory must be absent, and the JSON report includes a
@@ -112,7 +112,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
 
 Reassemble a payload from multiple local providers using the multi-source fetch
 orchestrator (`chunk_fetch_specs.json` can be the array emitted by
-`sorafs_manifest_stub --chunk-fetch-plan-out`):
+`sorafs_manifest_builder --chunk-fetch-plan-out`):
 
 ```
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -130,7 +130,7 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 - Add `--expect-payload-digest=<hex>` and/or `--expect-payload-len=<bytes>` to
   verify the reconstructed payload against manifest expectations during the run.
 - `--manifest-report=report.json` lets the CLI consume the JSON emitted by
-  `sorafs_manifest_stub`; it will reuse `chunk_fetch_specs`, `payload_digest_hex`,
+  `sorafs_manifest_builder`; it will reuse `chunk_fetch_specs`, `payload_digest_hex`,
   and `payload_len` so you don’t have to pass those values manually.
 - `--manifest=manifest.to` feeds the Norito-encoded manifest to the CLI so it can
   invoke the trustless `CarVerifier` after assembly and attach verification

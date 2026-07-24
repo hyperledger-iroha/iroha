@@ -296,6 +296,17 @@ impl<'r, 'a, F: Field, CS: Assignment<F> + 'a + SyncDeps> RegionLayouter<F>
         }
     }
 
+    fn assign_advice_discarding_value(
+        &mut self,
+        column: Column<Advice>,
+        offset: usize,
+        to: Value<Assigned<F>>,
+    ) {
+        self.layouter
+            .cs
+            .assign_advice_discarding_value(column, offset, to);
+    }
+
     fn assign_advice_from_constant<'v>(
         &'v mut self,
         _annotation: &'v (dyn Fn() -> String + 'v),

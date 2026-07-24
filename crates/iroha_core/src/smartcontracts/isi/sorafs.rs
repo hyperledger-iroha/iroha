@@ -15,7 +15,10 @@ use iroha_data_model::{
     permission::{Permission, Permissions},
     query::{
         error::{FindError, QueryExecutionFail},
-        sorafs::prelude::{FindSorafsRepairStatus, FindSorafsRepairTask},
+        sorafs::prelude::{
+            FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
+            FindSorafsRepairTasks,
+        },
     },
     sorafs::{
         capacity::{
@@ -27,10 +30,14 @@ use iroha_data_model::{
             REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1, REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1,
             REPAIR_LEDGER_MAX_LEASE_MS_V1, REPAIR_LEDGER_MAX_RECEIPTS_V1,
             REPAIR_LEDGER_MIN_LEASE_MS_V1, REPAIR_LEDGER_TASK_VERSION_V1,
-            RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1, RepairLedgerCompletedV1,
-            RepairLedgerEscalatedV1, RepairLedgerFailedV1, RepairLedgerLeaseV1,
-            RepairLedgerSlashRecordV1, RepairLedgerStatusV1, RepairLedgerTaskV1,
-            RepairLedgerTerminalKindV1, RepairLedgerTerminalOutcomeV1, sorafs_repair_appeal_id_v1,
+            REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1, REPAIR_QUERY_MAX_ITEMS_V1,
+            REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1, RepairFinalizedCursorV1,
+            RepairFinalizedEventPageV1, RepairFinalizedEventV1, RepairFinalizedStatusV1,
+            RepairFinalizedTaskV1, RepairLedgerActionReceiptV1, RepairLedgerAppealRecordV1,
+            RepairLedgerCompletedV1, RepairLedgerEscalatedV1, RepairLedgerFailedV1,
+            RepairLedgerLeaseV1, RepairLedgerSlashRecordV1, RepairLedgerStatusV1,
+            RepairLedgerTaskPageV1, RepairLedgerTaskV1, RepairLedgerTerminalKindV1,
+            RepairLedgerTerminalOutcomeV1, sorafs_repair_appeal_id_v1,
             sorafs_repair_idempotency_digest_v1, sorafs_repair_task_id_v1,
         },
         pin_registry::{
@@ -3022,10 +3029,14 @@ impl Execute for iroha_data_model::isi::sorafs::UpsertProviderCredit {
 const REPAIR_STATUS_STATE_KEY_V1: &str = "sorafs_repair_status_v1";
 const REPAIR_TASK_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_task_v1_";
 const REPAIR_SOURCE_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_source_v1_";
+const REPAIR_EVENT_STATE_KEY_PREFIX_V1: &str = "sorafs_repair_event_v1_";
+const REPAIR_EVENT_JOURNAL_HEAD_STATE_KEY_V1: &str = "sorafs_repair_event_head_v1";
 const REPAIR_TICKET_STATE_KEY_DOMAIN_V1: &[u8] = b"sorafs.repair.ticket-state-key.v1";
 const REPAIR_ACTION_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.repair.action-digest.v1";
 const REPAIR_STATE_MAX_BYTES_V1: usize = 256 * 1024;
 const REPAIR_PAYLOAD_MAX_BYTES_V1: usize = 64 * 1024;
+const REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1: usize = 16 * 1024 * 1024;
+const REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1: usize = 32 * 1024 * 1024;
 const REPAIR_STATE_LIMITS_V1: DecodeLimits = DecodeLimits::new(
     512,
     REPAIR_STATE_MAX_BYTES_V1,
@@ -3047,6 +3058,25 @@ struct RepairSourceBindingV1 {
     task_id: [u8; 32],
     ticket_id: String,
     report_digest: [u8; 32],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct RepairPersistedEventV1 {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+    event: SorafsRepairLedgerEvent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct RepairEventJournalHeadV1 {
+    last_sequence: u64,
+    last_target_block_height: u64,
+    last_event_index: u32,
+}
+
+fn corrupt_repair_state(message: impl Into<String>) -> InstructionExecutionError {
+    InstructionExecutionError::InvariantViolation(message.into().into())
 }
 
 fn repair_status_key() -> &'static Name {
@@ -3083,6 +3113,21 @@ fn repair_source_key(source_identity: [u8; 32]) -> Name {
         REPAIR_SOURCE_STATE_KEY_PREFIX_V1,
         sorafs_repair_task_id_v1(source_identity),
     )
+}
+
+fn repair_event_key(sequence: u64) -> Name {
+    Name::from_str(&format!(
+        "{REPAIR_EVENT_STATE_KEY_PREFIX_V1}{sequence:016x}"
+    ))
+    .expect("static prefix plus fixed-width lowercase hex is a valid state key")
+}
+
+fn repair_event_journal_head_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        Name::from_str(REPAIR_EVENT_JOURNAL_HEAD_STATE_KEY_V1)
+            .expect("static repair event journal head key is valid")
+    })
 }
 
 fn encode_repair_state<T: norito::core::NoritoSerialize>(
@@ -3456,6 +3501,520 @@ fn read_repair_task(
     Ok(Some(task))
 }
 
+fn validate_repair_persisted_event(
+    record: &RepairPersistedEventV1,
+    expected_sequence: u64,
+) -> Result<(), InstructionExecutionError> {
+    let event = &record.event;
+    let revision_floor = match event.kind {
+        SorafsRepairLedgerEventKind::TaskSubmitted => 1,
+        SorafsRepairLedgerEventKind::LeaseClaimed
+        | SorafsRepairLedgerEventKind::LeaseRenewed
+        | SorafsRepairLedgerEventKind::Completed
+        | SorafsRepairLedgerEventKind::Failed
+        | SorafsRepairLedgerEventKind::Escalated => 2,
+        SorafsRepairLedgerEventKind::Appealed => 4,
+    };
+    if record.sequence == 0
+        || record.sequence != expected_sequence
+        || record.target_block_height == 0
+        || event.task_id == [0; 32]
+        || event.provider_id.as_bytes() == &[0; 32]
+        || event.manifest_digest.as_bytes() == &[0; 32]
+        || event.revision < revision_floor
+        || event.occurred_at_unix_ms == 0
+        || RepairTicketId(event.ticket_id.clone()).validate().is_err()
+        || (event.kind == SorafsRepairLedgerEventKind::TaskSubmitted && event.revision != 1)
+    {
+        return Err(corrupt_repair_state(
+            "stored repair event cursor metadata or payload is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repair_event_successor(
+    previous: Option<&RepairPersistedEventV1>,
+    current: &RepairPersistedEventV1,
+) -> Result<(), InstructionExecutionError> {
+    let Some(previous) = previous else {
+        if current.sequence != 1
+            || current.event_index != 0
+            || current.event.kind != SorafsRepairLedgerEventKind::TaskSubmitted
+            || current.event.revision != 1
+        {
+            return Err(corrupt_repair_state(
+                "repair event journal does not begin with task submission at sequence one and block index zero",
+            ));
+        }
+        return Ok(());
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(corrupt_repair_state(
+            "repair event journal sequence is not contiguous",
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(corrupt_repair_state(
+            "repair event journal block height/index ordering is invalid",
+        )),
+    }
+}
+
+fn read_repair_persisted_event(
+    world: &impl crate::state::WorldReadOnly,
+    sequence: u64,
+) -> Result<Option<RepairPersistedEventV1>, InstructionExecutionError> {
+    if sequence == 0 {
+        return Err(corrupt_repair_state(
+            "repair event sequence zero cannot be read",
+        ));
+    }
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(&repair_event_key(sequence))
+    else {
+        return Ok(None);
+    };
+    let record: RepairPersistedEventV1 = decode_repair_state(bytes, "repair committed event")?;
+    validate_repair_persisted_event(&record, sequence)?;
+    Ok(Some(record))
+}
+
+fn read_repair_event_journal_head(
+    world: &impl crate::state::WorldReadOnly,
+) -> Result<Option<RepairEventJournalHeadV1>, InstructionExecutionError> {
+    let Some(bytes) = world
+        .smart_contract_state()
+        .get(repair_event_journal_head_key())
+    else {
+        return Ok(None);
+    };
+    let head: RepairEventJournalHeadV1 = decode_repair_state(bytes, "repair event journal head")?;
+    if head.last_sequence == 0 || head.last_target_block_height == 0 {
+        return Err(corrupt_repair_state(
+            "stored repair event journal head is invalid",
+        ));
+    }
+    let record = read_repair_persisted_event(world, head.last_sequence)?.ok_or_else(|| {
+        corrupt_repair_state("repair event journal head references a missing event")
+    })?;
+    if record.target_block_height != head.last_target_block_height
+        || record.event_index != head.last_event_index
+    {
+        return Err(corrupt_repair_state(
+            "repair event journal head does not match its terminal event",
+        ));
+    }
+    let predecessor = if head.last_sequence == 1 {
+        None
+    } else {
+        let predecessor_sequence = head.last_sequence - 1;
+        Some(
+            read_repair_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
+                corrupt_repair_state(format!(
+                    "repair event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                ))
+            })?,
+        )
+    };
+    validate_repair_event_successor(predecessor.as_ref(), &record)?;
+    Ok(Some(head))
+}
+
+fn ensure_no_repair_event_after_head(
+    world: &impl crate::state::WorldReadOnly,
+    head: Option<RepairEventJournalHeadV1>,
+) -> Result<(), InstructionExecutionError> {
+    let prefix_start =
+        Name::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1).expect("static event prefix is valid");
+    let first_event_key = world
+        .smart_contract_state()
+        .range(prefix_start..)
+        .next()
+        .and_then(|(key, _)| {
+            key.to_string()
+                .starts_with(REPAIR_EVENT_STATE_KEY_PREFIX_V1)
+                .then_some(key)
+        });
+    match (head, first_event_key) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(corrupt_repair_state(
+                "repair event journal contains records without a head",
+            ));
+        }
+        (Some(_), Some(key)) if *key == repair_event_key(1) => {}
+        (Some(_), _) => {
+            return Err(corrupt_repair_state(
+                "repair event journal does not begin at sequence one",
+            ));
+        }
+    }
+    let start = head.map_or_else(
+        || Name::from_str(REPAIR_EVENT_STATE_KEY_PREFIX_V1).expect("static event prefix is valid"),
+        |head| repair_event_key(head.last_sequence),
+    );
+    for (key, _) in world.smart_contract_state().range(start..) {
+        let rendered = key.to_string();
+        if !rendered.starts_with(REPAIR_EVENT_STATE_KEY_PREFIX_V1) {
+            break;
+        }
+        if head.is_some_and(|head| *key == repair_event_key(head.last_sequence)) {
+            continue;
+        }
+        return Err(corrupt_repair_state(
+            "repair event journal contains a record beyond its head",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_repair_event_task_binding(
+    world: &impl crate::state::WorldReadOnly,
+    record: &RepairPersistedEventV1,
+) -> Result<usize, InstructionExecutionError> {
+    let event = &record.event;
+    let task_state_bytes = world
+        .smart_contract_state()
+        .get(&repair_task_key(&event.ticket_id))
+        .map_or(0, Vec::len);
+    let task = read_repair_task(world, &event.ticket_id)?.ok_or_else(|| {
+        corrupt_repair_state(format!(
+            "repair event sequence {} references a missing task",
+            record.sequence
+        ))
+    })?;
+    let source_state_bytes = world
+        .smart_contract_state()
+        .get(&repair_source_key(task.source_identity))
+        .map_or(0, Vec::len);
+    let inspected_state_bytes = task_state_bytes
+        .checked_add(source_state_bytes)
+        .ok_or_else(|| corrupt_repair_state("repair event binding byte counter overflow"))?;
+    if event.task_id != task.task_id
+        || event.provider_id.as_bytes() != &task.provider_id
+        || event.manifest_digest.as_bytes() != &task.manifest_digest
+        || event.revision > task.revision
+        || event.occurred_at_unix_ms < task.submitted_at_unix_ms
+        || event.occurred_at_unix_ms > task.updated_at_unix_ms
+    {
+        return Err(corrupt_repair_state(format!(
+            "repair event sequence {} disagrees with its authoritative task",
+            record.sequence
+        )));
+    }
+    if event.kind == SorafsRepairLedgerEventKind::TaskSubmitted {
+        if event.revision != 1
+            || event.authority != task.submitted_by
+            || event.occurred_at_unix_ms != task.submitted_at_unix_ms
+        {
+            return Err(corrupt_repair_state(
+                "repair task-submission event provenance is inconsistent",
+            ));
+        }
+        return Ok(inspected_state_bytes);
+    }
+    let receipt_index = event
+        .revision
+        .checked_sub(2)
+        .and_then(|index| usize::try_from(index).ok())
+        .ok_or_else(|| {
+            corrupt_repair_state("repair event revision cannot index action receipts")
+        })?;
+    if task
+        .action_receipts
+        .get(receipt_index)
+        .is_none_or(|receipt| receipt.resulting_revision != event.revision)
+    {
+        return Err(corrupt_repair_state(
+            "repair event revision has no matching authoritative action receipt",
+        ));
+    }
+    match event.kind {
+        SorafsRepairLedgerEventKind::TaskSubmitted
+        | SorafsRepairLedgerEventKind::LeaseClaimed
+        | SorafsRepairLedgerEventKind::LeaseRenewed => {}
+        SorafsRepairLedgerEventKind::Completed => {
+            let Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Completed(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) = &task.terminal_outcome
+            else {
+                return Err(corrupt_repair_state(
+                    "repair completion event has no matching terminal outcome",
+                ));
+            };
+            if finalized_by != &event.authority
+                || *finalized_at_unix_ms != event.occurred_at_unix_ms
+            {
+                return Err(corrupt_repair_state(
+                    "repair completion event provenance is inconsistent",
+                ));
+            }
+        }
+        SorafsRepairLedgerEventKind::Failed => {
+            let Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Failed(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) = &task.terminal_outcome
+            else {
+                return Err(corrupt_repair_state(
+                    "repair failure event has no matching terminal outcome",
+                ));
+            };
+            if finalized_by != &event.authority
+                || *finalized_at_unix_ms != event.occurred_at_unix_ms
+            {
+                return Err(corrupt_repair_state(
+                    "repair failure event provenance is inconsistent",
+                ));
+            }
+        }
+        SorafsRepairLedgerEventKind::Escalated => {
+            let Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Escalated(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) = &task.terminal_outcome
+            else {
+                return Err(corrupt_repair_state(
+                    "repair escalation event has no matching terminal outcome",
+                ));
+            };
+            if finalized_by != &event.authority
+                || *finalized_at_unix_ms != event.occurred_at_unix_ms
+                || task.slash.is_none()
+            {
+                return Err(corrupt_repair_state(
+                    "repair escalation event provenance is inconsistent",
+                ));
+            }
+        }
+        SorafsRepairLedgerEventKind::Appealed => {
+            let Some(appeal) = &task.appeal else {
+                return Err(corrupt_repair_state(
+                    "repair appeal event has no matching appeal record",
+                ));
+            };
+            if appeal.appellant != event.authority
+                || appeal.submitted_at_unix_ms != event.occurred_at_unix_ms
+            {
+                return Err(corrupt_repair_state(
+                    "repair appeal event provenance is inconsistent",
+                ));
+            }
+        }
+    }
+    Ok(inspected_state_bytes)
+}
+
+fn validate_repair_event_current_transition(
+    task: &RepairLedgerTaskV1,
+    event: &SorafsRepairLedgerEvent,
+) -> Result<(), InstructionExecutionError> {
+    if task.revision != event.revision || task.updated_at_unix_ms != event.occurred_at_unix_ms {
+        return Err(corrupt_repair_state(
+            "repair event does not describe the latest accepted task transition",
+        ));
+    }
+    let valid = match event.kind {
+        SorafsRepairLedgerEventKind::TaskSubmitted => {
+            task.revision == 1
+                && task.action_receipts.is_empty()
+                && task.lease.is_none()
+                && task.terminal_outcome.is_none()
+                && task.slash.is_none()
+                && task.appeal.is_none()
+        }
+        SorafsRepairLedgerEventKind::LeaseClaimed => {
+            task.lease.as_ref().is_some_and(|lease| {
+                lease.owner == event.authority
+                    && lease.acquired_at_unix_ms == event.occurred_at_unix_ms
+                    && lease.renewed_at_unix_ms == event.occurred_at_unix_ms
+            }) && task.terminal_outcome.is_none()
+        }
+        SorafsRepairLedgerEventKind::LeaseRenewed => {
+            task.lease.as_ref().is_some_and(|lease| {
+                lease.owner == event.authority
+                    && lease.renewed_at_unix_ms == event.occurred_at_unix_ms
+            }) && task.terminal_outcome.is_none()
+        }
+        SorafsRepairLedgerEventKind::Completed => matches!(
+            &task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Completed(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) if finalized_by == &event.authority
+                && *finalized_at_unix_ms == event.occurred_at_unix_ms
+                && task.lease.is_none()
+        ),
+        SorafsRepairLedgerEventKind::Failed => matches!(
+            &task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Failed(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) if finalized_by == &event.authority
+                && *finalized_at_unix_ms == event.occurred_at_unix_ms
+                && task.lease.is_none()
+        ),
+        SorafsRepairLedgerEventKind::Escalated => matches!(
+            &task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Escalated(_),
+                finalized_by,
+                finalized_at_unix_ms,
+                ..
+            }) if finalized_by == &event.authority
+                && *finalized_at_unix_ms == event.occurred_at_unix_ms
+                && task.lease.is_none()
+                && task.slash.is_some()
+        ),
+        SorafsRepairLedgerEventKind::Appealed => task.appeal.as_ref().is_some_and(|appeal| {
+            appeal.appellant == event.authority
+                && appeal.submitted_at_unix_ms == event.occurred_at_unix_ms
+        }),
+    };
+    if !valid {
+        return Err(corrupt_repair_state(
+            "repair event kind disagrees with the latest task transition",
+        ));
+    }
+    Ok(())
+}
+
+fn append_repair_event_journal(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    task: &RepairLedgerTaskV1,
+    event: &SorafsRepairLedgerEvent,
+) -> Result<(), InstructionExecutionError> {
+    let committed_parent_height =
+        u64::try_from(state_transaction.block_hashes().len()).map_err(|_| {
+            corrupt_repair_state("committed repair parent height does not fit into u64")
+        })?;
+    let target_block_height = committed_parent_height
+        .checked_add(1)
+        .ok_or_else(|| corrupt_repair_state("repair event target block height overflow"))?;
+    let executing_block_height = state_transaction._curr_block.height().get();
+    if target_block_height != executing_block_height {
+        return Err(corrupt_repair_state(format!(
+            "repair event target height {target_block_height} does not match executing block height {executing_block_height}"
+        )));
+    }
+    let head = read_repair_event_journal_head(state_transaction.world())?;
+    ensure_no_repair_event_after_head(state_transaction.world(), head)?;
+    let (sequence, event_index, previous) = match head {
+        Some(head) => {
+            let sequence = head
+                .last_sequence
+                .checked_add(1)
+                .ok_or_else(|| corrupt_repair_state("repair event sequence overflow"))?;
+            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+                core::cmp::Ordering::Less => 0,
+                core::cmp::Ordering::Equal => head
+                    .last_event_index
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt_repair_state("repair event block index overflow"))?,
+                core::cmp::Ordering::Greater => {
+                    return Err(corrupt_repair_state(
+                        "repair event target height regressed behind the journal head",
+                    ));
+                }
+            };
+            let previous =
+                read_repair_persisted_event(state_transaction.world(), head.last_sequence)?
+                    .ok_or_else(|| {
+                        corrupt_repair_state("repair event journal head lost its terminal record")
+                    })?;
+            (sequence, event_index, Some(previous))
+        }
+        None => {
+            let status = read_repair_status(state_transaction.world())?
+                .ok_or_else(|| corrupt_repair_state("first repair event has no ledger status"))?;
+            let initial_status = status.tasks == 1
+                && status.leased_tasks == 0
+                && status.terminal_outcomes == 0
+                && status.completed == 0
+                && status.failed == 0
+                && status.escalated == 0
+                && status.slash_proposals == 0
+                && status.appeals == 0
+                && status.updated_at_unix_ms == event.occurred_at_unix_ms;
+            if event.kind != SorafsRepairLedgerEventKind::TaskSubmitted
+                || event.revision != 1
+                || !initial_status
+            {
+                return Err(corrupt_repair_state(
+                    "repair event journal must begin with the first task submission",
+                ));
+            }
+            (1, 0, None)
+        }
+    };
+    let key = repair_event_key(sequence);
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_some()
+    {
+        return Err(corrupt_repair_state(
+            "repair event journal sequence already exists",
+        ));
+    }
+    let record = RepairPersistedEventV1 {
+        sequence,
+        target_block_height,
+        event_index,
+        event: event.clone(),
+    };
+    validate_repair_persisted_event(&record, sequence)?;
+    validate_repair_event_successor(previous.as_ref(), &record)?;
+    validate_repair_event_task_binding(state_transaction.world(), &record)?;
+    validate_repair_event_current_transition(task, event)?;
+    let next_head = RepairEventJournalHeadV1 {
+        last_sequence: sequence,
+        last_target_block_height: target_block_height,
+        last_event_index: event_index,
+    };
+    let encoded_record = encode_repair_state(&record, "repair committed event")?;
+    let encoded_head = encode_repair_state(&next_head, "repair event journal head")?;
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(key, encoded_record);
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(repair_event_journal_head_key().clone(), encoded_head);
+    Ok(())
+}
+
 fn repair_action_digest<T: norito::core::NoritoSerialize>(
     authority: &AccountId,
     action: &T,
@@ -3577,21 +4136,22 @@ fn emit_repair_ledger_event(
     kind: SorafsRepairLedgerEventKind,
     authority: &AccountId,
     now: u64,
-) {
+) -> Result<(), InstructionExecutionError> {
+    let event = SorafsRepairLedgerEvent {
+        kind,
+        ticket_id: task.ticket_id.clone(),
+        task_id: task.task_id,
+        provider_id: ProviderId::new(task.provider_id),
+        manifest_digest: ManifestDigest::new(task.manifest_digest),
+        revision: task.revision,
+        authority: authority.clone(),
+        occurred_at_unix_ms: now,
+    };
+    append_repair_event_journal(state_transaction, task, &event)?;
     state_transaction
         .world
-        .emit_events(Some(SorafsGatewayEvent::RepairLedger(
-            SorafsRepairLedgerEvent {
-                kind,
-                ticket_id: task.ticket_id.clone(),
-                task_id: task.task_id,
-                provider_id: ProviderId::new(task.provider_id),
-                manifest_digest: ManifestDigest::new(task.manifest_digest),
-                revision: task.revision,
-                authority: authority.clone(),
-                occurred_at_unix_ms: now,
-            },
-        )));
+        .emit_events(Some(SorafsGatewayEvent::RepairLedger(event)));
+    Ok(())
 }
 
 impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairTask {
@@ -3723,7 +4283,7 @@ impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairTask {
             SorafsRepairLedgerEventKind::TaskSubmitted,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -3749,6 +4309,11 @@ impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
             .ok_or_else(|| invalid_parameter("repair task does not exist"))?;
         if repair_action_is_replay(&task, idempotency_digest, action_digest)? {
             return Ok(());
+        }
+        if !has_repair_worker_permission(state_transaction, authority, task.provider_id) {
+            return Err(invalid_parameter(
+                "current provider-scoped CanOperateSorafsRepair permission required to mutate a repair task",
+            ));
         }
         if self.expected_revision != task.revision {
             return Err(invalid_parameter(format!(
@@ -3781,13 +4346,13 @@ impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
                 ensure_repair_receipt_capacity(&task, 2, "lease claim")?;
                 let lease_duration_ms = action.lease_duration_ms;
                 validate_repair_lease_duration(lease_duration_ms)?;
-                if !has_repair_worker_permission(state_transaction, authority, task.provider_id) {
-                    return Err(invalid_parameter(
-                        "provider-scoped CanOperateSorafsRepair permission required to claim task",
-                    ));
-                }
                 let generation = if let Some(lease) = &task.lease {
-                    if now < lease.expires_at_unix_ms {
+                    let owner_remains_authorized = has_repair_worker_permission(
+                        state_transaction,
+                        &lease.owner,
+                        task.provider_id,
+                    );
+                    if now < lease.expires_at_unix_ms && owner_remains_authorized {
                         return Err(invalid_parameter(format!(
                             "repair task lease is held by {} until {}",
                             lease.owner, lease.expires_at_unix_ms
@@ -3954,7 +4519,7 @@ impl Execute for iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction {
             .world
             .smart_contract_state
             .insert(repair_status_key().clone(), encoded_status);
-        emit_repair_ledger_event(state_transaction, &task, kind, authority, now);
+        emit_repair_ledger_event(state_transaction, &task, kind, authority, now)?;
         Ok(())
     }
 }
@@ -4062,7 +4627,7 @@ impl Execute for iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal {
             SorafsRepairLedgerEventKind::Appealed,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -4071,16 +4636,553 @@ fn repair_query_failure(error: InstructionExecutionError) -> QueryExecutionFail 
     QueryExecutionFail::Conversion(error.to_string())
 }
 
+fn checked_repair_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
+    if !(1..=REPAIR_QUERY_MAX_ITEMS_V1).contains(&limit) {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "SoraFS repair query limit {limit} is outside 1..={REPAIR_QUERY_MAX_ITEMS_V1}"
+        )));
+    }
+    usize::try_from(limit).map_err(|_| {
+        QueryExecutionFail::Conversion("SoraFS repair query limit conversion failed".to_owned())
+    })
+}
+
+fn charge_repair_query_state_bytes(
+    total: &mut usize,
+    additional: usize,
+    maximum: usize,
+    label: &str,
+) -> Result<(), QueryExecutionFail> {
+    *total = (*total).checked_add(additional).ok_or_else(|| {
+        QueryExecutionFail::Conversion(format!("{label} state-read byte counter overflow"))
+    })?;
+    if *total > maximum {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "{label} inspected more than {maximum} state bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn charge_repair_query_inspected_records(
+    total: &mut usize,
+    additional: usize,
+    maximum: usize,
+    label: &str,
+) -> Result<(), QueryExecutionFail> {
+    *total = (*total).checked_add(additional).ok_or_else(|| {
+        QueryExecutionFail::Conversion(format!("{label} inspected-record counter overflow"))
+    })?;
+    if *total > maximum {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "{label} inspected more than {maximum} records"
+        )));
+    }
+    Ok(())
+}
+
+fn ensure_repair_query_encoded_budget<T: norito::core::NoritoSerialize>(
+    value: &T,
+    maximum: usize,
+    label: &str,
+) -> Result<(), QueryExecutionFail> {
+    let encoded_len = norito::to_bytes(value)
+        .map_err(|error| {
+            QueryExecutionFail::Conversion(format!("failed to encode {label}: {error}"))
+        })?
+        .len();
+    if encoded_len > maximum {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "{label} encodes to {encoded_len} bytes, above {maximum}"
+        )));
+    }
+    Ok(())
+}
+
+fn resolve_repair_finalized_cursor(
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<RepairFinalizedCursorV1, QueryExecutionFail> {
+    let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
+        QueryExecutionFail::Conversion("finalized repair height does not fit into u64".to_owned())
+    })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "finalized repair queries require at least one committed block".to_owned(),
+            )
+        })?;
+    if height == 0 || block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized repair query anchor is invalid".to_owned(),
+        ));
+    }
+    Ok(RepairFinalizedCursorV1 { height, block_hash })
+}
+
+fn resolve_repair_query_finalized_cursor(
+    expected: Option<RepairFinalizedCursorV1>,
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<RepairFinalizedCursorV1, QueryExecutionFail> {
+    let actual = resolve_repair_finalized_cursor(state_ro)?;
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(QueryExecutionFail::Expired);
+    }
+    Ok(actual)
+}
+
+fn resolve_repair_committed_event(
+    state_ro: &impl crate::state::StateReadOnly,
+    record: &RepairPersistedEventV1,
+) -> Result<RepairFinalizedEventV1, QueryExecutionFail> {
+    let hash_index = record
+        .target_block_height
+        .checked_sub(1)
+        .and_then(|height| usize::try_from(height).ok())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "repair event target height cannot index finalized block hashes".to_owned(),
+            )
+        })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .get(hash_index)
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "repair event sequence {} targets non-finalized block height {}",
+                record.sequence, record.target_block_height
+            ))
+        })?;
+    if block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "repair event sequence {} resolved a zero block hash",
+            record.sequence
+        )));
+    }
+    Ok(RepairFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event.clone(),
+    })
+}
+
+fn read_repair_event_sequence(
+    state_ro: &impl crate::state::StateReadOnly,
+    sequence: u64,
+    previous: Option<&RepairPersistedEventV1>,
+) -> Result<(RepairPersistedEventV1, RepairFinalizedEventV1, usize), QueryExecutionFail> {
+    let event_state_bytes = state_ro
+        .world()
+        .smart_contract_state()
+        .get(&repair_event_key(sequence))
+        .map_or(0, Vec::len);
+    let record = read_repair_persisted_event(state_ro.world(), sequence)
+        .map_err(repair_query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "repair event journal is missing sequence {sequence}"
+            ))
+        })?;
+    validate_repair_event_successor(previous, &record).map_err(repair_query_failure)?;
+    let binding_state_bytes = validate_repair_event_task_binding(state_ro.world(), &record)
+        .map_err(repair_query_failure)?;
+    let inspected_state_bytes = event_state_bytes
+        .checked_add(binding_state_bytes)
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "repair event state-read byte counter overflow".to_owned(),
+            )
+        })?;
+    let resolved = resolve_repair_committed_event(state_ro, &record)?;
+    Ok((record, resolved, inspected_state_bytes))
+}
+
+fn query_repair_task_page(
+    query: &FindSorafsRepairTasks,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: RepairFinalizedCursorV1,
+) -> Result<RepairLedgerTaskPageV1, QueryExecutionFail> {
+    let limit = checked_repair_query_limit(query.limit)?;
+    let world = state_ro.world();
+    let start = repair_digest_key(
+        REPAIR_SOURCE_STATE_KEY_PREFIX_V1,
+        query.after_task_id.unwrap_or([0; 32]),
+    );
+    let read_budget = limit.saturating_add(2);
+    let task_payload_budget = REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1.saturating_sub(1_024);
+    let mut reads = 0usize;
+    let mut state_read_bytes = 0usize;
+    let mut encoded_task_bytes = 0usize;
+    let mut tasks = Vec::with_capacity(limit);
+    let mut has_more = false;
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key
+            .to_string()
+            .starts_with(REPAIR_SOURCE_STATE_KEY_PREFIX_V1)
+        {
+            break;
+        }
+        charge_repair_query_inspected_records(&mut reads, 1, read_budget, "repair task page")?;
+        state_read_bytes = state_read_bytes.checked_add(payload.len()).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "repair task-page state-read byte counter overflow".to_owned(),
+            )
+        })?;
+        if state_read_bytes > REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "repair task page inspected more than {REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1} state bytes"
+            )));
+        }
+        let binding: RepairSourceBindingV1 =
+            decode_repair_state(payload, "repair source binding").map_err(repair_query_failure)?;
+        if binding.source_identity == [0; 32]
+            || binding.task_id == [0; 32]
+            || binding.task_id != sorafs_repair_task_id_v1(binding.source_identity)
+            || binding.report_digest == [0; 32]
+            || repair_source_key(binding.source_identity) != *key
+            || RepairTicketId(binding.ticket_id.clone())
+                .validate()
+                .is_err()
+        {
+            return Err(QueryExecutionFail::Conversion(
+                "authoritative repair source-binding key or record is inconsistent".to_owned(),
+            ));
+        }
+        if query
+            .after_task_id
+            .is_some_and(|cursor| binding.task_id <= cursor)
+        {
+            continue;
+        }
+        let indexed_state_bytes = world
+            .smart_contract_state()
+            .get(&repair_task_key(&binding.ticket_id))
+            .map_or(0, Vec::len)
+            .checked_add(payload.len())
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "repair task-page indexed-read byte counter overflow".to_owned(),
+                )
+            })?;
+        state_read_bytes = state_read_bytes
+            .checked_add(indexed_state_bytes)
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "repair task-page state-read byte counter overflow".to_owned(),
+                )
+            })?;
+        if state_read_bytes > REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "repair task page inspected more than {REPAIR_QUERY_MAX_TASK_STATE_READ_BYTES_V1} state bytes"
+            )));
+        }
+        let task = read_repair_task(world, &binding.ticket_id)
+            .map_err(repair_query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "authoritative repair task disappeared during page read".to_owned(),
+                )
+            })?;
+        if task.task_id != binding.task_id {
+            return Err(QueryExecutionFail::Conversion(
+                "authoritative repair task disagrees with its page index".to_owned(),
+            ));
+        }
+        let task_len = norito::to_bytes(&task)
+            .map_err(|error| {
+                QueryExecutionFail::Conversion(format!(
+                    "failed to encode authoritative repair task: {error}"
+                ))
+            })?
+            .len();
+        let next_encoded_task_bytes =
+            encoded_task_bytes.checked_add(task_len).ok_or_else(|| {
+                QueryExecutionFail::Conversion("repair task-page byte counter overflow".to_owned())
+            })?;
+        if tasks.len() >= limit || next_encoded_task_bytes > task_payload_budget {
+            if tasks.is_empty() {
+                return Err(QueryExecutionFail::Conversion(format!(
+                    "one repair task cannot fit within the {REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1}-byte page budget"
+                )));
+            }
+            has_more = true;
+            break;
+        }
+        encoded_task_bytes = next_encoded_task_bytes;
+        tasks.push(task);
+    }
+    let next_after_task_id = if has_more {
+        Some(
+            tasks
+                .last()
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "repair task-page cursor invariant failed".to_owned(),
+                    )
+                })?
+                .task_id,
+        )
+    } else {
+        None
+    };
+    let page = RepairLedgerTaskPageV1 {
+        finalized_cursor,
+        tasks,
+        has_more,
+        next_after_task_id,
+    };
+    ensure_repair_query_encoded_budget(
+        &page,
+        REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
+        "authoritative repair task page",
+    )?;
+    Ok(page)
+}
+
+fn query_repair_event_page(
+    query: &FindSorafsRepairEvents,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: RepairFinalizedCursorV1,
+) -> Result<RepairFinalizedEventPageV1, QueryExecutionFail> {
+    let limit = checked_repair_query_limit(query.limit)?;
+    let world = state_ro.world();
+    let head_state_bytes = world
+        .smart_contract_state()
+        .get(repair_event_journal_head_key())
+        .map_or(0, Vec::len);
+    let head = read_repair_event_journal_head(world)
+        .map_err(repair_query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "active repair state has no committed-event journal".to_owned(),
+            )
+        })?;
+    let terminal_event_state_bytes = world
+        .smart_contract_state()
+        .get(&repair_event_key(head.last_sequence))
+        .map_or(0, Vec::len);
+    let head_predecessor_state_bytes = head
+        .last_sequence
+        .checked_sub(1)
+        .filter(|sequence| *sequence != 0)
+        .and_then(|sequence| {
+            world
+                .smart_contract_state()
+                .get(&repair_event_key(sequence))
+                .map(Vec::len)
+        })
+        .unwrap_or(0);
+    let terminal = read_repair_persisted_event(world, head.last_sequence)
+        .map_err(repair_query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "repair event journal terminal record disappeared during read".to_owned(),
+            )
+        })?;
+    let terminal_binding_state_bytes =
+        validate_repair_event_task_binding(world, &terminal).map_err(repair_query_failure)?;
+    let inspected_record_budget = limit.saturating_add(6);
+    let mut inspected_records = 2usize + usize::from(head.last_sequence > 1);
+    let mut state_read_bytes = 0usize;
+    charge_repair_query_state_bytes(
+        &mut state_read_bytes,
+        head_state_bytes,
+        REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+        "repair event page",
+    )?;
+    charge_repair_query_state_bytes(
+        &mut state_read_bytes,
+        terminal_event_state_bytes
+            .checked_mul(2)
+            .and_then(|bytes| bytes.checked_add(head_predecessor_state_bytes))
+            .and_then(|bytes| bytes.checked_add(terminal_binding_state_bytes))
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "repair event-page initial read-byte counter overflow".to_owned(),
+                )
+            })?,
+        REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+        "repair event page",
+    )?;
+    resolve_repair_committed_event(state_ro, &terminal)?;
+    ensure_no_repair_event_after_head(world, Some(head)).map_err(repair_query_failure)?;
+    let mut previous = match query.after {
+        Some(after) => {
+            if after.sequence == 0 || after.sequence > head.last_sequence {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let cursor_event_state_bytes = world
+                .smart_contract_state()
+                .get(&repair_event_key(after.sequence))
+                .map_or(0, Vec::len);
+            let record = read_repair_persisted_event(world, after.sequence)
+                .map_err(repair_query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            let cursor_binding_state_bytes =
+                validate_repair_event_task_binding(world, &record).map_err(repair_query_failure)?;
+            charge_repair_query_state_bytes(
+                &mut state_read_bytes,
+                cursor_event_state_bytes
+                    .checked_add(cursor_binding_state_bytes)
+                    .ok_or_else(|| {
+                        QueryExecutionFail::Conversion(
+                            "repair event cursor read-byte counter overflow".to_owned(),
+                        )
+                    })?,
+                REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+                "repair event page",
+            )?;
+            charge_repair_query_inspected_records(
+                &mut inspected_records,
+                1,
+                inspected_record_budget,
+                "repair event page",
+            )?;
+            let resolved = resolve_repair_committed_event(state_ro, &record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let predecessor = if after.sequence == 1 {
+                None
+            } else {
+                let predecessor_sequence = after.sequence - 1;
+                let predecessor_state_bytes = world
+                    .smart_contract_state()
+                    .get(&repair_event_key(predecessor_sequence))
+                    .map_or(0, Vec::len);
+                charge_repair_query_state_bytes(
+                    &mut state_read_bytes,
+                    predecessor_state_bytes,
+                    REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+                    "repair event page",
+                )?;
+                charge_repair_query_inspected_records(
+                    &mut inspected_records,
+                    1,
+                    inspected_record_budget,
+                    "repair event page",
+                )?;
+                Some(
+                    read_repair_persisted_event(world, predecessor_sequence)
+                        .map_err(repair_query_failure)?
+                        .ok_or_else(|| {
+                            QueryExecutionFail::Conversion(format!(
+                                "repair event journal is missing predecessor sequence {predecessor_sequence}"
+                            ))
+                        })?,
+                )
+            };
+            validate_repair_event_successor(predecessor.as_ref(), &record)
+                .map_err(repair_query_failure)?;
+            Some(record)
+        }
+        None => None,
+    };
+    let mut sequence = query
+        .after
+        .map_or(Some(1), |after| after.sequence.checked_add(1));
+    let mut events = Vec::with_capacity(limit);
+    let mut encoded_event_bytes = 0usize;
+    while let Some(current_sequence) = sequence {
+        if current_sequence > head.last_sequence || events.len() >= limit {
+            break;
+        }
+        charge_repair_query_inspected_records(
+            &mut inspected_records,
+            1,
+            inspected_record_budget,
+            "repair event page",
+        )?;
+        let (record, resolved, inspected_state_bytes) =
+            read_repair_event_sequence(state_ro, current_sequence, previous.as_ref())?;
+        charge_repair_query_state_bytes(
+            &mut state_read_bytes,
+            inspected_state_bytes,
+            REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+            "repair event page",
+        )?;
+        encoded_event_bytes = encoded_event_bytes
+            .checked_add(
+                norito::to_bytes(&resolved)
+                    .map_err(|error| {
+                        QueryExecutionFail::Conversion(format!(
+                            "failed to encode committed repair event: {error}"
+                        ))
+                    })?
+                    .len(),
+            )
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "committed repair event-page byte counter overflow".to_owned(),
+                )
+            })?;
+        if encoded_event_bytes > REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "committed repair event page exceeds {REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+            )));
+        }
+        previous = Some(record);
+        events.push(resolved);
+        sequence = current_sequence.checked_add(1);
+    }
+    let has_more = events
+        .last()
+        .is_some_and(|event| event.sequence < head.last_sequence);
+    let next_after = has_more.then(|| {
+        events
+            .last()
+            .expect("has_more requires a non-empty repair event page")
+            .cursor()
+    });
+    let page = RepairFinalizedEventPageV1 {
+        finalized_cursor,
+        events,
+        has_more,
+        next_after,
+    };
+    ensure_repair_query_encoded_budget(
+        &page,
+        REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+        "committed repair event page",
+    )?;
+    Ok(page)
+}
+
 impl ValidSingularQuery for FindSorafsRepairTask {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
-    ) -> Result<RepairLedgerTaskV1, QueryExecutionFail> {
-        read_repair_task(state_ro.world(), &self.ticket_id)
+    ) -> Result<RepairFinalizedTaskV1, QueryExecutionFail> {
+        let finalized_cursor =
+            resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        let task = read_repair_task(state_ro.world(), &self.ticket_id)
             .map_err(repair_query_failure)?
             .ok_or_else(|| {
                 QueryExecutionFail::Find(FindError::SorafsRepairTask(self.ticket_id.clone()))
-            })
+            })?;
+        Ok(RepairFinalizedTaskV1 {
+            finalized_cursor,
+            task,
+        })
+    }
+}
+
+impl ValidSingularQuery for FindSorafsRepairTasks {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<RepairLedgerTaskPageV1, QueryExecutionFail> {
+        read_repair_status(state_ro.world())
+            .map_err(repair_query_failure)?
+            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        let finalized_cursor =
+            resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_repair_task_page(self, state_ro, finalized_cursor)
     }
 }
 
@@ -4088,10 +5190,30 @@ impl ValidSingularQuery for FindSorafsRepairStatus {
     fn execute(
         &self,
         state_ro: &impl crate::state::StateReadOnly,
-    ) -> Result<RepairLedgerStatusV1, QueryExecutionFail> {
+    ) -> Result<RepairFinalizedStatusV1, QueryExecutionFail> {
+        let finalized_cursor =
+            resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        let status = read_repair_status(state_ro.world())
+            .map_err(repair_query_failure)?
+            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        Ok(RepairFinalizedStatusV1 {
+            finalized_cursor,
+            status,
+        })
+    }
+}
+
+impl ValidSingularQuery for FindSorafsRepairEvents {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<RepairFinalizedEventPageV1, QueryExecutionFail> {
         read_repair_status(state_ro.world())
             .map_err(repair_query_failure)?
-            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))
+            .ok_or(QueryExecutionFail::Find(FindError::SorafsRepairStatus))?;
+        let finalized_cursor =
+            resolve_repair_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_repair_event_page(self, state_ro, finalized_cursor)
     }
 }
 
@@ -4113,8 +5235,9 @@ mod sorafs_tests {
                 RecordCapacityTelemetry, RegisterCapacityDeclaration, RegisterCapacityDispute,
                 RegisterPinManifest, RegisterProviderOwner, RetirePinManifest, SetPricingSchedule,
                 SorafsRepairClaimV1, SorafsRepairCompleteV1, SorafsRepairEscalateV1,
-                SorafsRepairFailV1, SorafsRepairTaskActionV1, SubmitSorafsRepairAppeal,
-                SubmitSorafsRepairTask, UnregisterProviderOwner, UpsertProviderCredit,
+                SorafsRepairFailV1, SorafsRepairRenewV1, SorafsRepairTaskActionV1,
+                SubmitSorafsRepairAppeal, SubmitSorafsRepairTask, UnregisterProviderOwner,
+                UpsertProviderCredit,
             },
         },
         metadata::Metadata,
@@ -4379,6 +5502,49 @@ mod sorafs_tests {
         )
     }
 
+    fn transact_repair(
+        state: &mut State,
+        height: u64,
+        creation_time_ms: u64,
+        operation: impl FnOnce(
+            &mut crate::state::StateTransaction<'_, '_>,
+        ) -> Result<(), InstructionExecutionError>,
+    ) -> Result<(), InstructionExecutionError> {
+        let header = repair_block_header(height, creation_time_ms);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        let mut block = state.block(header);
+        let mut transaction = block.transaction();
+        operation(&mut transaction)?;
+        transaction.apply();
+        block.commit().expect("commit repair test block");
+        state.push_block_hash_for_testing(block_hash);
+        Ok(())
+    }
+
+    fn committed_repair_fixture(
+        ticket_id: &str,
+        source_identity: [u8; 32],
+        mutate: impl FnOnce(
+            &RepairReportV1,
+            &mut crate::state::StateTransaction<'_, '_>,
+        ) -> Result<(), InstructionExecutionError>,
+    ) -> State {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xF1; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        let report = repair_report(ticket_id, provider, [0xF2; 32], &alice(), 4_000);
+        transact_repair(&mut state, 1, 4_000_000, |transaction| {
+            SubmitSorafsRepairTask::new(
+                source_identity,
+                to_bytes(&report).expect("encode repair fixture report"),
+            )
+            .execute(&alice(), transaction)?;
+            mutate(&report, transaction)
+        })
+        .expect("commit repair fixture");
+        state
+    }
+
     fn repair_report(
         ticket_id: &str,
         provider_id: ProviderId,
@@ -4415,6 +5581,24 @@ mod sorafs_tests {
                 .unwrap_or_else(Permissions::default)
         };
         permissions.insert(permission);
+        state
+            .world
+            .account_permissions
+            .insert(account.clone(), permissions);
+    }
+
+    fn revoke_repair_operator(state: &mut State, account: &AccountId, provider_id: ProviderId) {
+        let permission = AccountPermission::from(CanOperateSorafsRepair { provider_id });
+        let mut permissions = {
+            let view = state.world.account_permissions.view();
+            view.get(account)
+                .cloned()
+                .unwrap_or_else(Permissions::default)
+        };
+        assert!(
+            permissions.remove(&permission),
+            "repair operator fixture permission must exist before revocation"
+        );
         state
             .world
             .account_permissions
@@ -12153,9 +13337,12 @@ mod sorafs_tests {
         let report = repair_report("REP-CHAIN-1", provider, [0xD2; 32], &alice(), 2_000);
         let report_payload = to_bytes(&report).expect("encode repair report");
         let source_identity = [0xD3; 32];
+        let first_header = repair_block_header(1, 2_000_000);
+        let first_hash = iroha_crypto::HashOf::new(&first_header);
+        let first_hash_bytes = *first_hash.as_ref();
 
         {
-            let mut block = state.block(repair_block_header(2, 2_000_000));
+            let mut block = state.block(first_header.clone());
             let mut transaction = block.transaction();
             SubmitSorafsRepairTask::new(source_identity, report_payload.clone())
                 .execute(&alice(), &mut transaction)
@@ -12199,9 +13386,13 @@ mod sorafs_tests {
             transaction.apply();
             block.commit().expect("commit first repair block");
         }
+        state.push_block_hash_for_testing(first_hash);
 
+        let second_header = repair_block_header(2, 2_001_000);
+        let second_hash = iroha_crypto::HashOf::new(&second_header);
+        let second_hash_bytes = *second_hash.as_ref();
         {
-            let mut block = state.block(repair_block_header(3, 2_001_000));
+            let mut block = state.block(second_header.clone());
             let mut transaction = block.transaction();
             ApplySorafsRepairTaskAction::new(
                 report.ticket_id.0.clone(),
@@ -12273,26 +13464,651 @@ mod sorafs_tests {
             .expect_err("a task has exactly one terminal outcome");
             assert!(second_terminal.to_string().contains("terminal outcome"));
 
-            let task = FindSorafsRepairTask::new(report.ticket_id.0.clone())
-                .execute(&transaction)
-                .expect("typed task query");
-            assert_eq!(task.revision, 4);
-            assert!(matches!(
-                task.terminal_outcome,
-                Some(RepairLedgerTerminalOutcomeV1 {
-                    kind: RepairLedgerTerminalKindV1::Completed(_),
-                    lease_generation: 2,
-                    ..
-                })
-            ));
-            let status = FindSorafsRepairStatus
-                .execute(&transaction)
-                .expect("typed status query");
-            assert_eq!(status.tasks, 1);
-            assert_eq!(status.terminal_outcomes, 1);
-            assert_eq!(status.completed, 1);
-            assert_eq!(status.leased_tasks, 0);
+            transaction.apply();
+            block.commit().expect("commit second repair block");
         }
+        state.push_block_hash_for_testing(second_hash);
+
+        let view = state.view();
+        let task = FindSorafsRepairTask::new(report.ticket_id.0.clone(), None)
+            .execute(&view)
+            .expect("typed finalized task query");
+        assert_eq!(task.task.revision, 4);
+        assert!(matches!(
+            task.task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Completed(_),
+                lease_generation: 2,
+                ..
+            })
+        ));
+        assert_eq!(task.finalized_cursor.height, 2);
+        assert_eq!(task.finalized_cursor.block_hash, second_hash_bytes);
+        let status = FindSorafsRepairStatus::new(Some(task.finalized_cursor))
+            .execute(&view)
+            .expect("typed finalized status query");
+        assert_eq!(status.status.tasks, 1);
+        assert_eq!(status.status.terminal_outcomes, 1);
+        assert_eq!(status.status.completed, 1);
+        assert_eq!(status.status.leased_tasks, 0);
+
+        let first_event_page = FindSorafsRepairEvents::new(Some(task.finalized_cursor), None, 2)
+            .execute(&view)
+            .expect("first finalized repair event page");
+        assert_eq!(first_event_page.events.len(), 2);
+        assert!(first_event_page.has_more);
+        assert_eq!(
+            first_event_page
+                .events
+                .iter()
+                .map(|event| (event.sequence, event.block_height, event.event_index))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, 0), (2, 1, 1)]
+        );
+        assert!(
+            first_event_page
+                .events
+                .iter()
+                .all(|event| event.block_hash == first_hash_bytes)
+        );
+        let event_cursor = first_event_page
+            .next_after
+            .expect("first event page has continuation cursor");
+        assert_eq!(
+            event_cursor,
+            first_event_page
+                .events
+                .last()
+                .expect("first event page is non-empty")
+                .cursor()
+        );
+        let second_event_page =
+            FindSorafsRepairEvents::new(Some(task.finalized_cursor), Some(event_cursor), 2)
+                .execute(&view)
+                .expect("second finalized repair event page");
+        assert_eq!(second_event_page.events.len(), 2);
+        assert!(!second_event_page.has_more);
+        assert_eq!(
+            second_event_page
+                .events
+                .iter()
+                .map(|event| (event.sequence, event.block_height, event.event_index))
+                .collect::<Vec<_>>(),
+            vec![(3, 2, 0), (4, 2, 1)]
+        );
+        assert!(
+            second_event_page
+                .events
+                .iter()
+                .all(|event| event.block_hash == second_hash_bytes)
+        );
+        assert_eq!(
+            second_event_page.events[1].event.kind,
+            SorafsRepairLedgerEventKind::Completed
+        );
+
+        let task_page = FindSorafsRepairTasks::new(Some(task.finalized_cursor), None, 1)
+            .execute(&view)
+            .expect("bounded repair task page");
+        assert_eq!(task_page.tasks, vec![task.task.clone()]);
+        assert!(!task_page.has_more);
+
+        let mut stale_anchor = task.finalized_cursor;
+        stale_anchor.height = 1;
+        assert_eq!(
+            FindSorafsRepairStatus::new(Some(stale_anchor)).execute(&view),
+            Err(QueryExecutionFail::Expired)
+        );
+        let mut tampered_event_cursor = event_cursor;
+        tampered_event_cursor.block_hash[0] ^= 0xFF;
+        assert_eq!(
+            FindSorafsRepairEvents::new(
+                Some(task.finalized_cursor),
+                Some(tampered_event_cursor),
+                1,
+            )
+            .execute(&view),
+            Err(QueryExecutionFail::Expired)
+        );
+        for limit in [0, REPAIR_QUERY_MAX_ITEMS_V1 + 1] {
+            assert!(matches!(
+                FindSorafsRepairTasks::new(None, None, limit).execute(&view),
+                Err(QueryExecutionFail::Conversion(_))
+            ));
+            assert!(matches!(
+                FindSorafsRepairEvents::new(None, None, limit).execute(&view),
+                Err(QueryExecutionFail::Conversion(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn revoked_lease_owner_cannot_mutate_and_authorized_worker_reclaims_immediately() {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xB1; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        grant_repair_operator(&mut state, &bob(), provider);
+        let report = repair_report("REP-REVOKE-1", provider, [0xB2; 32], &alice(), 7_000);
+        let report_payload = to_bytes(&report).expect("encode revoked-worker repair report");
+        let claim = ApplySorafsRepairTaskAction::new(
+            report.ticket_id.0.clone(),
+            1,
+            SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                idempotency_key: "claim-before-revocation".to_owned(),
+            }),
+        );
+        transact_repair(&mut state, 1, 7_000_000, |transaction| {
+            SubmitSorafsRepairTask::new([0xB3; 32], report_payload)
+                .execute(&alice(), transaction)?;
+            claim.clone().execute(&alice(), transaction)
+        })
+        .expect("commit initial repair lease");
+
+        revoke_repair_operator(&mut state, &alice(), provider);
+        transact_repair(&mut state, 2, 7_000_500, |transaction| {
+            claim
+                .execute(&alice(), transaction)
+                .expect("exact pre-revocation claim replay remains a no-op");
+
+            let revoked_renewal = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Renew(SorafsRepairRenewV1 {
+                    lease_generation: 1,
+                    lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                    idempotency_key: "revoked-renewal".to_owned(),
+                }),
+            )
+            .execute(&alice(), transaction)
+            .expect_err("revoked lease owner cannot renew");
+            assert!(
+                revoked_renewal
+                    .to_string()
+                    .contains("current provider-scoped")
+            );
+
+            let revoked_terminal = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+                    lease_generation: 1,
+                    evidence_digest: [0xB4; 32],
+                    idempotency_key: "revoked-completion".to_owned(),
+                }),
+            )
+            .execute(&alice(), transaction)
+            .expect_err("revoked lease owner cannot commit a terminal outcome");
+            assert!(
+                revoked_terminal
+                    .to_string()
+                    .contains("current provider-scoped")
+            );
+            let revoked_slash = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Escalate(SorafsRepairEscalateV1 {
+                    lease_generation: 1,
+                    slash_proposal_payload: vec![0xFF],
+                    idempotency_key: "revoked-escalation".to_owned(),
+                }),
+            )
+            .execute(&alice(), transaction)
+            .expect_err("revoked lease owner cannot commit a slash proposal");
+            assert!(
+                revoked_slash
+                    .to_string()
+                    .contains("current provider-scoped")
+            );
+
+            ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                2,
+                SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                    lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                    idempotency_key: "authorized-reclaim".to_owned(),
+                }),
+            )
+            .execute(&bob(), transaction)
+            .expect("authorized worker reclaims revoked owner's unexpired lease");
+
+            let revoked_after_reclaim = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                3,
+                SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+                    lease_generation: 1,
+                    failure_digest: [0xB5; 32],
+                    idempotency_key: "revoked-failure".to_owned(),
+                }),
+            )
+            .execute(&alice(), transaction)
+            .expect_err("revoked former owner cannot race the replacement");
+            assert!(
+                revoked_after_reclaim
+                    .to_string()
+                    .contains("current provider-scoped")
+            );
+
+            let completion = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                3,
+                SorafsRepairTaskActionV1::Complete(SorafsRepairCompleteV1 {
+                    lease_generation: 2,
+                    evidence_digest: [0xB6; 32],
+                    idempotency_key: "replacement-completion".to_owned(),
+                }),
+            );
+            completion
+                .clone()
+                .execute(&bob(), transaction)
+                .expect("replacement commits the single terminal outcome");
+            completion
+                .execute(&bob(), transaction)
+                .expect("replacement terminal replay is idempotent");
+            let duplicate_terminal = ApplySorafsRepairTaskAction::new(
+                report.ticket_id.0.clone(),
+                4,
+                SorafsRepairTaskActionV1::Fail(SorafsRepairFailV1 {
+                    lease_generation: 2,
+                    failure_digest: [0xB7; 32],
+                    idempotency_key: "replacement-second-terminal".to_owned(),
+                }),
+            )
+            .execute(&bob(), transaction)
+            .expect_err("replacement cannot commit a second terminal outcome");
+            assert!(duplicate_terminal.to_string().contains("terminal outcome"));
+            Ok(())
+        })
+        .expect("commit permission-revocation takeover");
+
+        let view = state.view();
+        let task = FindSorafsRepairTask::new(report.ticket_id.0, None)
+            .execute(&view)
+            .expect("query revoked-worker repair task");
+        assert_eq!(task.task.revision, 4);
+        assert!(matches!(
+            task.task.terminal_outcome,
+            Some(RepairLedgerTerminalOutcomeV1 {
+                kind: RepairLedgerTerminalKindV1::Completed(_),
+                lease_generation: 2,
+                ref finalized_by,
+                ..
+            }) if finalized_by == &bob()
+        ));
+        let events = FindSorafsRepairEvents::new(Some(task.finalized_cursor), None, 10)
+            .execute(&view)
+            .expect("query permission-revocation event journal");
+        assert_eq!(
+            events
+                .events
+                .iter()
+                .map(|event| (event.event.kind, event.event.authority.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (SorafsRepairLedgerEventKind::TaskSubmitted, alice()),
+                (SorafsRepairLedgerEventKind::LeaseClaimed, alice()),
+                (SorafsRepairLedgerEventKind::LeaseClaimed, bob()),
+                (SorafsRepairLedgerEventKind::Completed, bob()),
+            ],
+            "replays and rejected revoked-worker mutations must not create journal events"
+        );
+    }
+
+    #[test]
+    fn repair_task_pages_are_deterministic_and_exclusive() {
+        let mut state = make_state();
+        let provider = ProviderId::new([0xC1; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        let fixtures = [
+            ("REP-PAGE-1", [0x31; 32], [0x41; 32]),
+            ("REP-PAGE-2", [0x32; 32], [0x42; 32]),
+            ("REP-PAGE-3", [0x33; 32], [0x43; 32]),
+        ];
+        transact_repair(&mut state, 1, 5_000_000, |transaction| {
+            for (ticket_id, source_identity, manifest_digest) in fixtures {
+                let report = repair_report(ticket_id, provider, manifest_digest, &alice(), 5_000);
+                SubmitSorafsRepairTask::new(
+                    source_identity,
+                    to_bytes(&report).expect("encode paginated repair report"),
+                )
+                .execute(&alice(), transaction)?;
+            }
+            Ok(())
+        })
+        .expect("commit paginated repair tasks");
+
+        let view = state.view();
+        let first = FindSorafsRepairTasks::new(None, None, 1)
+            .execute(&view)
+            .expect("first repair task page");
+        let anchor = first.finalized_cursor;
+        let mut page = first;
+        let mut tasks = Vec::new();
+        loop {
+            let expected_after = page.tasks.last().map(|task| task.task_id);
+            let next_after = page.next_after_task_id;
+            tasks.extend(page.tasks);
+            let Some(after) = next_after else {
+                assert!(!page.has_more);
+                break;
+            };
+            assert!(page.has_more);
+            assert_eq!(Some(after), expected_after);
+            page = FindSorafsRepairTasks::new(Some(anchor), Some(after), 1)
+                .execute(&view)
+                .expect("continued repair task page");
+            assert_eq!(page.finalized_cursor, anchor);
+        }
+        assert_eq!(tasks.len(), fixtures.len());
+        assert!(
+            tasks
+                .windows(2)
+                .all(|pair| pair[0].task_id < pair[1].task_id),
+            "repair task pages must follow immutable task-id order"
+        );
+        let expected = fixtures
+            .into_iter()
+            .map(|(_, source_identity, _)| sorafs_repair_task_id_v1(source_identity))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.task_id)
+                .collect::<BTreeSet<_>>(),
+            expected
+        );
+        let events = FindSorafsRepairEvents::new(Some(anchor), None, 10)
+            .execute(&view)
+            .expect("query task-submission events");
+        assert_eq!(events.events.len(), fixtures.len());
+        assert!(
+            events
+                .events
+                .iter()
+                .all(|event| event.event.kind == SorafsRepairLedgerEventKind::TaskSubmitted)
+        );
+    }
+
+    #[test]
+    fn repair_task_byte_budget_returns_stable_continuation_cursor() {
+        const TASK_COUNT: usize = 150;
+        const EVIDENCE_PADDING_BYTES: usize = 58 * 1024;
+
+        let mut state = make_state();
+        let provider = ProviderId::new([0xC2; 32]);
+        grant_repair_operator(&mut state, &alice(), provider);
+        let evidence_json = format!(r#"{{"padding":"{}"}}"#, "x".repeat(EVIDENCE_PADDING_BYTES));
+        transact_repair(&mut state, 1, 6_000_000, |transaction| {
+            for index in 0..TASK_COUNT {
+                let sequence = u16::try_from(index + 1).expect("bounded repair fixture sequence");
+                let mut source_identity = [0u8; 32];
+                source_identity[..2].copy_from_slice(&sequence.to_be_bytes());
+                let mut manifest_digest = [0xC3; 32];
+                manifest_digest[..2].copy_from_slice(&sequence.to_be_bytes());
+                let mut report = repair_report(
+                    &format!("REP-BYTE-{sequence:03}"),
+                    provider,
+                    manifest_digest,
+                    &alice(),
+                    6_000,
+                );
+                report.evidence.evidence_json = Some(evidence_json.clone());
+                let report_payload = to_bytes(&report).expect("encode large repair report");
+                assert!(
+                    report_payload.len() <= REPAIR_PAYLOAD_MAX_BYTES_V1,
+                    "large repair fixture must remain an admissible bounded payload"
+                );
+                SubmitSorafsRepairTask::new(source_identity, report_payload)
+                    .execute(&alice(), transaction)?;
+            }
+            Ok(())
+        })
+        .expect("commit large repair task index");
+
+        let view = state.view();
+        let first = FindSorafsRepairTasks::new(None, None, REPAIR_QUERY_MAX_ITEMS_V1)
+            .execute(&view)
+            .expect("query byte-bounded repair task page");
+        assert!(first.has_more);
+        assert!(first.tasks.len() < TASK_COUNT);
+        let after = first
+            .next_after_task_id
+            .expect("byte-bounded task page has continuation cursor");
+        assert_eq!(
+            after,
+            first
+                .tasks
+                .last()
+                .expect("byte-bounded task page is non-empty")
+                .task_id
+        );
+        let second = FindSorafsRepairTasks::new(
+            Some(first.finalized_cursor),
+            Some(after),
+            REPAIR_QUERY_MAX_ITEMS_V1,
+        )
+        .execute(&view)
+        .expect("continue byte-bounded repair task page");
+        assert!(!second.has_more);
+        assert_eq!(second.finalized_cursor, first.finalized_cursor);
+        let mut task_ids = first
+            .tasks
+            .iter()
+            .map(|task| task.task_id)
+            .collect::<Vec<_>>();
+        task_ids.extend(second.tasks.iter().map(|task| task.task_id));
+        assert_eq!(task_ids.len(), TASK_COUNT);
+        assert!(
+            task_ids.windows(2).all(|pair| pair[0] < pair[1]),
+            "byte-budget continuation must preserve strict task-id order"
+        );
+    }
+
+    #[test]
+    fn repair_committed_event_queries_fail_closed_on_corrupt_journals() {
+        let missing_head =
+            committed_repair_fixture("REP-CORRUPT-HEAD", [0x61; 32], |_, transaction| {
+                transaction
+                    .world
+                    .smart_contract_state
+                    .remove(repair_event_journal_head_key().clone());
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&missing_head.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let malformed_event =
+            committed_repair_fixture("REP-CORRUPT-BYTES", [0x62; 32], |_, transaction| {
+                transaction
+                    .world
+                    .smart_contract_state
+                    .insert(repair_event_key(1), vec![0xFF; 16]);
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&malformed_event.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let orphan_event =
+            committed_repair_fixture("REP-CORRUPT-ORPHAN", [0x63; 32], |_, transaction| {
+                let mut orphan = read_repair_persisted_event(transaction.world(), 1)?
+                    .expect("initial repair event exists");
+                orphan.sequence = 2;
+                orphan.event_index = 1;
+                transaction.world.smart_contract_state.insert(
+                    repair_event_key(2),
+                    encode_repair_state(&orphan, "orphan repair event")?,
+                );
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&orphan_event.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let orphan_task =
+            committed_repair_fixture("REP-CORRUPT-TASK", [0x64; 32], |_, transaction| {
+                let mut orphan = read_repair_persisted_event(transaction.world(), 1)?
+                    .expect("initial repair event exists");
+                orphan.event.ticket_id = "REP-MISSING-TASK".to_owned();
+                transaction.world.smart_contract_state.insert(
+                    repair_event_key(1),
+                    encode_repair_state(&orphan, "orphan-task repair event")?,
+                );
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&orphan_task.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let missing_middle =
+            committed_repair_fixture("REP-CORRUPT-GAP", [0x65; 32], |report, transaction| {
+                ApplySorafsRepairTaskAction::new(
+                    report.ticket_id.0.clone(),
+                    1,
+                    SorafsRepairTaskActionV1::Claim(SorafsRepairClaimV1 {
+                        lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                        idempotency_key: "gap-claim".to_owned(),
+                    }),
+                )
+                .execute(&alice(), transaction)?;
+                ApplySorafsRepairTaskAction::new(
+                    report.ticket_id.0.clone(),
+                    2,
+                    SorafsRepairTaskActionV1::Renew(SorafsRepairRenewV1 {
+                        lease_generation: 1,
+                        lease_duration_ms: REPAIR_LEDGER_MIN_LEASE_MS_V1,
+                        idempotency_key: "gap-renew".to_owned(),
+                    }),
+                )
+                .execute(&alice(), transaction)?;
+                transaction
+                    .world
+                    .smart_contract_state
+                    .remove(repair_event_key(2));
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&missing_middle.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let nonfinalized =
+            committed_repair_fixture("REP-CORRUPT-HEIGHT", [0x66; 32], |_, transaction| {
+                let mut event = read_repair_persisted_event(transaction.world(), 1)?
+                    .expect("initial repair event exists");
+                event.target_block_height = 2;
+                let mut head = read_repair_event_journal_head(transaction.world())?
+                    .expect("repair event head exists");
+                head.last_target_block_height = 2;
+                transaction.world.smart_contract_state.insert(
+                    repair_event_key(1),
+                    encode_repair_state(&event, "non-finalized repair event")?,
+                );
+                transaction.world.smart_contract_state.insert(
+                    repair_event_journal_head_key().clone(),
+                    encode_repair_state(&head, "non-finalized repair event head")?,
+                );
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairEvents::new(None, None, 10).execute(&nonfinalized.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+    }
+
+    #[test]
+    fn repair_query_resource_and_encoded_budget_guards_fail_closed() {
+        let oversized_record =
+            committed_repair_fixture("REP-BUDGET-STATE", [0x67; 32], |_, transaction| {
+                transaction.world.smart_contract_state.insert(
+                    repair_source_key([0x67; 32]),
+                    vec![0xFF; REPAIR_STATE_MAX_BYTES_V1 + 1],
+                );
+                Ok(())
+            });
+        assert!(matches!(
+            FindSorafsRepairTasks::new(None, None, 1).execute(&oversized_record.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let mut inspected_records = 3usize;
+        assert!(
+            charge_repair_query_inspected_records(
+                &mut inspected_records,
+                1,
+                3,
+                "adversarial sparse repair projection",
+            )
+            .is_err()
+        );
+        let mut state_read_bytes = REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1;
+        assert!(
+            charge_repair_query_state_bytes(
+                &mut state_read_bytes,
+                1,
+                REPAIR_QUERY_MAX_EVENT_STATE_READ_BYTES_V1,
+                "adversarial repair projection",
+            )
+            .is_err()
+        );
+
+        let state = committed_repair_fixture("REP-BUDGET-PAGE", [0x68; 32], |_, _| Ok(()));
+        let view = state.view();
+        let finalized_task = FindSorafsRepairTask::new("REP-BUDGET-PAGE".to_owned(), None)
+            .execute(&view)
+            .expect("query repair budget fixture task");
+        let mut oversized_task = finalized_task.task;
+        oversized_task.canonical_report = vec![0xA5; REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1 + 1];
+        let oversized_task_page = RepairLedgerTaskPageV1 {
+            finalized_cursor: finalized_task.finalized_cursor,
+            tasks: vec![oversized_task],
+            has_more: false,
+            next_after_task_id: None,
+        };
+        assert!(
+            ensure_repair_query_encoded_budget(
+                &oversized_task_page,
+                REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1,
+                "adversarial repair task page",
+            )
+            .is_err()
+        );
+
+        let event_page =
+            FindSorafsRepairEvents::new(Some(finalized_task.finalized_cursor), None, 1)
+                .execute(&view)
+                .expect("query repair budget fixture event");
+        let event = event_page
+            .events
+            .into_iter()
+            .next()
+            .expect("repair budget fixture has one event");
+        let encoded_event_len = to_bytes(&event)
+            .expect("encode repair budget fixture event")
+            .len();
+        let oversized_event_count = REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1
+            .checked_div(encoded_event_len)
+            .and_then(|count| count.checked_add(2))
+            .expect("bounded repair event fixture count");
+        let oversized_event_page = RepairFinalizedEventPageV1 {
+            finalized_cursor: finalized_task.finalized_cursor,
+            events: vec![event; oversized_event_count],
+            has_more: false,
+            next_after: None,
+        };
+        assert!(
+            ensure_repair_query_encoded_budget(
+                &oversized_event_page,
+                REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1,
+                "adversarial repair event page",
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -12302,7 +14118,9 @@ mod sorafs_tests {
         grant_repair_operator(&mut state, &alice(), provider);
         state.world.provider_owners.insert(provider, bob());
         let report = repair_report("REP-SLASH-1", provider, [0xE2; 32], &alice(), 3_000);
-        let mut block = state.block(repair_block_header(2, 3_000_000));
+        let header = repair_block_header(1, 3_000_000);
+        let block_hash = iroha_crypto::HashOf::new(&header);
+        let mut block = state.block(header);
         let mut transaction = block.transaction();
 
         SubmitSorafsRepairTask::new([0xE3; 32], to_bytes(&report).expect("encode repair report"))
@@ -12377,23 +14195,45 @@ mod sorafs_tests {
         .expect_err("slash proposal permits only one appeal");
         assert!(duplicate_appeal.to_string().contains("single appeal"));
 
-        let task = FindSorafsRepairTask::new(report.ticket_id.0)
-            .execute(&transaction)
-            .expect("typed task query");
-        assert!(task.slash.is_some());
-        assert!(task.appeal.is_some());
+        transaction.apply();
+        block.commit().expect("commit repair escalation block");
+        state.push_block_hash_for_testing(block_hash);
+
+        let view = state.view();
+        let task = FindSorafsRepairTask::new(report.ticket_id.0, None)
+            .execute(&view)
+            .expect("typed finalized task query");
+        assert!(task.task.slash.is_some());
+        assert!(task.task.appeal.is_some());
         assert!(matches!(
-            task.terminal_outcome,
+            task.task.terminal_outcome,
             Some(RepairLedgerTerminalOutcomeV1 {
                 kind: RepairLedgerTerminalKindV1::Escalated(_),
                 ..
             })
         ));
-        let status = FindSorafsRepairStatus
-            .execute(&transaction)
-            .expect("typed status query");
-        assert_eq!(status.escalated, 1);
-        assert_eq!(status.slash_proposals, 1);
-        assert_eq!(status.appeals, 1);
+        let status = FindSorafsRepairStatus::new(Some(task.finalized_cursor))
+            .execute(&view)
+            .expect("typed finalized status query");
+        assert_eq!(status.status.escalated, 1);
+        assert_eq!(status.status.slash_proposals, 1);
+        assert_eq!(status.status.appeals, 1);
+        let events = FindSorafsRepairEvents::new(Some(task.finalized_cursor), None, 10)
+            .execute(&view)
+            .expect("query escalation event journal");
+        assert_eq!(events.events.len(), 4, "exact replays emit no journal rows");
+        assert_eq!(
+            events
+                .events
+                .iter()
+                .map(|event| event.event.kind)
+                .collect::<Vec<_>>(),
+            vec![
+                SorafsRepairLedgerEventKind::TaskSubmitted,
+                SorafsRepairLedgerEventKind::LeaseClaimed,
+                SorafsRepairLedgerEventKind::Escalated,
+                SorafsRepairLedgerEventKind::Appealed,
+            ]
+        );
     }
 }

@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` ဇာတ်ညွှန်းသည် တည်ဆောက်ရန် `sorafs_manifest_stub capacity` ကို တောင်းဆိုသည်-
+`run_cli.sh` ဇာတ်ညွှန်းသည် တည်ဆောက်ရန် `sorafs_manifest_builder capacity` ကို တောင်းဆိုသည်-
 
 - ခွဲတမ်းညှိနှိုင်းမှု အစုံအလင်အတွက် သတ်မှတ်ထားသော ပံ့ပိုးပေးသူ၏ ကြေငြာချက်များ။
 - ညှိနှိုင်းမှုအခြေအနေနှင့်ကိုက်ညီသော ပုံတူကူးယူမှု။

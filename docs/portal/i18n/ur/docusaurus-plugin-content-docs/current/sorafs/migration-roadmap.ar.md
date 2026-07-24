@@ -43,14 +43,14 @@ SoraFS کے ذریعہ طاقت والا۔
 | -------- | -------- | ------- | ------------ | ------------ |
 | فکسچر ٹریننگ کی مشقیں | M0 | ہفتہ وار خشک رنز `fixtures/sorafs_chunker` کے ساتھ CHUNK کے مقامی ڈائجسٹوں کا موازنہ کرتے ہیں۔ `docs/source/sorafs/reports/` کے تحت شائع ہونے والی رپورٹ۔ | اسٹوریج فراہم کرنے والے | `determinism-<date>.md` پاس/فیل سرنی کے ساتھ۔ |
 | دستخطوں کو نافذ کریں | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` ناکام ہوجاتا ہے اگر دستخطوں یا منشور کو اسکیچ کیا جاتا ہے۔ ترقی کے اوور رائڈس کے لئے PR سے منسلک گورننس چھوٹ کی ضرورت ہوتی ہے۔ | ٹولنگ ڈبلیو جی | CI لاگ ، چھوٹ ٹکٹ لنک (اگر قابل اطلاق ہو)۔ |
-| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_stub` کو آؤٹ پٹ کو ٹھیک کرنے کے لئے واضح توقعات کے ساتھ کال کرتی ہے: | دستاویزات CI | توقع کے جھنڈوں کی نشاندہی کرنے والے تازہ ترین اسکرپٹس (نیچے کمانڈ بلاک دیکھیں)۔ |
+| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_builder` کو آؤٹ پٹ کو ٹھیک کرنے کے لئے واضح توقعات کے ساتھ کال کرتی ہے: | دستاویزات CI | توقع کے جھنڈوں کی نشاندہی کرنے والے تازہ ترین اسکرپٹس (نیچے کمانڈ بلاک دیکھیں)۔ |
 | رجسٹری فرسٹ پننگ | ایم 2 | `sorafs pin propose` اور `sorafs pin approve` مینی فیسٹ گذارشات کو انکولیٹ کرتے ہیں۔ پہلے سے طے شدہ CLI `--require-registry` استعمال کرتا ہے۔ | گورننس اوپس | رجسٹری کے لئے سی ایل آئی آڈٹ لاگ ، تجویز کی ناکامی میٹرک۔ |
 | مشاہدہ مساوات | M3 | Prometheus/Grafana بورڈ الرٹ جب رجسٹری میں ٹکڑوں سے مختلف ہوتے ہیں۔ انتباہات او پی ایس شفٹ سے منسلک ہیں۔ | مشاہدہ | اسکور بورڈ لنک ، آئی ڈی ، الرٹ کے قواعد ، گیم ڈے اسکور۔ |
 
 #### معیاری پوسٹ کمانڈ
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

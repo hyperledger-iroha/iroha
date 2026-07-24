@@ -41,14 +41,14 @@ title: "خارطة طريق ترحيل SoraFS"
 |--------|--------|------------|---------|---|
 | تدريبات تركيبات | م0 | التشغيل الجاف أسبوعية تقارن الملخصات المحلية للـ Chunk مع `fixtures/sorafs_chunker`. نشر التقرير تحت `docs/source/sorafs/reports/`. | موفرو التخزين | `determinism-<date>.md` مع مصفوفة النجاح/الفشل. |
 | فرض التواقيع | م1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` تفشل إذا انحرفت التواقيع أو البيان. يتجاوز التطوير متطلبات التنازل من الإلحاق بالـ PR. | الأدوات مجموعة العمل | سجل CI، رابط تذكرة التنازل (إن وجدت). |
-| أعلام التوقع | م1 | خطوط تستدعي `sorafs_manifest_stub` بتوقعات صريحة مباشرة للمخرجات: | مستندات CI | سكربتات محدثة تشير إلى أعلام التوقع (انظر كتلة الأمر أدناه). |
+| أعلام التوقع | م1 | خطوط تستدعي `sorafs_manifest_builder` بتوقعات صريحة مباشرة للمخرجات: | مستندات CI | سكربتات محدثة تشير إلى أعلام التوقع (انظر كتلة الأمر أدناه). |
 | تثبيت التسجيل أولاً | م2 | `sorafs pin propose` و`sorafs pin approve` يغلِّفان تقديم المانيفست؛ يستخدم CLI الافتراضي `--require-registry`. | عمليات الحوكمة | سجل دقيق CLI للـ التسجيل، تليمترية فشل المقترحات. |
 | توافق قابلية الملاحظة | م3 | لوحات Prometheus/Grafana تنبه عند اكتشاف فرق المخزون عن البيانات في السجل؛ تنبيهات وصول بمناوبة ops. | إمكانية الملاحظة | رابط اللوحة، معرفات متطلبات التنبيه، نتائج GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

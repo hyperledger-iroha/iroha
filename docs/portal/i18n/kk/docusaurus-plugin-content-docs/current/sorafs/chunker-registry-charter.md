@@ -59,7 +59,7 @@ SDKs). Ол бүркеншік атын және тексерген инвари
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Құралдарды, ұсынысты, детерминизм есебін және тізілімді қамтитын PR жіберіңіз
@@ -98,14 +98,14 @@ SDKs). Ол бүркеншік атын және тексерген инвари
 
 ## Құралдардан күтулер
 
-- `sorafs_manifest_chunk_store` және `sorafs_manifest_stub` мыналарды көрсетеді:
+- `sorafs_manifest_chunk_store` және `sorafs_manifest_builder` мыналарды көрсетеді:
   - тізілімді тексеру үшін `--list-profiles`.
   - пайдаланылған канондық метадеректер блогын жасау үшін `--promote-profile=<handle>`
     профильді жылжыту кезінде.
   - `--json-out=-` есептерді stdout жүйесіне жіберу үшін қайталанатын шолуды қамтамасыз етеді
     журналдар.
 - `ensure_charter_compliance()` сәйкес екілік файлдарда іске қосу кезінде шақырылады
-  (`manifest_chunk_store`, `provider_advert_stub`). Жаңа болса, CI сынақтары сәтсіз болуы керек
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Жаңа болса, CI сынақтары сәтсіз болуы керек
   жазбалар жарғыны бұзады.
 
 ## Іс қағаздарын жүргізу

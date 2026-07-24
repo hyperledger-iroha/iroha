@@ -40,7 +40,7 @@ Sidebar_label: Сборник споров и отзывов
 
 ## 3. Представить спор
 
-1. Создайте спецификацию JSON для `sorafs_manifest_stub capacity dispute`:
+1. Создайте спецификацию JSON для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: Сборник споров и отзывов
 2. Включение CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: Сборник споров и отзывов
 
 1. **Вентана де грация:** уведомление о неизбежном отзыве; разрешите эвакуацию данных из Фихадо, если политика будет разрешена.
 2. **Род `ProviderAdmissionRevocationV1`:**
-   - США `sorafs_manifest_stub provider-admission revoke` с проверенным разумом.
+   - США `sorafs_manifest_builder provider-admission revoke` с проверенным разумом.
    - Проверка фирм и дайджест отзыва.
 3. **Публикация отзыва:**
    - Отправьте запрос на отзыв на номер Torii.
@@ -93,7 +93,7 @@ Sidebar_label: Сборник споров и отзывов
 
 ## 6. Справочные материалы
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
 - `docs/source/sorafs/provider_admission_policy.md` (переход к отзыву)
 - Панель наблюдения: `SoraFS / Capacity Providers`

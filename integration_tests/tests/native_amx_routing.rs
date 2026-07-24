@@ -61,6 +61,8 @@ use tokio::{
 use toml::{Table, Value as TomlValue};
 
 const PEERS: usize = 4;
+const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
+const RUN_IGNORED_ENV: &str = "IROHA_RUN_IGNORED";
 const UNIVERSAL_LANE: u32 = 0;
 const ACME_LANE: u32 = 1;
 const BANK_LANE: u32 = 2;
@@ -1333,13 +1335,41 @@ async fn native_amx_queue_journal_replays_plan_after_restart() -> Result<()> {
     result
 }
 
+fn multilane_release_gate_requested(context: &str) -> Result<bool> {
+    let release = std::env::var(MULTILANE_RELEASE_MODE_ENV).ok();
+    let developer = std::env::var(RUN_IGNORED_ENV).ok();
+    if release.as_deref().is_some_and(|value| value != "1") {
+        return Err(eyre!(
+            "{context}: {MULTILANE_RELEASE_MODE_ENV} must be exactly 1 when present"
+        ));
+    }
+    if release.as_deref() == Some("1") {
+        return Ok(true);
+    }
+    if developer.as_deref().is_some_and(|value| value != "1") {
+        return Err(eyre!(
+            "{context}: {RUN_IGNORED_ENV} must be exactly 1 when present"
+        ));
+    }
+    let requested = developer.as_deref() == Some("1");
+    if !requested {
+        eprintln!(
+            "{context}: developer opt-out; set {RUN_IGNORED_ENV}=1 to run the rotating-validator gate"
+        );
+    }
+    Ok(requested)
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-#[ignore = "long-running rotating-validator Native AMX fault soak"]
 async fn native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs()
 -> Result<()> {
     init_instruction_registry();
     let context =
         stringify!(native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs);
+    if !multilane_release_gate_requested(context)? {
+        return Ok(());
+    }
+    eprintln!("[multilane-release-gate] started: {context}");
     let iterations = native_amx_soak_iterations()?;
     let Some(network) = sandbox::start_network_async_or_skip(localnet_builder(), context).await?
     else {
@@ -1472,5 +1502,7 @@ async fn native_amx_rotating_validator_fault_soak_preserves_independent_particip
     .await;
 
     network.shutdown().await;
-    result
+    result?;
+    eprintln!("[multilane-release-gate] completed: {context}");
+    Ok(())
 }

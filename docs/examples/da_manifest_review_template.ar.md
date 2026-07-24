@@ -30,7 +30,7 @@ takedown، او تغييرات الاحتفاظ (خارطة الطريق DA-10).
 
 ## التحقق من التواقيع
 - مصدر جلب البيان / تذكرة التخزين: `<hex>`
-- امر/ناتج التحقق: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (هل تم ارفاق مقتطف سجل؟)
+- امر/ناتج التحقق: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (هل تم ارفاق مقتطف سجل؟)
 - `manifest_blake3` الذي ابلغت عنه الاداة: `<digest>`
 - `chunk_digest_sha3_256` الذي ابلغت عنه الاداة: `<digest>`
 - تواقيع مجلس الموقعين (multihash):

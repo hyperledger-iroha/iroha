@@ -314,6 +314,7 @@ def _sumeragi_diagnostics_payload() -> Dict[str, Any]:
         "lane_governance_sealed_aliases": [],
         "lane_governance": [],
         "native_amx_participant_applications": [],
+        "autonomous_lane_executions": [],
     }
 
 
@@ -3985,6 +3986,46 @@ def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -
     assert applications[0].state == "durably_applied"
 
 
+def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    row = {
+        "lane_id": 3, "dataspace_id": 8,
+        "lane_incarnation": _canonical_hash(0x65),
+        "lane_block_height": 8, "lane_block_view": 1,
+        "proposal_height": 10, "proposal_view": 2,
+        "proposal_hash": _canonical_hash(0x69),
+        "descriptor_hash": _canonical_hash(0x73),
+        "executable_payload_hash": _canonical_hash(0x74),
+        "source_bundle_hash": _canonical_hash(0x75),
+        "merge_entry_hash": _canonical_hash(0x76),
+        "application_block_height": 12,
+        "application_block_hash": _canonical_hash(0x77),
+        "reservation_count": 2, "transaction_count": 2,
+        "highest_durable_stage": "kura_wsv_application_receipt_durable",
+        "stuck_reason": "queue_finalization_unverifiable",
+    }
+    payload["autonomous_lane_executions"] = [row]
+    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
+    assert parsed.merge_entry_hash == _canonical_hash(0x76)
+    assert parsed.application_block_height == 12
+
+    payload["autonomous_lane_executions"] = [row, dict(row)]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(payload)
+    payload["autonomous_lane_executions"] = [row]
+    row["reservation_count"] = 1
+    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
+        _get_sumeragi_diagnostics(payload)
+    row["highest_durable_stage"] = "conflict"
+    row["stuck_reason"] = "evidence_conflict"
+    assert _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0].stuck_reason == (
+        "evidence_conflict"
+    )
+    row["stuck_reason"] = "awaiting_merge_selection"
+    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+
 def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
     payload = _sumeragi_diagnostics_payload()
     payload["npos"] = {
@@ -6114,7 +6155,7 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_eq_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        circuit_id="kagemusha-recursive-spend-step-eq-compact-layout-v5",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
         max_proof_bytes=2 * 1024 * 1024,
@@ -6131,7 +6172,7 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_ep_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+        circuit_id="kagemusha-recursive-spend-step-ep-compact-lineage-v5",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
         max_proof_bytes=2 * 1024 * 1024,

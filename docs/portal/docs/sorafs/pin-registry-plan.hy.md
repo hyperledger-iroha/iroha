@@ -80,7 +80,7 @@ Rust Norito սխեմաներ և վավերացման օգնականներ, որ�
 |-----------|------|----------|
 | Torii Ծառայություն | Բացահայտեք `/v1/sorafs/pin` (ներկայացնել), `/v1/sorafs/pin/{cid}` (որոնում), `/v1/sorafs/aliases` (ցուցակ/կապում), `/v1/sorafs/replication` (պատվերներ/անդորրագրեր): Տրամադրել էջադրում + զտում: | Ցանցային TL / Core Infra |
 | Ատեստավորում | Պատասխանների մեջ ներառել ռեեստրի բարձրությունը/հեշը; ավելացնել Norito ատեստավորման կառուցվածքը, որն օգտագործվում է SDK-ների կողմից: | Core Infra |
-| CLI | Ընդլայնել `sorafs_manifest_stub` կամ նոր `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`-ով: | Գործիքավորում WG |
+| CLI | Ընդլայնել `sorafs_manifest_builder` կամ նոր `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`-ով: | Գործիքավորում WG |
 | SDK | Ստեղծեք հաճախորդի կապեր (Rust/Go/TS) Norito սխեմայից; ավելացնել ինտեգրման թեստեր: | SDK թիմեր |
 
 Գործողություններ:

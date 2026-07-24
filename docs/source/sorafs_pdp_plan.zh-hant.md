@@ -2,7 +2,7 @@
 lang: zh-hant
 direction: ltr
 source: docs/source/sorafs_pdp_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 081d0b3c5ed447615ee16364f76176d2eae91f7419938d4b8d24b5d2ffd833e5
 source_last_modified: "2026-07-06T19:29:26.838406+00:00"
@@ -14,11 +14,23 @@ source_mtime: 2026-07-06T19:29:26.838406+00:00
 
 ## Status
 
-SF-13 defines Sora-PDP hot-storage proofs. The local repository now has the
-schema and accounting foundations, but the provider protocol is not production
-ready yet. Torii therefore rejects PDP proof-stream requests with `400 Bad
-Request` until real provider proof generation, signature verification, and
-governance archival are implemented.
+SF-13 defines Sora-PDP hot-storage proofs. The local cryptographic layer builds
+the canonical trees, generates byte-backed witnesses, verifies both commitment
+roots, enforces exact governed coverage and deadlines, and verifies provider
+signatures against council-verified admission records. Torii ships the
+authenticated `/v1/sorafs/pdp/challenge`, `/next`, `/proof`, `/status`, and
+`/export` protocol family. `/v1/sorafs/proof/stream` also accepts `pdp` only
+when the caller supplies the existing non-zero governed challenge ID; it
+rejects client-selected PDP sample counts and seeds. Persisted storage retains
+canonical PDP trees and produces witnesses through verified no-follow chunk
+reads.
+
+This protocol is not production-ready while rejected or expired challenges
+still converge on the process-local repair coordinator. The native repair
+ledger exists, but PDP terminal handoff, retry reconciliation, and readback
+must use its finalized committed task/event projection before SF-13 can be
+promoted. Genuine multi-provider transport, restart, key-rotation, metrics,
+archive, and repair evidence also remains external rollout work.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
 SF-13 rollout evidence gate for deployed PDP promotion, and
 `scripts/run_sorafs_pdp_rollout_evidence.py` provides the matching
@@ -33,10 +45,12 @@ Implemented locally:
   paths, timestamps, and signatures.
 - `crates/sorafs_manifest/tests/pdp.rs` covers the structural validators for
   commitments, challenges, and proofs.
-- `sorafs-validate pdp` validates committed PDP commitments, challenges, and
-  proofs, including commitment/challenge binding and challenge/proof binding
-  for manifest digest, provider id, epoch id, challenge id, response deadline,
-  segment coverage, and hot-leaf coverage.
+- `sorafs-validate pdp` performs exhaustive diagnostic validation of committed
+  commitments, challenges, proof signatures, byte witnesses, both Merkle roots,
+  and all manifest/provider/epoch/deadline/coverage bindings. A standalone
+  fixture triple reports `SFS-PDP-DIAG-000` and never authorizes production
+  acceptance; only the admission-bound verifier can emit `SFS-OK-000`, after a
+  council-verified active provider record supplies the trusted signing key.
 - The PDP rollout evidence gate requires payload-free provider-transport,
   proof-generation, validator-replay, governance/repair, observability, and
   governance-approval artifacts before reporting `ready`, and it requires
@@ -121,26 +135,47 @@ Implemented locally:
   challenge, and proof `.to`/JSON pairs plus negative fixtures for duplicate
   hot-leaf challenge material and missing proof signatures. The fixture bundle
   validator discovers these payloads from a clean checkout.
-- `sorafs_car::ChunkStore` derives deterministic PDP hot-leaf and segment roots
-  from the same two-level tree used by PoR sampling, exposing
-  `pdp_hot_root`, `pdp_segment_root`, `pdp_hot_leaf_count`, and
-  `pdp_segment_count`.
+- `sorafs_manifest::PdpMerkleTreeV1` and
+  `PdpMerkleTreeBuilderV1` implement the canonical, chunk-boundary-independent
+  4 KiB hot-leaf and 256 KiB segment trees. Finished trees retain two exact
+  flat node slabs, expose checked allocation-free retained-memory estimates,
+  and generate witnesses through a bounded exact-position reader callback.
+  The proof constructor rejects duplicate, unordered, or out-of-range samples
+  before performing I/O, reads each requested hot leaf once, and verifies the
+  returned bytes against the retained commitment before returning a witness.
+- With its `manifest` feature, `sorafs_car::ChunkStore` builds that canonical
+  PDP tree transactionally while it verifies the CAR plan and whole payload.
+  Its PDP roots and counts no longer reuse the incompatible 64 KiB PoR tree,
+  and arbitrary CAR chunk splits produce the same PDP roots as a contiguous
+  payload. Plan validation applies a checked heap estimate before allocation or
+  source/sink I/O.
+- `sorafs_node::StorageBackend` persists the commitment and bounded retained
+  tree, rehydrates them on restart, and generates exact challenge witnesses
+  while holding the manifest read lease. Integration and adversarial tests
+  cover restart parity, corrupted chunks, short/mutating reads, symlink and
+  hard-link replacement, out-of-range/duplicate samples, and eviction races.
 - `ProofStreamRequestV1` and the CLI request layer understand
-  `proof_kind=pdp` as a sample-count proof kind, allowing external PDP-capable
-  gateways to be exercised by `sorafs_cli proof stream --proof-kind=pdp`.
+  `proof_kind=pdp` as a challenge-bound proof kind.
+  `sorafs_cli proof stream --proof-kind=pdp
+  --challenge-id-hex=<governed-challenge-id>` emits the canonical request;
+  client-selected `--samples` and `--sample-seed` are rejected for PDP.
 - Capacity telemetry, penalty policy, reputation scoring, and proof-health
   dashboards already reserve PDP counters so governance can account for PDP
   success/failure once provider submissions are live.
 
-Fail-closed surfaces:
+Shipped fail-closed surfaces:
 
-- Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp`
-  but returns `400 Bad Request` so clients do not mistake PoR samples for PDP
-  provider proofs.
-- The public OpenAPI description documents `proof_kind=pdp` as reserved.
-- `sorafs_cli proof stream --proof-kind=pdp` is a client interoperability path
-  for PDP-capable gateways, not proof that the embedded Torii gateway serves
-  PDP today.
+- Every provider-protocol route requires canonical application
+  authentication. Challenge enqueue binds the exact canonical commitment and
+  challenge to the provider's active council admission.
+- `/v1/sorafs/proof/stream` requires `challenge_id_hex` for PDP, rejects
+  absent/zero IDs and client-controlled sampling fields, and binds the returned
+  durable status to the requested manifest and provider.
+- The public OpenAPI description documents the five provider routes and
+  challenge-bound PDP proof streaming as shipped V1 surfaces.
+- Missing protocol runtime, unknown challenge, admission mismatch, malformed
+  proof, archive failure, and repair-handoff failure are explicit errors; no
+  request falls back to PoR sampling or an unsigned local result.
 
 ## Protocol Target
 
@@ -207,33 +242,40 @@ remaining domain-separated:
 - Response deadline defaults should remain in the 4-10 minute policy window and
   be recorded in challenge payloads so validators can replay decisions.
 
-## Provider Protocol Gates
+## Provider Protocol Contract
 
-Do not remove the Torii fail-closed PDP guard until these local gates exist:
+The local V1 protocol gates are shipped:
 
-1. Provider challenge queue:
-   `POST /sorafs/pdp/challenge`, `GET /sorafs/pdp/next`, and
-   `POST /sorafs/pdp/proof` or their governed Torii equivalents.
+1. Authenticated durable challenge enqueue, next-work pickup, proof submission,
+   status, and sequence-bounded terminal export.
 2. Deterministic proof generation from stored payloads, including segment and
    hot-leaf witness material bound to `PdpCommitmentV1` roots.
 3. Provider signature verification over canonical PDP proof bytes with
-   governance-controlled key material.
-4. Deadline, manifest digest, provider id, epoch, challenge id, and sample-set
-   replay checks in the live provider-submission pipeline. The reference
-   validator already covers these checks for committed PDP fixtures.
-5. Governance DAG archival for accepted PDP proofs and PDP failure reports.
-6. Repair pipeline handoff for `pdp_failure` events.
-7. Portal/OpenAPI update that moves `proof_kind=pdp` from reserved to shipped.
+   admission-controlled key material.
+4. Deadline, manifest digest, provider ID, epoch, challenge ID, sample-set,
+   replay, and terminal-idempotency checks in the provider-submission pipeline.
+5. Governance DAG archival for accepted proofs and failure reports.
+6. An explicit repair-handoff boundary for `pdp_failure` events.
+7. OpenAPI coverage for the five provider routes and challenge-bound proof
+   streaming.
+
+The remaining authority gate is the sixth item: its target must be the
+finalized native repair ledger rather than `FileRepairStore` or any other
+process-local scheduler state.
 
 ## CLI And SDK Surface
 
 Shipped today:
 
-- `sorafs_cli proof stream --proof-kind=pdp --samples=<n>` serializes a
-  `ProofStreamRequestV1` with `proof_kind=pdp` and consumes NDJSON responses
-  from an external PDP-capable gateway.
+- `sorafs_cli proof stream --proof-kind=pdp
+  --challenge-id-hex=<hex32>` serializes a challenge-bound
+  `ProofStreamRequestV1` and consumes the NDJSON status response. PDP sampling
+  remains fixed by the recorded challenge.
 - `sorafs-validate pdp --commitment <commitment.to> --challenge <challenge.to>
   --proof <proof.to>` validates the reference fixture shape and pair binding.
+- Canonical positive and negative PDP fixtures, the fail-closed rollout
+  checker/runner, payload-free canary builder, and operator argfile templates
+  are checked in.
 
 Not shipped yet:
 
@@ -253,11 +295,18 @@ Implemented:
 
 - Structural unit tests for `PdpCommitmentV1`, `PdpChallengeV1`, and
   `PdpProofV1`.
-- Chunk-store tests that cover PDP commitment roots as part of the PoR tree.
-- CLI proof-stream tests that verify PDP request serialization against mocked
-  gateways.
-- Torii test coverage that PDP proof-stream requests are rejected as unsupported
-  while the provider protocol is absent.
+- Merkle tests covering 4 KiB/256 KiB boundaries, arbitrary streaming splits,
+  odd-node padding, compact-path parity against an independent layered tree,
+  corrupt/truncated/extended retained state, allocation overflow, exact reader
+  counts, short/long reads, and tampered source bytes.
+- CAR chunk-store tests that compare byte and streamed ingestion against an
+  independent canonical PDP tree, prove chunk-boundary invariance, and verify
+  transactional state preservation on digest, length, sink, and PDP failures.
+- CLI proof-stream tests that require the governed PDP challenge ID and reject
+  client-selected PDP sampling against mocked gateways.
+- Torii tests for authenticated challenge enqueue/next-work/proof/status/export,
+  challenge-bound proof streaming, governance archival, repair handoff, and
+  telemetry counters.
 - Canonical `fixtures/sorafs_manifest/pdp/` commitment/challenge/proof samples.
 - Negative PDP fixtures for duplicate hot-leaf challenges, missing proof
   signatures, missing segment Merkle paths, missing hot-leaf Merkle paths,
@@ -272,10 +321,9 @@ Implemented:
 
 Required before production enablement:
 
-- Storage-node integration tests that generate PDP proofs from persisted
-  payloads and validate them against commitment roots.
-- Torii endpoint tests for challenge issuance, proof submission, governance
-  archival, repair handoff, and telemetry counters.
+- Replace the local repair coordinator target with finalized native repair
+  transactions, committed task/event queries, durable retry reconciliation,
+  and cross-peer exactly-once tests.
 - SDK parity tests that verify the same PDP fixture bundle across Rust,
   JavaScript/TypeScript, Python, Swift, Kotlin/JVM, Java Android, and C#.
 
@@ -289,9 +337,9 @@ Reserved telemetry names should stay stable:
 - `sorafs_pdp_slash_proposals_total`.
 - Proof-health gauges such as `torii_sorafs_proof_health_pdp_failures`.
 
-Dashboards may continue to show empty or telemetry-derived PDP panels before
-provider protocol rollout, but release evidence must call out that embedded
-Torii proof streaming is still fail-closed for PDP.
+Dashboards may show empty panels before a provider receives governed
+challenges, but release evidence must distinguish zero work from unavailable
+protocol, archive, or chain-repair dependencies.
 
 ## Rollout Status
 
@@ -300,6 +348,8 @@ Completed local foundations:
 - Define PDP commitment, challenge, sample, and proof schemas.
 - Add structural validators and unit tests.
 - Derive PDP hot/segment commitment roots from stored payload trees.
+- Generate PDP witnesses from persisted storage with restart, corruption,
+  filesystem-race, exact-read, and eviction adversarial coverage.
 - Reserve proof-stream request and telemetry labels.
 - Generate canonical PDP fixture bundle and expanded negative fixtures.
 - Add reference validator and `sorafs-validate pdp` coverage for PDP binding.
@@ -321,9 +371,11 @@ Completed local foundations:
 
 Remaining production gates:
 
-- Implement provider challenge/proof transport.
-- Verify provider signatures and PDP inclusion witnesses.
-- Archive PDP verdicts/failures in Governance DAG and wire repair handoff.
+- Cut PDP terminal repair handoff over to the finalized native repair ledger
+  and delete the local-authority path.
+- Exercise admission-bound provider signatures, archive publication, restart,
+  retry, revocation, and exactly-once repair across multiple providers and
+  validators.
 - Collect deployed provider-transport, proof-generation, validator-replay,
   governance/repair, observability, and governed-approval evidence that passes
   the SF-13 rollout gate with replay/governance/observability evidence bound to
@@ -332,5 +384,5 @@ Remaining production gates:
   artifact in the emitted summary. Provider-transport latency values must be
   non-negative and proof-generation max-latency values must be positive, so
   impossible negative timings cannot satisfy rollout thresholds.
-- Ship operator CLI commands and SDK validators.
-- Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.
+- Ship dedicated operator CLI commands and complete cross-SDK validation
+  parity.

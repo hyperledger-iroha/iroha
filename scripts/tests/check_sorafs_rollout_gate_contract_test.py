@@ -80,6 +80,23 @@ SORAFS_CHUNKER_EXPORT_VECTORS_RS = (
 SORAFS_CAR_FETCH_RS = (
     REPO_ROOT / "crates" / "sorafs_car" / "src" / "bin" / "sorafs_fetch.rs"
 )
+SORAFS_CAR_CARGO_TOML = REPO_ROOT / "crates" / "sorafs_car" / "Cargo.toml"
+SORAFS_MANIFEST_BUILDER_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_car"
+    / "src"
+    / "bin"
+    / "sorafs_manifest_builder.rs"
+)
+SORAFS_PROVIDER_ADVERT_RS = (
+    REPO_ROOT
+    / "crates"
+    / "sorafs_car"
+    / "src"
+    / "bin"
+    / "sorafs_provider_advert.rs"
+)
 SORAFS_CAR_LOCAL_FETCH_RS = REPO_ROOT / "crates" / "sorafs_car" / "src" / "local_fetch.rs"
 SORAFS_REFERENCE_FFI_RS = (
     REPO_ROOT / "crates" / "sorafs_manifest" / "src" / "reference_ffi.rs"
@@ -8182,7 +8199,7 @@ def test_android_codegen_sorafs_fixture_replay_uses_no_follow_io() -> None:
         "test_test_council_signing_seed_rejects_symlink_and_existing_output"
         in replay_test
     )
-    assert "test_manifest_stub_receives_only_ephemeral_signing_key_path" in replay_test
+    assert "test_manifest_builder_receives_only_ephemeral_signing_key_path" in replay_test
     assert (
         "test_generated_manifest_requires_one_canonical_council_signature"
         in replay_test
@@ -8449,6 +8466,12 @@ def test_sorafs_docs_portal_package_summary_uses_no_follow_read() -> None:
     assert "os.fdopen(fd, \"r\", encoding=\"utf-8\")" in packager
     assert "for raw in read_summary_lines_no_follow(summary_path)" in packager
     assert "with open(summary_path" not in packager
+    assert re.search(r"\bmanifest\s+sign(?:\s|$)", packager) is None
+    assert "manifest verify-signature" not in packager
+    assert "--identity-token" not in packager
+    assert "--sigstore-" not in packager
+    assert "manifest.bundle.json" not in packager
+    assert "sign the aggregate release manifest" in packager
 
 
 def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
@@ -8477,9 +8500,16 @@ def test_sorafs_docs_portal_pin_release_descriptor_uses_no_follow_io() -> None:
     assert "target.write_text" not in pin_release
     assert ".read_text(" not in pin_release
     assert ".write_text(" not in pin_release
+    assert "manifest verify-signature" not in pin_release
+    assert "manifest sign" not in pin_release
+    assert "--identity-token" not in pin_release
+    assert "--include-token" not in pin_release
+    assert "manifest.bundle.json" not in pin_release
+    assert "external-aggregate-release-manifest" in pin_release
+    assert "scripts/release_sorafs_cli.sh" in pin_release
 
 
-def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
+def test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io() -> None:
     release_cli = read(SCRIPTS_DIR / "release_sorafs_cli.sh")
     direct_smoke = read(SCRIPTS_DIR / "sorafs_direct_mode_smoke.sh")
     gateway_self_cert = read(SCRIPTS_DIR / "sorafs_gateway_self_cert.sh")
@@ -8488,7 +8518,7 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     direct_smoke_test = read(SCRIPTS_DIR / "tests" / "sorafs_direct_mode_smoke_test.py")
     gateway_probe_test = read(SCRIPTS_DIR / "tests" / "sorafs_gateway_probe_wrapper_test.py")
 
-    for script in (release_cli, direct_smoke, gateway_probe):
+    for script in (direct_smoke, gateway_probe):
         assert "def read_open_flags() -> int" in script
         assert 'getattr(os, "O_NOFOLLOW", 0)' in script
         assert "os.lstat(path)" in script
@@ -8498,22 +8528,30 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
         assert "json.load(" in script
         assert "with open(" not in script
 
-    assert "identity_token_hash_blake3_hex" in release_cli
-    assert 'prepare_output_file_path "release bundle output"' in release_cli
-    assert 'prepare_output_file_path "release signature output"' in release_cli
-    assert 'prepare_output_file_path "sign summary"' in release_cli
-    assert 'prepare_output_file_path "verify summary"' in release_cli
+    assert "release_manifest_signing.py" in release_cli
+    assert "umask 077" in release_cli
+    assert "--external-signer" in release_cli
+    assert "--signing-public-key" in release_cli
+    assert "--trusted-signing-fingerprint" in release_cli
+    assert "--release-manifest-verifier" in release_cli
+    assert "--trusted-release-manifest-verifier-sha256" in release_cli
+    assert "manifest verify-signature" not in release_cli
+    assert re.search(r"\bmanifest\s+sign(?:\s|$)", release_cli) is None
+    assert "--identity-token" not in release_cli
+    assert "--manifest-bundle" not in release_cli
+    assert 'prepare_new_output_file_path "release signature output"' in release_cli
+    assert 'prepare_new_output_file_path "release public-key output"' in release_cli
     assert "require_option_value" in release_cli
     assert "validate_existing_file_path" in release_cli
-    assert 'validate_existing_file_path "manifest input"' in release_cli
-    assert 'validate_existing_file_path "chunk plan input"' in release_cli
-    assert 'validate_existing_file_path "chunk summary input"' in release_cli
-    assert 'validate_existing_file_path "identity token file"' in release_cli
-    assert 'validate_existing_executable_file_path "sorafs_cli binary"' in release_cli
-    assert "sign summary must not be a symlink" in release_cli
+    assert 'validate_existing_file_path "aggregate release manifest"' in release_cli
+    assert (
+        'validate_existing_executable_file_path "external Ed25519 signer"'
+        in release_cli
+    )
+    assert '"native release-manifest verifier"' in release_cli
     assert "parent must not be a symlink" in release_cli
     assert (
-        "test_release_wrapper_defaults_manifest_under_workspace_before_artifacts"
+        "test_release_wrapper_signs_and_verifies_with_pinned_native_validator"
         in release_cli_test
     )
     assert (
@@ -8521,21 +8559,30 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_option_shaped_output_value_before_artifacts"
+        "test_release_wrapper_requires_all_governed_signing_inputs"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_symlinked_manifest_input_before_artifacts"
+        "test_release_wrapper_rejects_removed_oidc_bundle_interface"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_chunk_summary_parent_symlink_before_artifacts"
+        "test_release_wrapper_rejects_unreviewed_signing_fingerprint"
         in release_cli_test
     )
     assert (
-        "test_release_wrapper_rejects_symlinked_identity_token_file_before_artifacts"
+        "test_release_wrapper_rejects_unreviewed_native_verifier"
         in release_cli_test
     )
+    for retired_fixture in (
+        "manifest.bundle.json",
+        "manifest.sig",
+        "manifest.sign.summary.json",
+        "manifest.verify.summary.json",
+    ):
+        assert not (
+            REPO_ROOT / "fixtures" / "sorafs_manifest" / "ci_sample" / retired_fixture
+        ).exists()
     assert "policy path must not be a symlink" in direct_smoke
     assert 'prepare_output_file_path "payload output"' in direct_smoke
     assert 'prepare_output_file_path "summary JSON report"' in direct_smoke
@@ -8561,7 +8608,18 @@ def test_sorafs_shell_helpers_use_no_follow_json_reads() -> None:
     assert "test_direct_mode_smoke_rejects_malformed_adoption_override_id" in direct_smoke_test
     assert "allow_adoption_skip=False" in direct_smoke_test
     assert 'prepare_output_dir_path "gateway self-cert output directory"' in gateway_self_cert
-    assert 'prepare_output_file_path "manifest verification summary"' in gateway_self_cert
+    assert "release manifest verification summary" in gateway_self_cert
+    assert "prepare_new_output_file_path" in gateway_self_cert
+    assert "release_manifest_signing.py" in gateway_self_cert
+    assert "umask 077" in gateway_self_cert
+    assert "--trusted-signing-fingerprint" in gateway_self_cert
+    assert "--release-manifest-verifier" in gateway_self_cert
+    assert "--trusted-release-manifest-verifier-sha256" in gateway_self_cert
+    assert "manifest verify-signature" not in gateway_self_cert
+    assert "--manifest-bundle" not in gateway_self_cert
+    assert "--public-key-hex" not in gateway_self_cert
+    assert '[[ -n "$gateway_target" ]] || missing+=("--gateway")' in gateway_self_cert
+    assert "defaults to harness fixture target" not in gateway_self_cert
     assert 'prepare_output_file_path "denylist diff report"' in gateway_self_cert
     assert "must not be a symlink" in gateway_self_cert
     assert "parent must not be a symlink" in gateway_self_cert
@@ -8663,10 +8721,14 @@ def test_sorafs_cli_release_gate_runs_helper_adversarial_tests() -> None:
     assert 'echo "[sorafs-release] release helper adversarial tests"' in release_gate
     assert "python3 -m pytest -q \\" in release_gate
     assert "scripts/tests/release_sorafs_cli_test.py" in release_gate
+    assert "scripts/tests/package_sorafs_cli_candidate_test.py" in release_gate
+    assert (
+        "scripts/tests/generate_sorafs_cli_release_manifest_test.py" in release_gate
+    )
     assert "scripts/tests/package_sorafs_validate_release_test.py" in release_gate
     assert (
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
-        "test_sorafs_shell_helpers_use_no_follow_json_reads"
+        "test_sorafs_shell_helpers_use_hardened_release_and_no_follow_io"
     ) in release_gate
     assert (
         "scripts/tests/check_sorafs_rollout_gate_contract_test.py::"
@@ -8756,9 +8818,13 @@ def test_sorafs_operator_helpers_do_not_reintroduce_plain_file_io() -> None:
     allowed_rglob = {
         SCRIPTS_DIR / "check_sorafs_hedging_fixture_manifest.py",
         SCRIPTS_DIR / "sorafs_evidence_paths.py",
+        SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
         SCRIPTS_DIR / "package_sorafs_validate_release.sh",
     }
-    allowed_tarfile_open = {SCRIPTS_DIR / "package_sorafs_validate_release.sh"}
+    allowed_tarfile_open = {
+        SCRIPTS_DIR / "package_sorafs_cli_candidate.py",
+        SCRIPTS_DIR / "package_sorafs_validate_release.sh",
+    }
     offenders: list[str] = []
 
     for root in roots:
@@ -15833,8 +15899,15 @@ def pop_credentials_production_surface_errors(
         errors.append("Torii does not mount the exact PoP descriptor/handler/limit inventory")
 
     for _, _, handler, _ in SHIPPED_POP_CREDENTIALS_ROUTES:
-        if len(re.findall(rf"pub async fn {re.escape(handler)}\(", pop_api)) != 1:
-            errors.append(f"{handler} must have exactly one public handler")
+        handler_definitions = re.findall(
+            rf"(?m)^[ \t]*(?P<visibility>pub(?:\([^)\n]+\))?[ \t]+)?"
+            rf"async[ \t]+fn[ \t]+{re.escape(handler)}[ \t]*\(",
+            pop_api,
+        )
+        if handler_definitions != ["pub(crate) "]:
+            errors.append(
+                f"{handler} must have exactly one crate-visible async handler"
+            )
 
     required_openapi_markers = (
         "pop_authorization_header_parameters(),",
@@ -15953,8 +16026,26 @@ def test_pop_credentials_production_surface_matcher_has_negative_controls() -> N
     )
     assert validate(
         handlers=pop_api.replace(
-            "pub async fn handle_post_pop_verify(",
+            "pub(crate) async fn handle_post_pop_verify(",
             "async fn handle_post_pop_verify(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub(crate) async fn handle_post_pop_verify(",
+            "pub async fn handle_post_pop_verify(",
+            1,
+        )
+    )
+    assert validate(
+        handlers=pop_api
+        + "\npub(crate) async fn handle_post_pop_verify() {}\n"
+    )
+    assert validate(
+        handlers=pop_api.replace(
+            "pub(crate) async fn handle_post_pop_verify(",
+            "pub(crate) async fn handle_post_pop_verify_missing(",
             1,
         )
     )
@@ -18365,8 +18456,8 @@ def test_cli_sdk_distribution_and_live_governance_stay_open_in_docs() -> None:
 
     required_plan_open = (
         "Use `scripts/release_sorafs_cli.sh`, `ci/check_sorafs_cli_release.sh`, `scripts/sorafs_gateway_self_cert.sh`, and `cargo xtask sorafs-gateway-attest` for release and self-certification evidence.",
-        "Release signing and manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
-        "Runtime secrets such as identity tokens, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
+        "Release signing and native manifest verification are wrapped by `scripts/release_sorafs_cli.sh`; gateway self-cert evidence is wrapped by `scripts/sorafs_gateway_self_cert.sh`.",
+        "Runtime secrets such as HSM credentials, private keys, and gateway bearer tokens must be supplied at execution time and not committed.",
         "Remaining release work is signed distribution evidence and live deployment capture, not missing local command surfaces.",
         "Package registries such as Homebrew, npm, crates.io, and Go modules should be populated only from signed release cuts using the existing release scripts and fixture smoke checks.",
     )
@@ -19584,19 +19675,20 @@ def test_unshipped_potr_live_rollout_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_repair_live_operator_evidence_work_stays_open_in_docs() -> None:
+def test_repair_chain_authority_and_live_evidence_work_stay_open_in_docs() -> None:
     source = read(SORAFS_REPAIR_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "Remaining SF-8b work is live operator evidence: archive a production PoR/PoTR failure, repair, escalation, and governance handoff once the deployed auditor roster and SF-9 coordinator publish their runbooks.",
-        "Use the rollout gate after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
+        "Remaining SF-8b implementation work is to submit every auditor/worker transition as a native transaction, reconcile finalized task and event queries, rebuild daemon state solely from committed history, and delete the authoritative local mutation path.",
+        "Use the rollout gate only after the native finalized-chain cutover and after the deployed auditor roster, SF-9 coordinator, PoR/PoTR failure capture, signed auditor API, repair worker lifecycle, committed repair event streams, governance handoff, observability, and governance packet have produced reviewed, payload-free JSON evidence:",
         "The checker recognizes `sorafs.repair.*` SF-8b rollout schemas for auditor roster, failure capture, signed auditor API, worker lifecycle, event streams, governance handoff, observability, and governance approval evidence.",
         "raw PoR/PoTR evidence, raw repair payloads, signed auditor requests, response bodies, signed transactions, secrets, and ledgers are absent",
         "matches a valid auditor-roster artifact, and worker lifecycle / event stream / governance handoff artifacts carry an `evidence_bundle_digest_hex` that matches a valid PoR/PoTR failure-capture artifact",
         "governance approval artifacts carry a `handoff_digest_hex` that matches a valid governance handoff artifact",
         "The SF-8b rollout evidence gate, collection planner, operator argfile templates, and focused tests are implemented for payload-free deployed evidence review",
-        "Remaining rollout work is live operator evidence: collect production PoR failure, repair, and governance handoff artifacts once the deployed auditor roster and SF-9 coordinator publish their runbooks, then pass the SF-8b rollout evidence gate.",
+        "Remaining implementation work is the finalized-chain cutover: replace `FileRepairStore` mutations and local event streams with native repair transactions and committed task/event projections, then prove cross-peer exactly-once execution and restart reconciliation.",
+        "Remaining rollout work after that cutover is genuine operator evidence for a production PoR/PoTR failure, repair, escalation, and governance handoff, followed by the SF-8b rollout evidence gate.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -20091,7 +20183,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "The checker recognizes `sorafs.reference_sdk.*` SF-11 release schemas for release archives, signed manifests, downstream bindings, cookbook smoke, FFI/header contract, and governance approval.",
         "duplicate or unknown release-target entries",
         "`target_count` values that do not match the unique target list",
-        "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence",
+        "missing JavaScript/Python/Kotlin/JVM/Java Android/Swift/C# package publication evidence",
         "duplicate or unknown downstream-package entries",
         "`package_count` values that do not match the unique package list",
         "Signed-manifest artifacts also fingerprint the reviewed `signature_algorithm`, the summary exports `signature_algorithms`, and the aggregate production-readiness gate requires that metadata to match the signed-manifest artifact fingerprint and stay inside the governed Ed25519 release algorithm set before final promotion can report ready.",
@@ -20102,7 +20194,7 @@ def test_reference_sdk_release_distribution_work_stays_open_in_docs() -> None:
         "Release-manifest, policy, and release-key binding failures are recorded on the offending artifact before required-kind validity is computed, so the JSON summary matches the fail-closed release decision.",
         "digests, governance approval policy and `--public-key-fingerprint-hex` inputs",
         "Run the packaging helper for the supported release targets and publish signed release manifests outside the repository using governed release keys",
-        "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers",
+        "Ship/publish downstream SDK binding packages and release artifacts for the local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers",
         "Archive live operator smoke evidence for the published `sorafs-validate` archives and cookbook replay before declaring SF-11 fully released",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
@@ -20566,28 +20658,31 @@ def test_unshipped_reference_sdk_distribution_surface_is_not_exposed() -> None:
     assert exposed == {}
 
 
-def test_pdp_provider_protocol_work_and_storage_foundation_are_documented() -> None:
+def test_pdp_provider_protocol_and_chain_repair_boundary_are_documented() -> None:
     source = read(SORAFS_PDP_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
     required_open = (
-        "The deployed provider protocol is not production-ready yet: Torii therefore rejects PDP proof-stream requests with `400 Bad Request` until signed challenge/proof transport, admission-bound live submission, governance archival, and repair handoff are wired end to end.",
+        "Torii ships the authenticated `/v1/sorafs/pdp/challenge`, `/next`, `/proof`, `/status`, and `/export` protocol family.",
+        "`/v1/sorafs/proof/stream` also accepts `pdp` only when the caller supplies the existing non-zero governed challenge ID; it rejects client-selected PDP sample counts and seeds.",
+        "This protocol is not production-ready while rejected or expired challenges still converge on the process-local repair coordinator.",
         "The PDP rollout evidence gate requires payload-free provider-transport, proof-generation, validator-replay, governance/repair, observability, and governance-approval artifacts before reporting `ready`",
-        "Torii `/v1/sorafs/proof/stream` accepts PoR and PoTR only. It parses `pdp` but returns `400 Bad Request` so clients do not mistake PoR samples for PDP provider proofs.",
-        "Do not remove the Torii fail-closed PDP guard until these local gates exist:",
-        "Provider challenge queue:",
+        "`/v1/sorafs/proof/stream` requires `challenge_id_hex` for PDP, rejects absent/zero IDs and client-controlled sampling fields, and binds the returned durable status to the requested manifest and provider.",
+        "The local V1 protocol gates are shipped:",
+        "Authenticated durable challenge enqueue, next-work pickup, proof submission, status, and sequence-bounded terminal export.",
         "Deterministic proof generation from stored payloads",
-        "Provider signature verification over canonical PDP proof bytes with governance-controlled key material.",
-        "Governance DAG archival for accepted PDP proofs and PDP failure reports.",
-        "Repair pipeline handoff for `pdp_failure` events.",
+        "Provider signature verification over canonical PDP proof bytes with admission-controlled key material.",
+        "Governance DAG archival for accepted proofs and failure reports.",
+        "An explicit repair-handoff boundary for `pdp_failure` events.",
+        "its target must be the finalized native repair ledger rather than `FileRepairStore` or any other process-local scheduler state.",
         "Do not document the unshipped `sorafs pdp ...` commands as operator-ready until they exist in the CLI and have focused tests.",
         "Required before production enablement:",
         "`sorafs_node::StorageBackend` persists the commitment and bounded retained tree, rehydrates them on restart, and generates exact challenge witnesses while holding the manifest read lease.",
         "Integration and adversarial tests cover restart parity, corrupted chunks, short/mutating reads, symlink and hard-link replacement, out-of-range/duplicate samples, and eviction races.",
-        "Torii endpoint tests for challenge issuance, proof submission, governance archival, repair handoff, and telemetry counters.",
+        "Replace the local repair coordinator target with finalized native repair transactions, committed task/event queries, durable retry reconciliation, and cross-peer exactly-once tests.",
         "Remaining production gates:",
-        "Ship operator CLI commands and SDK validators.",
-        "Update OpenAPI/portal docs and remove the Torii PDP fail-closed guard.",
+        "Cut PDP terminal repair handoff over to the finalized native repair ledger and delete the local-authority path.",
+        "Ship dedicated operator CLI commands and complete cross-SDK validation parity.",
     )
     missing = [phrase for phrase in required_open if phrase not in normalized]
 
@@ -25095,34 +25190,53 @@ def test_unshipped_transparency_deployed_service_surface_is_not_exposed() -> Non
     assert exposed == {}
 
 
-def test_gateway_compliance_controller_services_stay_unshipped_in_docs() -> None:
+def test_gateway_compliance_controller_runtime_state_is_honest_in_docs() -> None:
     source = read(SORAFS_GATEWAY_COMPLIANCE_PLAN)
     normalized = re.sub(r"\s+", " ", source)
 
-    required_unshipped = (
-        "The repository does not yet ship an always-on central compliance controller daemon, deployed moderation toggle service, deployed public receipt explorer, or full appeal-driven override workflow. The local SFM-4c transparency ledger builder and readback surface are shipped, but promotion evidence now has to prove controller runtime, moderation-toggle, deployed-publication, and multi-gateway boundaries before gateway compliance can be marked ready.",
-        "Ship the always-on compliance controller daemon that fetches external feeds, normalizes updates, signs them, distributes them to gateways, and tracks acknowledgements.",
-        "the daemon itself still needs production deployment",
-        "Persist denylist/catalog state and update history through the configured production storage path instead of relying only on local bundle ingestion.",
-        "Implement moderation toggle APIs, approval workflows, expiry handling, and operator audit trails.",
-        "the service itself still needs production deployment",
-        "Connect appeal outcomes to gateway policy overrides and cache invalidation.",
+    required_current = (
+        "`iroha_config` now carries the non-secret controller policy",
+        "Torii accepts runtime-injected ACME and authenticated feed transports",
+        "This controller/runtime integration ships locally.",
+        "Real authenticated feed and ACME adapters, authenticated stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover, finalized accepted-appeal and legal/safety-hold producers, and deployment across two independently administered regional gateways remain open.",
+        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
+        "Configuration, runtime dependency transfer, fail-closed startup checks, and durable controller construction already ship locally and must not be reopened as missing work.",
+        "Connect finalized accepted-appeal outcomes and legal/safety-hold producers to signed catalog construction and cache invalidation.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
         "Capture staged multi-gateway rollout artifacts that satisfy the SFM-4 evidence gate before promoting gateway compliance changes to production.",
     )
-    missing = [phrase for phrase in required_unshipped if phrase not in normalized]
+    stale_claims = (
+        "The repository does not yet wire that controller through `iroha_config`",
+        "always-on central compliance controller daemon",
+        "Ship the always-on compliance controller daemon",
+        "missing deployed controller daemon",
+        "the daemon itself still needs production deployment",
+    )
+    missing = [phrase for phrase in required_current if phrase not in normalized]
+    stale = [phrase for phrase in stale_claims if phrase in normalized]
 
     assert missing == []
+    assert stale == []
 
 
-def test_gateway_compliance_docs_do_not_reopen_shipped_transparency_builder() -> None:
+def test_gateway_compliance_docs_keep_shipped_runtime_and_transparency_state() -> None:
     stale_phrases = (
         "SFM-4c transparency ledger builder, public receipt explorer",
         "Publish GAR receipts, proof-token indexes, and moderation events through the SFM-4c transparency ledger once that builder exists.",
+        "The repository does not yet wire that controller through `iroha_config`",
+        "always-on central compliance controller daemon",
+        "Ship the always-on compliance controller daemon",
+        "missing deployed controller daemon",
+        "the daemon itself still needs production deployment",
     )
     required_current = (
-        "The local SFM-4c transparency ledger builder and readback surface are shipped",
-        "promotion evidence now has to prove controller runtime, moderation-toggle, deployed-publication, and multi-gateway boundaries",
+        "`iroha_config` now carries the non-secret controller policy",
+        "Torii accepts runtime-injected ACME and authenticated feed transports",
+        "This controller/runtime integration ships locally.",
+        "Real authenticated feed and ACME adapters",
+        "finalized accepted-appeal and legal/safety-hold producers",
+        "two independently administered regional gateways remain open",
+        "The local SFM-4c transparency ledger builder and readback surface are shipped, but deployed publication, public-explorer, and two-gateway evidence remain open.",
         "Wire deployed GAR receipts, proof-token indexes, and moderation events through the shipped local SFM-4c transparency source-entry and publication paths, then capture deployed publication evidence.",
     )
     stale: dict[str, list[str]] = {}
@@ -28043,11 +28157,11 @@ def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
         name
         for name in documented_bins
         if name.startswith("generate_")
-        or name in {"provider_admission_fixtures", "sorafs_manifest_stub"}
+        or name in {"provider_admission_fixtures", "sorafs_manifest_builder"}
     ]
     expected_fixture_bins = [
         "provider_admission_fixtures",
-        "sorafs_manifest_stub",
+        "sorafs_manifest_builder",
         "generate_orderbook_fixtures",
         "generate_por_fixtures",
     ]
@@ -28062,6 +28176,134 @@ def test_sorafs_proto_plan_documents_only_active_fixture_generators() -> None:
     assert [name for name in documented_fixture_bins if name not in existing_bins] == []
     assert "Do not document retired generator names as required workflow" in source
     assert "not defining a separate\n`sora-proto` codec outside Norito" in source
+
+
+def test_sorafs_v1_builder_and_provider_advert_are_canonical_production_bins() -> None:
+    cargo_toml = read(SORAFS_CAR_CARGO_TOML)
+    assert (
+        'name = "sorafs_manifest_builder"\n'
+        'path = "src/bin/sorafs_manifest_builder.rs"'
+    ) in cargo_toml
+    assert (
+        'name = "sorafs_provider_advert"\n'
+        'path = "src/bin/sorafs_provider_advert.rs"'
+    ) in cargo_toml
+    assert SORAFS_MANIFEST_BUILDER_RS.is_file()
+    assert SORAFS_PROVIDER_ADVERT_RS.is_file()
+
+    obsolete_names = (
+        "sorafs_manifest_" + "stub",
+        "sorafs_provider_advert_" + "stub",
+        "sorafs-manifest-" + "stub",
+        "sorafs-provider-advert-" + "stub",
+    )
+    searchable_suffixes = {
+        ".json",
+        ".md",
+        ".py",
+        ".rs",
+        ".sh",
+        ".toml",
+        ".yaml",
+        ".yml",
+    }
+    offenders: dict[str, list[str]] = {}
+    for root in (
+        REPO_ROOT / ".github",
+        REPO_ROOT / "configs",
+        REPO_ROOT / "crates",
+        REPO_ROOT / "defaults",
+        REPO_ROOT / "docs",
+        REPO_ROOT / "python",
+        REPO_ROOT / "scripts",
+    ):
+        for path in root.rglob("*"):
+            if not path.is_file() or path.suffix not in searchable_suffixes:
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            matched = [name for name in obsolete_names if name in source]
+            if matched:
+                offenders[str(path.relative_to(REPO_ROOT))] = matched
+    assert offenders == {}
+
+    retired_internal_markers = (
+        "SORAFS_MANIFEST_" + "STUB",
+        "run_manifest_" + "stub",
+        "manifest_" + "stub_cli",
+        "provider_advert_" + "stub",
+    )
+    retired_internal_sources = (
+        REPO_ROOT / "configs" / "soranexus" / "taira" / "check_sorafs_rollout.sh",
+        REPO_ROOT / "scripts" / "android_codegen_replay_sorafs_fixture.py",
+        REPO_ROOT
+        / "scripts"
+        / "tests"
+        / "android_codegen_replay_sorafs_fixture_test.py",
+        REPO_ROOT / "crates" / "sorafs_car",
+    )
+    stale_internal: dict[str, list[str]] = {}
+    for source_path in retired_internal_sources:
+        candidates = (
+            source_path.rglob("*") if source_path.is_dir() else (source_path,)
+        )
+        for path in candidates:
+            if not path.is_file():
+                continue
+            source = path.read_text(encoding="utf-8", errors="replace")
+            matched = [
+                marker for marker in retired_internal_markers if marker in source
+            ]
+            if matched:
+                stale_internal[str(path.relative_to(REPO_ROOT))] = matched
+    assert stale_internal == {}
+
+    provider_source = read(SORAFS_PROVIDER_ADVERT_RS).split("#[cfg(test)]", 1)[0]
+    required_contract = (
+        "--prepare",
+        "--emit",
+        "--verify",
+        "--public-key-file",
+        "--public-key-fingerprint-sha256",
+        "--signing-payload-out",
+        "--signing-payload-file",
+        "--signature-file",
+        "signature_payload_bytes",
+        "VerifyingKey::from_bytes",
+        "is_weak()",
+        "set_no_follow_flag",
+        "nlink() != 1",
+        "trusted_metadata_matches",
+        "create_new(true)",
+    )
+    missing = [marker for marker in required_contract if marker not in provider_source]
+    assert missing == []
+
+    forbidden_contract = (
+        "--signing-" + "key",
+        "--signing-" + "key-file",
+        "--public-" + "key=",
+        "--signature=",
+        "Signing" + "Key",
+    )
+    forbidden = [marker for marker in forbidden_contract if marker in provider_source]
+    assert forbidden == []
+
+
+def test_governance_publishers_must_implement_pdp_archive_publication() -> None:
+    source = read(SORAFS_NODE_LIB_RS)
+    trait_source = source.split(
+        "pub trait GovernancePublisher", 1
+    )[1].split("/// Error returned", 1)[0]
+    required_declaration = re.search(
+        r"fn publish_pdp_archive\("
+        r".*?"
+        r"\) -> Result<\(\), GovernancePublishError>;",
+        trait_source,
+        flags=re.DOTALL,
+    )
+
+    assert required_declaration is not None
+    assert "publication is not implemented by this publisher" not in trait_source
 
 
 def test_sorafs_proto_release_evidence_work_stays_open_in_docs() -> None:

@@ -81,6 +81,8 @@ use norito::codec::{Decode, Encode};
 use toml::{Table, Value as TomlValue};
 
 const TOTAL_PEERS: usize = 4;
+const MULTILANE_RELEASE_MODE_ENV: &str = "IROHA_MULTILANE_RELEASE_MODE";
+const RUN_IGNORED_ENV: &str = "IROHA_RUN_IGNORED";
 const AUTOSCALE_LOCALNET_STACK_BYTES: usize = 32 * 1024 * 1024;
 const INITIAL_PROVISIONED_LANES: usize = 1;
 const EXPANDED_PROVISIONED_LANES: usize = 2;
@@ -6123,16 +6125,47 @@ fn block_with_merge_reference(
     altered
 }
 
+fn multilane_release_gate_requested(context: &str) -> Result<bool> {
+    let release = std::env::var(MULTILANE_RELEASE_MODE_ENV).ok();
+    let developer = std::env::var(RUN_IGNORED_ENV).ok();
+    if release.as_deref().is_some_and(|value| value != "1") {
+        return Err(eyre!(
+            "{context}: {MULTILANE_RELEASE_MODE_ENV} must be exactly 1 when present"
+        ));
+    }
+    if release.as_deref() == Some("1") {
+        return Ok(true);
+    }
+    if developer.as_deref().is_some_and(|value| value != "1") {
+        return Err(eyre!(
+            "{context}: {RUN_IGNORED_ENV} must be exactly 1 when present"
+        ));
+    }
+    let requested = developer.as_deref() == Some("1");
+    if !requested {
+        eprintln!(
+            "{context}: developer opt-out; set {RUN_IGNORED_ENV}=1 to run the four-peer gate"
+        );
+    }
+    Ok(requested)
+}
+
 #[test]
-#[ignore = "four-peer multilane release lifecycle/adversarial gate"]
 fn nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts()
 -> Result<()> {
+    let context = stringify!(
+        nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
+    );
+    if !multilane_release_gate_requested(context)? {
+        return Ok(());
+    }
+    eprintln!("[multilane-release-gate] started: {context}");
     run_autoscale_localnet_test_on_large_stack(
-        stringify!(
-            nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts
-        ),
+        context,
         nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts_impl,
-    )
+    )?;
+    eprintln!("[multilane-release-gate] completed: {context}");
+    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

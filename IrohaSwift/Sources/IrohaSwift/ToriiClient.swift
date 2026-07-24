@@ -20766,7 +20766,8 @@ public struct ToriiNativeAmxLeg: Decodable, Sendable, Equatable {
             && dataspaceId == body.coordinatorDataspaceId
             && body.participantLaneIncarnation == body.coordinatorLaneIncarnation
         let coordinatorParticipantProposalMatches = !participantSharesCoordinatorRoute
-            || (participantProposal.proposalHash == body.coordinatorProposalHash
+            || (!requiresMixedRoleAnchorValidation
+                && participantProposal.proposalHash == body.coordinatorProposalHash
                 && descriptor.laneBlockHeight == body.plannedCoordinatorBlockHeight
                 && descriptor.laneBlockView == body.coordinatorLaneBlockView)
         let settlementIsZeroEffect = settlementReceipts.allSatisfy { receipt in
@@ -22426,9 +22427,172 @@ public struct ToriiSumeragiNativeAmxParticipantApplication: Decodable, Sendable,
     }
 }
 
+public enum ToriiSumeragiAutonomousLaneExecutionStage:
+    String, Decodable, Sendable, Equatable
+{
+    case reservationsDurable = "reservations_durable"
+    case executablePayloadDurable = "executable_payload_durable"
+    case payloadAvailabilityCertified = "payload_availability_certified"
+    case laneCertified = "lane_certified"
+    case certifiedBundleDurable = "certified_bundle_durable"
+    case mergeCandidateDurable = "merge_candidate_durable"
+    case globalCarrierCommitted = "global_carrier_committed"
+    case kuraWsvApplicationReceiptDurable = "kura_wsv_application_receipt_durable"
+    case queueFinalized = "queue_finalized"
+    case conflict
+}
+
+public enum ToriiSumeragiAutonomousLaneExecutionStuckReason:
+    String, Decodable, Sendable, Equatable
+{
+    case awaitingPayloadAvailability = "awaiting_payload_availability"
+    case awaitingLaneCertification = "awaiting_lane_certification"
+    case certifiedBundleUnavailable = "certified_bundle_unavailable"
+    case awaitingMergeSelection = "awaiting_merge_selection"
+    case awaitingGlobalCarrier = "awaiting_global_carrier"
+    case awaitingApplicationReceipt = "awaiting_application_receipt"
+    case queueFinalizationUnverifiable = "queue_finalization_unverifiable"
+    case evidenceConflict = "evidence_conflict"
+}
+
+public struct ToriiSumeragiAutonomousLaneExecution: Decodable, Sendable, Equatable {
+    public let laneID: UInt32
+    public let dataspaceID: UInt64
+    public let laneIncarnation: String
+    public let laneBlockHeight: UInt64
+    public let laneBlockView: UInt64
+    public let proposalHeight: UInt64
+    public let proposalView: UInt64
+    public let proposalHash: String
+    public let descriptorHash: String
+    public let executablePayloadHash: String?
+    public let sourceBundleHash: String?
+    public let mergeEntryHash: String?
+    public let applicationBlockHeight: UInt64?
+    public let applicationBlockHash: String?
+    public let reservationCount: UInt64
+    public let transactionCount: UInt64
+    public let highestDurableStage: ToriiSumeragiAutonomousLaneExecutionStage
+    public let stuckReason: ToriiSumeragiAutonomousLaneExecutionStuckReason?
+
+    private enum CodingKeys: String, CodingKey {
+        case laneID = "lane_id", dataspaceID = "dataspace_id"
+        case laneIncarnation = "lane_incarnation"
+        case laneBlockHeight = "lane_block_height", laneBlockView = "lane_block_view"
+        case proposalHeight = "proposal_height", proposalView = "proposal_view"
+        case proposalHash = "proposal_hash", descriptorHash = "descriptor_hash"
+        case executablePayloadHash = "executable_payload_hash"
+        case sourceBundleHash = "source_bundle_hash", mergeEntryHash = "merge_entry_hash"
+        case applicationBlockHeight = "application_block_height"
+        case applicationBlockHash = "application_block_hash"
+        case reservationCount = "reservation_count", transactionCount = "transaction_count"
+        case highestDurableStage = "highest_durable_stage", stuckReason = "stuck_reason"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        laneID = try container.decode(UInt32.self, forKey: .laneID)
+        dataspaceID = try container.decode(UInt64.self, forKey: .dataspaceID)
+        laneIncarnation = try container.decode(String.self, forKey: .laneIncarnation)
+        laneBlockHeight = try container.decode(UInt64.self, forKey: .laneBlockHeight)
+        laneBlockView = try container.decode(UInt64.self, forKey: .laneBlockView)
+        proposalHeight = try container.decode(UInt64.self, forKey: .proposalHeight)
+        proposalView = try container.decode(UInt64.self, forKey: .proposalView)
+        proposalHash = try container.decode(String.self, forKey: .proposalHash)
+        descriptorHash = try container.decode(String.self, forKey: .descriptorHash)
+        executablePayloadHash = try container.decodeIfPresent(String.self, forKey: .executablePayloadHash)
+        sourceBundleHash = try container.decodeIfPresent(String.self, forKey: .sourceBundleHash)
+        mergeEntryHash = try container.decodeIfPresent(String.self, forKey: .mergeEntryHash)
+        applicationBlockHeight = try container.decodeIfPresent(UInt64.self, forKey: .applicationBlockHeight)
+        applicationBlockHash = try container.decodeIfPresent(String.self, forKey: .applicationBlockHash)
+        reservationCount = try container.decode(UInt64.self, forKey: .reservationCount)
+        transactionCount = try container.decode(UInt64.self, forKey: .transactionCount)
+        highestDurableStage = try container.decode(
+            ToriiSumeragiAutonomousLaneExecutionStage.self, forKey: .highestDurableStage
+        )
+        stuckReason = try container.decodeIfPresent(
+            ToriiSumeragiAutonomousLaneExecutionStuckReason.self, forKey: .stuckReason
+        )
+        let hashes = [laneIncarnation, proposalHash, descriptorHash]
+            + [executablePayloadHash, sourceBundleHash, mergeEntryHash, applicationBlockHash].compactMap { $0 }
+        guard hashes.allSatisfy(ToriiNativeAmxWire.isCanonicalHash),
+              laneBlockHeight > 0, proposalHeight > 0,
+              transactionCount > 0, transactionCount <= 4_096,
+              reservationCount <= 4_096,
+              (applicationBlockHeight == nil) == (applicationBlockHash == nil),
+              applicationBlockHeight != 0 else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .highestDurableStage, in: container,
+                debugDescription: "Autonomous lane execution diagnostics are inconsistent"
+            )
+        }
+        let expectedReason: ToriiSumeragiAutonomousLaneExecutionStuckReason?
+        switch highestDurableStage {
+        case .reservationsDurable, .executablePayloadDurable:
+            expectedReason = .awaitingPayloadAvailability
+        case .payloadAvailabilityCertified:
+            expectedReason = .awaitingLaneCertification
+        case .laneCertified:
+            expectedReason = .certifiedBundleUnavailable
+        case .certifiedBundleDurable:
+            expectedReason = .awaitingMergeSelection
+        case .mergeCandidateDurable:
+            expectedReason = .awaitingGlobalCarrier
+        case .globalCarrierCommitted:
+            expectedReason = .awaitingApplicationReceipt
+        case .kuraWsvApplicationReceiptDurable:
+            expectedReason = .queueFinalizationUnverifiable
+        case .queueFinalized:
+            expectedReason = nil
+        case .conflict:
+            expectedReason = .evidenceConflict
+        }
+        guard stuckReason == expectedReason else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .stuckReason, in: container,
+                debugDescription: "Autonomous stage and stuck reason disagree"
+            )
+        }
+        if highestDurableStage != .conflict, reservationCount != transactionCount {
+            throw DecodingError.dataCorruptedError(
+                forKey: .reservationCount, in: container,
+                debugDescription: "Autonomous reservation and transaction counts disagree"
+            )
+        }
+        guard highestDurableStage == .conflict || evidenceGeometryMatches else {
+            throw DecodingError.dataCorruptedError(
+                forKey: .highestDurableStage, in: container,
+                debugDescription: "Autonomous evidence does not match durable stage"
+            )
+        }
+    }
+
+    private var evidenceGeometryMatches: Bool {
+        let hasPayload = executablePayloadHash != nil
+        let hasBundle = sourceBundleHash != nil
+        let hasMerge = mergeEntryHash != nil
+        let hasCarrier = applicationBlockHeight != nil
+        switch highestDurableStage {
+        case .reservationsDurable:
+            return !hasPayload && !hasBundle && !hasMerge && !hasCarrier
+        case .executablePayloadDurable, .payloadAvailabilityCertified, .laneCertified:
+            return hasPayload && !hasBundle && !hasMerge && !hasCarrier
+        case .certifiedBundleDurable:
+            return hasPayload && hasBundle && !hasMerge && !hasCarrier
+        case .mergeCandidateDurable, .globalCarrierCommitted:
+            return hasPayload && hasBundle && hasMerge && !hasCarrier
+        case .kuraWsvApplicationReceiptDurable, .queueFinalized:
+            return hasPayload && hasBundle && hasMerge && hasCarrier
+        case .conflict:
+            return true
+        }
+    }
+}
+
 /// Non-authoritative operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
     private static let maximumNativeAmxParticipantApplications = 1_024
+    private static let maximumAutonomousLaneExecutions = 128
 
     public let pipelineExecution: ToriiJSONValue
     public let txQueueDepth: UInt64
@@ -22453,6 +22617,7 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
     public let laneGovernance: [ToriiJSONValue]
     public let nativeAmxParticipantApplications:
         [ToriiSumeragiNativeAmxParticipantApplication]
+    public let autonomousLaneExecutions: [ToriiSumeragiAutonomousLaneExecution]
     /// Original diagnostics fields, including future-neutral typed subtrees.
     public let fields: [String: ToriiJSONValue]
 
@@ -22466,6 +22631,7 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
         "lane_block_sessions", "lane_governance_sealed_total",
         "lane_governance_sealed_aliases", "lane_governance",
         "native_amx_participant_applications",
+        "autonomous_lane_executions",
     ]
 
     public init(from decoder: Decoder) throws {
@@ -22551,6 +22717,32 @@ public struct ToriiSumeragiDiagnosticsSnapshot: Decodable, Sendable {
             [ToriiSumeragiNativeAmxParticipantApplication].self,
             "native_amx_participant_applications"
         )
+        self.autonomousLaneExecutions = raw["autonomous_lane_executions"] == nil
+            ? []
+            : try decode(
+                [ToriiSumeragiAutonomousLaneExecution].self,
+                "autonomous_lane_executions"
+            )
+        guard autonomousLaneExecutions.count <= Self.maximumAutonomousLaneExecutions else {
+            throw DecodingError.dataCorrupted(
+                .init(codingPath: decoder.codingPath,
+                      debugDescription: "Autonomous lane diagnostics exceed the 128-row limit")
+            )
+        }
+        var previousAutonomousKey: String?
+        for row in autonomousLaneExecutions {
+            let key = String(format: "%010u:%020llu:%@:%020llu:%020llu:%020llu:%020llu:%@",
+                             row.laneID, row.dataspaceID, row.laneIncarnation,
+                             row.laneBlockHeight, row.laneBlockView, row.proposalHeight,
+                             row.proposalView, row.proposalHash)
+            guard previousAutonomousKey.map({ $0 < key }) ?? true else {
+                throw DecodingError.dataCorrupted(
+                    .init(codingPath: decoder.codingPath,
+                          debugDescription: "Autonomous lane diagnostics must be strictly ordered")
+                )
+            }
+            previousAutonomousKey = key
+        }
         guard nativeAmxParticipantApplications.count
                 <= Self.maximumNativeAmxParticipantApplications else {
             throw DecodingError.dataCorrupted(

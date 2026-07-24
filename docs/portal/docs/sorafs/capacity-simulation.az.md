@@ -17,7 +17,7 @@ translator: machine-google-reviewed
 :::Qeyd Kanonik Mənbə
 :::
 
-Bu runbook SF-2c tutumlu bazar simulyasiya dəstini necə işə salmağı və nəticədə əldə edilən ölçüləri vizuallaşdırmağı izah edir. O, `docs/examples/sorafs_capacity_simulation/`-dəki deterministik qurğulardan istifadə edərək, kvota danışıqlarını, uğursuzluqla işləməyi və kəsintilərin aradan qaldırılmasını başdan sona doğrulayır. Tutumlu yüklər hələ də `sorafs_manifest_stub capacity`-dən istifadə edir; manifest/CAR qablaşdırma axınları üçün `iroha app sorafs toolkit pack` istifadə edin.
+Bu runbook SF-2c tutumlu bazar simulyasiya dəstini necə işə salmağı və nəticədə əldə edilən ölçüləri vizuallaşdırmağı izah edir. O, `docs/examples/sorafs_capacity_simulation/`-dəki deterministik qurğulardan istifadə edərək, kvota danışıqlarını, uğursuzluqla işləməyi və kəsintilərin aradan qaldırılmasını başdan sona doğrulayır. Tutumlu yüklər hələ də `sorafs_manifest_builder capacity`-dən istifadə edir; manifest/CAR qablaşdırma axınları üçün `iroha app sorafs toolkit pack` istifadə edin.
 
 ## 1. CLI artefaktları yaradın
 
@@ -26,7 +26,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`, Norito faydalı yükləri, base64 blobları, Torii sorğu gövdələrini və JSON xülasələrini yaymaq üçün `sorafs_manifest_stub capacity`-i əhatə edir:
+`run_cli.sh`, Norito faydalı yükləri, base64 blobları, Torii sorğu gövdələrini və JSON xülasələrini yaymaq üçün `sorafs_manifest_builder capacity`-i əhatə edir:
 
 - Kvota danışıqları ssenarisində iştirak edən üç provayder bəyannaməsi.
 - Mərhələli manifesti həmin provayderlər arasında bölüşdürən replikasiya sifarişi.

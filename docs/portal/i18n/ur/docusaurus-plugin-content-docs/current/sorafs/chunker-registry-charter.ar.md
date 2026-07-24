@@ -57,7 +57,7 @@ ID: چنکر رجسٹری چارٹر
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - فکسچر ، تجویز ، لازمی رپورٹ اور تاریخ کی تازہ کاریوں پر مشتمل ایک PR فراہم کریں۔
@@ -90,12 +90,12 @@ ID: چنکر رجسٹری چارٹر
    - ہٹانے یا فوری مرمت کے لئے کونسل کے اکثریتی ووٹ کی ضرورت ہوتی ہے۔
    - TWG کو خطرے میں کمی کے اقدامات کی دستاویز کرنا ہوگی اور واقعے کے لاگ کو اپ ڈیٹ کرنا ہوگا۔
 
-## پیشن گوئی ٹولنگ- `sorafs_manifest_chunk_store` اور `sorafs_manifest_stub` فراہم کریں:
+## پیشن گوئی ٹولنگ- `sorafs_manifest_chunk_store` اور `sorafs_manifest_builder` فراہم کریں:
   - لاگ کو چیک کرنے کے لئے `--list-profiles`۔
   - `--promote-profile=<handle>` فائل کو اپ گریڈ کرتے وقت استعمال شدہ مجاز ڈیٹا بلاک تیار کرنے کے لئے۔
   - `--json-out=-` STDOUT پر رپورٹس کو اسٹریم کرنے کے لئے ، تولیدی آڈٹ لاگز کی اجازت دیتا ہے۔
 - جب متعلقہ بائنریز چل رہی ہیں تو `ensure_charter_compliance()` کہا جاتا ہے
-  (`manifest_chunk_store` ، `provider_advert_stub`)۔ اگر سی آئی ٹیسٹ ناکام ہونا چاہئے تو ...
+  (`manifest_chunk_store` ، `sorafs_provider_advert`)۔ اگر سی آئی ٹیسٹ ناکام ہونا چاہئے تو ...
   نئی اندراجات چارٹر کی خلاف ورزی کرتی ہیں۔
 
 ## ریکارڈ رکھنا

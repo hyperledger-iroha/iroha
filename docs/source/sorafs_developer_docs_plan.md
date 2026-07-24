@@ -34,8 +34,12 @@ summary: Structure for CLI/SDK developer guides and samples (SF-6).
 
 ## CI Recipes
 
-- GitHub Actions + Sigstore keyless (link to CI templates).
-- GitLab pipeline with proof verification stage.
+- GitHub Actions content build plus a protected external Ed25519/HSM aggregate
+  release-signing job (link to CI templates).
+- GitLab content/proof pipeline plus the same governed aggregate signing and
+  SHA256-pinned native verification boundary.
+- Optional OIDC/cosign provenance attestation, explicitly separate from release
+  authenticity.
 - Optional chunk-range smoketest job (link to chunk_range_smoketest.md).
 
 ## Release Notes & Changelog

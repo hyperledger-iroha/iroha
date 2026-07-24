@@ -113,7 +113,7 @@ groups:
    - قم بتنفيذ `iroha app sorafs providers list` وتحقق من أن القدرات المعلنة تتوافق مع متطلبات النسخ المتماثل.
    - تحقق من المقاييس `torii_sorafs_capacity_*` لتأكيد توفير GiB ونجاح PoR.
 3. **إعادة تعيين النسخ**
-   - إنشاء أوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عند نزول حافة الأعمال المتراكمة (`stat="avg"`) خلال 5 فترات (يستخدم بيان التعبئة/CAR `iroha app sorafs toolkit pack`).
+   - إنشاء أوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عند نزول حافة الأعمال المتراكمة (`stat="avg"`) خلال 5 فترات (يستخدم بيان التعبئة/CAR `iroha app sorafs toolkit pack`).
    - Notifier la gouvernance si les aliases n'ont pas de links de واضح النشاط (baisse inattendue de `torii_sorafs_registry_aliases_total`).
 4. **توثيق النتيجة**
    - أرسل ملاحظات الحادث إلى مجلة العمليات SoraFS مع الطوابع الزمنية وملخصات البيان المعني.

@@ -97,9 +97,9 @@ fixtures များသည် registry၊ CLI tooling နှင့် governanc
   manifest digest၊ PoR သည် အဆိုပြုထားသော ကန့်သတ်ချက်များဖြင့် စစ်ဆေးသည်။
 - `sorafs_manifest_chunk_store --json-out=-` – အတုံးလိုက်စတိုးဆိုင်အစီရင်ခံစာကို တိုက်ရိုက်ထုတ်လွှင့်ပါ။
   အလိုအလျောက်နှိုင်းယှဉ်မှုများအတွက် stdout ။
-- `sorafs_manifest_stub --chunker-profile=<handle>` - manifests များနှင့် CAR ကို အတည်ပြုပါ။
+- `sorafs_manifest_builder --chunker-profile=<handle>` - manifests များနှင့် CAR ကို အတည်ပြုပါ။
   အစီအစဥ်များသည် canonical handle နှင့် aliases တို့ကို ထည့်သွင်းထားသည်။
-- `sorafs_manifest_stub --plan=-` - ယခင် `chunk_fetch_specs` ကို ပြန်ကျွေးပါ
+- `sorafs_manifest_builder --plan=-` - ယခင် `chunk_fetch_specs` ကို ပြန်ကျွေးပါ
   ပြောင်းလဲမှုပြီးနောက် အော့ဖ်ဆက်များ/အချေအတင်များကို အတည်ပြုရန်။
 
 အဆိုပြုချက်တွင် command output (digests၊ PoR roots၊ manifest hash) ကို မှတ်တမ်းတင်ပါ
@@ -140,7 +140,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -149,7 +149,7 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

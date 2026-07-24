@@ -76,7 +76,7 @@ dashboards and alerts remain portable across deployments.
 
 ### Admission Envelope Mismatch (`C3`)
 
-1. Run `cargo run -p sorafs_car --bin sorafs_manifest_stub -- provider-admission verify --envelope=<envelope.to>` to validate the provider admission envelope. Include `--proposal`, `--advert`, or `--advert-body` sidecars when available so the tool checks the envelope binding.
+1. Run `cargo run -p sorafs_car --bin sorafs_manifest_builder -- provider-admission verify --envelope=<envelope.to>` to validate the provider admission envelope. Include `--proposal`, `--advert`, or `--advert-body` sidecars when available so the tool checks the envelope binding.
 2. Run `cargo run -p sorafs_manifest --bin sorafs-validate -- admission --input <envelope.to>` to emit the SF-11 validation report and telemetry evidence.
 3. Confirm manifest council signatures with `sorafs_cli manifest verify-signature`, ensuring public
    keys align with the latest rotation.

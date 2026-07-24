@@ -7,7 +7,7 @@ use std::{
     env,
     fmt::Write as FmtWrite,
     fs::{self, File, Metadata, OpenOptions},
-    io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write},
+    io::{self, BufReader, BufWriter, Cursor, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     process,
@@ -23,18 +23,12 @@ use std::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 
-use base64::{
-    Engine,
-    engine::general_purpose::{
-        STANDARD as BASE64_STANDARD, URL_SAFE as BASE64_URL_SAFE,
-        URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD,
-    },
-};
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use ed25519_dalek::{Signature as DalekSig, Signer, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signer, SigningKey};
 use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
-use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
+use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
@@ -64,7 +58,11 @@ use norito::{
     json::{Map, Number, Value, from_slice, to_string_pretty, to_value, to_vec},
     to_bytes,
 };
-use reqwest::{StatusCode, blocking::Client as HttpClient, header::CONTENT_TYPE};
+use reqwest::{
+    StatusCode,
+    blocking::Client as HttpClient,
+    header::{ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_TYPE},
+};
 #[cfg(test)]
 use rust_decimal::Decimal;
 use sha3::{Digest, Sha3_256};
@@ -77,9 +75,9 @@ use sorafs_car::{
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget},
     policy::{PolicyEvidenceValidator, run_honey_probe},
     proof_stream::{
-        ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamRequest, ProofStreamSummary,
-        ProofTier,
+        ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamSummary, ProofTier,
     },
+    proof_stream_transport::ProofStreamNdjsonReader,
     scoreboard::{Eligibility, TelemetrySnapshot},
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
 };
@@ -92,8 +90,9 @@ use sorafs_manifest::{
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogNodeV1, GovernanceLogPayloadV1,
     GovernanceLogSignatureV1, GovernanceSignatureAlgorithm, MANIFEST_DAG_CODEC, ManifestBuildError,
     ManifestBuilder, ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
-    PorReportIsoWeek, PorWeeklyReportV1, ReputationMerkleProofV1, ReputationSnapshotV1,
-    SignedReputationSnapshotV1, StorageClass, ValidationOutcomeV1,
+    PorReportIsoWeek, PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1,
+    ReputationMerkleProofV1, ReputationSnapshotV1, SignedReputationSnapshotV1, StorageClass,
+    ValidationOutcomeV1,
     chunker_registry as manifest_chunker_registry, governance_dag_block_cid_v1,
     validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
 };
@@ -125,7 +124,6 @@ const SORAFS_CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
 use url::{Url, form_urlencoded::Serializer};
 
 const DEFAULT_CHUNKER_HANDLE: &str = "sorafs.sf1@1.0.0";
-const DEFAULT_IDENTITY_TOKEN_ENV: &str = "SIGSTORE_ID_TOKEN";
 const CONTEXT_APPEAL_QUOTE: &str = "sorafs_cli appeal quote";
 const CONTEXT_APPEAL_SETTLE: &str = "sorafs_cli appeal settle";
 const CONTEXT_APPEAL_DISBURSE: &str = "sorafs_cli appeal disburse";
@@ -360,181 +358,6 @@ fn parse_appeal_verdict(value: &str) -> Result<AppealVerdict, String> {
     Ok(verdict)
 }
 
-#[derive(Clone, Copy, Debug)]
-enum IdentityTokenProvider {
-    GithubActions,
-}
-
-fn resolve_identity_token(
-    inline: Option<String>,
-    env_var: Option<String>,
-    file_path: Option<PathBuf>,
-    provider: Option<IdentityTokenProvider>,
-    audience_override: Option<String>,
-) -> Result<(String, String), String> {
-    if let Some(provider) = provider {
-        if inline.is_some() || env_var.is_some() || file_path.is_some() {
-            return Err("identity token provider flags cannot be combined with explicit identity token options (`--identity-token*`)".to_string());
-        }
-        return fetch_identity_token_from_provider(provider, audience_override);
-    }
-
-    if audience_override.is_some() {
-        return Err("`--identity-token-audience` requires `--identity-token-provider`".to_string());
-    }
-
-    match (inline, env_var, file_path) {
-        (Some(token), None, None) => {
-            let trimmed = token.trim();
-            if trimmed.is_empty() {
-                return Err("`--identity-token` may not be empty".to_string());
-            }
-            Ok((trimmed.to_string(), "inline".to_string()))
-        }
-        (None, Some(var), None) => {
-            let value = env::var(&var)
-                .map_err(|err| format!("failed to read identity token from `{var}`: {err}"))?;
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Err(format!("environment variable `{var}` is empty"));
-            }
-            Ok((trimmed.to_string(), format!("env:{var}")))
-        }
-        (None, None, Some(path)) => {
-            let contents = fs::read_to_string(&path).map_err(|err| {
-                format!(
-                    "failed to read identity token from `{}`: {err}",
-                    path.display()
-                )
-            })?;
-            let trimmed = contents.trim();
-            if trimmed.is_empty() {
-                return Err(format!("identity token file `{}` is empty", path.display()));
-            }
-            Ok((trimmed.to_string(), format!("file:{}", path.display())))
-        }
-        (Some(_), Some(_), _) | (Some(_), _, Some(_)) | (_, Some(_), Some(_)) => Err(
-            "identity token flags are mutually exclusive; provide exactly one of `--identity-token`, `--identity-token-env`, `--identity-token-file`, or `--identity-token-provider`"
-                .to_string(),
-        ),
-        (None, None, None) => {
-            let value = env::var(DEFAULT_IDENTITY_TOKEN_ENV).map_err(|_| {
-                "missing identity token for `sorafs_cli manifest sign`; supply `--identity-token`, `--identity-token-env`, `--identity-token-file`, or set SIGSTORE_ID_TOKEN".to_string()
-            })?;
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                return Err(format!(
-                    "environment variable `{DEFAULT_IDENTITY_TOKEN_ENV}` is set but empty"
-                ));
-            }
-            Ok((
-                trimmed.to_string(),
-                format!("env:{DEFAULT_IDENTITY_TOKEN_ENV}"),
-            ))
-        }
-    }
-}
-
-fn fetch_identity_token_from_provider(
-    provider: IdentityTokenProvider,
-    audience_override: Option<String>,
-) -> Result<(String, String), String> {
-    match provider {
-        IdentityTokenProvider::GithubActions => {
-            let audience_raw = audience_override.ok_or_else(|| {
-                "`--identity-token-provider` requires --identity-token-audience".to_string()
-            })?;
-            let trimmed = audience_raw.trim();
-            if trimmed.is_empty() {
-                return Err("`--identity-token-audience` may not be empty".to_string());
-            }
-            let audience = trimmed.to_string();
-            let token = request_github_actions_token(&audience)?;
-            Ok((token, provider.label(&audience)))
-        }
-    }
-}
-
-fn request_github_actions_token(audience: &str) -> Result<String, String> {
-    let raw_url = env::var("ACTIONS_ID_TOKEN_REQUEST_URL").map_err(|_| {
-        "ACTIONS_ID_TOKEN_REQUEST_URL is not set; GitHub Actions OIDC tokens require running inside GitHub Actions with the id-token permission enabled".to_string()
-    })?;
-    let request_token = env::var("ACTIONS_ID_TOKEN_REQUEST_TOKEN").map_err(|_| {
-        "ACTIONS_ID_TOKEN_REQUEST_TOKEN is not set; GitHub Actions OIDC tokens require running inside GitHub Actions with the id-token permission enabled".to_string()
-    })?;
-
-    let mut url = Url::parse(&raw_url)
-        .map_err(|err| format!("failed to parse ACTIONS_ID_TOKEN_REQUEST_URL: {err}"))?;
-    let mut existing_pairs: Vec<(String, String)> = url
-        .query_pairs()
-        .map(|(k, v)| (k.into_owned(), v.into_owned()))
-        .collect();
-    let mut replaced = false;
-    for (key, value) in &mut existing_pairs {
-        if key == "audience" {
-            *value = audience.to_string();
-            replaced = true;
-        }
-    }
-    if !replaced {
-        existing_pairs.push(("audience".into(), audience.to_string()));
-    }
-    url.set_query(None);
-    if !existing_pairs.is_empty() {
-        let mut serializer = Serializer::new(String::new());
-        for (key, value) in existing_pairs {
-            serializer.append_pair(&key, &value);
-        }
-        let query = serializer.finish();
-        url.set_query(Some(&query));
-    }
-
-    let client = HttpClient::new();
-    let response = client
-        .get(url)
-        .header("Authorization", format!("Bearer {request_token}"))
-        .header("Accept", "application/json")
-        .send()
-        .map_err(|err| format!("failed to request GitHub Actions OIDC token: {err}"))?;
-    let status = response.status();
-    let body = response
-        .bytes()
-        .map_err(|err| format!("failed to read GitHub Actions OIDC response: {err}"))?;
-    if !status.is_success() {
-        let snippet = String::from_utf8_lossy(&body);
-        return Err(format!(
-            "GitHub Actions OIDC token request failed with status {status}: {snippet}"
-        ));
-    }
-    let json: Value = from_slice(&body)
-        .map_err(|err| format!("failed to parse GitHub Actions OIDC response JSON: {err}"))?;
-    let token = json
-        .get("value")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "GitHub Actions OIDC response missing `value` field".to_string())?;
-    let trimmed = token.trim();
-    if trimmed.is_empty() {
-        return Err("GitHub Actions OIDC response returned an empty token".to_string());
-    }
-    Ok(trimmed.to_string())
-}
-
-impl IdentityTokenProvider {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "github-actions" | "gha" => Ok(Self::GithubActions),
-            other => Err(format!(
-                "unsupported identity token provider `{other}`; supported providers: github-actions"
-            )),
-        }
-    }
-
-    fn label(self, audience: &str) -> String {
-        match self {
-            Self::GithubActions => format!("oidc:github-actions({audience})"),
-        }
-    }
-}
 fn main() {
     if let Err(err) = run() {
         eprintln!("error: {err}");
@@ -564,8 +387,6 @@ fn run() -> Result<(), String> {
             };
             match sub.as_str() {
                 "build" => manifest_build(args.collect()),
-                "sign" => manifest_sign(args.collect()),
-                "verify-signature" => manifest_verify_signature(args.collect()),
                 "submit" => manifest_submit(args.collect()),
                 "proposal" => manifest_proposal(args.collect()),
                 _ => Err(usage()),
@@ -752,7 +573,7 @@ fn car_pack(raw_args: Vec<String>) -> Result<(), String> {
         .trim();
 
     let descriptor = chunker_registry::lookup_by_handle(handle).ok_or_else(|| {
-        format!("unknown chunker profile handle `{handle}`; see `sorafs_manifest_stub --list-chunker-profiles` for options")
+        format!("unknown chunker profile handle `{handle}`; see `sorafs_manifest_builder --list-chunker-profiles` for options")
     })?;
 
     let metadata =
@@ -3096,14 +2917,12 @@ fn usage() -> String {
   sorafs_cli deploy --payload=PATH --client-config=PATH [--torii-url=URL] [--submitted-epoch=EPOCH] [--name=NAME] [--out-dir=PATH] [--gateway-base-url=URL] [--pin-torii-url=URL...] [--no-peer-discovery] [--summary-out=PATH]
   sorafs_cli car pack --input=PATH --car-out=PATH [--chunker-handle=HANDLE] [--plan-out=PATH] [--summary-out=PATH]
   sorafs_cli manifest build --summary=PATH --manifest-out=PATH [--manifest-json-out=PATH] [--pin-min-replicas=N] [--pin-storage-class=hot|warm|cold] [--pin-retention-epoch=EPOCH] [--metadata key=value]
-  sorafs_cli manifest sign --manifest=PATH (--bundle-out=PATH | --signature-out=PATH) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--identity-token=JWT | --identity-token-env=VAR | --identity-token-file=PATH | --identity-token-provider=github-actions [--identity-token-audience=AUD]] [--include-token=true|false] [--issued-at=UNIX]
-  sorafs_cli manifest verify-signature --manifest=PATH (--bundle=PATH | (--signature=PATH --public-key-hex=HEX)) [--summary=PATH | --chunk-plan=PATH | --chunk-digest-sha3=HEX] [--expect-token-hash=HEX]
   sorafs_cli manifest submit --manifest=PATH --torii-url=URL (--submitted-epoch=EPOCH | --resolve-submitted-epoch=true) (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --authority=ACCOUNT [--network-prefix=U16] (--private-key=KEY | --private-key-file=PATH) [--alias-namespace=NS --alias-name=NAME --alias-proof=PATH] [--successor-of=HEX] [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli manifest proposal --manifest=PATH --submitted-epoch=EPOCH (--chunk-plan=PATH | --chunk-digest-sha3=HEX) --proposal-out=PATH [--successor-of=HEX] [--alias-hint=TEXT]
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli storage pin --manifest=PATH --payload=PATH --torii-url=URL [--summary-out=PATH] [--response-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=stage-a|stage-b|stage-c|anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=hot|warm|cold] [--orchestrator-config=PATH] [--taikai-cache-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] [--moderation-key-b64=BASE64] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
-  sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL | --endpoint=URL) (--provider-id-hex=HEX32 | --provider-id=ID) [--proof-kind=por|pdp|potr] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
+  sorafs_cli proof stream --manifest=PATH (--torii-url=URL | --gateway-url=URL) --provider-id-hex=HEX32 [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--stream-token=TOKEN] [--bearer-token-env=VAR] [--por-root-hex=HEX32] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false] [--max-failures=N] [--max-verification-failures=N]
   sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli reputation publish --torii-url=URL --snapshot=SIGNED_ENVELOPE.to [--summary-out=PATH]
   sorafs_cli reputation snapshot --torii-url=URL [--output=PATH] [--summary-out=PATH]
@@ -17265,8 +17084,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut torii_url: Option<String> = None;
     let mut endpoint_url: Option<String> = None;
     let mut provider_id_hex: Option<String> = None;
-    let mut provider_id: Option<String> = None;
     let mut proof_kind_arg: Option<String> = None;
+    let mut challenge_id_hex: Option<String> = None;
     let mut samples: Option<u32> = None;
     let mut sample_seed: Option<u64> = None;
     let mut deadline_ms: Option<u32> = None;
@@ -17281,18 +17100,24 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut emit_events = false;
     let mut max_failures: Option<u64> = None;
     let mut max_verification_failures: Option<u64> = None;
+    let mut seen_options = BTreeSet::new();
 
     for arg in raw_args {
         let (key, value) = arg
             .split_once('=')
             .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
+        if !seen_options.insert(key.to_string()) {
+            return Err(format!(
+                "duplicate option `{key}` for `sorafs_cli proof stream`"
+            ));
+        }
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
             "--torii-url" => torii_url = Some(value.to_string()),
-            "--gateway-url" | "--endpoint" => endpoint_url = Some(value.to_string()),
+            "--gateway-url" => endpoint_url = Some(value.to_string()),
             "--provider-id-hex" => provider_id_hex = Some(value.to_string()),
-            "--provider-id" => provider_id = Some(value.to_string()),
             "--proof-kind" => proof_kind_arg = Some(value.to_string()),
+            "--challenge-id-hex" => challenge_id_hex = Some(value.to_string()),
             "--samples" => {
                 let parsed: u32 = value
                     .parse()
@@ -17343,60 +17168,75 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let manifest_path = manifest_path.ok_or_else(|| {
         "missing required `--manifest=PATH` for `sorafs_cli proof stream`".to_string()
     })?;
-    let legacy_proof_stream_mode = endpoint_url.is_some() || provider_id.is_some();
     if torii_url.is_some() && endpoint_url.is_some() {
-        return Err(
-            "`--torii-url` cannot be combined with `--gateway-url`/`--endpoint`".to_string(),
-        );
+        return Err("`--torii-url` cannot be combined with `--gateway-url`".to_string());
     }
 
-    let (torii_url, endpoint) = if let Some(endpoint_raw) = endpoint_url {
-        let endpoint_raw = endpoint_raw.trim().to_string();
+    let endpoint = if let Some(endpoint_raw) = endpoint_url {
         if endpoint_raw.is_empty() {
-            return Err("`--gateway-url`/`--endpoint` must not be empty".to_string());
+            return Err("`--gateway-url` must not be empty".to_string());
         }
-        let endpoint = Url::parse(&endpoint_raw)
-            .map_err(|err| format!("invalid proof stream endpoint `{endpoint_raw}`: {err}"))?;
-        (endpoint_raw, endpoint)
+        if endpoint_raw.trim() != endpoint_raw {
+            return Err("`--gateway-url` must not contain surrounding whitespace".to_string());
+        }
+        Url::parse(&endpoint_raw)
+            .map_err(|err| format!("invalid `--gateway-url` value `{endpoint_raw}`: {err}"))?
     } else {
         let torii = torii_url.ok_or_else(|| {
-            "missing required `--torii-url=URL` (or `--gateway-url=URL`/`--endpoint=URL`) for `sorafs_cli proof stream`".to_string()
+            "missing required `--torii-url=URL` (or `--gateway-url=URL`) for `sorafs_cli proof stream`".to_string()
         })?;
-        let endpoint = Url::parse(&torii)
+        Url::parse(&torii)
             .map_err(|err| format!("invalid `--torii-url` value `{torii}`: {err}"))?
             .join("v1/sorafs/proof/stream")
-            .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?;
-        (torii, endpoint)
+            .map_err(|err| format!("failed to resolve proof stream endpoint: {err}"))?
     };
 
-    if provider_id_hex.is_some() && provider_id.is_some() {
-        return Err("`--provider-id-hex` cannot be combined with `--provider-id`".to_string());
-    }
     let provider_id = if let Some(raw_hex) = provider_id_hex {
-        let normalized = raw_hex.trim().to_ascii_lowercase();
-        let _ = parse_digest_hex(&normalized)
+        let bytes = parse_digest_hex(&raw_hex)
             .map_err(|err| format!("invalid `--provider-id-hex` value: {err}"))?;
-        normalized
-    } else if let Some(raw_id) = provider_id {
-        let trimmed = raw_id.trim();
-        if trimmed.is_empty() {
-            return Err("`--provider-id` must not be empty".to_string());
+        let canonical = hex_encode(bytes);
+        if raw_hex != canonical {
+            return Err(
+                "`--provider-id-hex` must be exact 64-character lowercase hexadecimal".to_string(),
+            );
         }
-        trimmed.to_string()
+        canonical
     } else {
         return Err(
-            "missing required `--provider-id-hex=HEX32` (or legacy `--provider-id=ID`) for `sorafs_cli proof stream`".to_string(),
+            "missing required `--provider-id-hex=HEX32` for `sorafs_cli proof stream`".to_string(),
         );
     };
 
     let proof_kind = proof_kind_arg
         .as_deref()
-        .map(|kind| ProofKind::parse(kind.trim()))
+        .map(ProofKind::parse)
         .transpose()?
         .unwrap_or_default();
     let deadline_ms_arg = deadline_ms;
-    let (sample_count, deadline_ms) = match proof_kind {
+    let challenge_id_hex = challenge_id_hex
+        .map(|value| {
+            let bytes = parse_digest_hex(&value)
+                .map_err(|err| format!("invalid `--challenge-id-hex` value: {err}"))?;
+            let canonical = hex_encode(bytes);
+            if value != canonical {
+                return Err(
+                    "`--challenge-id-hex` must be exact 64-character lowercase hexadecimal"
+                        .to_string(),
+                );
+            }
+            if bytes.iter().all(|byte| *byte == 0) {
+                return Err("`--challenge-id-hex` must be non-zero".to_string());
+            }
+            Ok(canonical)
+        })
+        .transpose()?;
+    let (challenge_id_hex, sample_count, deadline_ms) = match proof_kind {
         ProofKind::Por => {
+            if challenge_id_hex.is_some() {
+                return Err(
+                    "`--challenge-id-hex` may only be used with `--proof-kind=pdp`".to_string(),
+                );
+            }
             if deadline_ms_arg.is_some() {
                 return Err("`--deadline-ms` may only be used with `--proof-kind=potr`".to_string());
             }
@@ -17404,21 +17244,40 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             if count == 0 {
                 return Err("`--samples` must be greater than zero".to_string());
             }
-            (Some(count), None)
+            (None, Some(count), None)
         }
         ProofKind::Pdp => {
+            let challenge_id = challenge_id_hex.ok_or_else(|| {
+                "`--challenge-id-hex=HEX32` is required when `--proof-kind=pdp`".to_string()
+            })?;
             if deadline_ms_arg.is_some() {
                 return Err("`--deadline-ms` may only be used with `--proof-kind=potr`".to_string());
             }
-            let count = samples.unwrap_or(32);
-            if count == 0 {
-                return Err("`--samples` must be greater than zero".to_string());
+            if samples.is_some() {
+                return Err(
+                    "`--samples` is not supported for `--proof-kind=pdp`; sampling is fixed by the governed challenge"
+                        .to_string(),
+                );
             }
-            (Some(count), None)
+            if sample_seed.is_some() {
+                return Err(
+                    "`--sample-seed` is not supported for `--proof-kind=pdp`; sampling is fixed by the governed challenge"
+                        .to_string(),
+                );
+            }
+            (Some(challenge_id), None, None)
         }
         ProofKind::Potr => {
+            if challenge_id_hex.is_some() {
+                return Err(
+                    "`--challenge-id-hex` may only be used with `--proof-kind=pdp`".to_string(),
+                );
+            }
             if samples.is_some() {
                 return Err("`--samples` is not supported for `--proof-kind=potr`".to_string());
+            }
+            if sample_seed.is_some() {
+                return Err("`--sample-seed` is only supported for `--proof-kind=por`".to_string());
             }
             let deadline = deadline_ms_arg.ok_or_else(|| {
                 "`--deadline-ms` is required when `--proof-kind=potr`".to_string()
@@ -17426,12 +17285,18 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             if deadline == 0 {
                 return Err("`--deadline-ms` must be greater than zero".to_string());
             }
-            (None, Some(deadline))
+            (None, None, Some(deadline))
         }
     };
-    let tier = tier_arg
-        .as_deref()
-        .map(|tier| ProofTier::parse(tier.trim()))
+    let tier = tier_arg.as_deref().map(ProofTier::parse).transpose()?;
+    let orchestrator_job_id_hex = orchestrator_job_id_hex
+        .map(|value| {
+            let bytes = parse_fixed_hex_bytes::<16>(&value, "--orchestrator-job-id-hex")?;
+            if bytes.iter().all(|byte| *byte == 0) {
+                return Err("`--orchestrator-job-id-hex` must be non-zero".to_string());
+            }
+            Ok(hex_encode(bytes))
+        })
         .transpose()?;
 
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
@@ -17454,6 +17319,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         generate_proof_stream_nonce(
             manifest_digest.as_bytes(),
             proof_kind,
+            challenge_id_hex.as_deref(),
             sample_count,
             deadline_ms,
             Some(&provider_id),
@@ -17462,14 +17328,15 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
 
     let request = ProofStreamRequest {
         manifest_digest_hex: manifest_digest_hex.clone(),
-        provider_id_hex: Some(provider_id.clone()),
+        provider_id_hex: provider_id.clone(),
         proof_kind,
+        challenge_id_hex: challenge_id_hex.clone(),
         sample_count,
         sample_seed,
         deadline_ms,
         tier,
         nonce,
-        orchestrator_job_id_hex: orchestrator_job_id_hex.map(|id| id.trim().to_ascii_lowercase()),
+        orchestrator_job_id_hex,
     };
     let request_body = request.to_json_bytes()?;
 
@@ -17480,6 +17347,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         .post(endpoint.clone())
         .header(CONTENT_TYPE, "application/json")
         .header("Accept", "application/x-ndjson")
+        .header(ACCEPT_ENCODING, "identity")
         .header("Sora-Stream-Client", "sorafs_cli/stream/v2");
 
     if let Some(token) = stream_token.as_ref() {
@@ -17501,13 +17369,28 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         .map_err(|err| format!("failed to initiate proof stream: {err}"))?;
     let status = response.status();
     if !status.is_success() {
-        let body = response
-            .bytes()
-            .map_err(|err| format!("failed to read proof stream error response: {err}"))?;
-        let snippet = String::from_utf8_lossy(&body);
-        return Err(format!(
-            "gateway returned {status} when streaming proofs: {snippet}"
-        ));
+        return Err(format!("gateway returned {status} when streaming proofs"));
+    }
+    let response_content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok());
+    if response_content_type != Some("application/x-ndjson") {
+        return Err(
+            "gateway returned a noncanonical proof stream Content-Type; expected `application/x-ndjson`"
+                .to_string(),
+        );
+    }
+    let response_content_encoding = response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .map(|value| value.to_str())
+        .transpose()
+        .map_err(|_| "gateway returned a non-ASCII proof stream Content-Encoding".to_string())?;
+    if !matches!(response_content_encoding, None | Some("identity")) {
+        return Err(
+            "gateway ignored `Accept-Encoding: identity` for the proof stream response".to_string(),
+        );
     }
 
     let expected_root = por_root_hex
@@ -17517,25 +17400,65 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let mut verification_attempts: u64 = 0;
     let mut verification_failures: u64 = 0;
 
-    let mut reader = BufReader::new(response);
-    let mut line = String::new();
+    let reader = BufReader::new(response);
     let mut metrics = ProofStreamMetrics::default();
     let mut failure_samples: Vec<ProofStreamItem> = Vec::new();
     const FAILURE_SAMPLE_LIMIT: usize = 5;
 
-    loop {
-        line.clear();
-        let bytes_read = reader
-            .read_line(&mut line)
-            .map_err(|err| format!("failed to read proof stream response: {err}"))?;
-        if bytes_read == 0 {
-            break;
+    for item in ProofStreamNdjsonReader::new(reader) {
+        let mut item =
+            item.map_err(|err| format!("gateway returned an invalid proof stream: {err}"))?;
+        if item.manifest_digest_hex != manifest_digest_hex {
+            return Err("proof stream item manifest digest does not match the request".to_string());
         }
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
-            continue;
+        if item.provider_id_hex != provider_id {
+            return Err("proof stream item provider id does not match the request".to_string());
         }
-        let mut item = ProofStreamItem::from_ndjson(trimmed.as_bytes())?;
+        if item.proof_kind != proof_kind {
+            return Err(format!(
+                "proof stream item kind `{}` does not match requested `{}`",
+                item.proof_kind.as_str(),
+                proof_kind.as_str()
+            ));
+        }
+        match proof_kind {
+            ProofKind::Por => {
+                if item.challenge_id_hex.is_some() || item.deadline_ms.is_some() {
+                    return Err(
+                        "PoR proof stream item contains fields reserved for PDP or PoTR"
+                            .to_string(),
+                    );
+                }
+            }
+            ProofKind::Pdp => {
+                if item.challenge_id_hex.as_deref() != challenge_id_hex.as_deref() {
+                    return Err(
+                        "PDP proof stream item challenge id does not match the request".to_string(),
+                    );
+                }
+                if item.deadline_ms.is_some() {
+                    return Err("PDP proof stream item contains a PoTR deadline".to_string());
+                }
+            }
+            ProofKind::Potr => {
+                if item.challenge_id_hex.is_some() {
+                    return Err("PoTR proof stream item contains a PDP challenge id".to_string());
+                }
+                if item.deadline_ms != deadline_ms {
+                    return Err(
+                        "PoTR proof stream item deadline does not match the request".to_string()
+                    );
+                }
+            }
+        }
+        let canonical_event = if emit_events {
+            Some(
+                norito::json::to_string(&item.to_json())
+                    .map_err(|err| format!("failed to encode proof stream event: {err}"))?,
+            )
+        } else {
+            None
+        };
         if let Some(root) = expected_root.as_ref()
             && matches!(item.proof_kind, ProofKind::Por)
         {
@@ -17558,15 +17481,17 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         if item.status.is_failure() && failure_samples.len() < FAILURE_SAMPLE_LIMIT {
             failure_samples.push(item.clone());
         }
-        if emit_events {
-            println!("{trimmed}");
+        if let Some(event) = canonical_event {
+            println!("{event}");
         }
+    }
+    if metrics.item_total == 0 {
+        return Err("gateway returned an empty proof stream".to_string());
     }
 
     let summary = ProofStreamSummary::new(metrics.clone(), failure_samples.clone());
     let mut summary_map = Map::new();
     summary_map.insert("endpoint".into(), Value::from(endpoint.as_str()));
-    summary_map.insert("torii_url".into(), Value::from(torii_url.clone()));
     summary_map.insert(
         "manifest_path".into(),
         Value::from(manifest_path.display().to_string()),
@@ -17580,8 +17505,13 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         Value::from(manifest_cid_hex.clone()),
     );
     summary_map.insert("provider_id_hex".into(), Value::from(provider_id.clone()));
-    summary_map.insert("provider_id".into(), Value::from(provider_id.clone()));
     summary_map.insert("proof_kind".into(), Value::from(proof_kind.as_str()));
+    if let Some(challenge_id) = challenge_id_hex {
+        summary_map.insert(
+            "requested_challenge_id_hex".into(),
+            Value::from(challenge_id),
+        );
+    }
     if let Some(count) = sample_count {
         summary_map.insert(
             "requested_sample_count".into(),
@@ -17604,44 +17534,8 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         "nonce_b64".into(),
         Value::from(BASE64_STANDARD.encode(request.nonce)),
     );
-    let metrics_json = summary.metrics.to_json();
-    summary_map.insert("metrics".into(), metrics_json.clone());
-    summary_map.insert(
-        "total_items".into(),
-        Value::from(summary.metrics.item_total),
-    );
-    summary_map.insert(
-        "success_count".into(),
-        Value::from(summary.metrics.success_total),
-    );
-    summary_map.insert(
-        "failure_count".into(),
-        Value::from(summary.metrics.failure_total),
-    );
-    let mut legacy_breakdown = Map::new();
-    for (reason, count) in &summary.metrics.failure_by_reason {
-        legacy_breakdown.insert(reason.clone(), Value::from(*count));
-    }
-    summary_map.insert("failure_breakdown".into(), Value::Object(legacy_breakdown));
-    if let Some(avg) = metrics_json
-        .as_object()
-        .and_then(|obj| obj.get("latency_ms"))
-        .and_then(Value::as_object)
-        .and_then(|obj| obj.get("average_ms"))
-        .and_then(Value::as_f64)
-    {
-        summary_map.insert("average_latency_ms".into(), Value::from(avg));
-    }
-    let failure_budget = max_failures.unwrap_or({
-        if legacy_proof_stream_mode {
-            1
-        } else {
-            match proof_kind {
-                ProofKind::Potr => 1,
-                _ => 0,
-            }
-        }
-    });
+    summary_map.insert("metrics".into(), summary.metrics.to_json());
+    let failure_budget = max_failures.unwrap_or(0);
     summary_map.insert("allowed_failure_budget".into(), Value::from(failure_budget));
     let verification_budget = max_verification_failures.unwrap_or(0);
     summary_map.insert(
@@ -17684,7 +17578,7 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             &manifest_path,
             &manifest_digest_hex,
             &rendered,
-            &torii_url,
+            endpoint.as_str(),
         )?;
     }
 
@@ -17708,7 +17602,7 @@ fn write_proof_stream_evidence(
     manifest_path: &Path,
     manifest_digest_hex: &str,
     summary_json: &str,
-    torii_url: &str,
+    endpoint: &str,
 ) -> Result<(), String> {
     prepare_clean_dir(dir)?;
     let summary_file_name = "proof_stream_summary.json";
@@ -17737,7 +17631,7 @@ fn write_proof_stream_evidence(
     let mut metadata = Map::new();
     metadata.insert("captured_at_unix_ms".into(), Value::from(captured_at_ms));
     metadata.insert("sorafs_cli_version".into(), Value::from(SORAFS_CLI_VERSION));
-    metadata.insert("torii_url".into(), Value::from(torii_url.to_string()));
+    metadata.insert("endpoint".into(), Value::from(endpoint.to_string()));
     metadata.insert(
         "manifest_source".into(),
         Value::from(manifest_path.display().to_string()),
@@ -19962,7 +19856,7 @@ fn write_governance_dag_car_archive(
 ) -> Result<Value, String> {
     let descriptor = chunker_registry::lookup_by_handle(chunker_handle).ok_or_else(|| {
         format!(
-            "unknown governance DAG CAR chunker profile handle `{chunker_handle}`; see `sorafs_manifest_stub --list-chunker-profiles` for options"
+            "unknown governance DAG CAR chunker profile handle `{chunker_handle}`; see `sorafs_manifest_builder --list-chunker-profiles` for options"
         )
     })?;
     let (plan, payload) = CarBuildPlan::from_files_with_profile(files, descriptor.profile)
@@ -21052,6 +20946,7 @@ fn governance_dag_now_secs() -> u64 {
 fn generate_proof_stream_nonce(
     manifest_digest: &[u8],
     proof_kind: ProofKind,
+    challenge_id_hex: Option<&str>,
     sample_count: Option<u32>,
     deadline_ms: Option<u32>,
     provider_id: Option<&str>,
@@ -21059,6 +20954,9 @@ fn generate_proof_stream_nonce(
     let mut buffer = Vec::with_capacity(manifest_digest.len() + 48);
     buffer.extend_from_slice(manifest_digest);
     buffer.extend_from_slice(proof_kind.as_str().as_bytes());
+    if let Some(challenge_id) = challenge_id_hex {
+        buffer.extend_from_slice(challenge_id.as_bytes());
+    }
     let count_bytes = sample_count.unwrap_or(0).to_le_bytes();
     buffer.extend_from_slice(&count_bytes);
     if let Some(deadline) = deadline_ms {
@@ -21080,12 +20978,11 @@ fn generate_proof_stream_nonce(
 }
 
 fn decode_nonce_b64(input: &str) -> Result<[u8; 16], String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
+    if input.is_empty() {
         return Err("`--nonce-b64` may not be empty".to_string());
     }
     let decoded = BASE64_STANDARD
-        .decode(trimmed.as_bytes())
+        .decode(input.as_bytes())
         .map_err(|err| format!("invalid `--nonce-b64` value: {err}"))?;
     if decoded.len() != 16 {
         return Err(format!(
@@ -21095,685 +20992,13 @@ fn decode_nonce_b64(input: &str) -> Result<[u8; 16], String> {
     }
     let mut out = [0u8; 16];
     out.copy_from_slice(&decoded);
+    if out.iter().all(|byte| *byte == 0) {
+        return Err("`--nonce-b64` must decode to a non-zero nonce".to_string());
+    }
+    if BASE64_STANDARD.encode(out) != input {
+        return Err("`--nonce-b64` must use canonical padded base64".to_string());
+    }
     Ok(out)
-}
-
-fn manifest_sign(raw_args: Vec<String>) -> Result<(), String> {
-    let mut manifest_path: Option<PathBuf> = None;
-    let mut bundle_out: Option<PathBuf> = None;
-    let mut signature_out: Option<PathBuf> = None;
-    let mut identity_token_inline: Option<String> = None;
-    let mut identity_token_env: Option<String> = None;
-    let mut identity_token_file: Option<PathBuf> = None;
-    let mut identity_token_provider: Option<IdentityTokenProvider> = None;
-    let mut identity_token_audience: Option<String> = None;
-    let mut include_token = false;
-    let mut summary_source: Option<JsonSource> = None;
-    let mut chunk_plan_source: Option<JsonSource> = None;
-    let mut chunk_plan_label: Option<String> = None;
-    let mut chunk_digest_hex_arg: Option<String> = None;
-    let mut issued_at_unix: Option<u64> = None;
-
-    for arg in raw_args {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--manifest" => manifest_path = Some(PathBuf::from(value)),
-            "--bundle-out" => bundle_out = Some(PathBuf::from(value)),
-            "--signature-out" => signature_out = Some(PathBuf::from(value)),
-            "--identity-token" => identity_token_inline = Some(value.to_string()),
-            "--identity-token-env" => identity_token_env = Some(value.to_string()),
-            "--identity-token-file" => identity_token_file = Some(PathBuf::from(value)),
-            "--identity-token-provider" => {
-                let provider = IdentityTokenProvider::parse(value)?;
-                if identity_token_provider.replace(provider).is_some() {
-                    return Err(
-                        "`--identity-token-provider` may not be specified more than once"
-                            .to_string(),
-                    );
-                }
-            }
-            "--identity-token-audience" => {
-                let trimmed = value.trim();
-                if trimmed.is_empty() {
-                    return Err("`--identity-token-audience` may not be empty".to_string());
-                }
-                if identity_token_audience
-                    .replace(trimmed.to_string())
-                    .is_some()
-                {
-                    return Err(
-                        "`--identity-token-audience` may not be specified more than once"
-                            .to_string(),
-                    );
-                }
-            }
-            "--include-token" => include_token = parse_bool_flag(value, "--include-token")?,
-            "--summary" => summary_source = Some(JsonSource::from_arg(value)?),
-            "--chunk-plan" => {
-                chunk_plan_source = Some(JsonSource::from_arg(value)?);
-                chunk_plan_label = Some(value.to_string());
-            }
-            "--chunk-digest-sha3" => chunk_digest_hex_arg = Some(value.to_string()),
-            "--issued-at" => {
-                issued_at_unix = Some(parse_u64_arg(
-                    "--issued-at",
-                    value,
-                    "sorafs_cli manifest sign",
-                )?);
-            }
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli manifest sign`"
-                ));
-            }
-        }
-    }
-
-    if bundle_out.is_none() && signature_out.is_none() {
-        return Err(
-            "must provide at least one of `--bundle-out` or `--signature-out` for `sorafs_cli manifest sign`"
-                .to_string(),
-        );
-    }
-
-    let manifest_path = manifest_path.ok_or_else(|| {
-        "missing required `--manifest=PATH` for `sorafs_cli manifest sign`".to_string()
-    })?;
-
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
-
-    let chunk_digest_resolution = resolve_chunk_digest(
-        summary_source,
-        chunk_plan_source,
-        chunk_plan_label,
-        chunk_digest_hex_arg,
-        true,
-        "sorafs_cli manifest sign",
-    )?;
-    let chunk_digest_bytes = chunk_digest_resolution.digest.ok_or_else(|| {
-        "missing chunk digest for sorafs_cli manifest sign after digest resolution".to_string()
-    })?;
-    let chunk_digest_hex = chunk_digest_resolution
-        .hex
-        .unwrap_or_else(|| hex_encode(chunk_digest_bytes));
-    let plan_chunk_count = chunk_digest_resolution.plan_chunk_count;
-    let chunk_plan_label = chunk_digest_resolution.plan_label;
-
-    let (identity_token, token_source_label) = resolve_identity_token(
-        identity_token_inline,
-        identity_token_env,
-        identity_token_file,
-        identity_token_provider,
-        identity_token_audience,
-    )?;
-    let token_hash = blake3_hash(identity_token.as_bytes());
-    let token_hash_hex = hex_encode(token_hash.as_bytes());
-
-    let (jwt_header, jwt_claims) = decode_jwt_sections(&identity_token)?;
-
-    let seed = blake3_hash(identity_token.as_bytes());
-    let signing_key = SigningKey::from_bytes(seed.as_bytes());
-    let verifying_key = signing_key.verifying_key();
-    let signature = signing_key.sign(manifest_digest.as_bytes());
-    let signature_hex = hex_encode(signature.to_bytes());
-    let public_key_bytes = verifying_key.to_bytes();
-    let public_key_hex = hex_encode(public_key_bytes);
-
-    let public_key_multihash = PublicKey::from_bytes(Algorithm::Ed25519, &public_key_bytes)
-        .and_then(|key| key.try_to_prefixed_string())
-        .map_err(|err| format!("failed to format public key multihash: {err}"))?;
-
-    let issued_at = manifest_sign_issued_at(issued_at_unix, SystemTime::now())?;
-
-    let mut bundle = Map::new();
-    bundle.insert(
-        "schema_version".into(),
-        Value::from("sorafs-cli-manifest-sign/v2"),
-    );
-    bundle.insert("issued_at_unix".into(), Value::from(issued_at));
-
-    let mut manifest_info = Map::new();
-    manifest_info.insert(
-        "path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    manifest_info.insert(
-        "manifest_blake3_hex".into(),
-        Value::from(manifest_digest_hex.clone()),
-    );
-    manifest_info.insert(
-        "car_digest_hex".into(),
-        Value::from(hex_encode(manifest.car_digest)),
-    );
-    manifest_info.insert("car_size".into(), Value::from(manifest.car_size));
-    manifest_info.insert(
-        "chunk_digest_sha3_256_hex".into(),
-        Value::from(chunk_digest_hex.clone()),
-    );
-    if let Some(label) = &chunk_plan_label {
-        manifest_info.insert("chunk_plan_source".into(), Value::from(label.clone()));
-    }
-    if let Some(count) = plan_chunk_count {
-        manifest_info.insert("chunk_plan_chunk_count".into(), Value::from(count));
-    }
-    bundle.insert("manifest".into(), Value::Object(manifest_info));
-
-    let mut signature_info = Map::new();
-    signature_info.insert("algorithm".into(), Value::from("ed25519"));
-    signature_info.insert("signature_hex".into(), Value::from(signature_hex.clone()));
-    signature_info.insert("public_key_hex".into(), Value::from(public_key_hex.clone()));
-    signature_info.insert(
-        "public_key_multihash".into(),
-        Value::from(public_key_multihash.clone()),
-    );
-    bundle.insert("signature".into(), Value::Object(signature_info));
-
-    let mut identity_info = Map::new();
-    identity_info.insert(
-        "token_source".into(),
-        Value::from(token_source_label.clone()),
-    );
-    identity_info.insert(
-        "token_hash_blake3_hex".into(),
-        Value::from(token_hash_hex.clone()),
-    );
-    identity_info.insert("token_included".into(), Value::from(include_token));
-    if include_token {
-        identity_info.insert("token".into(), Value::from(identity_token.clone()));
-    }
-    identity_info.insert("jwt_header".into(), jwt_header);
-    identity_info.insert("jwt_claims".into(), jwt_claims);
-    bundle.insert("identity".into(), Value::Object(identity_info));
-
-    let bundle_value = Value::Object(bundle);
-    let bundle_rendered = to_string_pretty(&bundle_value)
-        .map_err(|err| format!("failed to render signature bundle: {err}"))?;
-
-    if let Some(path) = bundle_out.as_ref() {
-        write_text(path, bundle_rendered.as_bytes())?;
-    }
-
-    if let Some(path) = signature_out.as_ref() {
-        let mut signature_text = signature_hex.clone();
-        signature_text.push('\n');
-        write_text(path, signature_text.as_bytes())?;
-    }
-
-    let mut summary = Map::new();
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "manifest_blake3_hex".into(),
-        Value::from(manifest_digest_hex),
-    );
-    summary.insert("signature_hex".into(), Value::from(signature_hex));
-    summary.insert("public_key_hex".into(), Value::from(public_key_hex));
-    summary.insert(
-        "public_key_multihash".into(),
-        Value::from(public_key_multihash),
-    );
-    summary.insert("issued_at_unix".into(), Value::from(issued_at));
-    if let Some(path) = bundle_out {
-        summary.insert(
-            "bundle_path".into(),
-            Value::from(path.display().to_string()),
-        );
-    }
-    if let Some(path) = signature_out {
-        summary.insert(
-            "signature_path".into(),
-            Value::from(path.display().to_string()),
-        );
-    }
-    summary.insert(
-        "identity_token_source".into(),
-        Value::from(token_source_label),
-    );
-    summary.insert(
-        "identity_token_hash_blake3_hex".into(),
-        Value::from(token_hash_hex),
-    );
-    summary.insert("token_included".into(), Value::from(include_token));
-    summary.insert(
-        "chunk_digest_sha3_256_hex".into(),
-        Value::from(chunk_digest_hex),
-    );
-    if let Some(count) = plan_chunk_count {
-        summary.insert("chunk_plan_chunk_count".into(), Value::from(count));
-    }
-    if let Some(label) = chunk_plan_label {
-        summary.insert("chunk_plan_source".into(), Value::from(label));
-    }
-
-    let summary_rendered = to_string_pretty(&Value::Object(summary))
-        .map_err(|err| format!("failed to render summary: {err}"))?;
-    println!("{summary_rendered}");
-
-    Ok(())
-}
-
-fn manifest_sign_issued_at(issued_at_unix: Option<u64>, now: SystemTime) -> Result<u64, String> {
-    match issued_at_unix {
-        Some(value) => Ok(value),
-        None => now
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_secs())
-            .map_err(|_| {
-                "system clock is before UNIX_EPOCH; refusing to sign SoraFS manifest".to_string()
-            }),
-    }
-}
-
-fn checked_manifest_ed25519_signature_from_bytes(
-    signature: &[u8; ed25519_dalek::SIGNATURE_LENGTH],
-) -> Result<DalekSig, String> {
-    if signature.iter().all(|byte| *byte == 0) {
-        return Err("signature material must not be all zero".to_string());
-    }
-
-    let r_bytes: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = signature
-        .get(..ed25519_dalek::PUBLIC_KEY_LENGTH)
-        .ok_or_else(|| "signature R bytes missing".to_string())?
-        .try_into()
-        .map_err(|_| "signature R bytes have invalid length".to_string())?;
-    if !ed25519_compressed_y_is_canonical(&r_bytes) {
-        return Err("signature R is not a canonical Ed25519 point".to_string());
-    }
-    let r_point = VerifyingKey::from_bytes(&r_bytes)
-        .map_err(|err| format!("signature R is not a canonical Ed25519 point: {err}"))?;
-    if r_point.is_weak() {
-        return Err("signature R is small-order (weak); rejected".to_string());
-    }
-
-    iroha_crypto::ed25519_parse_signature(signature)
-        .map_err(|err| format!("invalid signature material: {err}"))?;
-    Ok(DalekSig::from_bytes(signature))
-}
-
-fn checked_manifest_ed25519_verifying_key_from_bytes(
-    public_key: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH],
-) -> Result<VerifyingKey, String> {
-    if public_key.iter().all(|byte| *byte == 0) {
-        return Err("public key material must not be all zero".to_string());
-    }
-    if !ed25519_compressed_y_is_canonical(public_key) {
-        return Err("public key is not a canonical Ed25519 point".to_string());
-    }
-    let verifying_key =
-        VerifyingKey::from_bytes(public_key).map_err(|err| format!("invalid public key: {err}"))?;
-    if verifying_key.is_weak() {
-        return Err("public key is small-order (weak); rejected".to_string());
-    }
-    Ok(verifying_key)
-}
-
-fn ed25519_compressed_y_is_canonical(bytes: &[u8; ed25519_dalek::PUBLIC_KEY_LENGTH]) -> bool {
-    const ED25519_FIELD_MODULUS_LE: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
-        0xed, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
-
-    let mut y = *bytes;
-    y[ed25519_dalek::PUBLIC_KEY_LENGTH - 1] &= 0x7f;
-    for idx in (0..ed25519_dalek::PUBLIC_KEY_LENGTH).rev() {
-        match y[idx].cmp(&ED25519_FIELD_MODULUS_LE[idx]) {
-            std::cmp::Ordering::Less => return true,
-            std::cmp::Ordering::Greater => return false,
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-    false
-}
-
-fn manifest_verify_signature(raw_args: Vec<String>) -> Result<(), String> {
-    let mut manifest_path: Option<PathBuf> = None;
-    let mut bundle_path: Option<PathBuf> = None;
-    let mut signature_path: Option<PathBuf> = None;
-    let mut public_key_hex_arg: Option<String> = None;
-    let mut summary_source: Option<JsonSource> = None;
-    let mut chunk_plan_source: Option<JsonSource> = None;
-    let mut chunk_plan_label: Option<String> = None;
-    let mut chunk_digest_hex_arg: Option<String> = None;
-    let mut expect_token_hash: Option<String> = None;
-
-    for arg in raw_args {
-        let (key, value) = arg
-            .split_once('=')
-            .ok_or_else(|| format!("expected key=value argument, got `{arg}`"))?;
-        match key {
-            "--manifest" => manifest_path = Some(PathBuf::from(value)),
-            "--bundle" => bundle_path = Some(PathBuf::from(value)),
-            "--signature" => signature_path = Some(PathBuf::from(value)),
-            "--public-key-hex" => public_key_hex_arg = Some(value.to_string()),
-            "--summary" => summary_source = Some(JsonSource::from_arg(value)?),
-            "--chunk-plan" => {
-                chunk_plan_source = Some(JsonSource::from_arg(value)?);
-                chunk_plan_label = Some(value.to_string());
-            }
-            "--chunk-digest-sha3" => chunk_digest_hex_arg = Some(value.to_string()),
-            "--expect-token-hash" => expect_token_hash = Some(value.to_string()),
-            _ => {
-                return Err(format!(
-                    "unrecognised option `{key}` for `sorafs_cli manifest verify-signature`"
-                ));
-            }
-        }
-    }
-
-    let manifest_path = manifest_path.ok_or_else(|| {
-        "missing required `--manifest=PATH` for `sorafs_cli manifest verify-signature`".to_string()
-    })?;
-
-    if bundle_path.is_none() && signature_path.is_none() {
-        return Err(
-            "provide either `--bundle` or `--signature`/`--public-key-hex` inputs for `sorafs_cli manifest verify-signature`"
-                .to_string(),
-        );
-    }
-
-    if signature_path.is_some() && public_key_hex_arg.is_none() && bundle_path.is_none() {
-        return Err(
-            "`--signature` requires `--public-key-hex` unless a bundle is also supplied"
-                .to_string(),
-        );
-    }
-
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
-    let manifest_digest = manifest
-        .digest()
-        .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let manifest_digest_hex = hex_encode(manifest_digest.as_bytes());
-
-    let chunk_digest_resolution = resolve_chunk_digest(
-        summary_source,
-        chunk_plan_source,
-        chunk_plan_label,
-        chunk_digest_hex_arg,
-        false,
-        "sorafs_cli manifest verify-signature",
-    )?;
-
-    let mut final_chunk_digest_hex = chunk_digest_resolution.hex.clone();
-    let mut final_chunk_plan_count = chunk_digest_resolution.plan_chunk_count;
-    let mut final_chunk_plan_label = chunk_digest_resolution.plan_label.clone();
-
-    let mut bundle_manifest_digest_hex: Option<String> = None;
-    let mut bundle_chunk_digest_hex: Option<String> = None;
-    let mut bundle_chunk_plan_count: Option<u64> = None;
-    let mut bundle_chunk_plan_label: Option<String> = None;
-    let mut bundle_signature_hex: Option<String> = None;
-    let mut bundle_public_key_hex: Option<String> = None;
-    let mut bundle_token_hash: Option<String> = None;
-    let mut bundle_token_source: Option<String> = None;
-
-    if let Some(bundle_path) = &bundle_path {
-        let bytes = fs::read(bundle_path)
-            .map_err(|err| format!("failed to read bundle `{}`: {err}", bundle_path.display()))?;
-        let value: Value = from_slice(&bytes).map_err(|err| {
-            format!(
-                "failed to parse bundle `{}` as JSON: {err}",
-                bundle_path.display()
-            )
-        })?;
-        let bundle_obj = value
-            .as_object()
-            .ok_or_else(|| format!("bundle `{}` must be a JSON object", bundle_path.display()))?;
-        let manifest_obj = bundle_obj
-            .get("manifest")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                format!(
-                    "bundle `{}` missing `manifest` object",
-                    bundle_path.display()
-                )
-            })?;
-        bundle_manifest_digest_hex = manifest_obj
-            .get("manifest_blake3_hex")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
-        bundle_chunk_digest_hex = manifest_obj
-            .get("chunk_digest_sha3_256_hex")
-            .or_else(|| manifest_obj.get("chunk_digest_sha3_hex"))
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
-        bundle_chunk_plan_count = manifest_obj
-            .get("chunk_plan_chunk_count")
-            .and_then(Value::as_u64);
-        bundle_chunk_plan_label = manifest_obj
-            .get("chunk_plan_source")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
-
-        let signature_obj = bundle_obj
-            .get("signature")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                format!(
-                    "bundle `{}` missing `signature` object",
-                    bundle_path.display()
-                )
-            })?;
-        bundle_signature_hex = signature_obj
-            .get("signature_hex")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
-        bundle_public_key_hex = signature_obj
-            .get("public_key_hex")
-            .and_then(Value::as_str)
-            .map(|s| s.to_string());
-
-        if let Some(identity_obj) = bundle_obj.get("identity").and_then(Value::as_object) {
-            bundle_token_hash = identity_obj
-                .get("token_hash_blake3_hex")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string());
-            bundle_token_source = identity_obj
-                .get("token_source")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string());
-        }
-    }
-
-    if let Some(bundle_digest_hex) = &bundle_manifest_digest_hex {
-        if !bundle_digest_hex.eq_ignore_ascii_case(&manifest_digest_hex) {
-            return Err("bundle manifest digest does not match manifest payload".to_string());
-        }
-    } else if bundle_path.is_some() {
-        return Err("bundle missing manifest digest field".to_string());
-    }
-
-    if let Some(bundle_hex) = &bundle_chunk_digest_hex {
-        if let Some(local_hex) = &chunk_digest_resolution.hex
-            && !local_hex.eq_ignore_ascii_case(bundle_hex)
-        {
-            return Err("chunk digest mismatch between bundle and local inputs".to_string());
-        }
-        final_chunk_digest_hex.get_or_insert_with(|| bundle_hex.clone());
-    }
-
-    if let Some(bundle_count) = bundle_chunk_plan_count {
-        if let Some(local_count) = final_chunk_plan_count
-            && local_count != bundle_count
-        {
-            return Err("chunk plan count mismatch between bundle and local inputs".to_string());
-        } else {
-            final_chunk_plan_count = Some(bundle_count);
-        }
-    }
-
-    if let Some(bundle_label) = bundle_chunk_plan_label {
-        if let Some(local_label) = &final_chunk_plan_label {
-            if local_label != &bundle_label {
-                return Err("chunk plan label mismatch between bundle and local inputs".to_string());
-            }
-        } else {
-            final_chunk_plan_label = Some(bundle_label);
-        }
-    }
-
-    let mut signature_hex = bundle_signature_hex.clone();
-    let mut signature_source = bundle_path.as_ref().and_then(|path| {
-        signature_hex
-            .as_ref()
-            .map(|_| format!("bundle:{}", path.display()))
-    });
-
-    if let Some(path) = &signature_path {
-        let contents = fs::read_to_string(path)
-            .map_err(|err| format!("failed to read signature `{}`: {err}", path.display()))?;
-        let trimmed = contents.trim();
-        if trimmed.is_empty() {
-            return Err(format!("signature file `{}` is empty", path.display()));
-        }
-        if let Some(existing) = &signature_hex
-            && !existing.eq_ignore_ascii_case(trimmed)
-        {
-            return Err("signature from file does not match bundle signature".to_string());
-        }
-        signature_hex = Some(trimmed.to_string());
-        signature_source = Some(format!("file:{}", path.display()));
-    }
-
-    let signature_hex = signature_hex.ok_or_else(|| {
-        "signature material not provided; pass `--signature` or a bundle generated by `manifest sign`"
-            .to_string()
-    })?;
-
-    let mut public_key_source = None;
-    if let (Some(arg_hex), Some(bundle_hex)) = (&public_key_hex_arg, &bundle_public_key_hex)
-        && !arg_hex.eq_ignore_ascii_case(bundle_hex)
-    {
-        return Err("public key from CLI does not match bundle".to_string());
-    }
-
-    let public_key_hex = public_key_hex_arg
-        .clone()
-        .or_else(|| bundle_public_key_hex.clone())
-        .ok_or_else(|| {
-            "public key not provided; supply `--public-key-hex` or include it via `--bundle`"
-                .to_string()
-        })?;
-
-    if public_key_hex_arg.is_some() {
-        public_key_source = Some("arg:--public-key-hex".to_string());
-    } else if let Some(bundle) = bundle_path.as_ref() {
-        public_key_source = Some(format!("bundle:{}", bundle.display()));
-    }
-
-    let signature_bytes_vec = parse_hex_vec(&signature_hex)?;
-    if signature_bytes_vec.len() != 64 {
-        return Err(format!(
-            "signature must be 64 bytes (128 hex chars), found {} bytes",
-            signature_bytes_vec.len()
-        ));
-    }
-    let signature_bytes: [u8; 64] = signature_bytes_vec
-        .try_into()
-        .map_err(|_| "failed to convert signature bytes".to_string())?;
-    let signature = checked_manifest_ed25519_signature_from_bytes(&signature_bytes)?;
-
-    let public_key_bytes_vec = parse_hex_vec(&public_key_hex)?;
-    if public_key_bytes_vec.len() != 32 {
-        return Err(format!(
-            "public key must be 32 bytes (64 hex chars), found {} bytes",
-            public_key_bytes_vec.len()
-        ));
-    }
-    let public_key_bytes: [u8; 32] = public_key_bytes_vec
-        .try_into()
-        .map_err(|_| "failed to convert public key bytes".to_string())?;
-    let verifying_key = checked_manifest_ed25519_verifying_key_from_bytes(&public_key_bytes)?;
-
-    verifying_key
-        .verify_strict(manifest_digest.as_bytes(), &signature)
-        .map_err(|err| format!("signature verification failed: {err}"))?;
-
-    if let Some(expected_hash) = expect_token_hash {
-        let bundle_hash = bundle_token_hash
-            .as_ref()
-            .ok_or_else(|| "bundle does not expose `token_hash_blake3_hex`".to_string())?;
-        if !bundle_hash.eq_ignore_ascii_case(&expected_hash) {
-            return Err("bundle token hash does not match expected value".to_string());
-        }
-    }
-
-    let mut summary = Map::new();
-    summary.insert(
-        "manifest_path".into(),
-        Value::from(manifest_path.display().to_string()),
-    );
-    summary.insert(
-        "manifest_blake3_hex".into(),
-        Value::from(manifest_digest_hex.clone()),
-    );
-    summary.insert("verification_status".into(), Value::from("ok"));
-    summary.insert("public_key_hex".into(), Value::from(public_key_hex.clone()));
-    if let Some(source) = public_key_source {
-        summary.insert("public_key_source".into(), Value::from(source));
-    }
-    summary.insert("signature_hex".into(), Value::from(signature_hex.clone()));
-    if let Some(source) = signature_source {
-        summary.insert("signature_source".into(), Value::from(source));
-    }
-    if let Some(bundle_path) = bundle_path {
-        summary.insert(
-            "bundle_path".into(),
-            Value::from(bundle_path.display().to_string()),
-        );
-    }
-    if let Some(signature_path) = signature_path {
-        summary.insert(
-            "signature_path".into(),
-            Value::from(signature_path.display().to_string()),
-        );
-    }
-    if let Some(chunk_hex) = final_chunk_digest_hex.or(bundle_chunk_digest_hex) {
-        summary.insert("chunk_digest_sha3_256_hex".into(), Value::from(chunk_hex));
-    }
-    if let Some(count) = final_chunk_plan_count {
-        summary.insert("chunk_plan_chunk_count".into(), Value::from(count));
-    }
-    if let Some(label) = final_chunk_plan_label {
-        summary.insert("chunk_plan_source".into(), Value::from(label));
-    }
-    if let Some(token_hash) = bundle_token_hash {
-        summary.insert(
-            "bundle_token_hash_blake3_hex".into(),
-            Value::from(token_hash),
-        );
-    }
-    if let Some(token_source) = bundle_token_source {
-        summary.insert("bundle_token_source".into(), Value::from(token_source));
-    }
-
-    let rendered = to_string_pretty(&Value::Object(summary))
-        .map_err(|err| format!("failed to render verification summary: {err}"))?;
-    println!("{rendered}");
-
-    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -21781,106 +21006,6 @@ struct AliasInputs {
     namespace: String,
     name: String,
     proof: Vec<u8>,
-}
-
-struct ChunkDigestResult {
-    digest: Option<[u8; 32]>,
-    hex: Option<String>,
-    plan_chunk_count: Option<u64>,
-    plan_label: Option<String>,
-}
-
-fn resolve_chunk_digest(
-    summary_source: Option<JsonSource>,
-    chunk_plan_source: Option<JsonSource>,
-    chunk_plan_label: Option<String>,
-    chunk_digest_hex_arg: Option<String>,
-    require_digest: bool,
-    context: &str,
-) -> Result<ChunkDigestResult, String> {
-    let mut chunk_digest: Option<[u8; 32]> = None;
-    let mut chunk_digest_hex: Option<String> = None;
-    let mut plan_chunk_count: Option<u64> = None;
-    let mut plan_label = chunk_plan_label;
-
-    if let Some(summary_src) = summary_source {
-        let value = summary_src.read()?;
-        if let Some(hex) = value
-            .get("chunk_digest_sha3_256_hex")
-            .or_else(|| value.get("chunk_digest_sha3_hex"))
-            .and_then(Value::as_str)
-        {
-            let parsed = parse_digest_hex(hex)
-                .map_err(|err| format!("invalid chunk digest in summary JSON: {err}"))?;
-            chunk_digest = Some(parsed);
-            chunk_digest_hex = Some(hex.to_string());
-        }
-        if let Some(count) = value.get("chunk_plan_chunk_count").and_then(Value::as_u64) {
-            plan_chunk_count = Some(count);
-        }
-        if plan_label.is_none()
-            && let Some(label) = value
-                .get("chunk_plan")
-                .or_else(|| value.get("chunk_plan_source"))
-                .and_then(Value::as_str)
-        {
-            plan_label = Some(label.to_string());
-        }
-    }
-
-    if let Some(source) = chunk_plan_source {
-        let plan_json = source.read()?;
-        let specs = chunk_fetch_specs_from_json(&plan_json)
-            .map_err(|err| format!("failed to parse chunk plan JSON: {err}"))?;
-        let digest = chunk_digest_sha3_from_specs(&specs);
-        if let Some(existing) = chunk_digest
-            && existing != digest
-        {
-            return Err("chunk plan digest does not match digest derived from summary".to_string());
-        }
-        chunk_digest = Some(digest);
-        chunk_digest_hex = Some(hex_encode(digest));
-        plan_chunk_count = Some(specs.len() as u64);
-    }
-
-    if let Some(hex) = chunk_digest_hex_arg {
-        let parsed = parse_digest_hex(&hex)
-            .map_err(|err| format!("invalid `--chunk-digest-sha3` value: {err}"))?;
-        if let Some(existing) = chunk_digest
-            && existing != parsed
-        {
-            return Err(
-                "`--chunk-digest-sha3` does not match digest derived from summary or chunk plan"
-                    .to_string(),
-            );
-        }
-        chunk_digest = Some(parsed);
-        chunk_digest_hex = Some(hex);
-    }
-
-    chunk_digest = match chunk_digest {
-        Some(digest) => {
-            if chunk_digest_hex.is_none() {
-                chunk_digest_hex = Some(hex_encode(digest));
-            }
-            Some(digest)
-        }
-        None => {
-            if require_digest {
-                return Err(format!(
-                    "missing chunk digest for {context}; supply `--chunk-plan`, `--chunk-digest-sha3`, or a summary containing the digest"
-                ));
-            }
-            None
-        }
-    };
-
-    Ok(ChunkDigestResult {
-        digest: chunk_digest,
-        hex: chunk_digest_hex,
-        plan_chunk_count,
-        plan_label,
-    })
 }
 
 fn parse_private_key_inline(value: &str) -> Result<PrivateKey, String> {
@@ -22402,49 +21527,10 @@ mod tests {
     }
 
     #[test]
-    fn manifest_sign_rejects_noncanonical_issued_at_tokens() {
-        for value in ["", " 1", "1 ", "+1", "01", "1_000", "-1"] {
-            let err = manifest_sign(vec![format!("--issued-at={value}")])
-                .expect_err("noncanonical issued-at token must fail");
-            assert!(
-                err.contains("canonical unsigned decimal integer"),
-                "unexpected issued-at error for {value:?}: {err}"
-            );
-        }
-    }
-
-    #[test]
-    fn manifest_sign_issued_at_rejects_pre_epoch_clock() {
-        let err = manifest_sign_issued_at(
-            None,
-            UNIX_EPOCH
-                .checked_sub(std::time::Duration::from_secs(1))
-                .expect("construct pre-epoch system time"),
-        )
-        .expect_err("pre-epoch clock must fail");
-        assert!(
-            err.contains("before UNIX_EPOCH"),
-            "unexpected clock error: {err}"
-        );
-
-        assert_eq!(
-            manifest_sign_issued_at(Some(1_700_000_000), UNIX_EPOCH)
-                .expect("explicit timestamp bypasses clock"),
-            1_700_000_000
-        );
-    }
-
-    #[test]
-    fn resolve_chunk_digest_reports_required_digest_without_panic() {
-        let err =
-            match resolve_chunk_digest(None, None, None, None, true, "sorafs_cli manifest sign") {
-                Ok(_) => panic!("missing required digest must fail"),
-                Err(err) => err,
-            };
-        assert!(
-            err.contains("missing chunk digest"),
-            "unexpected digest error: {err}"
-        );
+    fn usage_omits_retired_manifest_authentication_commands() {
+        let help = usage();
+        assert!(!help.contains("sorafs_cli manifest sign --"));
+        assert!(!help.contains("sorafs_cli manifest verify-signature --"));
     }
 
     #[test]
@@ -22911,62 +21997,6 @@ fn parse_bool_flag(value: &str, flag: &str) -> Result<bool, String> {
         "false" | "0" | "no" | "off" => Ok(false),
         _ => Err(format!("{flag} expects a boolean value (true|false)")),
     }
-}
-
-fn decode_jwt_sections(token: &str) -> Result<(Value, Value), String> {
-    let mut segments = token.split('.');
-    let header_segment = segments
-        .next()
-        .ok_or_else(|| "identity token missing header segment".to_string())?;
-    let claims_segment = segments
-        .next()
-        .ok_or_else(|| "identity token missing payload segment".to_string())?;
-    let signature_segment = segments
-        .next()
-        .ok_or_else(|| "identity token missing signature segment".to_string())?;
-    if segments.next().is_some() {
-        return Err("identity token contains unexpected extra segments".to_string());
-    }
-    if signature_segment.trim().is_empty() {
-        return Err("identity token signature segment is empty".to_string());
-    }
-
-    let header_bytes = decode_base64url_segment(header_segment)
-        .map_err(|err| format!("failed to decode identity token header: {err}"))?;
-    let claims_bytes = decode_base64url_segment(claims_segment)
-        .map_err(|err| format!("failed to decode identity token payload: {err}"))?;
-
-    let header_value = if header_bytes.is_empty() {
-        Value::Object(Map::new())
-    } else {
-        from_slice(&header_bytes)
-            .map_err(|err| format!("failed to parse identity token header JSON: {err}"))?
-    };
-    let claims_value = if claims_bytes.is_empty() {
-        Value::Object(Map::new())
-    } else {
-        from_slice(&claims_bytes)
-            .map_err(|err| format!("failed to parse identity token payload JSON: {err}"))?
-    };
-
-    Ok((header_value, claims_value))
-}
-
-fn decode_base64url_segment(segment: &str) -> Result<Vec<u8>, String> {
-    let trimmed = segment.trim();
-    if trimmed.is_empty() {
-        return Ok(Vec::new());
-    }
-    BASE64_URL_SAFE_NO_PAD
-        .decode(trimmed.as_bytes())
-        .or_else(|_| {
-            let mut padded = trimmed.to_string();
-            while !padded.len().is_multiple_of(4) {
-                padded.push('=');
-            }
-            BASE64_URL_SAFE.decode(padded.as_bytes())
-        })
-        .map_err(|err| format!("{err}"))
 }
 
 fn build_plan_from_specs(
@@ -23690,15 +22720,24 @@ fn body_snippet(body: &[u8]) -> String {
 }
 
 fn parse_digest_hex(input: &str) -> Result<[u8; 32], String> {
+    parse_fixed_hex_bytes::<32>(input, "digest")
+}
+
+fn parse_fixed_hex_bytes<const N: usize>(input: &str, field: &str) -> Result<[u8; N], String> {
     let bytes = parse_hex_vec(input)?;
-    if bytes.len() != 32 {
+    if bytes.len() != N {
         return Err(format!(
-            "expected 32-byte digest, found {} bytes",
+            "{field} must encode exactly {N} bytes, found {} bytes",
             bytes.len()
         ));
     }
-    let mut out = [0u8; 32];
+    let mut out = [0u8; N];
     out.copy_from_slice(&bytes);
+    if input != hex_encode(out) {
+        return Err(format!(
+            "{field} must use exact lowercase hexadecimal without surrounding whitespace"
+        ));
+    }
     Ok(out)
 }
 

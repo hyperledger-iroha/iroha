@@ -52,7 +52,7 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
 - تقديم الأفكار والطرق الاختيارية (على سبيل المثال، معرفات البناء).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

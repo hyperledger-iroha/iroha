@@ -197,8 +197,8 @@ fn validate_builtin_initial_query_permission(
 ) -> Result<(), ValidationFail> {
     // Mirror the query visitors supplied by the default executor while a chain
     // still runs the native Initial executor. Standard Iroha queries are public;
-    // only the authoritative SoraFS orderbook and per-juror eligibility record
-    // carry additional confidentiality rules in the default policy.
+    // only authoritative SoraFS finance state, complete moderation snapshots,
+    // and per-juror eligibility records carry additional confidentiality rules.
     if latest_block.is_none_or(BlockHeader::is_genesis) {
         return Ok(());
     }
@@ -215,7 +215,10 @@ fn validate_builtin_initial_query_permission(
         | SingularQueryBox::FindSorafsOrderbookChannelById(_)
         | SingularQueryBox::FindSorafsOrderbookStatus(_)
         | SingularQueryBox::FindSorafsOrderbookOrders(_)
-        | SingularQueryBox::FindSorafsOrderbookReceipts(_) => {
+        | SingularQueryBox::FindSorafsOrderbookReceipts(_)
+        | SingularQueryBox::FindSorafsOrderbookTrades(_)
+        | SingularQueryBox::FindSorafsOrderbookChannels(_)
+        | SingularQueryBox::FindSorafsOrderbookEvents(_) => {
             let can_set_pricing: Permission =
                 executor_permission::sorafs::CanSetSorafsPricing.into();
             let can_complete_orders: Permission =
@@ -254,6 +257,17 @@ fn validate_builtin_initial_query_permission(
             } else {
                 Err(ValidationFail::NotPermitted(
                     "Can't read another juror's moderation PoP eligibility record".to_owned(),
+                ))
+            }
+        }
+        SingularQueryBox::FindSorafsModerationSnapshot(_) => {
+            let can_manage_moderation: Permission =
+                executor_permission::sorafs::CanManageSorafsModeration.into();
+            if authority_has_permission(world, authority, &can_manage_moderation)? {
+                Ok(())
+            } else {
+                Err(ValidationFail::NotPermitted(
+                    "Can't read the complete authoritative SoraFS moderation snapshot".to_owned(),
                 ))
             }
         }
@@ -2266,8 +2280,8 @@ impl ContractEntrypointAuthorizationSnapshot {
             })?;
         if live_code_hash != self.code_hash {
             return Err(ValidationFail::NotPermitted(format!(
-                "contract instance `{}` changed code binding while its call was prepared",
-                self.contract_address
+                "contract instance `{}` changed code binding while its call was prepared: captured `{}`, live `{}`",
+                self.contract_address, self.code_hash, live_code_hash
             )));
         }
 
@@ -10644,6 +10658,8 @@ const INITIAL_EXECUTOR_PERMISSION_NAMES: &[&str] = &[
     "CanOperateSorafsPopIssuer",
     "CanUpsertSorafsProviderCredit",
     "CanOperateSorafsRepair",
+    "CanManageSorafsProofOutcomePolicy",
+    "CanRecordSorafsProofOutcome",
     "CanRegisterSorafsProviderOwner",
     "CanUnregisterSorafsProviderOwner",
     "CanSetMusubiShortAlias",
@@ -18162,7 +18178,8 @@ seiyaku GuardedValueRebound {
             .expect_err("a signed direct call must not cross a live code rebind");
         assert!(
             matches!(rebound, ValidationFail::NotPermitted(ref message)
-                if message.contains(&code_hash.to_string())
+                if message.contains(&contract_address.to_string())
+                    && message.contains(&code_hash.to_string())
                     && message.contains(&rebound_code_hash.to_string())),
             "unexpected live-rebind error: {rebound}"
         );
@@ -19780,7 +19797,8 @@ seiyaku IdentityRequired {
     #[test]
     fn initial_executor_mirrors_default_private_query_permissions() {
         use iroha_data_model::query::sorafs::prelude::{
-            FindSorafsModerationJurorEligibility, FindSorafsOrderbookPolicy,
+            FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
+            FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -19812,6 +19830,19 @@ seiyaku IdentityRequired {
             )
             .into(),
         );
+        let moderation_snapshot =
+            QueryRequest::Singular(FindSorafsModerationSnapshot::new(8, 16).into());
+        let moderation_events = QueryRequest::Singular(
+            FindSorafsModerationEvents::new(
+                iroha_data_model::sorafs::moderation_ledger::ModerationFinalizedCursorV1 {
+                    height: 1,
+                    block_hash: [0x42; 32],
+                },
+                None,
+                16,
+            )
+            .into(),
+        );
 
         let orderbook_error = executor
             .validate_query_with_world_parts(
@@ -19839,6 +19870,23 @@ seiyaku IdentityRequired {
             )
             .expect_err("another juror's eligibility must remain private");
         assert!(matches!(eligibility_error, ValidationFail::NotPermitted(_)));
+        let snapshot_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &moderation_snapshot,
+            )
+            .expect_err("complete moderation snapshots must remain private");
+        assert!(matches!(snapshot_error, ValidationFail::NotPermitted(_)));
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &moderation_events,
+            )
+            .expect("payload-free committed moderation events must remain public");
 
         state_transaction.world.account_permissions.insert(
             ALICE_ID.clone(),
@@ -19858,11 +19906,19 @@ seiyaku IdentityRequired {
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,
-                Some(latest_block),
+                Some(latest_block.clone()),
                 &ALICE_ID,
                 &foreign_eligibility,
             )
             .expect("moderation managers must be able to read juror eligibility");
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block),
+                &ALICE_ID,
+                &moderation_snapshot,
+            )
+            .expect("moderation managers must be able to read complete snapshots");
 
         let public_query = QueryRequest::Singular(SingularQueryBox::FindParameters(FindParameters));
         executor

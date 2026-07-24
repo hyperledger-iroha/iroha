@@ -64,7 +64,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-အော်ပရေတာများသည် `sorafs_manifest_stub capacity {declaration,dispute}` ဖြင့် စတင်ခြင်း/အငြင်းပွားမှုတောင်းဆိုမှု payload များကို ပြန်လည်ထုတ်ပေးပြီး ရရှိလာသော JSON/Norito bytes ကို အုပ်ချုပ်မှုလက်မှတ်နှင့်အတူ သိမ်းဆည်းထားသင့်သည်။
+အော်ပရေတာများသည် `sorafs_manifest_builder capacity {declaration,dispute}` ဖြင့် စတင်ခြင်း/အငြင်းပွားမှုတောင်းဆိုမှု payload များကို ပြန်လည်ထုတ်ပေးပြီး ရရှိလာသော JSON/Norito bytes ကို အုပ်ချုပ်မှုလက်မှတ်နှင့်အတူ သိမ်းဆည်းထားသင့်သည်။
 
 ## နိမိတ်လက္ခဏာများ
 

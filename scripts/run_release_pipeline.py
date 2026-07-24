@@ -12,7 +12,11 @@ Example:
         --version <release-version> \\
         --previous-tag <previous-release-tag> \\
         --output-dir artifacts/releases/<release-version> \\
-        --signing-key ~/.keys/iroha_signing.pem \\
+        --external-signer /opt/iroha/bin/pkcs11-ed25519-sign \\
+        --signing-public-key /run/iroha-release/ed25519-public.raw \\
+        --trusted-signing-fingerprint <reviewed-lowercase-sha256> \\
+        --release-manifest-verifier /opt/iroha/bin/sorafs-validate \\
+        --trusted-release-manifest-verifier-sha256 <reviewed-lowercase-sha256> \\
         --publish-target iroha2=sorafs://releases/iroha2/v<release-version> \\
         --publish-target iroha3=sorafs://releases/iroha3/v<release-version>
 """
@@ -23,6 +27,7 @@ import datetime as dt
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -31,7 +36,18 @@ from typing import Dict, Iterable, List, Tuple
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 
-from publish_plan import build_publish_plan, parse_target_map, validate_publish_plan, write_plan_files
+from publish_plan import (
+    PublishPlanError,
+    build_publish_plan,
+    parse_target_map,
+    validate_publish_plan,
+    write_plan_files,
+)
+from release_manifest_signing import (
+    ReleaseManifestSignatureError,
+    sign_release_manifest,
+)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILES = ("iroha2=single", "iroha3=nexus")
 
@@ -71,6 +87,40 @@ def parse_profiles(specs: Iterable[str]) -> List[Tuple[str, str]]:
             raise PipelineError(f"Invalid profile spec '{spec}'.")
         pairs.append((name, config))
     return pairs
+
+
+def release_signing_cli_args(
+    external_signer: str | None,
+    signing_public_key: str | None,
+    trusted_signing_fingerprint: str | None,
+) -> List[str]:
+    """Return the complete private-key-free Ed25519 signer argument set."""
+
+    values = (external_signer, signing_public_key, trusted_signing_fingerprint)
+    supplied = sum(value is not None for value in values)
+    if supplied not in (0, len(values)):
+        raise PipelineError(
+            "--external-signer, --signing-public-key, and "
+            "--trusted-signing-fingerprint must be supplied together"
+        )
+    if supplied == 0:
+        return []
+    assert external_signer is not None
+    assert signing_public_key is not None
+    assert trusted_signing_fingerprint is not None
+    if re.fullmatch(r"[0-9a-f]{64}", trusted_signing_fingerprint) is None:
+        raise PipelineError(
+            "--trusted-signing-fingerprint must be exactly 64 lowercase "
+            "hexadecimal characters"
+        )
+    return [
+        "--external-signer",
+        external_signer,
+        "--signing-public-key",
+        signing_public_key,
+        "--trusted-signing-fingerprint",
+        trusted_signing_fingerprint,
+    ]
 
 
 def detect_os_tag() -> str:
@@ -248,7 +298,7 @@ def update_release_manifest_evidence(
         manifest["evidence"] = evidence
 
     with manifest_path.open("w", encoding="utf-8") as fh:
-        json.dump(manifest, fh, indent=2)
+        json.dump(manifest, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
 
@@ -270,7 +320,29 @@ def main() -> int:
         dest="profiles",
         help="Profile spec in the form name=config (default: iroha2=single, iroha3=nexus). Can be repeated.",
     )
-    parser.add_argument("--signing-key", help="PEM-encoded private key used for bundle/image signing.")
+    parser.add_argument(
+        "--external-signer",
+        help=(
+            "Reviewed PKCS#11/HSM Ed25519 wrapper invoked with the artifact path "
+            "and a new raw-signature output path."
+        ),
+    )
+    parser.add_argument(
+        "--signing-public-key",
+        help="Raw 32-byte Ed25519 public key used to verify external signatures.",
+    )
+    parser.add_argument(
+        "--trusted-signing-fingerprint",
+        help="Reviewed lowercase SHA256 of the exact raw Ed25519 public key.",
+    )
+    parser.add_argument(
+        "--release-manifest-verifier",
+        help="Direct path to the reviewed sorafs-validate native verifier.",
+    )
+    parser.add_argument(
+        "--trusted-release-manifest-verifier-sha256",
+        help="Reviewed lowercase SHA256 of the exact native verifier executable.",
+    )
     parser.add_argument("--skip-bundles", action="store_true", help="Skip building tar.zst bundles.")
     parser.add_argument("--skip-images", action="store_true", help="Skip building Docker images.")
     parser.add_argument(
@@ -294,6 +366,14 @@ def main() -> int:
         help=(
             "Publish target URI for publication plan (optional). "
             "Repeat as profile=uri to target specific tracks; a single URI is used for both profiles."
+        ),
+    )
+    parser.add_argument(
+        "--development-allow-unsigned-publish-plan",
+        action="store_true",
+        help=(
+            "TEST/DEVELOPMENT ONLY: permit publish-plan generation from an "
+            "unsigned aggregate manifest; never use this mode for promotion."
         ),
     )
     parser.add_argument(
@@ -378,6 +458,63 @@ def main() -> int:
     )
 
     args = parser.parse_args()
+    signing_cli_args = release_signing_cli_args(
+        args.external_signer,
+        args.signing_public_key,
+        args.trusted_signing_fingerprint,
+    )
+    verifier_values = (
+        args.release_manifest_verifier,
+        args.trusted_release_manifest_verifier_sha256,
+    )
+    verifier_value_count = sum(value is not None for value in verifier_values)
+    if verifier_value_count not in (0, len(verifier_values)):
+        raise PipelineError(
+            "--release-manifest-verifier and "
+            "--trusted-release-manifest-verifier-sha256 must be supplied together"
+        )
+    if (
+        args.trusted_release_manifest_verifier_sha256 is not None
+        and re.fullmatch(
+            r"[0-9a-f]{64}",
+            args.trusted_release_manifest_verifier_sha256,
+        )
+        is None
+    ):
+        raise PipelineError(
+            "--trusted-release-manifest-verifier-sha256 must be exactly "
+            "64 lowercase hexadecimal characters"
+        )
+    if bool(signing_cli_args) != bool(verifier_value_count):
+        raise PipelineError(
+            "aggregate signing requires both the complete external signer "
+            "contract and the pinned native release-manifest verifier contract"
+        )
+    if args.development_allow_unsigned_publish_plan and not args.publish_target:
+        raise PipelineError(
+            "--development-allow-unsigned-publish-plan requires --publish-target"
+        )
+    if args.publish_target and signing_cli_args and args.development_allow_unsigned_publish_plan:
+        raise PipelineError(
+            "signed release inputs cannot be combined with "
+            "--development-allow-unsigned-publish-plan"
+        )
+    if (
+        args.publish_target
+        and not signing_cli_args
+        and not args.development_allow_unsigned_publish_plan
+    ):
+        raise PipelineError(
+            "production publish plans require --external-signer, "
+            "--signing-public-key, and --trusted-signing-fingerprint; use "
+            "--development-allow-unsigned-publish-plan only for tests/development"
+        )
+    try:
+        publish_target_map = (
+            parse_target_map(args.publish_target) if args.publish_target else None
+        )
+    except PublishPlanError as exc:
+        raise PipelineError(f"Invalid publish target configuration: {exc}") from exc
 
     provided_version = args.version.lstrip("v")
     repo_ver = repo_version()
@@ -470,8 +607,7 @@ def main() -> int:
                 "--artifacts-dir",
                 str(artifact_dir),
             ]
-            if args.signing_key:
-                bundle_cmd.extend(["--signing-key", args.signing_key])
+            bundle_cmd.extend(signing_cli_args)
             if args.dry_run:
                 print(f"[release-pipeline] (dry-run) {' '.join(bundle_cmd)}")
             else:
@@ -490,8 +626,7 @@ def main() -> int:
                 "--artifacts-dir",
                 str(artifact_dir),
             ]
-            if args.signing_key:
-                image_cmd.extend(["--signing-key", args.signing_key])
+            image_cmd.extend(signing_cli_args)
             if args.dry_run:
                 print(f"[release-pipeline] (dry-run) {' '.join(image_cmd)}")
             else:
@@ -538,44 +673,6 @@ def main() -> int:
         print(f"[release-pipeline] (dry-run) {' '.join(manifest_args)}")
     else:
         run(manifest_args)
-
-    publish_target_map = None
-    if args.publish_target:
-        target_map = parse_target_map(args.publish_target)
-        publish_target_map = target_map
-        if args.dry_run:
-            print(
-                f"[release-pipeline] (dry-run) publish plan for targets {target_map} would be written to {release_root}"
-            )
-        else:
-            plan = build_publish_plan(
-                manifest_path=release_root / "release_manifest.json",
-                artifacts_dir=artifact_dir,
-                target_map=target_map,
-            )
-            plan_paths = write_plan_files(plan, release_root)
-            report = validate_publish_plan(
-                plan_path=plan_paths["json"],
-                previous_plan_path=Path(args.previous_publish_plan)
-                if args.previous_publish_plan
-                else None,
-                probe_remote=args.publish_probe_remote,
-                probe_command=args.publish_probe_command,
-            )
-            report_path = release_root / "publish_plan_report.json"
-            with report_path.open("w", encoding="utf-8") as fh:
-                json.dump(report, fh, indent=2)
-                fh.write("\n")
-            report_txt = release_root / "publish_plan_report.txt"
-            lines = [
-                f"status: {report.get('status')}",
-                f"local failures: {len(report.get('local_failures', []))}",
-                f"remote failures: {len(report.get('remote_failures', []))}",
-                f"diff: {report.get('diff') or {}}",
-            ]
-            report_txt.write_text("\n".join(lines) + "\n", encoding="utf-8")
-            if report.get("status") != "ok":
-                raise PipelineError("Publish plan validation failed; see publish_plan_report.json")
 
     if args.publish_android_sdk:
         android_dir = release_root / "android"
@@ -746,6 +843,129 @@ def main() -> int:
             cbdc_validation_rel=cbdc_validation_rel,
         )
 
+    manifest_path = release_root / "release_manifest.json"
+    aggregate_signature_path = release_root / "release_manifest.json.sig"
+    aggregate_public_key_path = release_root / "release_manifest.json.pub"
+    aggregate_signing_result: Dict[str, object] | None = None
+    if signing_cli_args:
+        if args.dry_run:
+            print(
+                "[release-pipeline] (dry-run) sign final aggregate manifest "
+                f"{manifest_path} via {args.external_signer}; verify against "
+                f"{args.trusted_signing_fingerprint}; write "
+                f"{aggregate_signature_path} and raw key "
+                f"{aggregate_public_key_path}; verify with "
+                f"{args.release_manifest_verifier} pinned to "
+                f"{args.trusted_release_manifest_verifier_sha256}"
+            )
+        else:
+            assert args.external_signer is not None
+            assert args.signing_public_key is not None
+            assert args.trusted_signing_fingerprint is not None
+            assert args.release_manifest_verifier is not None
+            assert args.trusted_release_manifest_verifier_sha256 is not None
+            try:
+                aggregate_signing_result = sign_release_manifest(
+                    manifest_path,
+                    Path(args.external_signer),
+                    Path(args.signing_public_key),
+                    args.trusted_signing_fingerprint,
+                    aggregate_signature_path,
+                    aggregate_public_key_path,
+                    Path(args.release_manifest_verifier),
+                    args.trusted_release_manifest_verifier_sha256,
+                )
+            except ReleaseManifestSignatureError as exc:
+                raise PipelineError(
+                    f"Aggregate release-manifest signing failed: {exc}"
+                ) from exc
+
+    if publish_target_map:
+        if args.dry_run:
+            mode = (
+                "verified aggregate Ed25519 manifest"
+                if signing_cli_args
+                else "explicit development-only unsigned manifest"
+            )
+            print(
+                f"[release-pipeline] (dry-run) publish plan for targets "
+                f"{publish_target_map} using {mode} would be written to {release_root}"
+            )
+        else:
+            try:
+                plan = build_publish_plan(
+                    manifest_path=manifest_path,
+                    artifacts_dir=artifact_dir,
+                    target_map=publish_target_map,
+                    manifest_signature_path=aggregate_signature_path
+                    if signing_cli_args
+                    else None,
+                    manifest_public_key_path=aggregate_public_key_path
+                    if signing_cli_args
+                    else None,
+                    trusted_signing_fingerprint=args.trusted_signing_fingerprint
+                    if signing_cli_args
+                    else None,
+                    release_manifest_verifier_path=Path(
+                        args.release_manifest_verifier
+                    )
+                    if signing_cli_args
+                    else None,
+                    trusted_release_manifest_verifier_sha256=(
+                        args.trusted_release_manifest_verifier_sha256
+                        if signing_cli_args
+                        else None
+                    ),
+                    development_allow_unsigned_manifest=(
+                        args.development_allow_unsigned_publish_plan
+                    ),
+                )
+                plan_paths = write_plan_files(plan, release_root)
+                report = validate_publish_plan(
+                    plan_path=plan_paths["json"],
+                    previous_plan_path=Path(args.previous_publish_plan)
+                    if args.previous_publish_plan
+                    else None,
+                    probe_remote=args.publish_probe_remote,
+                    probe_command=args.publish_probe_command,
+                    trusted_signing_fingerprint=(
+                        args.trusted_signing_fingerprint
+                        if signing_cli_args
+                        else None
+                    ),
+                    release_manifest_verifier_path=Path(
+                        args.release_manifest_verifier
+                    )
+                    if signing_cli_args
+                    else None,
+                    trusted_release_manifest_verifier_sha256=(
+                        args.trusted_release_manifest_verifier_sha256
+                        if signing_cli_args
+                        else None
+                    ),
+                    development_allow_unsigned_manifest=(
+                        args.development_allow_unsigned_publish_plan
+                    ),
+                )
+            except (PublishPlanError, OSError, json.JSONDecodeError) as exc:
+                raise PipelineError(f"Publish plan generation failed: {exc}") from exc
+            report_path = release_root / "publish_plan_report.json"
+            with report_path.open("w", encoding="utf-8") as fh:
+                json.dump(report, fh, indent=2, sort_keys=True)
+                fh.write("\n")
+            report_txt = release_root / "publish_plan_report.txt"
+            report_lines = [
+                f"status: {report.get('status')}",
+                f"local failures: {len(report.get('local_failures', []))}",
+                f"remote failures: {len(report.get('remote_failures', []))}",
+                f"diff: {report.get('diff') or {}}",
+            ]
+            report_txt.write_text("\n".join(report_lines) + "\n", encoding="utf-8")
+            if report.get("status") != "ok":
+                raise PipelineError(
+                    "Publish plan validation failed; see publish_plan_report.json"
+                )
+
     summary = release_root / "SUMMARY.txt"
     lines = [
         f"Version: {provided_version}",
@@ -756,6 +976,32 @@ def main() -> int:
         f"Manifest: release_manifest.json",
         f"Profiles: {', '.join(f'{p}={c}' for p, c in profiles)}",
     ]
+    if signing_cli_args:
+        lines.append(
+            "Release signatures: externally produced and locally verified as "
+            f"Ed25519 ({args.trusted_signing_fingerprint})"
+        )
+        lines.append(
+            "Aggregate manifest signature: "
+            + (
+                "release_manifest.json.sig (verified)"
+                if aggregate_signing_result is not None
+                else "planned in dry-run"
+            )
+        )
+        lines.append("Aggregate manifest public key: release_manifest.json.pub")
+        lines.append(
+            "Aggregate manifest native verifier: "
+            f"{args.release_manifest_verifier} "
+            f"({args.trusted_release_manifest_verifier_sha256})"
+        )
+    else:
+        lines.append("Release signatures: absent (artifact set is not promotable)")
+        if args.development_allow_unsigned_publish_plan:
+            lines.append(
+                "Aggregate manifest verification: development-unsigned "
+                "(not promotable)"
+            )
     if args.skip_privacy_dp:
         lines.append("Privacy DP notebook: skipped (--skip-privacy-dp)")
     else:

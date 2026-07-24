@@ -2,16 +2,12 @@
 lang: mn
 direction: ltr
 source: docs/source/sorafs_reference_sdk_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: 17795c2f7b0c214cc201830011074c55377718b5fba12975411c09662f0176d3
 source_last_modified: "2026-07-23T20:31:52.000000+00:00"
 translation_last_reviewed: 2026-07-23
 source_mtime: "2026-07-06T20:43:03.555553+00:00"
----
----
-title: SoraFS Reference SDK & Validator
-summary: SF-11 implementation status for reference validators, CLI and FFI surfaces, release packaging, and remaining live-release evidence.
 ---
 
 # SoraFS Reference SDK & Validator
@@ -533,7 +529,7 @@ match the unique target list, missing binary/archive checksums, missing
 deterministic-archive proof, tracked generated `dist/*` artifacts beyond
 `dist/.gitkeep`, unsigned or unverified release manifests, missing governed
 release-key fingerprints, missing
-JavaScript/Python/Kotlin/JVM/Java Android/Swift package publication evidence,
+JavaScript/Python/Kotlin/JVM/Java Android/Swift/C# package publication evidence,
 duplicate or unknown downstream-package entries, `package_count` values that do not match
 the unique package list,
 SDK export or `ValidationOutcomeV1` drift, missing native bridge/header binding,
@@ -633,7 +629,7 @@ Remaining production gates:
   release manifests outside the repository using governed release keys, then
   require those artifacts to pass the SF-11 release evidence gate.
 - Ship/publish downstream SDK binding packages and release artifacts for the
-  local JavaScript, Python, Kotlin/JVM, Java Android, and Swift wrappers and
+  local JavaScript, Python, Kotlin/JVM, Java Android, Swift, and C# wrappers and
   attach their digests to the SF-11 downstream-bindings evidence packet.
 - Archive live operator smoke evidence for the published `sorafs-validate`
   archives and cookbook replay before declaring SF-11 fully released, and

@@ -102,11 +102,18 @@ IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
 Native AMX rotating-validator fault soak:
 
 ```bash
-IROHA_NATIVE_AMX_SOAK_ITERATIONS=10 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
+IROHA_RUN_IGNORED=1 IROHA_NATIVE_AMX_SOAK_ITERATIONS=10 \
+  IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
   cargo test --locked --offline -p integration_tests --test native_amx_routing \
   native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs \
-  -- --ignored --nocapture --test-threads=1
+  -- --exact --nocapture --test-threads=1
 ```
+
+The production multilane corridor runs this test and the four-peer autoscale
+A/B/A lifecycle gate as ordinary, non-ignored inventory tests through
+`scripts/run_nexus_cross_dataspace_atomic_swap.sh --release
+--multilane-four-peer-release`. Release mode requires a real network and exact
+start/completion markers; a developer opt-out cannot satisfy the gate.
 
 ## Expected Proof Signals
 

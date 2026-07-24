@@ -38,7 +38,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
 
 ## 3. سجل النزاع
 
-1. صرخ بمواصفات JSON للفقرة `sorafs_manifest_stub capacity dispute`:
+1. صرخ بمواصفات JSON للفقرة `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -61,7 +61,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
 2. تنفيذ CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
 
 ## 4. الإخلاء والإعادة1. **Janela de graca:** إشعار أو إثبات حول إعادة وشيكة؛ يسمح بالإخلاء بعد إصلاحه عندما تسمح به السياسة.
 2. ** جير `ProviderAdmissionRevocationV1`: **
-   - استخدم `sorafs_manifest_stub provider-admission revoke` كدافع مصدق.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` كدافع مصدق.
    - التحقق من الاغتيالات وخلاصة المراجعة.
 3. **نشر تجديد:**
    - أرسل طلب الإصلاح لـ Torii.
@@ -91,7 +91,7 @@ Sidebar_label: Runbook de disputas and Revogacoes
 
 ## 6. المواد المرجعية
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (سيكاو دي ديسبوتاس)
 - `docs/source/sorafs/provider_admission_policy.md` (تدفق التجديد)
 - لوحة القيادة للمراقبة: `SoraFS / Capacity Providers`

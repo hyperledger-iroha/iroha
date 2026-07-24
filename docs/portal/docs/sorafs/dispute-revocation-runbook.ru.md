@@ -41,7 +41,7 @@ description: Процесс governance для подачи споров по е�
 
 ## 3. Подать спор
 
-1. Создайте JSON spec для `sorafs_manifest_stub capacity dispute`:
+1. Создайте JSON spec для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -64,7 +64,7 @@ description: Процесс governance для подачи споров по е�
 2. Запустите CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -81,7 +81,7 @@ description: Процесс governance для подачи споров по е�
 
 1. **Окно льготы:** уведомите провайдера о грядущем отзыве; разрешите эвакуацию закрепленных данных, когда это допускает политика.
 2. **Сгенерируйте `ProviderAdmissionRevocationV1`:**
-   - Используйте `sorafs_manifest_stub provider-admission revoke` с утвержденной причиной.
+   - Используйте `sorafs_manifest_builder provider-admission revoke` с утвержденной причиной.
    - Проверьте подписи и digest отзыва.
 3. **Опубликуйте отзыв:**
    - Отправьте запрос на отзыв в Torii.
@@ -96,7 +96,7 @@ description: Процесс governance для подачи споров по е�
 
 ## 6. Справочные материалы
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (раздел споров)
 - `docs/source/sorafs/provider_admission_policy.md` (workflow отзыва)
 - Дашборд наблюдаемости: `SoraFS / Capacity Providers`

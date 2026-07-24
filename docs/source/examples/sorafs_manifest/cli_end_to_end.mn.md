@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS Manifest CLI Төгсгөл хүртэлх жишээ
 
 Энэ жишээг ашиглан SoraFS хүртэлх баримт бичгийг нийтлэх үйл явцыг харуулсан.
-`sorafs_manifest_stub` CLI нь тодорхойлогч бэхэлгээний хамт
+`sorafs_manifest_builder` CLI нь тодорхойлогч бэхэлгээний хамт
 SoraFS Architecture RFC-д тайлбарласан. Урсгал нь илэрхий үеийг хамардаг,
 хүлээлтийг шалгах, авчрах төлөвлөгөөний баталгаажуулалт, нотлох баримтын давтлага гэх мэт
 багууд ижил алхмуудыг CI-д оруулах боломжтой.
@@ -30,7 +30,7 @@ SoraFS Architecture RFC-д тайлбарласан. Урсгал нь илэр�
 ## Алхам 1 - Манифест, CAR, гарын үсэг үүсгэх, авах төлөвлөгөө
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ CI орчны хувьд үйлчилгээ үзүүлэгч тус бүрд т�
 CLI-ээр дамжуулан манифест илгээх:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

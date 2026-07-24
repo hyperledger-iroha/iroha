@@ -1083,6 +1083,12 @@ mod model {
         FindSorafsOrderbookOrders(sorafs::prelude::FindSorafsOrderbookOrders),
         /// Fetch a cursor-bounded page of authoritative `SoraFS` settlement receipts.
         FindSorafsOrderbookReceipts(sorafs::prelude::FindSorafsOrderbookReceipts),
+        /// Fetch a cursor-bounded page of authoritative `SoraFS` trades.
+        FindSorafsOrderbookTrades(sorafs::prelude::FindSorafsOrderbookTrades),
+        /// Fetch a cursor-bounded page of authoritative `SoraFS` settlement channels.
+        FindSorafsOrderbookChannels(sorafs::prelude::FindSorafsOrderbookChannels),
+        /// Fetch a cursor-bounded page of committed `SoraFS` orderbook events.
+        FindSorafsOrderbookEvents(sorafs::prelude::FindSorafsOrderbookEvents),
         /// Fetch the active authoritative `SoraFS` reserve policy.
         FindSorafsReservePolicy(sorafs::prelude::FindSorafsReservePolicy),
         /// Fetch one authoritative provider reserve account.
@@ -1113,8 +1119,14 @@ mod model {
         FindSorafsPopRegistryStatus(sorafs::prelude::FindSorafsPopRegistryStatus),
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
         FindSorafsRepairTask(sorafs::prelude::FindSorafsRepairTask),
+        /// Fetch a cursor-bounded page of chain-authoritative repair tasks.
+        FindSorafsRepairTasks(sorafs::prelude::FindSorafsRepairTasks),
         /// Fetch constant-time chain-authoritative repair-ledger counters.
         FindSorafsRepairStatus(sorafs::prelude::FindSorafsRepairStatus),
+        /// Fetch a cursor-bounded page of committed repair-ledger events.
+        FindSorafsRepairEvents(sorafs::prelude::FindSorafsRepairEvents),
+        /// Fetch a cursor-bounded page of finalized PDP/PoTR proof-outcome events.
+        FindSorafsProofOutcomeEvents(sorafs::prelude::FindSorafsProofOutcomeEvents),
         /// Fetch the active authoritative `SoraFS` moderation policy.
         FindSorafsModerationPolicy(sorafs::prelude::FindSorafsModerationPolicy),
         /// Fetch one authoritative moderation appeal intake and sortition lifecycle.
@@ -1245,6 +1257,12 @@ mod model {
         SorafsOrderbookOrderPage(crate::sorafs::orderbook::OrderbookOrderPageV1),
         /// Cursor-bounded authoritative `SoraFS` settlement-receipt page.
         SorafsOrderbookReceiptPage(crate::sorafs::orderbook::OrderbookSettlementReceiptPageV1),
+        /// Cursor-bounded authoritative `SoraFS` trade page.
+        SorafsOrderbookTradePage(crate::sorafs::orderbook::OrderbookTradePageV1),
+        /// Cursor-bounded authoritative `SoraFS` settlement-channel page.
+        SorafsOrderbookChannelPage(crate::sorafs::orderbook::OrderbookSettlementChannelPageV1),
+        /// Cursor-bounded page of committed `SoraFS` orderbook events.
+        SorafsOrderbookEventPage(crate::sorafs::orderbook::OrderbookFinalizedEventPageV1),
         /// Active authoritative `SoraFS` reserve policy.
         SorafsReservePolicy(crate::sorafs::reserve::ReserveAuthorityPolicyRecordV1),
         /// Authoritative provider reserve account.
@@ -1269,10 +1287,18 @@ mod model {
         SorafsPopAuditDigest(crate::sorafs::pop_registry::PopRegistryAuditDigestRecordV1),
         /// Authoritative `PoP` registry anchors and counters.
         SorafsPopRegistryStatus(crate::sorafs::pop_registry::PopRegistryStatusV1),
-        /// Chain-authoritative repair task, lease, outcome, slash, and appeal.
-        SorafsRepairTask(crate::sorafs::moderation_ledger::RepairLedgerTaskV1),
-        /// Chain-authoritative repair-ledger counters.
-        SorafsRepairStatus(crate::sorafs::moderation_ledger::RepairLedgerStatusV1),
+        /// Finalized chain-authoritative repair task, lease, outcome, slash, and appeal.
+        SorafsRepairTask(crate::sorafs::moderation_ledger::RepairFinalizedTaskV1),
+        /// Cursor-bounded chain-authoritative repair-task page.
+        SorafsRepairTaskPage(crate::sorafs::moderation_ledger::RepairLedgerTaskPageV1),
+        /// Finalized chain-authoritative repair-ledger counters.
+        SorafsRepairStatus(crate::sorafs::moderation_ledger::RepairFinalizedStatusV1),
+        /// Cursor-bounded page of committed repair-ledger events.
+        SorafsRepairEventPage(crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1),
+        /// Cursor-bounded page of committed PDP/PoTR proof-outcome events.
+        SorafsProofOutcomeEventPage(
+            crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1,
+        ),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
         /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
@@ -5320,8 +5346,17 @@ pub mod sorafs {
         account::AccountId,
         sorafs::{
             capacity::ProviderId,
-            moderation_ledger::{ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1},
-            orderbook::OrderbookOrderStatusV1,
+            moderation_ledger::{
+                ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
+                RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
+            },
+            proof_ledger::{
+                ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
+            },
+            orderbook::{
+                OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
+                OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
+            },
         },
     };
 
@@ -5384,6 +5419,8 @@ pub mod sorafs {
         /// Fetch an exclusive-cursor, status-filtered page of authoritative orders.
         #[derive(Copy)]
         pub struct FindSorafsOrderbookOrders {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
             /// Optional lifecycle filter.
             pub status: Option<OrderbookOrderStatusV1>,
             /// Exclusive order-id cursor.
@@ -5395,10 +5432,47 @@ pub mod sorafs {
         /// Fetch an exclusive-cursor page of authoritative settlement receipts.
         #[derive(Copy)]
         pub struct FindSorafsOrderbookReceipts {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
             /// Optional exact channel filter.
             pub channel_id: Option<[u8; 32]>,
             /// Exclusive receipt-id cursor.
             pub after_receipt_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page of authoritative trades.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookTrades {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
+            /// Exclusive trade-id cursor.
+            pub after_trade_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor, status-filtered page of settlement channels.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookChannels {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
+            /// Optional lifecycle filter.
+            pub status: Option<OrderbookSettlementChannelStatusV1>,
+            /// Exclusive channel-id cursor.
+            pub after_channel_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page of committed orderbook events.
+        #[derive(Copy)]
+        pub struct FindSorafsOrderbookEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<OrderbookFinalizedCursorV1>,
+            /// Exclusive committed-event cursor.
+            pub after: Option<OrderbookFinalizedEventCursorV1>,
             /// Requested page size; validated against the hard query ceiling.
             pub limit: u32,
         }
@@ -5480,15 +5554,52 @@ pub mod sorafs {
         pub struct FindSorafsPopRegistryStatus;
 
         /// Fetch one chain-authoritative repair task by canonical ticket identifier.
-        #[repr(transparent)]
         pub struct FindSorafsRepairTask {
             /// Canonical repair ticket identifier.
             pub ticket_id: String,
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
+        }
+
+        /// Fetch an exclusive-cursor page of chain-authoritative repair tasks.
+        #[derive(Copy)]
+        pub struct FindSorafsRepairTasks {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
+            /// Exclusive immutable task-id cursor.
+            pub after_task_id: Option<[u8; 32]>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
         }
 
         /// Fetch constant-time chain-authoritative repair-ledger counters.
         #[derive(Copy)]
-        pub struct FindSorafsRepairStatus;
+        pub struct FindSorafsRepairStatus {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
+        }
+
+        /// Fetch an exclusive-cursor page of committed repair-ledger events.
+        #[derive(Copy)]
+        pub struct FindSorafsRepairEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<RepairFinalizedCursorV1>,
+            /// Exclusive committed-event cursor.
+            pub after: Option<RepairFinalizedEventCursorV1>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
+        /// Fetch an exclusive-cursor page of finalized PDP/PoTR proof-outcome events.
+        #[derive(Copy)]
+        pub struct FindSorafsProofOutcomeEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
+            /// Exclusive committed-event cursor.
+            pub after: Option<ProofOutcomeFinalizedEventCursorV1>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
 
         /// Fetch the active authoritative moderation policy.
         #[derive(Copy)]
@@ -5697,6 +5808,32 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsOrderbookTrades {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS orderbook trades with limit {}", self.limit)
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookChannels {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS orderbook settlement channels with limit {}",
+                self.limit
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsOrderbookEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS orderbook events with limit {}",
+                self.limit
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsReservePolicy {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find active SoraFS reserve policy")
@@ -5797,9 +5934,35 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsRepairTasks {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "Find SoraFS repair tasks with limit {}", self.limit)
+        }
+    }
+
     impl fmt::Display for FindSorafsRepairStatus {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find SoraFS repair ledger status")
+        }
+    }
+
+    impl fmt::Display for FindSorafsRepairEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS repair-ledger events with limit {}",
+                self.limit
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsProofOutcomeEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS proof-outcome events with limit {}",
+                self.limit
+            )
         }
     }
 
@@ -5915,15 +6078,17 @@ pub mod sorafs {
             FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
             FindSorafsModerationSnapshot, FindSorafsModerationStatus,
             FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
-            FindSorafsOrderbookOrderById, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
-            FindSorafsOrderbookReceiptById, FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
-            FindSorafsOrderbookTradeById, FindSorafsPopAuditDigestBySequence,
+            FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
+            FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
+            FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
+            FindSorafsOrderbookTrades, FindSorafsPopAuditDigestBySequence,
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsProviderOwner, FindSorafsRepairStatus, FindSorafsRepairTask,
-            FindSorafsReserveAppealById, FindSorafsReserveMovementById, FindSorafsReservePolicy,
-            FindSorafsReserveProviderById,
+            FindSorafsProviderOwner, FindSorafsRepairEvents, FindSorafsRepairStatus,
+            FindSorafsProofOutcomeEvents, FindSorafsRepairTask, FindSorafsRepairTasks,
+            FindSorafsReserveAppealById,
+            FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
         };
     }
 }
@@ -5995,6 +6160,18 @@ impl_sorafs_orderbook_singular_query!(
         => crate::sorafs::orderbook::OrderbookSettlementReceiptPageV1
 );
 impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookTrades
+        => crate::sorafs::orderbook::OrderbookTradePageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookChannels
+        => crate::sorafs::orderbook::OrderbookSettlementChannelPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsOrderbookEvents
+        => crate::sorafs::orderbook::OrderbookFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsReservePolicy
         => crate::sorafs::reserve::ReserveAuthorityPolicyRecordV1
 );
@@ -6040,11 +6217,23 @@ impl_sorafs_orderbook_singular_query!(
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsRepairTask
-        => crate::sorafs::moderation_ledger::RepairLedgerTaskV1
+        => crate::sorafs::moderation_ledger::RepairFinalizedTaskV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsRepairTasks
+        => crate::sorafs::moderation_ledger::RepairLedgerTaskPageV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsRepairStatus
-        => crate::sorafs::moderation_ledger::RepairLedgerStatusV1
+        => crate::sorafs::moderation_ledger::RepairFinalizedStatusV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsRepairEvents
+        => crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsProofOutcomeEvents
+        => crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsModerationPolicy
@@ -7028,21 +7217,57 @@ mod tests {
         use norito::codec::{Decode, Encode};
 
         let juror = AccountId::new(KeyPair::random().public_key().clone());
+        let orderbook_cursor = crate::sorafs::orderbook::OrderbookFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0xA7; 32],
+        };
+        let repair_cursor = crate::sorafs::moderation_ledger::RepairFinalizedCursorV1 {
+            height: 8,
+            block_hash: [0xA8; 32],
+        };
         let queries: Vec<SingularQueryBox> = vec![
             sorafs::prelude::FindSorafsOrderbookPolicy.into(),
             sorafs::prelude::FindSorafsOrderbookOrderById::new([0x11; 32]).into(),
             sorafs::prelude::FindSorafsOrderbookCancellationByOrderId::new([0x12; 32]).into(),
             sorafs::prelude::FindSorafsOrderbookReceiptById::new([0x13; 32]).into(),
+            sorafs::prelude::FindSorafsOrderbookTradeById::new([0x17; 32]).into(),
+            sorafs::prelude::FindSorafsOrderbookChannelById::new([0x18; 32]).into(),
             sorafs::prelude::FindSorafsOrderbookStatus.into(),
             sorafs::prelude::FindSorafsOrderbookOrders::new(
+                Some(orderbook_cursor),
                 Some(crate::sorafs::orderbook::OrderbookOrderStatusV1::Open),
                 Some([0x14; 32]),
                 25,
             )
             .into(),
             sorafs::prelude::FindSorafsOrderbookReceipts::new(
+                Some(orderbook_cursor),
                 Some([0x15; 32]),
                 Some([0x16; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsOrderbookTrades::new(
+                Some(orderbook_cursor),
+                Some([0x19; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsOrderbookChannels::new(
+                Some(orderbook_cursor),
+                Some(crate::sorafs::orderbook::OrderbookSettlementChannelStatusV1::Open),
+                Some([0x1A; 32]),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsOrderbookEvents::new(
+                Some(orderbook_cursor),
+                Some(crate::sorafs::orderbook::OrderbookFinalizedEventCursorV1 {
+                    sequence: 2,
+                    block_height: 7,
+                    block_hash: [0xA7; 32],
+                    event_index: 1,
+                }),
                 25,
             )
             .into(),
@@ -7053,6 +7278,24 @@ mod tests {
             sorafs::prelude::FindSorafsPopRevocationByNonceCommitment::new([0x22; 32]).into(),
             sorafs::prelude::FindSorafsPopAuditDigestBySequence::new(4).into(),
             sorafs::prelude::FindSorafsPopRegistryStatus.into(),
+            sorafs::prelude::FindSorafsRepairTask::new("REP-1".to_owned(), Some(repair_cursor))
+                .into(),
+            sorafs::prelude::FindSorafsRepairTasks::new(Some(repair_cursor), Some([0x23; 32]), 25)
+                .into(),
+            sorafs::prelude::FindSorafsRepairStatus::new(Some(repair_cursor)).into(),
+            sorafs::prelude::FindSorafsRepairEvents::new(
+                Some(repair_cursor),
+                Some(
+                    crate::sorafs::moderation_ledger::RepairFinalizedEventCursorV1 {
+                        sequence: 6,
+                        block_height: 8,
+                        block_hash: [0xA8; 32],
+                        event_index: 2,
+                    },
+                ),
+                25,
+            )
+            .into(),
             sorafs::prelude::FindSorafsModerationPolicy.into(),
             sorafs::prelude::FindSorafsModerationAppeal::new(
                 "case-1".to_owned(),

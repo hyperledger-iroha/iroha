@@ -1,7 +1,7 @@
 //! Authoritative SoraFS moderation commit/reveal ledger handlers.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::OnceLock,
 };
@@ -27,11 +27,10 @@ use iroha_data_model::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
             FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
-            FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationEvents, FindSorafsModerationNoShow,
-            FindSorafsModerationOutcome, FindSorafsModerationPolicy,
-            FindSorafsModerationReveal, FindSorafsModerationSnapshot,
-            FindSorafsModerationStatus,
+            FindSorafsModerationCommit, FindSorafsModerationEvents,
+            FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
+            FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
+            FindSorafsModerationSnapshot, FindSorafsModerationStatus,
         },
     },
     sorafs::{
@@ -41,23 +40,22 @@ use iroha_data_model::{
             SoraFsModerationVoteChoice,
         },
         moderation_ledger::{
-            MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
-            MODERATION_LEDGER_MAX_NONCE_BYTES_V1, MODERATION_LEDGER_MAX_PANEL_SIZE_V1,
-            MODERATION_LEDGER_MAX_REASON_BYTES_V1, MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1,
-            MODERATION_QUERY_MAX_CASES_V1, MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1,
-            MODERATION_QUERY_MAX_EVENTS_V1, MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
-            ModerationAppealRecordV1, ModerationAppealStatusV1,
-            ModerationCaseRecordV1, ModerationCaseSpecV1, ModerationCaseStatusV1,
-            ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
+            MODERATION_FINALIZED_SNAPSHOT_VERSION_V1, MODERATION_LEDGER_MAX_NONCE_BYTES_V1,
+            MODERATION_LEDGER_MAX_PANEL_SIZE_V1, MODERATION_LEDGER_MAX_REASON_BYTES_V1,
+            MODERATION_LEDGER_MAX_WAITLIST_SIZE_V1, MODERATION_QUERY_MAX_CASES_V1,
+            MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1, MODERATION_QUERY_MAX_EVENTS_V1,
+            MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1, ModerationAppealRecordV1,
+            ModerationAppealStatusV1, ModerationCaseRecordV1, ModerationCaseSpecV1,
+            ModerationCaseStatusV1, ModerationChallengeDecisionV1, ModerationChallengeRecordV1,
             ModerationCommitRecordV1, ModerationFinalizedAppealViewV1,
             ModerationFinalizedCaseViewV1, ModerationFinalizedCursorV1,
-            ModerationFinalizedEventCursorV1, ModerationFinalizedEventPageV1,
-            ModerationFinalizedEventV1, ModerationFinalizedLedgerSnapshotV1,
-            ModerationJurorEligibilityClassV1, ModerationJurorEligibilityRecordV1,
-            ModerationJurorReplacementV1, ModerationLedgerPolicyRecord, ModerationLedgerStatusV1,
-            ModerationNoShowKindV1, ModerationNoShowRecordV1, ModerationOutcomeKindV1,
-            ModerationOutcomeRecordV1, ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1,
-            ModerationRevealRecordV1, ModerationSortitionError, ModerationVoteCountsV1,
+            ModerationFinalizedEventPageV1, ModerationFinalizedEventV1,
+            ModerationFinalizedLedgerSnapshotV1, ModerationJurorEligibilityClassV1,
+            ModerationJurorEligibilityRecordV1, ModerationJurorReplacementV1,
+            ModerationLedgerPolicyRecord, ModerationLedgerStatusV1, ModerationNoShowKindV1,
+            ModerationNoShowRecordV1, ModerationOutcomeKindV1, ModerationOutcomeRecordV1,
+            ModerationPanelSelectionV1, ModerationPoPRegistrySnapshotV1, ModerationRevealRecordV1,
+            ModerationSortitionError, ModerationVoteCountsV1,
             is_canonical_moderation_identifier_v1, sorafs_moderation_panel_roster_hash_v1,
             sorafs_moderation_pop_challenge_v1, sorafs_moderation_pop_verifier_context_v1,
             sorafs_moderation_select_panel_v1, sorafs_moderation_sortition_digest_v1,
@@ -111,7 +109,7 @@ const STATE_LIMITS: DecodeLimits =
 const PAYLOAD_LIMITS: DecodeLimits =
     DecodeLimits::new(256, PAYLOAD_MAX_BYTES, 2_048, 2 * PAYLOAD_MAX_BYTES, 64);
 const PROOF_LIMITS: DecodeLimits = DecodeLimits::new(
-    256,
+    POP_MEMBERSHIP_PROOF_MAX_BYTES_V1,
     POP_MEMBERSHIP_PROOF_MAX_BYTES_V1 + 32 * 1024,
     4_096,
     2 * (POP_MEMBERSHIP_PROOF_MAX_BYTES_V1 + 32 * 1024),
@@ -136,9 +134,7 @@ struct AppealProofTokenBindingStateV1 {
     intake_digest: [u8; 32],
 }
 
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
-)]
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationPersistedEventV1 {
     sequence: u64,
     target_block_height: u64,
@@ -146,9 +142,7 @@ struct ModerationPersistedEventV1 {
     event: SorafsModerationLedgerEvent,
 }
 
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
 struct ModerationEventJournalHeadV1 {
     last_sequence: u64,
     last_target_block_height: u64,
@@ -566,8 +560,7 @@ fn read_persisted_event(
     let Some(bytes) = world.smart_contract_state().get(&key) else {
         return Ok(None);
     };
-    let record: ModerationPersistedEventV1 =
-        decode_state(bytes, "moderation committed event")?;
+    let record: ModerationPersistedEventV1 = decode_state(bytes, "moderation committed event")?;
     validate_persisted_event(&record, sequence)?;
     Ok(Some(record))
 }
@@ -575,14 +568,10 @@ fn read_persisted_event(
 fn read_event_journal_head(
     world: &impl WorldReadOnly,
 ) -> Result<Option<ModerationEventJournalHeadV1>, InstructionExecutionError> {
-    let Some(bytes) = world
-        .smart_contract_state()
-        .get(event_journal_head_key())
-    else {
+    let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
         return Ok(None);
     };
-    let head: ModerationEventJournalHeadV1 =
-        decode_state(bytes, "moderation event journal head")?;
+    let head: ModerationEventJournalHeadV1 = decode_state(bytes, "moderation event journal head")?;
     if head.last_sequence == 0 || head.last_target_block_height == 0 {
         return Err(corrupt_state(
             "stored moderation event journal head is invalid",
@@ -604,6 +593,31 @@ fn ensure_no_event_after_head(
     world: &impl WorldReadOnly,
     head: Option<ModerationEventJournalHeadV1>,
 ) -> Result<(), InstructionExecutionError> {
+    let prefix_start =
+        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+    let first_event_key = world
+        .smart_contract_state()
+        .range(prefix_start..)
+        .next()
+        .and_then(|(key, _)| {
+            key.to_string()
+                .starts_with(EVENT_STATE_KEY_PREFIX)
+                .then_some(key)
+        });
+    match (head, first_event_key) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(corrupt_state(
+                "moderation event journal contains records without a head",
+            ));
+        }
+        (Some(_), Some(key)) if *key == event_key(1) => {}
+        (Some(_), _) => {
+            return Err(corrupt_state(
+                "moderation event journal does not begin at sequence one",
+            ));
+        }
+    }
     let start = head.map_or_else(
         || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
         |head| event_key(head.last_sequence),
@@ -1509,10 +1523,8 @@ fn emit_moderation_ledger_event(
     authority: &AccountId,
     now: u64,
 ) -> Result<(), InstructionExecutionError> {
-    let committed_parent_height =
-        u64::try_from(state_transaction.block_hashes().len()).map_err(|_| {
-            corrupt_state("committed moderation parent height does not fit into u64")
-        })?;
+    let committed_parent_height = u64::try_from(state_transaction.block_hashes().len())
+        .map_err(|_| corrupt_state("committed moderation parent height does not fit into u64"))?;
     let target_block_height = committed_parent_height
         .checked_add(1)
         .ok_or_else(|| corrupt_state("moderation event target block height overflow"))?;
@@ -1618,9 +1630,7 @@ fn emit_moderation_ledger_event(
         .insert(event_journal_head_key().clone(), encoded_head);
     state_transaction
         .world
-        .emit_events(Some(SorafsGatewayEvent::ModerationLedger(
-            event,
-        )));
+        .emit_events(Some(SorafsGatewayEvent::ModerationLedger(event)));
     Ok(())
 }
 
@@ -3332,14 +3342,10 @@ fn checked_snapshot_limits(
         )));
     }
     let max_cases = usize::try_from(query.max_cases).map_err(|_| {
-        QueryExecutionFail::Conversion(
-            "SoraFS moderation max_cases conversion failed".to_owned(),
-        )
+        QueryExecutionFail::Conversion("SoraFS moderation max_cases conversion failed".to_owned())
     })?;
     let max_events = usize::try_from(query.max_events).map_err(|_| {
-        QueryExecutionFail::Conversion(
-            "SoraFS moderation max_events conversion failed".to_owned(),
-        )
+        QueryExecutionFail::Conversion("SoraFS moderation max_events conversion failed".to_owned())
     })?;
     Ok((max_cases, max_events))
 }
@@ -3351,9 +3357,7 @@ fn checked_event_page_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
         )));
     }
     usize::try_from(limit).map_err(|_| {
-        QueryExecutionFail::Conversion(
-            "SoraFS moderation event limit conversion failed".to_owned(),
-        )
+        QueryExecutionFail::Conversion("SoraFS moderation event limit conversion failed".to_owned())
     })
 }
 
@@ -3394,12 +3398,8 @@ fn latest_committed_events(
         .max(1);
     let mut previous = if start > 1 {
         let predecessor_sequence = start - 1;
-        charge_existing_snapshot_state(
-            state_ro.world(),
-            &event_key(predecessor_sequence),
-            budget,
-        )
-        .map_err(query_failure)?;
+        charge_existing_snapshot_state(state_ro.world(), &event_key(predecessor_sequence), budget)
+            .map_err(query_failure)?;
         Some(
             read_persisted_event(state_ro.world(), predecessor_sequence)
                 .map_err(query_failure)?
@@ -3452,29 +3452,38 @@ fn query_moderation_event_page(
             if resolved.cursor() != after {
                 return Err(QueryExecutionFail::Expired);
             }
+            let predecessor = if after.sequence == 1 {
+                None
+            } else {
+                let predecessor_sequence = after.sequence - 1;
+                Some(
+                    read_persisted_event(state_ro.world(), predecessor_sequence)
+                        .map_err(query_failure)?
+                        .ok_or_else(|| {
+                            QueryExecutionFail::Conversion(format!(
+                                "moderation event journal is missing predecessor sequence {predecessor_sequence}"
+                            ))
+                        })?,
+                )
+            };
+            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
             Some(record)
         }
         None => None,
     };
     let start = query
         .after
-        .map_or(Ok(1), |after| {
-            after.sequence.checked_add(1).ok_or_else(|| {
-                if head.is_some_and(|head| head.last_sequence == after.sequence) {
-                    QueryExecutionFail::Expired
-                } else {
-                    QueryExecutionFail::Conversion(
-                        "moderation event continuation sequence overflow".to_owned(),
-                    )
-                }
-            })
-        })?;
+        .map_or(Some(1), |after| after.sequence.checked_add(1));
     let last_sequence = head.map_or(0, |head| head.last_sequence);
     let mut events = Vec::with_capacity(limit);
     let mut encoded_event_bytes = 0usize;
     let mut sequence = start;
-    while sequence <= last_sequence && events.len() < limit {
-        let (record, resolved) = read_event_sequence(state_ro, sequence, previous.as_ref())?;
+    while let Some(current_sequence) = sequence {
+        if current_sequence > last_sequence || events.len() >= limit {
+            break;
+        }
+        let (record, resolved) =
+            read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
         encoded_event_bytes = encoded_event_bytes
             .checked_add(
                 norito::to_bytes(&resolved)
@@ -3497,11 +3506,7 @@ fn query_moderation_event_page(
         }
         previous = Some(record);
         events.push(resolved);
-        sequence = sequence.checked_add(1).ok_or_else(|| {
-            QueryExecutionFail::Conversion(
-                "moderation event sequence overflow while paging".to_owned(),
-            )
-        })?;
+        sequence = current_sequence.checked_add(1);
     }
     let has_more = events
         .last()
@@ -3531,6 +3536,631 @@ fn query_moderation_event_page(
         )));
     }
     Ok(page)
+}
+
+fn count_as_u64(count: usize, label: &str) -> Result<u64, QueryExecutionFail> {
+    u64::try_from(count).map_err(|_| {
+        QueryExecutionFail::Conversion(format!(
+            "moderation snapshot {label} count does not fit into u64"
+        ))
+    })
+}
+
+fn sum_lengths_as_u64(
+    counts: impl IntoIterator<Item = usize>,
+    label: &str,
+) -> Result<u64, QueryExecutionFail> {
+    counts.into_iter().try_fold(0u64, |total, count| {
+        let count = count_as_u64(count, label)?;
+        total.checked_add(count).ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!("moderation snapshot {label} count overflow"))
+        })
+    })
+}
+
+#[allow(clippy::too_many_lines)]
+fn query_moderation_snapshot(
+    query: &FindSorafsModerationSnapshot,
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<ModerationFinalizedLedgerSnapshotV1, QueryExecutionFail> {
+    let (max_cases, max_events) = checked_snapshot_limits(query)?;
+    let finalized_cursor = resolve_finalized_cursor(state_ro)?;
+    let world = state_ro.world();
+    let mut budget = ModerationSnapshotReadBudget::default();
+    charge_existing_snapshot_state(world, policy_key(), &mut budget).map_err(query_failure)?;
+    charge_existing_snapshot_state(world, status_key(), &mut budget).map_err(query_failure)?;
+    charge_existing_snapshot_state(world, event_journal_head_key(), &mut budget)
+        .map_err(query_failure)?;
+
+    let policy = read_policy(world).map_err(query_failure)?;
+    let status = read_status(world).map_err(query_failure)?;
+    let head = read_event_journal_head(world).map_err(query_failure)?;
+    ensure_no_event_after_head(world, head).map_err(query_failure)?;
+
+    let mut appeals: Vec<ModerationAppealRecordV1> = scan_moderation_state_prefix(
+        world,
+        APPEAL_STATE_KEY_PREFIX,
+        "moderation appeal",
+        &mut budget,
+        |key, candidate: ModerationAppealRecordV1| {
+            if appeal_key(&candidate.intake.case_id, &candidate.intake.round_id) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal key does not match its record",
+                ));
+            }
+            let record = read_appeal(world, &candidate.intake.case_id, &candidate.intake.round_id)?
+                .ok_or_else(|| {
+                    corrupt_state(
+                        "authoritative moderation appeal disappeared during snapshot read",
+                    )
+                })?;
+            read_appeal_deposit_binding(world, record.intake.appeal_deposit_lock_digest)?
+                .ok_or_else(|| {
+                    corrupt_state("authoritative moderation appeal has no deposit binding")
+                })?;
+            read_appeal_proof_token_binding(world, record.intake.proof_token_digest)?.ok_or_else(
+                || corrupt_state("authoritative moderation appeal has no proof-token binding"),
+            )?;
+            Ok(record)
+        },
+    )
+    .map_err(query_failure)?;
+    let deposit_bindings: Vec<AppealDepositBindingStateV1> = scan_moderation_state_prefix(
+        world,
+        APPEAL_DEPOSIT_STATE_KEY_PREFIX,
+        "moderation appeal deposit binding",
+        &mut budget,
+        |key, candidate: AppealDepositBindingStateV1| {
+            if appeal_deposit_key(candidate.deposit_lock_digest) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal deposit key does not match its binding",
+                ));
+            }
+            read_appeal_deposit_binding(world, candidate.deposit_lock_digest)?.ok_or_else(|| {
+                corrupt_state(
+                    "authoritative moderation appeal deposit disappeared during snapshot read",
+                )
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let proof_token_bindings: Vec<AppealProofTokenBindingStateV1> = scan_moderation_state_prefix(
+        world,
+        APPEAL_PROOF_TOKEN_STATE_KEY_PREFIX,
+        "moderation appeal proof-token binding",
+        &mut budget,
+        |key, candidate: AppealProofTokenBindingStateV1| {
+            if appeal_proof_token_key(candidate.proof_token_digest) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation appeal proof-token key does not match its binding",
+                ));
+            }
+            read_appeal_proof_token_binding(world, candidate.proof_token_digest)?.ok_or_else(|| {
+                corrupt_state(
+                    "authoritative moderation appeal proof-token disappeared during snapshot read",
+                )
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let mut eligibilities: Vec<ModerationJurorEligibilityRecordV1> = scan_moderation_state_prefix(
+        world,
+        ELIGIBILITY_STATE_KEY_PREFIX,
+        "moderation juror eligibility",
+        &mut budget,
+        |key, candidate: ModerationJurorEligibilityRecordV1| {
+            if eligibility_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation eligibility key does not match its record",
+                ));
+            }
+            let record = read_eligibility(
+                world,
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.juror,
+            )?
+            .ok_or_else(|| {
+                corrupt_state(
+                    "authoritative moderation eligibility disappeared during snapshot read",
+                )
+            })?;
+            let nullifier = read_nullifier(world, record.nullifier)?.ok_or_else(|| {
+                corrupt_state("authoritative moderation eligibility has no nullifier binding")
+            })?;
+            if nullifier != record {
+                return Err(corrupt_state(
+                    "authoritative moderation eligibility disagrees with its nullifier binding",
+                ));
+            }
+            Ok(record)
+        },
+    )
+    .map_err(query_failure)?;
+    let nullifier_bindings: Vec<ModerationJurorEligibilityRecordV1> = scan_moderation_state_prefix(
+        world,
+        NULLIFIER_STATE_KEY_PREFIX,
+        "moderation PoP nullifier",
+        &mut budget,
+        |key, candidate: ModerationJurorEligibilityRecordV1| {
+            if nullifier_key(candidate.nullifier) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation nullifier key does not match its record",
+                ));
+            }
+            read_nullifier(world, candidate.nullifier)?.ok_or_else(|| {
+                corrupt_state("authoritative moderation nullifier disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let mut cases: Vec<ModerationCaseRecordV1> = scan_moderation_state_prefix(
+        world,
+        CASE_STATE_KEY_PREFIX,
+        "moderation case",
+        &mut budget,
+        |key, candidate: ModerationCaseRecordV1| {
+            if case_key(&candidate.spec.context.case_id, &candidate.spec.round_id) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation case key does not match its record",
+                ));
+            }
+            read_case(
+                world,
+                &candidate.spec.context.case_id,
+                &candidate.spec.round_id,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation case disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let commits: Vec<ModerationCommitRecordV1> = scan_moderation_state_prefix(
+        world,
+        COMMIT_STATE_KEY_PREFIX,
+        "moderation commit",
+        &mut budget,
+        |key, candidate: ModerationCommitRecordV1| {
+            if commit_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation commit key does not match its record",
+                ));
+            }
+            read_commit(
+                world,
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.juror,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation commit disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let reveals: Vec<ModerationRevealRecordV1> = scan_moderation_state_prefix(
+        world,
+        REVEAL_STATE_KEY_PREFIX,
+        "moderation reveal",
+        &mut budget,
+        |key, candidate: ModerationRevealRecordV1| {
+            if reveal_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation reveal key does not match its record",
+                ));
+            }
+            read_reveal(
+                world,
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.juror,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation reveal disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let challenges: Vec<ModerationChallengeRecordV1> = scan_moderation_state_prefix(
+        world,
+        CHALLENGE_STATE_KEY_PREFIX,
+        "moderation challenge",
+        &mut budget,
+        |key, candidate: ModerationChallengeRecordV1| {
+            if challenge_key(
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.challenge_id,
+            ) != *key
+            {
+                return Err(corrupt_state(
+                    "authoritative moderation challenge key does not match its record",
+                ));
+            }
+            read_challenge(
+                world,
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.challenge_id,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation challenge disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let outcomes: Vec<ModerationOutcomeRecordV1> = scan_moderation_state_prefix(
+        world,
+        OUTCOME_STATE_KEY_PREFIX,
+        "moderation outcome",
+        &mut budget,
+        |key, candidate: ModerationOutcomeRecordV1| {
+            if outcome_key(&candidate.case_id, &candidate.round_id) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation outcome key does not match its record",
+                ));
+            }
+            read_outcome(world, &candidate.case_id, &candidate.round_id)?.ok_or_else(|| {
+                corrupt_state("authoritative moderation outcome disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+    let no_shows: Vec<ModerationNoShowRecordV1> = scan_moderation_state_prefix(
+        world,
+        NO_SHOW_STATE_KEY_PREFIX,
+        "moderation no-show",
+        &mut budget,
+        |key, candidate: ModerationNoShowRecordV1| {
+            if no_show_key(&candidate.case_id, &candidate.round_id, &candidate.juror) != *key {
+                return Err(corrupt_state(
+                    "authoritative moderation no-show key does not match its record",
+                ));
+            }
+            read_no_show(
+                world,
+                &candidate.case_id,
+                &candidate.round_id,
+                &candidate.juror,
+            )?
+            .ok_or_else(|| {
+                corrupt_state("authoritative moderation no-show disappeared during snapshot read")
+            })
+        },
+    )
+    .map_err(query_failure)?;
+
+    if appeals.len() > max_cases || cases.len() > max_cases {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "complete moderation projection contains {} appeals and {} cases, exceeding requested max_cases {max_cases}",
+            appeals.len(),
+            cases.len()
+        )));
+    }
+
+    let primary_records_present = !appeals.is_empty()
+        || !eligibilities.is_empty()
+        || !cases.is_empty()
+        || !commits.is_empty()
+        || !reveals.is_empty()
+        || !challenges.is_empty()
+        || !outcomes.is_empty()
+        || !no_shows.is_empty();
+    let index_records_present = !deposit_bindings.is_empty()
+        || !proof_token_bindings.is_empty()
+        || !nullifier_bindings.is_empty();
+    match (&policy, &status) {
+        (None, None) if !primary_records_present && !index_records_present && head.is_none() => {}
+        (Some(_), Some(_)) if head.is_some() => {}
+        (None, None) => {
+            return Err(QueryExecutionFail::Conversion(
+                "uninitialized moderation ledger contains authoritative records".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(QueryExecutionFail::Conversion(
+                "authoritative moderation policy, status, and event journal are inconsistent"
+                    .to_owned(),
+            ));
+        }
+    }
+
+    appeals.sort_by(|left, right| {
+        (left.intake.case_id.as_str(), left.intake.round_id.as_str()).cmp(&(
+            right.intake.case_id.as_str(),
+            right.intake.round_id.as_str(),
+        ))
+    });
+    if appeals.windows(2).any(|window| {
+        window[0].intake.case_id == window[1].intake.case_id
+            && window[0].intake.round_id == window[1].intake.round_id
+    }) {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains duplicate appeal identities".to_owned(),
+        ));
+    }
+    cases.sort_by(|left, right| {
+        (
+            left.spec.context.case_id.as_str(),
+            left.spec.round_id.as_str(),
+        )
+            .cmp(&(
+                right.spec.context.case_id.as_str(),
+                right.spec.round_id.as_str(),
+            ))
+    });
+    if cases.windows(2).any(|window| {
+        window[0].spec.context.case_id == window[1].spec.context.case_id
+            && window[0].spec.round_id == window[1].spec.round_id
+    }) {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains duplicate case identities".to_owned(),
+        ));
+    }
+
+    let appeal_statuses = appeals
+        .iter()
+        .map(|appeal| {
+            (
+                (
+                    appeal.intake.case_id.clone(),
+                    appeal.intake.round_id.clone(),
+                ),
+                appeal.status,
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let case_keys = cases
+        .iter()
+        .map(|case| {
+            (
+                case.spec.context.case_id.clone(),
+                case.spec.round_id.clone(),
+            )
+        })
+        .collect::<BTreeSet<_>>();
+    if cases.iter().any(|case| {
+        !appeal_statuses.contains_key(&(
+            case.spec.context.case_id.clone(),
+            case.spec.round_id.clone(),
+        ))
+    }) || appeals.iter().any(|appeal| {
+        matches!(
+            appeal.status,
+            ModerationAppealStatusV1::BallotOpen | ModerationAppealStatusV1::Finalized
+        ) && !case_keys.contains(&(
+            appeal.intake.case_id.clone(),
+            appeal.intake.round_id.clone(),
+        ))
+    }) {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation appeal and activated-case projections disagree".to_owned(),
+        ));
+    }
+
+    let eligibility_count = eligibilities.len();
+    let commit_count = commits.len();
+    let reveal_count = reveals.len();
+    let challenge_count = challenges.len();
+    let outcome_count = outcomes.len();
+    let no_show_count = no_shows.len();
+
+    eligibilities.sort_by(|left, right| {
+        (
+            left.case_id.as_str(),
+            left.round_id.as_str(),
+            left.juror.to_string(),
+        )
+            .cmp(&(
+                right.case_id.as_str(),
+                right.round_id.as_str(),
+                right.juror.to_string(),
+            ))
+    });
+    let mut eligibility_by_appeal: BTreeMap<
+        (String, String),
+        Vec<ModerationJurorEligibilityRecordV1>,
+    > = BTreeMap::new();
+    for record in eligibilities {
+        eligibility_by_appeal
+            .entry((record.case_id.clone(), record.round_id.clone()))
+            .or_default()
+            .push(record);
+    }
+    let mut appeal_views = Vec::with_capacity(appeals.len());
+    for appeal in appeals.iter().cloned() {
+        let key = (
+            appeal.intake.case_id.clone(),
+            appeal.intake.round_id.clone(),
+        );
+        appeal_views.push(ModerationFinalizedAppealViewV1 {
+            appeal,
+            eligibility: eligibility_by_appeal.remove(&key).unwrap_or_default(),
+        });
+    }
+    if !eligibility_by_appeal.is_empty() {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains orphan eligibility records".to_owned(),
+        ));
+    }
+
+    let mut commits_by_case: BTreeMap<(String, String), Vec<ModerationCommitRecordV1>> =
+        BTreeMap::new();
+    for record in commits {
+        commits_by_case
+            .entry((record.case_id.clone(), record.round_id.clone()))
+            .or_default()
+            .push(record);
+    }
+    let mut reveals_by_case: BTreeMap<(String, String), Vec<ModerationRevealRecordV1>> =
+        BTreeMap::new();
+    for record in reveals {
+        reveals_by_case
+            .entry((record.case_id.clone(), record.round_id.clone()))
+            .or_default()
+            .push(record);
+    }
+    let mut challenges_by_case: BTreeMap<(String, String), Vec<ModerationChallengeRecordV1>> =
+        BTreeMap::new();
+    for record in challenges {
+        challenges_by_case
+            .entry((record.case_id.clone(), record.round_id.clone()))
+            .or_default()
+            .push(record);
+    }
+    let mut outcomes_by_case: BTreeMap<(String, String), ModerationOutcomeRecordV1> =
+        BTreeMap::new();
+    for record in outcomes {
+        let key = (record.case_id.clone(), record.round_id.clone());
+        if outcomes_by_case.insert(key, record).is_some() {
+            return Err(QueryExecutionFail::Conversion(
+                "moderation snapshot contains duplicate terminal outcomes".to_owned(),
+            ));
+        }
+    }
+    let mut no_shows_by_case: BTreeMap<(String, String), Vec<ModerationNoShowRecordV1>> =
+        BTreeMap::new();
+    for record in no_shows {
+        no_shows_by_case
+            .entry((record.case_id.clone(), record.round_id.clone()))
+            .or_default()
+            .push(record);
+    }
+
+    let mut case_views = Vec::with_capacity(cases.len());
+    for case in cases.iter().cloned() {
+        let key = (
+            case.spec.context.case_id.clone(),
+            case.spec.round_id.clone(),
+        );
+        let mut case_commits = commits_by_case.remove(&key).unwrap_or_default();
+        case_commits.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
+        let mut case_reveals = reveals_by_case.remove(&key).unwrap_or_default();
+        case_reveals.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
+        let mut case_challenges = challenges_by_case.remove(&key).unwrap_or_default();
+        case_challenges.sort_by(|left, right| left.challenge_id.cmp(&right.challenge_id));
+        let mut case_no_shows = no_shows_by_case.remove(&key).unwrap_or_default();
+        case_no_shows.sort_by(|left, right| left.juror.to_string().cmp(&right.juror.to_string()));
+        case_views.push(ModerationFinalizedCaseViewV1 {
+            case,
+            commits: case_commits,
+            reveals: case_reveals,
+            challenges: case_challenges,
+            outcome: outcomes_by_case.remove(&key),
+            no_shows: case_no_shows,
+        });
+    }
+    if !commits_by_case.is_empty()
+        || !reveals_by_case.is_empty()
+        || !challenges_by_case.is_empty()
+        || !outcomes_by_case.is_empty()
+        || !no_shows_by_case.is_empty()
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "moderation snapshot contains orphan case subrecords".to_owned(),
+        ));
+    }
+
+    if let Some(status) = status {
+        let expected = ModerationLedgerStatusV1 {
+            appeal_intakes: count_as_u64(appeals.len(), "appeal")?,
+            eligibility_proofs: count_as_u64(eligibility_count, "eligibility")?,
+            panel_selections: count_as_u64(
+                appeals
+                    .iter()
+                    .filter(|appeal| appeal.selection.is_some())
+                    .count(),
+                "panel selection",
+            )?,
+            assignment_acceptances: sum_lengths_as_u64(
+                appeals.iter().map(|appeal| appeal.accepted_jurors.len()),
+                "assignment acceptance",
+            )?,
+            failover_replacements: sum_lengths_as_u64(
+                appeals.iter().map(|appeal| appeal.replacements.len()),
+                "failover replacement",
+            )?,
+            failed_panel_formations: count_as_u64(
+                appeals
+                    .iter()
+                    .filter(|appeal| {
+                        matches!(
+                            appeal.status,
+                            ModerationAppealStatusV1::InsufficientEligiblePool
+                                | ModerationAppealStatusV1::FailoverExhausted
+                        )
+                    })
+                    .count(),
+                "failed panel formation",
+            )?,
+            open_cases: count_as_u64(
+                cases
+                    .iter()
+                    .filter(|case| {
+                        matches!(
+                            case.status,
+                            ModerationCaseStatusV1::Open | ModerationCaseStatusV1::Challenged
+                        )
+                    })
+                    .count(),
+                "open case",
+            )?,
+            finalized_cases: count_as_u64(
+                cases
+                    .iter()
+                    .filter(|case| case.status == ModerationCaseStatusV1::Finalized)
+                    .count(),
+                "finalized case",
+            )?,
+            commitments: count_as_u64(commit_count, "commitment")?,
+            reveals: count_as_u64(reveal_count, "reveal")?,
+            challenges: count_as_u64(challenge_count, "challenge")?,
+            outcomes: count_as_u64(outcome_count, "outcome")?,
+            no_shows: count_as_u64(no_show_count, "no-show")?,
+            updated_at_unix_ms: status.updated_at_unix_ms,
+        };
+        if status != expected {
+            return Err(QueryExecutionFail::Conversion(
+                "moderation status counters disagree with the complete ledger projection"
+                    .to_owned(),
+            ));
+        }
+        let head = head.expect("initialized moderation ledger requires an event journal head");
+        let latest_event = read_persisted_event(world, head.last_sequence)
+            .map_err(query_failure)?
+            .expect("validated moderation event head has a terminal record");
+        if latest_event.event.occurred_at_unix_ms != status.updated_at_unix_ms {
+            return Err(QueryExecutionFail::Conversion(
+                "moderation event journal timestamp disagrees with ledger status".to_owned(),
+            ));
+        }
+    }
+
+    let events = latest_committed_events(state_ro, head, max_events, &mut budget)?;
+    let snapshot = ModerationFinalizedLedgerSnapshotV1 {
+        version: MODERATION_FINALIZED_SNAPSHOT_VERSION_V1,
+        finalized_height: finalized_cursor.height,
+        finalized_block_hash: finalized_cursor.block_hash,
+        policy,
+        status,
+        appeals: appeal_views,
+        cases: case_views,
+        events,
+    };
+    let encoded_len = norito::to_bytes(&snapshot)
+        .map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to encode finalized moderation snapshot: {error}"
+            ))
+        })?
+        .len();
+    if encoded_len > MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1 {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "finalized moderation snapshot encodes to {encoded_len} bytes, above {MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1}"
+        )));
+    }
+    Ok(snapshot)
 }
 
 fn query_failure(error: InstructionExecutionError) -> QueryExecutionFail {
@@ -3695,6 +4325,24 @@ impl ValidSingularQuery for FindSorafsModerationStatus {
                 "authoritative SoraFS moderation policy/status state is inconsistent".to_owned(),
             )),
         }
+    }
+}
+
+impl ValidSingularQuery for FindSorafsModerationSnapshot {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<ModerationFinalizedLedgerSnapshotV1, QueryExecutionFail> {
+        query_moderation_snapshot(self, state_ro)
+    }
+}
+
+impl ValidSingularQuery for FindSorafsModerationEvents {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<ModerationFinalizedEventPageV1, QueryExecutionFail> {
+        query_moderation_event_page(self, state_ro)
     }
 }
 
@@ -4455,6 +5103,7 @@ mod tests {
                 seed_activated_case(transaction, &manager_id, spec.clone())
             })
             .expect("activate policy and open case");
+            state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
             Self {
                 manager,
                 jurors,
@@ -4483,6 +5132,8 @@ mod tests {
             let height = self.next_height;
             let result = transact(&mut self.state, height, now, operation);
             if result.is_ok() {
+                self.state
+                    .push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(height, now)));
                 self.next_height += 1;
             }
             result
@@ -5916,5 +6567,261 @@ mod tests {
                 .eligibility_proofs,
             1
         );
+    }
+
+    #[test]
+    fn committed_event_pages_resolve_final_hashes_and_enforce_exact_cursors() {
+        let mut fixture = Fixture::new(2);
+        let juror0 = fixture.juror_id(0);
+        let juror1 = fixture.juror_id(1);
+        let reveal0 = reveal(
+            &fixture.spec,
+            &juror0,
+            SoraFsModerationVoteChoice::Uphold,
+            0x91,
+        );
+        let reveal1 = reveal(
+            &fixture.spec,
+            &juror1,
+            SoraFsModerationVoteChoice::Overturn,
+            0x92,
+        );
+        fixture
+            .run(1_500, |transaction| {
+                SubmitSorafsModerationCommit::new(encode(&commit(&reveal0)))
+                    .execute(&juror0, transaction)?;
+                SubmitSorafsModerationCommit::new(encode(&commit(&reveal1)))
+                    .execute(&juror1, transaction)
+            })
+            .expect("commit two moderation events in one block");
+
+        let view = fixture.state.view();
+        let anchor = resolve_finalized_cursor(&view).expect("resolve finalized moderation anchor");
+        assert_eq!(anchor.height, 2);
+        let first = FindSorafsModerationEvents::new(anchor, None, 2)
+            .execute(&view)
+            .expect("read first committed-event page");
+        assert_eq!(
+            first
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(first.events[0].block_height, 1);
+        assert_eq!(first.events[0].event_index, 0);
+        assert_eq!(first.events[1].block_height, 2);
+        assert_eq!(first.events[1].event_index, 0);
+        assert_eq!(
+            first.events[1].block_hash,
+            *iroha_crypto::HashOf::new(&header(2, 1_500)).as_ref()
+        );
+        assert!(first.has_more);
+        let continuation = first.next_after.expect("continuation cursor");
+
+        let second = FindSorafsModerationEvents::new(anchor, Some(continuation), 2)
+            .execute(&view)
+            .expect("read second committed-event page");
+        assert_eq!(second.events.len(), 1);
+        assert_eq!(second.events[0].sequence, 3);
+        assert_eq!(second.events[0].block_height, 2);
+        assert_eq!(second.events[0].event_index, 1);
+        assert!(!second.has_more);
+        assert!(second.next_after.is_none());
+        let exhausted = FindSorafsModerationEvents::new(anchor, Some(second.events[0].cursor()), 2)
+            .execute(&view)
+            .expect("a cursor at the journal head yields an empty page");
+        assert!(exhausted.events.is_empty());
+        assert!(!exhausted.has_more);
+        assert!(exhausted.next_after.is_none());
+
+        let mut tampered_after = continuation;
+        tampered_after.block_hash[0] ^= 0xFF;
+        assert!(matches!(
+            FindSorafsModerationEvents::new(anchor, Some(tampered_after), 2).execute(&view),
+            Err(QueryExecutionFail::Expired)
+        ));
+        let mut tampered_anchor = anchor;
+        tampered_anchor.block_hash[0] ^= 0xFF;
+        assert!(matches!(
+            FindSorafsModerationEvents::new(tampered_anchor, None, 2).execute(&view),
+            Err(QueryExecutionFail::Expired)
+        ));
+        assert!(
+            FindSorafsModerationEvents::new(anchor, None, 0)
+                .execute(&view)
+                .is_err()
+        );
+        assert!(
+            FindSorafsModerationEvents::new(anchor, None, MODERATION_QUERY_MAX_EVENTS_V1 + 1)
+                .execute(&view)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn snapshot_rebuilds_complete_chain_projection_in_logical_order() {
+        let mut fixture = PanelFixture::new();
+        let appellant = fixture.appellant_id();
+        let z_intake = panel_intake(&fixture.appellant, "z-case", 1, 0, 1, 0x91);
+        fixture
+            .run(1_001_000, |transaction| {
+                SubmitSorafsModerationAppeal::new(z_intake).execute(&appellant, transaction)
+            })
+            .expect("submit z appeal");
+        let mut a_intake = panel_intake(&fixture.appellant, "a-case", 1, 0, 1, 0x92);
+        a_intake.proof_token_digest = [0x35; 32];
+        fixture
+            .run(1_001_001, |transaction| {
+                SubmitSorafsModerationAppeal::new(a_intake).execute(&appellant, transaction)
+            })
+            .expect("submit a appeal");
+
+        let view = fixture.state.view();
+        let snapshot = FindSorafsModerationSnapshot::new(8, 16)
+            .execute(&view)
+            .expect("rebuild complete finalized moderation snapshot");
+        assert_eq!(snapshot.finalized_height, 3);
+        assert_eq!(
+            snapshot
+                .appeals
+                .iter()
+                .map(|appeal| appeal.appeal.intake.case_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a-case", "z-case"]
+        );
+        assert!(snapshot.cases.is_empty());
+        assert_eq!(snapshot.events.len(), 3);
+        assert_eq!(
+            snapshot
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert!(
+            FindSorafsModerationSnapshot::new(1, 16)
+                .execute(&view)
+                .is_err(),
+            "a complete snapshot must fail instead of truncating cases"
+        );
+
+        let appeal = snapshot.appeals[0].appeal.clone();
+        drop(view);
+        fixture.state.world.smart_contract_state.insert(
+            digest_key(APPEAL_STATE_KEY_PREFIX, [0xEE; 32]),
+            encode_state(&appeal, "corrupt duplicate appeal").expect("encode corrupt fixture"),
+        );
+        assert!(
+            FindSorafsModerationSnapshot::new(8, 16)
+                .execute(&fixture.state.view())
+                .is_err(),
+            "a mismatched persisted key must fail the complete projection"
+        );
+    }
+
+    #[test]
+    fn snapshot_includes_all_eligibility_and_latest_typed_events() {
+        let mut fixture = PanelFixture::new();
+        fixture.submit(1, 0, 1);
+        fixture.register_juror();
+        fixture.finalize_single_juror_sortition();
+
+        let snapshot = FindSorafsModerationSnapshot::new(8, 16)
+            .execute(&fixture.state.view())
+            .expect("rebuild eligibility-bearing moderation snapshot");
+        assert_eq!(snapshot.appeals.len(), 1);
+        assert_eq!(snapshot.appeals[0].eligibility.len(), 1);
+        assert_eq!(snapshot.appeals[0].eligibility[0].juror, fixture.juror_id());
+        assert_eq!(snapshot.events.len(), 4);
+        assert_eq!(
+            snapshot.events.last().map(|event| event.event.kind),
+            Some(SorafsModerationLedgerEventKind::SortitionFinalized)
+        );
+        assert_eq!(
+            snapshot.events.last().map(|event| event.block_height),
+            Some(4)
+        );
+    }
+
+    #[test]
+    fn journal_rejects_missing_committed_parent_and_orphan_records() {
+        let manager_pair = keypair(0xA1);
+        let manager = account(&manager_pair);
+        let mut state = state(&[&manager_pair], &manager);
+        transact(&mut state, 1, OPENED_AT, |transaction| {
+            SetSorafsModerationPolicy::new(policy()).execute(&manager, transaction)
+        })
+        .expect("write initial policy event");
+
+        let active = FindSorafsModerationPolicy
+            .execute(&state.view())
+            .expect("active policy");
+        let mut next = policy();
+        next.revision = 2;
+        next.predecessor_policy_digest = Some(active.policy_digest);
+        assert!(
+            transact(&mut state, 2, OPENED_AT + 1, |transaction| {
+                SetSorafsModerationPolicy::new(next).execute(&manager, transaction)
+            })
+            .is_err(),
+            "journal append must derive height from the committed parent, not fabricate a block hash"
+        );
+        assert_eq!(
+            FindSorafsModerationPolicy
+                .execute(&state.view())
+                .expect("policy rollback")
+                .policy
+                .revision,
+            1
+        );
+
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header(1, OPENED_AT)));
+        let (head, terminal) = {
+            let view = state.view();
+            let head = read_event_journal_head(view.world())
+                .expect("read event head")
+                .expect("event head");
+            let terminal = read_persisted_event(view.world(), head.last_sequence)
+                .expect("read terminal event")
+                .expect("terminal event");
+            (head, terminal)
+        };
+        let orphan = ModerationPersistedEventV1 {
+            sequence: head.last_sequence + 2,
+            target_block_height: terminal.target_block_height,
+            event_index: terminal.event_index + 2,
+            event: terminal.event,
+        };
+        state.world.smart_contract_state.insert(
+            event_key(orphan.sequence),
+            encode_state(&orphan, "orphan moderation event").expect("encode orphan event"),
+        );
+        let anchor =
+            resolve_finalized_cursor(&state.view()).expect("resolve finalized moderation anchor");
+        assert!(
+            FindSorafsModerationEvents::new(anchor, None, 8)
+                .execute(&state.view())
+                .is_err(),
+            "event records beyond the journal head must fail closed"
+        );
+    }
+
+    #[test]
+    fn snapshot_budget_fails_closed_at_record_and_byte_ceilings() {
+        let key = Name::from_str("moderation_budget_probe").expect("bounded probe key");
+        let mut byte_budget = ModerationSnapshotReadBudget {
+            records: 0,
+            encoded_bytes: MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1,
+        };
+        assert!(byte_budget.charge(&key, &[0x01]).is_err());
+
+        let mut record_budget = ModerationSnapshotReadBudget {
+            records: MODERATION_QUERY_MAX_SNAPSHOT_RECORDS_V1,
+            encoded_bytes: 0,
+        };
+        assert!(record_budget.charge(&key, &[]).is_err());
     }
 }

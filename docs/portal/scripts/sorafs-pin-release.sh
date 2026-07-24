@@ -29,34 +29,44 @@ split_list() {
 append_asset_descriptor() {
   local target="$1"
   local label="$2"
-  local verify_summary="$3"
+  local manifest_summary="$3"
   local proof_summary="$4"
-  local bundle_path="$5"
-  local signature_path="$6"
-  local sign_summary="$7"
-  local submit_summary="$8"
-  local submission_flag="$9"
-  local alias_namespace="${10}"
-  local alias_name="${11}"
-  local alias_proof="${12}"
-  local metadata_label="${13}"
-  local alias_label="${14}"
-  local torii_url="${15}"
-  local submitted_epoch="${16}"
-  local authority="${17}"
-  local car_path="${18}"
-  local plan_path="${19}"
-  python3 - "$target" <<'PY'
+  local submit_summary="$5"
+  local submission_flag="$6"
+  local alias_namespace="$7"
+  local alias_name="$8"
+  local alias_proof="$9"
+  local metadata_label="${10}"
+  local alias_label="${11}"
+  local torii_url="${12}"
+  local submitted_epoch="${13}"
+  local authority="${14}"
+  local car_path="${15}"
+  local plan_path="${16}"
+  python3 - \
+    "$target" \
+    "$label" \
+    "$manifest_summary" \
+    "$proof_summary" \
+    "$submit_summary" \
+    "$submission_flag" \
+    "$alias_namespace" \
+    "$alias_name" \
+    "$alias_proof" \
+    "$metadata_label" \
+    "$alias_label" \
+    "$torii_url" \
+    "$submitted_epoch" \
+    "$authority" \
+    "$car_path" \
+    "$plan_path" <<'PY'
 import json, os, pathlib, stat, sys
 
 (
     path,
     label,
-    verify_summary,
+    manifest_summary,
     proof_summary,
-    bundle_path,
-    signature_path,
-    sign_summary,
     submit_summary,
     submission_flag,
     alias_namespace,
@@ -69,15 +79,12 @@ import json, os, pathlib, stat, sys
     authority,
     car_path,
     plan_path,
-) = sys.argv[1:20]
+) = sys.argv[1:17]
 
 entry = {
     "label": label,
-    "verify_summary": verify_summary or None,
+    "manifest_summary": manifest_summary or None,
     "proof_summary": proof_summary or None,
-    "bundle_path": bundle_path or None,
-    "signature_path": signature_path or None,
-    "sign_summary": sign_summary or None,
     "submit_summary": submit_summary or None,
     "submission_performed": submission_flag.lower() == "true",
     "alias_namespace": alias_namespace or None,
@@ -201,10 +208,7 @@ package_payload() {
   local summary="${prefix}.car.summary.json"
   local manifest="${prefix}.manifest.to"
   local manifest_json="${prefix}.manifest.json"
-  local bundle="${prefix}.manifest.bundle.json"
-  local signature="${prefix}.manifest.sig"
-  local sign_summary="${prefix}.manifest.sign.summary.json"
-  local verify_summary="${prefix}.manifest.verify.summary.json"
+  local manifest_summary="${prefix}.manifest.summary.json"
   local proof_summary="${prefix}.proof.summary.json"
   local submit_summary="${prefix}.manifest.submit.summary.json"
   local submit_response="${prefix}.manifest.submit.response.json"
@@ -239,30 +243,14 @@ package_payload() {
   log "Building ${label} manifest"
   cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
     manifest build \
-    "${manifest_args[@]}"
-
-  log "Signing ${label} manifest bundle via Sigstore"
-  cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-    manifest sign \
-    --manifest="${manifest}" \
-    --chunk-plan="${plan}" \
-    --bundle-out="${bundle}" \
-    --signature-out="${signature}" \
-    --include-token="${INCLUDE_TOKEN}" \
-    "${identity_args[@]}" | tee "${sign_summary}"
-
-  log "Verifying ${label} manifest signature bundle"
-  cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-    manifest verify-signature \
-    --manifest="${manifest}" \
-    --bundle="${bundle}" \
-    --chunk-plan="${plan}" | tee "${verify_summary}"
+    "${manifest_args[@]}" | tee "${manifest_summary}"
 
   log "Verifying ${label} CAR payload"
   cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
     proof verify \
     --manifest="${manifest}" \
-    --car="${car}" | tee "${proof_summary}"
+    --car="${car}" \
+    --chunk-plan="${plan}" | tee "${proof_summary}"
 
   local submit_performed=false
   if ! "${SKIP_SUBMIT}" && [[ -n "${TORII_URL}" ]] && [[ -n "${AUTHORITY}" ]] && [[ -n "${SUBMITTED_EPOCH}" ]]; then
@@ -313,10 +301,7 @@ package_payload() {
 
   LAST_MANIFEST_PATH="${manifest}"
   LAST_MANIFEST_JSON="${manifest_json}"
-  LAST_MANIFEST_BUNDLE="${bundle}"
-  LAST_MANIFEST_SIGNATURE="${signature}"
-  LAST_SIGN_SUMMARY="${sign_summary}"
-  LAST_VERIFY_SUMMARY="${verify_summary}"
+  LAST_MANIFEST_SUMMARY="${manifest_summary}"
   LAST_PROOF_SUMMARY="${proof_summary}"
   LAST_SUBMIT_SUMMARY="${submit_summary}"
   LAST_SUBMIT_RESPONSE="${submit_response}"
@@ -419,9 +404,10 @@ usage() {
 Usage: sorafs-pin-release.sh [options]
 
 Packages the docs portal build output, emits reproducible SoraFS artefacts
-(CAR, manifest, plan, bundle), verifies them, and optionally submits the
+(CAR, manifest, plan, proof summary), verifies them, and optionally submits the
 manifest to Torii. Environment variables provide sane defaults so CI workflows
-can wire secrets without inline arguments.
+can wire submission credentials without inline arguments. Release
+authentication is applied later to the aggregate release manifest.
 
 Options:
   --build-dir PATH              Path to built docs (default: build)
@@ -443,10 +429,6 @@ Options:
   --private-key KEY             Private key for submission authority
   --private-key-file PATH       Private key file path for submission authority
   --successor-of HEX            Optional successor-of manifest digest
-  --identity-token-provider P   Sigstore provider (e.g., github-actions)
-  --identity-token-audience AUD Sigstore audience (required with provider)
-  --identity-token-env VAR      Env var exposing a Sigstore OIDC token
-  --include-token true|false    Whether to embed the OIDC token in bundle (default: false)
   --dns-change-ticket ID        Change ticket recorded in the DNS cutover descriptor
   --dns-cutover-window RANGE    ISO8601 window for production DNS cutover (e.g., 2026-03-21T15:00Z/2026-03-21T15:30Z)
   --dns-hostname HOSTNAME       Production hostname (defaults to \$DNS_HOSTNAME when set)
@@ -505,8 +487,6 @@ Relevant environment defaults (can be overridden via flags):
   PRIVATE_KEY_FILE, SUBMITTED_EPOCH, PIN_MIN_REPLICAS,
   PIN_STORAGE_CLASS, PIN_RETENTION_EPOCH, PIN_LABEL,
   CHUNKER_HANDLE, DOCS_RELEASE_TAG, DOCS_RELEASE_SOURCE,
-  IDENTITY_TOKEN_PROVIDER, IDENTITY_TOKEN_AUDIENCE,
-  IDENTITY_TOKEN_ENV, INCLUDE_TOKEN,
   DNS_CHANGE_TICKET, DNS_CUTOVER_WINDOW, DNS_HOSTNAME,
   DNS_ZONE, DNS_OPS_CONTACT, DNS_CACHE_PURGE_ENDPOINT,
   DNS_CACHE_PURGE_AUTH_ENV, DNS_PREVIOUS_PLAN,
@@ -548,10 +528,6 @@ AUTHORITY="${AUTHORITY:-${SORA_FS_AUTHORITY:-}}"
 PRIVATE_KEY="${PRIVATE_KEY:-${SORA_FS_PRIVATE_KEY:-}}"
 PRIVATE_KEY_FILE="${PRIVATE_KEY_FILE:-}"
 SUCCESSOR_OF="${PIN_SUCCESSOR_OF:-}"
-IDENTITY_TOKEN_PROVIDER="${IDENTITY_TOKEN_PROVIDER:-${SIGSTORE_IDENTITY_PROVIDER:-}}"
-IDENTITY_TOKEN_AUDIENCE="${IDENTITY_TOKEN_AUDIENCE:-sorafs-devportal}"
-IDENTITY_TOKEN_ENV="${IDENTITY_TOKEN_ENV:-}"
-INCLUDE_TOKEN="${INCLUDE_TOKEN:-false}"
 DNS_CHANGE_TICKET="${DNS_CHANGE_TICKET:-}"
 DNS_CUTOVER_WINDOW="${DNS_CUTOVER_WINDOW:-}"
 DNS_HOSTNAME="${DNS_HOSTNAME:-}"
@@ -651,10 +627,6 @@ while [[ $# -gt 0 ]]; do
     --private-key) PRIVATE_KEY="$2"; shift 2 ;;
     --private-key-file) PRIVATE_KEY_FILE="$2"; shift 2 ;;
     --successor-of) SUCCESSOR_OF="$2"; shift 2 ;;
-    --identity-token-provider) IDENTITY_TOKEN_PROVIDER="$2"; shift 2 ;;
-    --identity-token-audience) IDENTITY_TOKEN_AUDIENCE="$2"; shift 2 ;;
-    --identity-token-env) IDENTITY_TOKEN_ENV="$2"; shift 2 ;;
-    --include-token) INCLUDE_TOKEN="$2"; shift 2 ;;
     --dns-change-ticket) DNS_CHANGE_TICKET="$2"; shift 2 ;;
     --dns-cutover-window) DNS_CUTOVER_WINDOW="$2"; shift 2 ;;
     --dns-hostname) DNS_HOSTNAME="$2"; shift 2 ;;
@@ -745,10 +717,7 @@ PLAN_OUT="${PORTAL_PREFIX}.plan.json"
 CAR_SUMMARY="${PORTAL_PREFIX}.car.summary.json"
 MANIFEST_OUT="${PORTAL_PREFIX}.manifest.to"
 MANIFEST_JSON="${PORTAL_PREFIX}.manifest.json"
-BUNDLE_OUT="${PORTAL_PREFIX}.manifest.bundle.json"
-SIGNATURE_OUT="${PORTAL_PREFIX}.manifest.sig"
-SIGN_SUMMARY="${PORTAL_PREFIX}.manifest.sign.summary.json"
-VERIFY_SUMMARY="${PORTAL_PREFIX}.manifest.verify.summary.json"
+MANIFEST_SUMMARY="${PORTAL_PREFIX}.manifest.summary.json"
 PROOF_SUMMARY="${PORTAL_PREFIX}.proof.summary.json"
 SUBMIT_SUMMARY="${PORTAL_PREFIX}.manifest.submit.summary.json"
 SUBMIT_RESPONSE="${PORTAL_PREFIX}.manifest.submit.response.json"
@@ -764,30 +733,6 @@ log "Archiving build output (${BUILD_DIR}) -> ${ARCHIVE}"
 tar -C "${BUILD_DIR}" -czf "${ARCHIVE}" .
 
 printf '[]\n' > "${ADDITIONAL_ASSETS_FILE}"
-
-identity_args=()
-if [[ -n "${IDENTITY_TOKEN_ENV}" ]]; then
-  identity_args+=( "--identity-token-env=${IDENTITY_TOKEN_ENV}" )
-elif [[ -n "${IDENTITY_TOKEN_PROVIDER}" ]]; then
-  if [[ -z "${IDENTITY_TOKEN_AUDIENCE}" ]]; then
-    err "`--identity-token-provider` requires an audience"
-  fi
-  identity_args+=(
-    "--identity-token-provider=${IDENTITY_TOKEN_PROVIDER}"
-    "--identity-token-audience=${IDENTITY_TOKEN_AUDIENCE}"
-  )
-elif [[ -n "${SIGSTORE_ID_TOKEN:-}" ]]; then
-  identity_args+=( "--identity-token-env=SIGSTORE_ID_TOKEN" )
-elif [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
-  identity_args+=(
-    "--identity-token-provider=github-actions"
-    "--identity-token-audience=${IDENTITY_TOKEN_AUDIENCE}"
-  )
-fi
-
-if [[ "${#identity_args[@]}" -eq 0 ]]; then
-  err "no Sigstore identity token source configured (set IDENTITY_TOKEN_PROVIDER or SIGSTORE_ID_TOKEN)"
-fi
 
 portal_metadata_flags=("${common_metadata_flags[@]}")
 
@@ -848,11 +793,8 @@ else
     append_asset_descriptor \
       "${ADDITIONAL_ASSETS_FILE}" \
       "openapi" \
-      "${LAST_VERIFY_SUMMARY}" \
+      "${LAST_MANIFEST_SUMMARY}" \
       "${LAST_PROOF_SUMMARY}" \
-      "${LAST_MANIFEST_BUNDLE}" \
-      "${LAST_MANIFEST_SIGNATURE}" \
-      "${LAST_SIGN_SUMMARY}" \
       "${LAST_SUBMIT_SUMMARY}" \
       "${LAST_SUBMISSION_PERFORMED}" \
       "${OPENAPI_ALIAS_NAMESPACE}" \
@@ -905,11 +847,8 @@ else
     append_asset_descriptor \
       "${ADDITIONAL_ASSETS_FILE}" \
       "portal-sbom" \
-      "${LAST_VERIFY_SUMMARY}" \
+      "${LAST_MANIFEST_SUMMARY}" \
       "${LAST_PROOF_SUMMARY}" \
-      "${LAST_MANIFEST_BUNDLE}" \
-      "${LAST_MANIFEST_SIGNATURE}" \
-      "${LAST_SIGN_SUMMARY}" \
       "${LAST_SUBMIT_SUMMARY}" \
       "${LAST_SUBMISSION_PERFORMED}" \
       "${PORTAL_SBOM_ALIAS_NAMESPACE}" \
@@ -941,11 +880,8 @@ else
     append_asset_descriptor \
       "${ADDITIONAL_ASSETS_FILE}" \
       "openapi-sbom" \
-      "${LAST_VERIFY_SUMMARY}" \
+      "${LAST_MANIFEST_SUMMARY}" \
       "${LAST_PROOF_SUMMARY}" \
-      "${LAST_MANIFEST_BUNDLE}" \
-      "${LAST_MANIFEST_SIGNATURE}" \
-      "${LAST_SIGN_SUMMARY}" \
       "${LAST_SUBMIT_SUMMARY}" \
       "${LAST_SUBMISSION_PERFORMED}" \
       "${OPENAPI_SBOM_ALIAS_NAMESPACE}" \
@@ -963,9 +899,11 @@ fi
 
 release_tag="${DOCS_RELEASE_TAG:-}"
 release_source="${DOCS_RELEASE_SOURCE:-}"
+GATEWAY_BINDING_JSON="${SORA_DIR}/portal.gateway.binding.json"
+GATEWAY_HEADERS="${SORA_DIR}/portal.gateway.headers.txt"
 
 node - \
-  "${VERIFY_SUMMARY}" \
+  "${MANIFEST_SUMMARY}" \
   "${PROOF_SUMMARY}" \
   "${PIN_REPORT}" \
   "${SUBMIT_SUMMARY}" \
@@ -973,9 +911,6 @@ node - \
   "${portal_submit_performed}" \
   "${BUILD_DIR}" \
   "${PLAN_OUT}" \
-  "${BUNDLE_OUT}" \
-  "${SIGN_SUMMARY}" \
-  "${SIGNATURE_OUT}" \
   "${PRIMARY_ALIAS}" \
   "${PROPOSAL_ALIAS}" \
   "${ALIAS_NAMESPACE}" \
@@ -994,7 +929,7 @@ const fs = require('node:fs');
 const [
   ,
   ,
-  verifyPath,
+  manifestSummaryPath,
   proofPath,
   reportPath,
   submitSummaryPath,
@@ -1002,9 +937,6 @@ const [
   submitPerformedRaw,
   buildDir,
   planPath,
-  bundlePath,
-  signSummaryPath,
-  signaturePath,
   aliasLabel,
   proposalAlias,
   aliasNamespace,
@@ -1030,19 +962,19 @@ function readTextOrNull(p) {
   if (!fs.existsSync(p)) return null;
   return fs.readFileSync(p, 'utf8');
 }
-const verify = readJsonOrNull(verifyPath);
+const manifestSummary = readJsonOrNull(manifestSummaryPath);
 const proof = readJsonOrNull(proofPath);
-if (!verify || !proof) {
-  console.error('failed to read verification summaries');
+if (!manifestSummary || !proof) {
+  console.error('failed to read content-manifest summaries');
   process.exit(1);
 }
 const submit = readJsonOrNull(submitSummaryPath);
 const manifestInfo = {
-  path: verify.manifest_path,
-  blake3_hex: verify.manifest_blake3_hex,
-  chunk_digest_sha3_hex: verify.chunk_digest_sha3_256_hex || null,
-  chunk_plan_chunk_count: verify.chunk_plan_chunk_count || null,
-  chunk_plan_source: verify.chunk_plan_source || null
+  path: manifestSummary.manifest_path,
+  blake3_hex: manifestSummary.manifest_digest_hex,
+  chunk_digest_sha3_hex: proof.chunk_digest_sha3_hex || null,
+  chunk_plan_chunk_count: proof.chunk_plan_chunk_count || proof.chunk_count || null,
+  chunk_plan_source: proof.chunk_plan_source || planPath || null
 };
 const carInfo = {
   path: proof.car_path,
@@ -1052,12 +984,6 @@ const carInfo = {
   payload_digest_hex: proof.payload_digest_hex,
   car_digest_hex: proof.car_digest_hex,
   chunker_handle: proof.chunker_handle
-};
-const signingInfo = {
-  bundle_path: bundlePath,
-  signature_path: signaturePath,
-  sign_summary_path: signSummaryPath,
-  verify_summary_path: verifyPath
 };
 const bindingJson = readJsonOrNull(gatewayBindingPath);
 const bindingHeaders = readTextOrNull(gatewayHeaderPath);
@@ -1088,9 +1014,9 @@ const additionalAssets = [];
 const additionalAssetDescriptors = readJsonOrNull(additionalAssetsPath);
 if (Array.isArray(additionalAssetDescriptors)) {
   for (const descriptor of additionalAssetDescriptors) {
-    const assetVerify = readJsonOrNull(descriptor.verify_summary);
+    const assetManifest = readJsonOrNull(descriptor.manifest_summary);
     const assetProof = readJsonOrNull(descriptor.proof_summary);
-    if (!assetVerify || !assetProof) {
+    if (!assetManifest || !assetProof) {
       console.warn(`skipping asset ${descriptor.label} due to missing summaries`);
       continue;
     }
@@ -1099,11 +1025,13 @@ if (Array.isArray(additionalAssetDescriptors)) {
       metadata_label: descriptor.metadata_label || null,
       alias_label: descriptor.alias_label || null,
       manifest: {
-        path: assetVerify.manifest_path,
-        blake3_hex: assetVerify.manifest_blake3_hex,
-        chunk_digest_sha3_hex: assetVerify.chunk_digest_sha3_256_hex || null,
-        chunk_plan_chunk_count: assetVerify.chunk_plan_chunk_count || null,
-        chunk_plan_source: assetVerify.chunk_plan_source || descriptor.plan_path || null
+        path: assetManifest.manifest_path,
+        blake3_hex: assetManifest.manifest_digest_hex,
+        chunk_digest_sha3_hex: assetProof.chunk_digest_sha3_hex || null,
+        chunk_plan_chunk_count:
+          assetProof.chunk_plan_chunk_count || assetProof.chunk_count || null,
+        chunk_plan_source:
+          assetProof.chunk_plan_source || descriptor.plan_path || null
       },
       car: {
         path: descriptor.car_path || assetProof.car_path,
@@ -1114,12 +1042,6 @@ if (Array.isArray(additionalAssetDescriptors)) {
         car_digest_hex: assetProof.car_digest_hex,
         chunker_handle: assetProof.chunker_handle,
         pin_policy: assetProof.pin_policy || null
-      },
-      signing: {
-        bundle_path: descriptor.bundle_path || null,
-        signature_path: descriptor.signature_path || null,
-        sign_summary_path: descriptor.sign_summary || null,
-        verify_summary_path: descriptor.verify_summary || null
       },
       submission: descriptor.submission_performed
         ? {
@@ -1149,7 +1071,10 @@ const report = {
   manifest: manifestInfo,
   car: carInfo,
   pin_policy: proof.pin_policy || null,
-  signing: signingInfo,
+  release_authentication: {
+    mode: 'external-aggregate-release-manifest',
+    helper: 'scripts/release_sorafs_cli.sh'
+  },
   submission: submitPerformed ? submissionInfo : null,
   alias_binding: submitPerformed ? {
     namespace: aliasNamespace || submit?.alias_namespace || null,
@@ -1163,8 +1088,6 @@ const report = {
 fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
 NODE
 
-GATEWAY_BINDING_JSON="${SORA_DIR}/portal.gateway.binding.json"
-GATEWAY_HEADERS="${SORA_DIR}/portal.gateway.headers.txt"
 binding_args=(
   "--manifest" "${MANIFEST_JSON}"
   "--json-out" "${GATEWAY_BINDING_JSON}"

@@ -19,7 +19,7 @@ Sidebar_label: Runbook لمحاكاة القدرات
 هذه الصفحة تعكس `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. قم بمزامنة النسختين حتى يتم هجرة مجموعة الوثائق التي ورثها أبو الهول بالكامل.
 :::
 
-يشرح كتاب التشغيل هذا التعليق على تنفيذ مجموعة محاكاة سوق السعة SF-2c ورؤية المقاييس الناتجة. يصادق على التفاوض بشأن الحصص وإدارة الفشل ومعالجة قطع النوبة بمساعدة التركيبات المحددة في `docs/examples/sorafs_capacity_simulation/`. تستخدم الحمولات ذات السعة دائمًا `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفق التفريغ الواضح/CAR.
+يشرح كتاب التشغيل هذا التعليق على تنفيذ مجموعة محاكاة سوق السعة SF-2c ورؤية المقاييس الناتجة. يصادق على التفاوض بشأن الحصص وإدارة الفشل ومعالجة قطع النوبة بمساعدة التركيبات المحددة في `docs/examples/sorafs_capacity_simulation/`. تستخدم الحمولات ذات السعة دائمًا `sorafs_manifest_builder capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفق التفريغ الواضح/CAR.
 
 ## 1. إنشاء القطع الأثرية CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` يحتوي على `sorafs_manifest_stub capacity` لزيادة الحمولات Norito وblobs base64 ومجموعة الطلبات Torii والسيرة الذاتية JSON من أجل:- ثلاثة إعلانات من الموردين المشاركين في سيناريو التفاوض على الحصص.
+`run_cli.sh` يحتوي على `sorafs_manifest_builder capacity` لزيادة الحمولات Norito وblobs base64 ومجموعة الطلبات Torii والسيرة الذاتية JSON من أجل:- ثلاثة إعلانات من الموردين المشاركين في سيناريو التفاوض على الحصص.
 - أمر نسخ يسمح بالبيان المرحلي بين هؤلاء الموردين.
 - لقطات عن بعد للخط الأساسي المسبق والفاصل الزمني للشاشة واستعادة الفشل.
 - حمولة من الدعاوى القضائية تتطلب تقطيعًا بعد اللوحة المحاكية.

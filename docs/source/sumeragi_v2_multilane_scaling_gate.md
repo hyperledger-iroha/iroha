@@ -123,6 +123,12 @@ creating another deployment or load stack. The runner exposes their absolute
 paths as `IROHA_GSCALE_DEPLOY_LOCALNET`, `IROHA_GSCALE_TX_LOAD`, and
 `IROHA_GSCALE_NEXUS_LANE_LOAD_TEST`.
 
+For release evidence, `software.workspace_source_sha256` must be the
+permission-aware manifest of the retained sealed release tree, not a digest of
+an earlier mutable checkout. The archived validator and all three archived
+helpers must be byte-identical to the files in that retained tree. The release
+receipt rechecks those files before and after replaying the validator.
+
 ## Trial harness contract
 
 Pass one executable, no-argument harness with `--trial-command`. The runner
@@ -212,10 +218,17 @@ runs/pair_01/four_lane/{raw_samples.json,trial.log,support/...}
 An archived bundle can be checked again without running a benchmark:
 
 ```bash
+mkdir -p "${RECHECK_OUTPUT_DIR}"
 python3 scripts/nexus/validate_multilane_scaling_evidence.py \
   "${G_SCALE_EVIDENCE_DIR}/scaling_evidence.json" \
-  --report "${G_SCALE_EVIDENCE_DIR}/validation_report.recheck.json"
+  --report "${RECHECK_OUTPUT_DIR}/validation_report.json"
 ```
+
+The report parent must already exist and the destination must be absent.
+Publication is durable and no-clobber: a regular file, symlink, or concurrent
+publisher at the destination causes failure instead of replacement. Keep the
+recheck report outside the archived bundle: unexpected files inside the bundle
+are rejected.
 
 Validation fails for a missing, duplicate, or unordered pair; seed or offered
 load mismatch; a skipped, failed, timed-out, or pending run; wrong active lane
@@ -226,9 +239,24 @@ performance threshold.
 ## Closure-ledger handoff
 
 A `validation_report.json` with `"result": "pass"` is necessary but not by
-itself sufficient to mark `G-SCALE` evidenced. Archive the complete directory
-with the release record, bind its manifest/report hashes in that record, and
-confirm the source and configuration identities belong to the candidate being
-released. Only then may the closure-ledger owner change `G-SCALE` evidence
-state. Never copy a test fixture, edit a failed report, or infer results from
-human-readable logs.
+itself sufficient to mark `G-SCALE` evidenced. The production release must
+receive these exact values through authenticated bootstrap
+`--runner-environment NAME=VALUE` entries:
+
+| Name | Required value |
+| --- | --- |
+| `IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST` | Absolute canonical non-symlink path to the bundle's `scaling_evidence.json` |
+| `IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256` | Lowercase SHA-256 of the approved archived harness |
+| `IROHA_RELEASE_SCALING_CONFIGURATION_SHA256` | Lowercase SHA-256 of the pinned archived configuration |
+| `IROHA_RELEASE_SCALING_IROHAD_SHA256` | Lowercase SHA-256 named for the measured `irohad` binary |
+| `IROHA_RELEASE_SCALING_IROHA_CLI_SHA256` | Lowercase SHA-256 named for the measured CLI binary |
+
+Ambient or lookalike variables are not accepted. The sealed corridor checks
+the four digests at every identity checkpoint, validates the bundle against
+the sealed commit/workspace and retained validator/tooling before network
+gates, and passes the same authenticated values to aggregate-receipt replay.
+The receipt archives the complete bundle and those trust anchors.
+
+Only after that receipt succeeds may the closure-ledger owner change
+`G-SCALE` evidence state. Never copy a test fixture, edit a failed report, or
+infer results from human-readable logs.

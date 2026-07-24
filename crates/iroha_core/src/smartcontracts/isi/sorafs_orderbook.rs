@@ -27,22 +27,26 @@ use iroha_data_model::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
             FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
-            FindSorafsOrderbookOrderById, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
-            FindSorafsOrderbookReceiptById, FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
-            FindSorafsOrderbookTradeById,
+            FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
+            FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
+            FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
+            FindSorafsOrderbookTrades,
         },
     },
     sorafs::capacity::ProviderId,
     sorafs::orderbook::{
         ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1, ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1,
         ORDERBOOK_MAX_OPEN_ORDERS_V1, ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1,
-        ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookAdmissionPolicyRecord, OrderbookCancellationRecord,
-        OrderbookLedgerStatusV1, OrderbookOrderPageV1, OrderbookOrderRecord,
-        OrderbookOrderStatusV1, OrderbookOwnerNonceRecord, OrderbookSettlementChannelRecord,
-        OrderbookSettlementChannelStatusV1, OrderbookSettlementIndexRecord,
-        OrderbookSettlementRangeRecord, OrderbookSettlementReceiptPageV1,
-        OrderbookSettlementReceiptRecord, OrderbookTradeRecord, orderbook_order_escrow_id,
-        orderbook_settlement_escrow_id,
+        ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1, ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1,
+        ORDERBOOK_QUERY_MAX_ITEMS_V1, ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
+        OrderbookAdmissionPolicyRecord, OrderbookCancellationRecord, OrderbookFinalizedCursorV1,
+        OrderbookFinalizedEventPageV1, OrderbookFinalizedEventV1, OrderbookLedgerStatusV1,
+        OrderbookOrderPageV1, OrderbookOrderRecord, OrderbookOrderStatusV1,
+        OrderbookOwnerNonceRecord, OrderbookSettlementChannelPageV1,
+        OrderbookSettlementChannelRecord, OrderbookSettlementChannelStatusV1,
+        OrderbookSettlementIndexRecord, OrderbookSettlementRangeRecord,
+        OrderbookSettlementReceiptPageV1, OrderbookSettlementReceiptRecord, OrderbookTradePageV1,
+        OrderbookTradeRecord, orderbook_order_escrow_id, orderbook_settlement_escrow_id,
     },
 };
 use iroha_primitives::{json::Json, numeric::Quantity};
@@ -73,6 +77,8 @@ const RECEIPT_STATE_KEY_PREFIX: &str = "sorafs_orderbook_receipt_v1_";
 const RECEIPT_INDEX_KEY_PREFIX: &str = "sorafs_orderbook_receipt_index_v1_";
 const TRADE_STATE_KEY_PREFIX: &str = "sorafs_orderbook_trade_v1_";
 const CHANNEL_STATE_KEY_PREFIX: &str = "sorafs_orderbook_channel_v1_";
+const EVENT_STATE_KEY_PREFIX: &str = "sorafs_orderbook_event_v1_";
+const EVENT_JOURNAL_HEAD_STATE_KEY: &str = "sorafs_orderbook_event_head_v1";
 const NONCE_KEY_DOMAIN_V1: &[u8] = b"sorafs.orderbook.owner-nonce-state.v1";
 const STATE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
@@ -82,6 +88,21 @@ const STATE_LIMITS: DecodeLimits = DecodeLimits::new(
     STATE_MAX_BYTES * 2,
     64,
 );
+
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct OrderbookPersistedEventV1 {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+    event: SorafsOrderbookLedgerEvent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct OrderbookEventJournalHeadV1 {
+    last_sequence: u64,
+    last_target_block_height: u64,
+    last_event_index: u32,
+}
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -105,22 +126,124 @@ fn emit_orderbook_event(
     book_revision: u64,
     authority: &AccountId,
     now_unix: u64,
-) {
+) -> Result<(), InstructionExecutionError> {
+    let committed_parent_height = u64::try_from(state_transaction.block_hashes().len())
+        .map_err(|_| corrupt_state("committed orderbook parent height does not fit into u64"))?;
+    let target_block_height = committed_parent_height
+        .checked_add(1)
+        .ok_or_else(|| corrupt_state("orderbook event target block height overflow"))?;
+    let executing_block_height = state_transaction._curr_block.height().get();
+    if target_block_height != executing_block_height {
+        return Err(corrupt_state(format!(
+            "orderbook event target height {target_block_height} does not match executing block height {executing_block_height}"
+        )));
+    }
+    let occurred_at_unix_ms = now_unix
+        .checked_mul(1_000)
+        .ok_or_else(|| corrupt_state("orderbook event timestamp overflow"))?;
+    let event = SorafsOrderbookLedgerEvent {
+        kind,
+        order_id,
+        trade_id,
+        channel_id,
+        receipt_id,
+        provider_id,
+        book_revision,
+        authority: authority.clone(),
+        occurred_at_unix_ms,
+    };
+    let head = read_event_journal_head(state_transaction.world())?;
+    ensure_no_event_after_head(state_transaction.world(), head)?;
+    let (sequence, event_index) = match head {
+        Some(head) => {
+            let sequence = head
+                .last_sequence
+                .checked_add(1)
+                .ok_or_else(|| corrupt_state("orderbook event sequence overflow"))?;
+            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+                core::cmp::Ordering::Less => 0,
+                core::cmp::Ordering::Equal => head
+                    .last_event_index
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt_state("orderbook event block index overflow"))?,
+                core::cmp::Ordering::Greater => {
+                    return Err(corrupt_state(
+                        "orderbook event target height regressed behind the journal head",
+                    ));
+                }
+            };
+            (sequence, event_index)
+        }
+        None => {
+            let policy = read_policy(state_transaction.world())?
+                .ok_or_else(|| corrupt_state("first orderbook event has no active policy"))?;
+            let status = read_status(state_transaction.world())?
+                .ok_or_else(|| corrupt_state("first orderbook event has no ledger status"))?;
+            let counters_empty = status.open_orders == 0
+                && status.partially_filled_orders == 0
+                && status.filled_orders == 0
+                && status.cancelled_orders == 0
+                && status.expired_orders == 0
+                && status.trades == 0
+                && status.settlement_receipts == 0
+                && status.settlement_channels == 0
+                && status.open_settlement_channels == 0
+                && status.book_revision == 0
+                && status.next_admission_sequence == 1
+                && status.next_trade_sequence == 1;
+            if kind != SorafsOrderbookLedgerEventKind::PolicyActivated
+                || order_id.is_some()
+                || trade_id.is_some()
+                || channel_id.is_some()
+                || receipt_id.is_some()
+                || provider_id.is_some()
+                || policy.policy.revision != 1
+                || !counters_empty
+            {
+                return Err(corrupt_state(
+                    "orderbook event journal must begin with initial policy activation",
+                ));
+            }
+            (1, 0)
+        }
+    };
+    let key = event_key(sequence);
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_some()
+    {
+        return Err(corrupt_state(
+            "orderbook event journal sequence already exists",
+        ));
+    }
+    let record = OrderbookPersistedEventV1 {
+        sequence,
+        target_block_height,
+        event_index,
+        event: event.clone(),
+    };
+    validate_persisted_event(&record, sequence)?;
+    let next_head = OrderbookEventJournalHeadV1 {
+        last_sequence: sequence,
+        last_target_block_height: target_block_height,
+        last_event_index: event_index,
+    };
+    let encoded_record = encode_state(&record, "orderbook committed event")?;
+    let encoded_head = encode_state(&next_head, "orderbook event journal head")?;
     state_transaction
         .world
-        .emit_events(Some(SorafsGatewayEvent::OrderbookLedger(
-            SorafsOrderbookLedgerEvent {
-                kind,
-                order_id,
-                trade_id,
-                channel_id,
-                receipt_id,
-                provider_id,
-                book_revision,
-                authority: authority.clone(),
-                occurred_at_unix_ms: now_unix * 1_000,
-            },
-        )));
+        .smart_contract_state
+        .insert(key, encoded_record);
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(event_journal_head_key().clone(), encoded_head);
+    state_transaction
+        .world
+        .emit_events(Some(SorafsGatewayEvent::OrderbookLedger(event)));
+    Ok(())
 }
 
 fn has_permission(
@@ -194,6 +317,18 @@ fn channel_key(channel_id: [u8; 32]) -> Name {
     digest_key(CHANNEL_STATE_KEY_PREFIX, channel_id)
 }
 
+fn event_key(sequence: u64) -> Name {
+    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+        .expect("static prefix plus fixed-width lowercase hex is a valid state key")
+}
+
+fn event_journal_head_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
+    })
+}
+
 fn nonce_key(owner: &AccountId) -> Name {
     let mut hasher = blake3::Hasher::new();
     hasher.update(NONCE_KEY_DOMAIN_V1);
@@ -227,6 +362,234 @@ where
         )));
     }
     Ok(value)
+}
+
+fn validate_persisted_event(
+    record: &OrderbookPersistedEventV1,
+    expected_sequence: u64,
+) -> Result<(), InstructionExecutionError> {
+    if record.sequence == 0
+        || record.sequence != expected_sequence
+        || record.target_block_height == 0
+        || record.event.occurred_at_unix_ms == 0
+    {
+        return Err(corrupt_state(
+            "stored orderbook event cursor metadata is invalid",
+        ));
+    }
+    for (label, digest) in [
+        ("order", record.event.order_id),
+        ("trade", record.event.trade_id),
+        ("channel", record.event.channel_id),
+        ("receipt", record.event.receipt_id),
+    ] {
+        if digest == Some([0; 32]) {
+            return Err(corrupt_state(format!(
+                "stored orderbook event has a zero {label} identifier"
+            )));
+        }
+    }
+    if record
+        .event
+        .provider_id
+        .is_some_and(|provider_id| provider_id.as_bytes() == &[0; 32])
+    {
+        return Err(corrupt_state(
+            "stored orderbook event has a zero provider identifier",
+        ));
+    }
+    let shape_is_valid = match record.event.kind {
+        SorafsOrderbookLedgerEventKind::PolicyActivated => {
+            record.event.order_id.is_none()
+                && record.event.trade_id.is_none()
+                && record.event.channel_id.is_none()
+                && record.event.receipt_id.is_none()
+                && record.event.provider_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::OrderAdmitted => {
+            record.event.order_id.is_some()
+                && record.event.trade_id.is_none()
+                && record.event.channel_id.is_none()
+                && record.event.receipt_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::OrderCancelled
+        | SorafsOrderbookLedgerEventKind::OrderExpired => {
+            record.event.order_id.is_some()
+                && record.event.trade_id.is_none()
+                && record.event.channel_id.is_none()
+                && record.event.receipt_id.is_none()
+                && record.event.provider_id.is_none()
+        }
+        SorafsOrderbookLedgerEventKind::TradeMatched => {
+            record.event.order_id.is_some()
+                && record.event.trade_id.is_some()
+                && record.event.channel_id.is_some()
+                && record.event.receipt_id.is_none()
+                && record.event.provider_id.is_some()
+        }
+        SorafsOrderbookLedgerEventKind::ChannelExpired => {
+            record.event.order_id.is_none()
+                && record.event.trade_id.is_some()
+                && record.event.channel_id.is_some()
+                && record.event.receipt_id.is_none()
+                && record.event.provider_id.is_some()
+        }
+        SorafsOrderbookLedgerEventKind::ReceiptRecorded => {
+            record.event.order_id.is_none()
+                && record.event.trade_id.is_some()
+                && record.event.channel_id.is_some()
+                && record.event.receipt_id.is_some()
+                && record.event.provider_id.is_some()
+        }
+    };
+    if !shape_is_valid {
+        return Err(corrupt_state(
+            "stored orderbook event payload shape is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_event_successor(
+    previous: Option<&OrderbookPersistedEventV1>,
+    current: &OrderbookPersistedEventV1,
+) -> Result<(), InstructionExecutionError> {
+    let Some(previous) = previous else {
+        if current.sequence != 1 || current.event_index != 0 {
+            return Err(corrupt_state(
+                "orderbook event journal does not begin at sequence one and block index zero",
+            ));
+        }
+        return Ok(());
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(corrupt_state(
+            "orderbook event journal sequence is not contiguous",
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(corrupt_state(
+            "orderbook event journal block height/index ordering is invalid",
+        )),
+    }
+}
+
+fn read_persisted_event(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+) -> Result<Option<OrderbookPersistedEventV1>, InstructionExecutionError> {
+    if sequence == 0 {
+        return Err(corrupt_state(
+            "orderbook event sequence zero cannot be read",
+        ));
+    }
+    let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
+        return Ok(None);
+    };
+    let record: OrderbookPersistedEventV1 = decode_state(bytes, "orderbook committed event")?;
+    validate_persisted_event(&record, sequence)?;
+    Ok(Some(record))
+}
+
+fn read_event_journal_head(
+    world: &impl WorldReadOnly,
+) -> Result<Option<OrderbookEventJournalHeadV1>, InstructionExecutionError> {
+    let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
+        return Ok(None);
+    };
+    let head: OrderbookEventJournalHeadV1 = decode_state(bytes, "orderbook event journal head")?;
+    if head.last_sequence == 0 || head.last_target_block_height == 0 {
+        return Err(corrupt_state(
+            "stored orderbook event journal head is invalid",
+        ));
+    }
+    let record = read_persisted_event(world, head.last_sequence)?
+        .ok_or_else(|| corrupt_state("orderbook event journal head references a missing event"))?;
+    if record.target_block_height != head.last_target_block_height
+        || record.event_index != head.last_event_index
+    {
+        return Err(corrupt_state(
+            "orderbook event journal head does not match its terminal event",
+        ));
+    }
+    let predecessor = if head.last_sequence == 1 {
+        None
+    } else {
+        let predecessor_sequence = head.last_sequence - 1;
+        Some(
+            read_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
+                corrupt_state(format!(
+                    "orderbook event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                ))
+            })?,
+        )
+    };
+    validate_event_successor(predecessor.as_ref(), &record)?;
+    Ok(Some(head))
+}
+
+fn ensure_no_event_after_head(
+    world: &impl WorldReadOnly,
+    head: Option<OrderbookEventJournalHeadV1>,
+) -> Result<(), InstructionExecutionError> {
+    let prefix_start =
+        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+    let first_event_key = world
+        .smart_contract_state()
+        .range(prefix_start..)
+        .next()
+        .and_then(|(key, _)| {
+            key.to_string()
+                .starts_with(EVENT_STATE_KEY_PREFIX)
+                .then_some(key)
+        });
+    match (head, first_event_key) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(corrupt_state(
+                "orderbook event journal contains records without a head",
+            ));
+        }
+        (Some(_), Some(key)) if *key == event_key(1) => {}
+        (Some(_), _) => {
+            return Err(corrupt_state(
+                "orderbook event journal does not begin at sequence one",
+            ));
+        }
+    }
+    let start = head.map_or_else(
+        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        |head| event_key(head.last_sequence),
+    );
+    for (key, _) in world.smart_contract_state().range(start..) {
+        let rendered = key.to_string();
+        if !rendered.starts_with(EVENT_STATE_KEY_PREFIX) {
+            break;
+        }
+        if head.is_some_and(|head| *key == event_key(head.last_sequence)) {
+            continue;
+        }
+        return Err(corrupt_state(
+            "orderbook event journal contains a record beyond its head",
+        ));
+    }
+    Ok(())
 }
 
 fn block_time_unix(
@@ -618,6 +981,17 @@ fn owner_has_registered_provider(world: &impl WorldReadOnly, owner: &AccountId) 
         .provider_owners()
         .iter()
         .any(|(_, registered)| registered.subject_id() == owner.subject_id())
+}
+
+fn provider_binding_is_current(
+    world: &impl WorldReadOnly,
+    provider_id: ProviderId,
+    owner: &AccountId,
+) -> bool {
+    world
+        .provider_owners()
+        .get(&provider_id)
+        .is_some_and(|registered| registered.subject_id() == owner.subject_id())
 }
 
 fn provider_id_for_owner(
@@ -1045,6 +1419,11 @@ fn validate_fill_custody(
                 "derived orderbook settlement channel custody already exists",
             ));
         }
+        if super::escrow::is_orderbook_channel_lock(state_transaction.world(), &child_id)? {
+            return Err(corrupt_state(
+                "derived orderbook settlement channel custody marker already exists",
+            ));
+        }
         let parent = state_transaction
             .world
             .asset_escrows
@@ -1076,6 +1455,21 @@ fn validate_fill_custody(
             .asset_escrows
             .get(&parent_id)
             .ok_or_else(|| corrupt_state("validated bid order custody disappeared"))?;
+        let custody_asset_id = iroha_data_model::asset::AssetId::new(
+            parent.asset_definition.clone(),
+            parent.custody.clone(),
+        );
+        let custody_balance = state_transaction
+            .world
+            .assets
+            .get(&custody_asset_id)
+            .map(|value| value.as_ref().clone())
+            .ok_or_else(|| corrupt_state("validated bid order custody balance is missing"))?;
+        if custody_balance != parent.remaining_amount {
+            return Err(corrupt_state(
+                "bid order custody balance does not match authoritative escrow record",
+            ));
+        }
         if total > parent.remaining_amount {
             return Err(invalid_parameter(
                 "deterministic fills exceed remaining funded bid custody",
@@ -1188,7 +1582,7 @@ impl Execute for SetSorafsOrderbookPolicy {
             book_revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1284,7 +1678,7 @@ impl Execute for SubmitSorafsOrderbookOrder {
             status.book_revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1404,7 +1798,7 @@ impl Execute for CancelSorafsOrderbookOrder {
             status.book_revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1703,7 +2097,7 @@ impl Execute for MatchSorafsOrderbook {
                 status.book_revision,
                 authority,
                 now,
-            );
+            )?;
         }
         Ok(())
     }
@@ -1944,7 +2338,7 @@ impl Execute for MaintainSorafsOrderbook {
                 status.book_revision,
                 authority,
                 now,
-            );
+            )?;
         }
         for (channel, _) in &expired_channels {
             emit_orderbook_event(
@@ -1958,7 +2352,7 @@ impl Execute for MaintainSorafsOrderbook {
                 status.book_revision,
                 authority,
                 now,
-            );
+            )?;
         }
         Ok(())
     }
@@ -2170,9 +2564,13 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
                 "settlement asset lock does not match authoritative channel custody",
             ));
         }
-        if !owner_has_registered_provider(state_transaction.world(), &channel.provider) {
+        if !provider_binding_is_current(
+            state_transaction.world(),
+            channel.provider_id,
+            &channel.provider,
+        ) {
             return Err(invalid_parameter(
-                "settlement asset-lock destination has no registered SoraFS provider binding",
+                "settlement channel's exact governed provider binding is no longer active",
             ));
         }
         let fee_recipient = state_transaction
@@ -2217,13 +2615,25 @@ impl Execute for RecordSorafsOrderbookSettlementReceipt {
             status.book_revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
 
 fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
+}
+
+fn ensure_orderbook_query_state(world: &impl WorldReadOnly) -> Result<(), QueryExecutionFail> {
+    let policy = read_policy(world).map_err(query_failure)?;
+    let status = read_status(world).map_err(query_failure)?;
+    match (policy, status) {
+        (Some(_), Some(_)) => Ok(()),
+        (None, None) => Err(QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy)),
+        _ => Err(QueryExecutionFail::Conversion(
+            "authoritative SoraFS orderbook policy/status state is inconsistent".to_owned(),
+        )),
+    }
 }
 
 fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
@@ -2237,17 +2647,175 @@ fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
     })
 }
 
+#[derive(Clone, Copy, Debug)]
+struct OrderbookQueryScanLimitsV1 {
+    max_inspected_records: u32,
+    max_read_bytes: usize,
+}
+
+const ORDERBOOK_QUERY_SCAN_LIMITS_V1: OrderbookQueryScanLimitsV1 = OrderbookQueryScanLimitsV1 {
+    max_inspected_records: ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1,
+    max_read_bytes: ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
+};
+
+#[derive(Debug)]
+struct OrderbookQueryScanBudgetV1 {
+    limits: OrderbookQueryScanLimitsV1,
+    inspected_records: u32,
+    read_bytes: usize,
+}
+
+impl OrderbookQueryScanBudgetV1 {
+    const fn new(limits: OrderbookQueryScanLimitsV1) -> Self {
+        Self {
+            limits,
+            inspected_records: 0,
+            read_bytes: 0,
+        }
+    }
+
+    fn inspect(&mut self, payload_len: usize, page_label: &str) -> Result<(), QueryExecutionFail> {
+        let inspected_records = self
+            .inspected_records
+            .checked_add(1)
+            .filter(|count| *count <= self.limits.max_inspected_records)
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "SoraFS orderbook {page_label} query exceeded inspected-record budget {}",
+                    self.limits.max_inspected_records
+                ))
+            })?;
+        let read_bytes = self
+            .read_bytes
+            .checked_add(payload_len)
+            .filter(|bytes| *bytes <= self.limits.max_read_bytes)
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "SoraFS orderbook {page_label} query exceeded encoded-read-byte budget {}",
+                    self.limits.max_read_bytes
+                ))
+            })?;
+        self.inspected_records = inspected_records;
+        self.read_bytes = read_bytes;
+        Ok(())
+    }
+}
+
+fn resolve_finalized_cursor(
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<OrderbookFinalizedCursorV1, QueryExecutionFail> {
+    let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "finalized orderbook height does not fit into u64".to_owned(),
+        )
+    })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "finalized orderbook queries require at least one committed block".to_owned(),
+            )
+        })?;
+    if height == 0 || block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized orderbook query anchor is invalid".to_owned(),
+        ));
+    }
+    Ok(OrderbookFinalizedCursorV1 { height, block_hash })
+}
+
+fn resolve_query_finalized_cursor(
+    expected: Option<OrderbookFinalizedCursorV1>,
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<OrderbookFinalizedCursorV1, QueryExecutionFail> {
+    let actual = resolve_finalized_cursor(state_ro)?;
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(QueryExecutionFail::Expired);
+    }
+    Ok(actual)
+}
+
+fn resolve_committed_event(
+    state_ro: &impl crate::state::StateReadOnly,
+    record: &OrderbookPersistedEventV1,
+) -> Result<OrderbookFinalizedEventV1, QueryExecutionFail> {
+    let hash_index = record
+        .target_block_height
+        .checked_sub(1)
+        .and_then(|height| usize::try_from(height).ok())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "orderbook event target height cannot index finalized block hashes".to_owned(),
+            )
+        })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .get(hash_index)
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "orderbook event sequence {} targets non-finalized block height {}",
+                record.sequence, record.target_block_height
+            ))
+        })?;
+    if block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "orderbook event sequence {} resolved a zero block hash",
+            record.sequence
+        )));
+    }
+    Ok(OrderbookFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event.clone(),
+    })
+}
+
+fn read_event_sequence(
+    state_ro: &impl crate::state::StateReadOnly,
+    sequence: u64,
+    previous: Option<&OrderbookPersistedEventV1>,
+) -> Result<(OrderbookPersistedEventV1, OrderbookFinalizedEventV1), QueryExecutionFail> {
+    let record = read_persisted_event(state_ro.world(), sequence)
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "orderbook event journal is missing sequence {sequence}"
+            ))
+        })?;
+    validate_event_successor(previous, &record).map_err(query_failure)?;
+    let resolved = resolve_committed_event(state_ro, &record)?;
+    Ok((record, resolved))
+}
+
 fn query_order_page(
     query: &FindSorafsOrderbookOrders,
-    world: &impl WorldReadOnly,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<OrderbookOrderPageV1, QueryExecutionFail> {
+    let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
+    query_order_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
+}
+
+fn query_order_page_with_budget(
+    query: &FindSorafsOrderbookOrders,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    scan_budget: &mut OrderbookQueryScanBudgetV1,
 ) -> Result<OrderbookOrderPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
+    let world = state_ro.world();
     let start = order_key(query.after_order_id.unwrap_or([0; 32]));
     let mut orders = Vec::with_capacity(limit.saturating_add(1));
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(ORDER_STATE_KEY_PREFIX) {
             break;
         }
+        scan_budget.inspect(payload.len(), "order page")?;
         let candidate: OrderbookOrderRecord =
             decode_state(payload, "orderbook order").map_err(query_failure)?;
         if order_key(candidate.order_id) != *key {
@@ -2295,6 +2863,7 @@ fn query_order_page(
         None
     };
     Ok(OrderbookOrderPageV1 {
+        finalized_cursor,
         orders,
         has_more,
         next_after_order_id,
@@ -2303,15 +2872,28 @@ fn query_order_page(
 
 fn query_receipt_page(
     query: &FindSorafsOrderbookReceipts,
-    world: &impl WorldReadOnly,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<OrderbookSettlementReceiptPageV1, QueryExecutionFail> {
+    let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
+    query_receipt_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
+}
+
+fn query_receipt_page_with_budget(
+    query: &FindSorafsOrderbookReceipts,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    scan_budget: &mut OrderbookQueryScanBudgetV1,
 ) -> Result<OrderbookSettlementReceiptPageV1, QueryExecutionFail> {
     let limit = checked_query_limit(query.limit)?;
+    let world = state_ro.world();
     let start = receipt_key(query.after_receipt_id.unwrap_or([0; 32]));
     let mut receipts = Vec::with_capacity(limit.saturating_add(1));
     for (key, payload) in world.smart_contract_state().range(start..) {
         if !key.to_string().starts_with(RECEIPT_STATE_KEY_PREFIX) {
             break;
         }
+        scan_budget.inspect(payload.len(), "receipt page")?;
         let candidate: OrderbookSettlementReceiptRecord =
             decode_state(payload, "orderbook settlement receipt").map_err(query_failure)?;
         if receipt_key(candidate.receipt_id) != *key {
@@ -2362,10 +2944,275 @@ fn query_receipt_page(
         None
     };
     Ok(OrderbookSettlementReceiptPageV1 {
+        finalized_cursor,
         receipts,
         has_more,
         next_after_receipt_id,
     })
+}
+
+fn query_trade_page(
+    query: &FindSorafsOrderbookTrades,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<OrderbookTradePageV1, QueryExecutionFail> {
+    let limit = checked_query_limit(query.limit)?;
+    let world = state_ro.world();
+    let start = trade_key(query.after_trade_id.unwrap_or([0; 32]));
+    let mut trades = Vec::with_capacity(limit.saturating_add(1));
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.to_string().starts_with(TRADE_STATE_KEY_PREFIX) {
+            break;
+        }
+        let candidate: OrderbookTradeRecord =
+            decode_state(payload, "orderbook trade").map_err(query_failure)?;
+        if trade_key(candidate.trade_id) != *key {
+            return Err(QueryExecutionFail::Conversion(
+                "authoritative orderbook trade key does not match its record".to_owned(),
+            ));
+        }
+        if query
+            .after_trade_id
+            .is_some_and(|cursor| candidate.trade_id <= cursor)
+        {
+            continue;
+        }
+        let record = read_trade(world, candidate.trade_id)
+            .map_err(query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "authoritative orderbook trade disappeared during read".to_owned(),
+                )
+            })?;
+        trades.push(record);
+        if trades.len() > limit {
+            break;
+        }
+    }
+    let has_more = trades.len() > limit;
+    if has_more {
+        trades.pop();
+    }
+    let next_after_trade_id = if has_more {
+        Some(
+            trades
+                .last()
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "orderbook trade-page cursor invariant failed".to_owned(),
+                    )
+                })?
+                .trade_id,
+        )
+    } else {
+        None
+    };
+    Ok(OrderbookTradePageV1 {
+        finalized_cursor,
+        trades,
+        has_more,
+        next_after_trade_id,
+    })
+}
+
+fn query_channel_page(
+    query: &FindSorafsOrderbookChannels,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<OrderbookSettlementChannelPageV1, QueryExecutionFail> {
+    let mut scan_budget = OrderbookQueryScanBudgetV1::new(ORDERBOOK_QUERY_SCAN_LIMITS_V1);
+    query_channel_page_with_budget(query, state_ro, finalized_cursor, &mut scan_budget)
+}
+
+fn query_channel_page_with_budget(
+    query: &FindSorafsOrderbookChannels,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+    scan_budget: &mut OrderbookQueryScanBudgetV1,
+) -> Result<OrderbookSettlementChannelPageV1, QueryExecutionFail> {
+    let limit = checked_query_limit(query.limit)?;
+    let world = state_ro.world();
+    let start = channel_key(query.after_channel_id.unwrap_or([0; 32]));
+    let mut channels = Vec::with_capacity(limit.saturating_add(1));
+    for (key, payload) in world.smart_contract_state().range(start..) {
+        if !key.to_string().starts_with(CHANNEL_STATE_KEY_PREFIX) {
+            break;
+        }
+        scan_budget.inspect(payload.len(), "channel page")?;
+        let candidate: OrderbookSettlementChannelRecord =
+            decode_state(payload, "orderbook settlement channel").map_err(query_failure)?;
+        if channel_key(candidate.channel_id) != *key {
+            return Err(QueryExecutionFail::Conversion(
+                "authoritative orderbook channel key does not match its record".to_owned(),
+            ));
+        }
+        if query
+            .after_channel_id
+            .is_some_and(|cursor| candidate.channel_id <= cursor)
+        {
+            continue;
+        }
+        let record = read_channel(world, candidate.channel_id)
+            .map_err(query_failure)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "authoritative orderbook channel disappeared during read".to_owned(),
+                )
+            })?;
+        if query.status.is_some_and(|status| record.status != status) {
+            continue;
+        }
+        channels.push(record);
+        if channels.len() > limit {
+            break;
+        }
+    }
+    let has_more = channels.len() > limit;
+    if has_more {
+        channels.pop();
+    }
+    let next_after_channel_id = if has_more {
+        Some(
+            channels
+                .last()
+                .ok_or_else(|| {
+                    QueryExecutionFail::Conversion(
+                        "orderbook channel-page cursor invariant failed".to_owned(),
+                    )
+                })?
+                .channel_id,
+        )
+    } else {
+        None
+    };
+    Ok(OrderbookSettlementChannelPageV1 {
+        finalized_cursor,
+        channels,
+        has_more,
+        next_after_channel_id,
+    })
+}
+
+fn query_event_page(
+    query: &FindSorafsOrderbookEvents,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: OrderbookFinalizedCursorV1,
+) -> Result<OrderbookFinalizedEventPageV1, QueryExecutionFail> {
+    let limit = checked_query_limit(query.limit)?;
+    let head = read_event_journal_head(state_ro.world())
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "active orderbook state has no committed-event journal".to_owned(),
+            )
+        })?;
+    let terminal = read_persisted_event(state_ro.world(), head.last_sequence)
+        .map_err(query_failure)?
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "orderbook event journal terminal record disappeared during read".to_owned(),
+            )
+        })?;
+    resolve_committed_event(state_ro, &terminal)?;
+    let head = Some(head);
+    ensure_no_event_after_head(state_ro.world(), head).map_err(query_failure)?;
+    let mut previous = match query.after {
+        Some(after) => {
+            let head = head.ok_or(QueryExecutionFail::Expired)?;
+            if after.sequence == 0 || after.sequence > head.last_sequence {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let record = read_persisted_event(state_ro.world(), after.sequence)
+                .map_err(query_failure)?
+                .ok_or(QueryExecutionFail::Expired)?;
+            let resolved = resolve_committed_event(state_ro, &record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let predecessor = if after.sequence == 1 {
+                None
+            } else {
+                let predecessor_sequence = after.sequence - 1;
+                Some(
+                    read_persisted_event(state_ro.world(), predecessor_sequence)
+                        .map_err(query_failure)?
+                        .ok_or_else(|| {
+                            QueryExecutionFail::Conversion(format!(
+                                "orderbook event journal is missing predecessor sequence {predecessor_sequence}"
+                            ))
+                        })?,
+                )
+            };
+            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
+            Some(record)
+        }
+        None => None,
+    };
+    let start = query
+        .after
+        .map_or(Some(1), |after| after.sequence.checked_add(1));
+    let last_sequence = head.map_or(0, |head| head.last_sequence);
+    let mut events = Vec::with_capacity(limit);
+    let mut encoded_event_bytes = 0usize;
+    let mut sequence = start;
+    while let Some(current_sequence) = sequence {
+        if current_sequence > last_sequence || events.len() >= limit {
+            break;
+        }
+        let (record, resolved) =
+            read_event_sequence(state_ro, current_sequence, previous.as_ref())?;
+        encoded_event_bytes = encoded_event_bytes
+            .checked_add(
+                norito::to_bytes(&resolved)
+                    .map_err(|error| {
+                        QueryExecutionFail::Conversion(format!(
+                            "failed to encode committed orderbook event: {error}"
+                        ))
+                    })?
+                    .len(),
+            )
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "committed orderbook event page byte counter overflow".to_owned(),
+                )
+            })?;
+        if encoded_event_bytes > ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "committed orderbook event page exceeds {ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+            )));
+        }
+        previous = Some(record);
+        events.push(resolved);
+        sequence = current_sequence.checked_add(1);
+    }
+    let has_more = events
+        .last()
+        .is_some_and(|event| event.sequence < last_sequence);
+    let next_after = has_more.then(|| {
+        events
+            .last()
+            .expect("has_more requires a non-empty orderbook event page")
+            .cursor()
+    });
+    let page = OrderbookFinalizedEventPageV1 {
+        finalized_cursor,
+        events,
+        has_more,
+        next_after,
+    };
+    let encoded_len = norito::to_bytes(&page)
+        .map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to encode committed orderbook event page: {error}"
+            ))
+        })?
+        .len();
+    if encoded_len > ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "committed orderbook event page encodes to {encoded_len} bytes, above {ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+        )));
+    }
+    Ok(page)
 }
 
 impl ValidSingularQuery for FindSorafsOrderbookPolicy {
@@ -2484,16 +3331,10 @@ impl ValidSingularQuery for FindSorafsOrderbookOrders {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<OrderbookOrderPageV1, QueryExecutionFail> {
-        if read_policy(state_ro.world())
-            .map_err(query_failure)?
-            .is_none()
-            || read_status(state_ro.world())
-                .map_err(query_failure)?
-                .is_none()
-        {
-            return Err(QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy));
-        }
-        query_order_page(self, state_ro.world())
+        ensure_orderbook_query_state(state_ro.world())?;
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_order_page(self, state_ro, finalized_cursor)
     }
 }
 
@@ -2502,16 +3343,46 @@ impl ValidSingularQuery for FindSorafsOrderbookReceipts {
         &self,
         state_ro: &impl crate::state::StateReadOnly,
     ) -> Result<OrderbookSettlementReceiptPageV1, QueryExecutionFail> {
-        if read_policy(state_ro.world())
-            .map_err(query_failure)?
-            .is_none()
-            || read_status(state_ro.world())
-                .map_err(query_failure)?
-                .is_none()
-        {
-            return Err(QueryExecutionFail::Find(FindError::SorafsOrderbookPolicy));
-        }
-        query_receipt_page(self, state_ro.world())
+        ensure_orderbook_query_state(state_ro.world())?;
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_receipt_page(self, state_ro, finalized_cursor)
+    }
+}
+
+impl ValidSingularQuery for FindSorafsOrderbookTrades {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<OrderbookTradePageV1, QueryExecutionFail> {
+        ensure_orderbook_query_state(state_ro.world())?;
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_trade_page(self, state_ro, finalized_cursor)
+    }
+}
+
+impl ValidSingularQuery for FindSorafsOrderbookChannels {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<OrderbookSettlementChannelPageV1, QueryExecutionFail> {
+        ensure_orderbook_query_state(state_ro.world())?;
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_channel_page(self, state_ro, finalized_cursor)
+    }
+}
+
+impl ValidSingularQuery for FindSorafsOrderbookEvents {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<OrderbookFinalizedEventPageV1, QueryExecutionFail> {
+        ensure_orderbook_query_state(state_ro.world())?;
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_event_page(self, state_ro, finalized_cursor)
     }
 }
 
@@ -2539,7 +3410,6 @@ mod tests {
         json::Json,
         numeric::{Numeric, Quantity},
     };
-    use nonzero_ext::nonzero;
     use sorafs_manifest::{
         XorQuantity,
         orderbook::{
@@ -2733,8 +3603,35 @@ mod tests {
         )
     }
 
+    fn block_header_at(height: u64, now_unix: u64) -> BlockHeader {
+        BlockHeader::new(
+            height.try_into().expect("nonzero fixture block height"),
+            None,
+            None,
+            None,
+            now_unix * 1_000,
+            0,
+        )
+    }
+
     fn block_header() -> BlockHeader {
-        BlockHeader::new(nonzero!(1_u64), None, None, None, NOW * 1_000, 0)
+        block_header_at(1, NOW)
+    }
+
+    fn transact(
+        state: &mut State,
+        height: u64,
+        now_unix: u64,
+        operation: impl FnOnce(&mut StateTransaction<'_, '_>) -> Result<(), InstructionExecutionError>,
+    ) -> Result<(), InstructionExecutionError> {
+        let header = block_header_at(height, now_unix);
+        let mut block = state.block(header.clone());
+        let mut transaction = block.transaction();
+        operation(&mut transaction)?;
+        transaction.apply();
+        block.commit().expect("commit orderbook test block");
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&header));
+        Ok(())
     }
 
     fn state_with_accounts(keypairs: &[&KeyPair]) -> State {
@@ -2963,6 +3860,206 @@ mod tests {
             .execute(authority, state_transaction)
             .expect("activate policy");
         digest
+    }
+
+    struct TwoFillMatchFixture {
+        policy_digest: [u8; 32],
+        order_ids: [[u8; 32]; 4],
+        parent_ids: [iroha_data_model::escrow::EscrowId; 2],
+        trade_ids: [[u8; 32]; 2],
+        channel_ids: [[u8; 32]; 2],
+    }
+
+    struct TwoFillMatchSnapshot {
+        status: OrderbookLedgerStatusV1,
+        orders: [OrderbookOrderRecord; 4],
+        parents: [iroha_data_model::escrow::AssetEscrowRecord; 2],
+        custody_balances: [Quantity; 2],
+    }
+
+    fn seed_two_fill_match(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        settlement_id: &AccountId,
+        buyer_id: &AccountId,
+        provider_id: &AccountId,
+        buyer: &KeyPair,
+        provider: &KeyPair,
+    ) -> TwoFillMatchFixture {
+        let policy_digest = activate_policy(state_transaction, settlement_id);
+        state_transaction
+            .world
+            .provider_owners
+            .insert(ProviderId::new([0x72; 32]), provider_id.clone());
+
+        let mut bid_one = order(buyer, 1);
+        bid_one.quantity_gib = 5;
+        bid_one.remaining_gib = 5;
+        let bid_one = sign_order(bid_one, buyer);
+        let mut bid_two = order(buyer, 2);
+        bid_two.quantity_gib = 5;
+        bid_two.remaining_gib = 5;
+        let bid_two = sign_order(bid_two, buyer);
+        let ask_one = ask_order(provider, 1, 90, 5);
+        let ask_two = ask_order(provider, 2, 90, 5);
+
+        SubmitSorafsOrderbookOrder::new(encode(&bid_one), policy_digest)
+            .execute(buyer_id, state_transaction)
+            .expect("admit first bid");
+        SubmitSorafsOrderbookOrder::new(encode(&bid_two), policy_digest)
+            .execute(buyer_id, state_transaction)
+            .expect("admit second bid");
+        SubmitSorafsOrderbookOrder::new(encode(&ask_one), policy_digest)
+            .execute(provider_id, state_transaction)
+            .expect("admit first ask");
+        SubmitSorafsOrderbookOrder::new(encode(&ask_two), policy_digest)
+            .execute(provider_id, state_transaction)
+            .expect("admit second ask");
+
+        let parent_one = orderbook_order_escrow_id(bid_one.order_id);
+        let parent_two = orderbook_order_escrow_id(bid_two.order_id);
+        OpenAssetLock::with_options(
+            parent_one.clone(),
+            settlement_asset_definition(),
+            buyer_id.clone(),
+            micro_quantity(20_000),
+            Some(buyer_id.clone()),
+            Some(bid_one.expiry_unix * 1_000),
+            Vec::new(),
+        )
+        .execute(buyer_id, state_transaction)
+        .expect("fund first bid custody");
+        OpenAssetLock::with_options(
+            parent_two.clone(),
+            settlement_asset_definition(),
+            buyer_id.clone(),
+            micro_quantity(20_000),
+            Some(buyer_id.clone()),
+            Some(bid_two.expiry_unix * 1_000),
+            Vec::new(),
+        )
+        .execute(buyer_id, state_transaction)
+        .expect("fund second bid custody");
+
+        let trade_one_id = derive_orderbook_trade_id_v1(1, &bid_one, &ask_one, NOW);
+        let trade_one = match_orders_v1(&bid_one, &ask_one, trade_one_id, NOW)
+            .expect("derive first deterministic fill")
+            .trade;
+        let trade_two_id = derive_orderbook_trade_id_v1(2, &bid_two, &ask_two, NOW);
+        let trade_two = match_orders_v1(&bid_two, &ask_two, trade_two_id, NOW)
+            .expect("derive second deterministic fill")
+            .trade;
+        let channel_one = derive_orderbook_settlement_channel_id_v1(&trade_one)
+            .expect("derive first deterministic channel");
+        let channel_two = derive_orderbook_settlement_channel_id_v1(&trade_two)
+            .expect("derive second deterministic channel");
+
+        TwoFillMatchFixture {
+            policy_digest,
+            order_ids: [
+                bid_one.order_id,
+                bid_two.order_id,
+                ask_one.order_id,
+                ask_two.order_id,
+            ],
+            parent_ids: [parent_one, parent_two],
+            trade_ids: [trade_one_id, trade_two_id],
+            channel_ids: [channel_one, channel_two],
+        }
+    }
+
+    fn snapshot_two_fill_match(
+        state_transaction: &StateTransaction<'_, '_>,
+        fixture: &TwoFillMatchFixture,
+    ) -> TwoFillMatchSnapshot {
+        TwoFillMatchSnapshot {
+            status: read_status(state_transaction.world())
+                .expect("read two-fill status")
+                .expect("active two-fill status"),
+            orders: core::array::from_fn(|index| {
+                read_order(state_transaction.world(), fixture.order_ids[index])
+                    .expect("read two-fill order")
+                    .expect("stored two-fill order")
+            }),
+            parents: core::array::from_fn(|index| {
+                state_transaction
+                    .world
+                    .asset_escrows
+                    .get(&fixture.parent_ids[index])
+                    .expect("stored two-fill parent custody")
+                    .clone()
+            }),
+            custody_balances: core::array::from_fn(|index| {
+                let custody = &state_transaction
+                    .world
+                    .asset_escrows
+                    .get(&fixture.parent_ids[index])
+                    .expect("stored two-fill parent custody")
+                    .custody;
+                asset_balance(state_transaction, custody)
+            }),
+        }
+    }
+
+    fn assert_two_fill_match_unchanged(
+        state_transaction: &StateTransaction<'_, '_>,
+        fixture: &TwoFillMatchFixture,
+        before: &TwoFillMatchSnapshot,
+        expected_markers: [bool; 2],
+    ) {
+        assert_eq!(
+            read_status(state_transaction.world())
+                .expect("read unchanged two-fill status")
+                .expect("active unchanged two-fill status"),
+            before.status
+        );
+        for (index, order_id) in fixture.order_ids.iter().enumerate() {
+            assert_eq!(
+                read_order(state_transaction.world(), *order_id)
+                    .expect("read unchanged two-fill order")
+                    .expect("stored unchanged two-fill order"),
+                before.orders[index]
+            );
+        }
+        for (index, parent_id) in fixture.parent_ids.iter().enumerate() {
+            let parent = state_transaction
+                .world
+                .asset_escrows
+                .get(parent_id)
+                .expect("unchanged two-fill parent custody");
+            assert_eq!(parent, &before.parents[index]);
+            assert_eq!(
+                asset_balance(state_transaction, &parent.custody),
+                before.custody_balances[index]
+            );
+        }
+        for index in 0..2 {
+            assert!(
+                read_trade(state_transaction.world(), fixture.trade_ids[index])
+                    .expect("read absent two-fill trade")
+                    .is_none()
+            );
+            assert!(
+                read_channel(state_transaction.world(), fixture.channel_ids[index])
+                    .expect("read absent two-fill channel")
+                    .is_none()
+            );
+            let child_id = orderbook_settlement_escrow_id(fixture.channel_ids[index]);
+            assert!(
+                state_transaction
+                    .world
+                    .asset_escrows
+                    .get(&child_id)
+                    .is_none()
+            );
+            assert_eq!(
+                crate::smartcontracts::isi::escrow::is_orderbook_channel_lock(
+                    state_transaction.world(),
+                    &child_id,
+                )
+                .expect("read two-fill channel marker"),
+                expected_markers[index]
+            );
+        }
     }
 
     fn encode<T: norito::core::NoritoSerialize>(value: &T) -> Vec<u8> {
@@ -3296,7 +4393,7 @@ mod tests {
     fn typed_order_queries_return_policy_cancellation_status_and_cursor_pages() {
         let buyer = keypair(0x28);
         let authority = account(&buyer);
-        let state = state_with_accounts(&[&buyer]);
+        let mut state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -3341,15 +4438,23 @@ mod tests {
         assert_eq!(status.settlement_receipts, 0);
         assert_eq!(status.settlement_channels, 0);
 
-        let first_page = FindSorafsOrderbookOrders::new(None, None, 2)
-            .execute(&stx)
+        stx.apply();
+        block.commit().expect("commit order query fixture");
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
+        let view = state.view();
+        let first_page = FindSorafsOrderbookOrders::new(None, None, None, 2)
+            .execute(&view)
             .expect("query first order page");
+        assert_eq!(first_page.finalized_cursor.height, 1);
         assert_eq!(first_page.orders.len(), 2);
         assert!(first_page.has_more);
+        let finalized_cursor = first_page.finalized_cursor;
         let cursor = first_page.next_after_order_id.expect("next cursor");
-        let second_page = FindSorafsOrderbookOrders::new(None, Some(cursor), 2)
-            .execute(&stx)
-            .expect("query second order page");
+        let second_page =
+            FindSorafsOrderbookOrders::new(Some(finalized_cursor), None, Some(cursor), 2)
+                .execute(&view)
+                .expect("query second order page");
+        assert_eq!(second_page.finalized_cursor, finalized_cursor);
         assert_eq!(second_page.orders.len(), 1);
         assert!(!second_page.has_more);
         assert!(second_page.next_after_order_id.is_none());
@@ -3366,19 +4471,83 @@ mod tests {
         expected_ids.sort_unstable();
         assert_eq!(returned_ids, expected_ids);
 
-        let cancelled_page =
-            FindSorafsOrderbookOrders::new(Some(OrderbookOrderStatusV1::Cancelled), None, 10)
-                .execute(&stx)
-                .expect("query cancelled order page");
+        let cancelled_page = FindSorafsOrderbookOrders::new(
+            Some(finalized_cursor),
+            Some(OrderbookOrderStatusV1::Cancelled),
+            None,
+            10,
+        )
+        .execute(&view)
+        .expect("query cancelled order page");
         assert_eq!(cancelled_page.orders.len(), 1);
         assert_eq!(cancelled_page.orders[0].order_id, second.order_id);
+
+        let mut stale_cursor = finalized_cursor;
+        stale_cursor.block_hash[0] ^= 0xFF;
+        assert_eq!(
+            FindSorafsOrderbookOrders::new(Some(stale_cursor), None, None, 1).execute(&view),
+            Err(QueryExecutionFail::Expired)
+        );
+
+        let first_events = FindSorafsOrderbookEvents::new(Some(finalized_cursor), None, 2)
+            .execute(&view)
+            .expect("query first committed-event page");
+        assert_eq!(first_events.finalized_cursor, finalized_cursor);
+        assert_eq!(first_events.events.len(), 2);
+        assert!(first_events.has_more);
+        for (index, event) in first_events.events.iter().enumerate() {
+            assert_eq!(
+                event.sequence,
+                u64::try_from(index + 1).expect("small index")
+            );
+            assert_eq!(event.block_height, 1);
+            assert_eq!(event.block_hash, finalized_cursor.block_hash);
+            assert_eq!(
+                event.event_index,
+                u32::try_from(index).expect("small index")
+            );
+        }
+        let event_cursor = first_events.next_after.expect("event continuation cursor");
+        let second_events =
+            FindSorafsOrderbookEvents::new(Some(finalized_cursor), Some(event_cursor), 10)
+                .execute(&view)
+                .expect("query second committed-event page");
+        assert_eq!(second_events.events.len(), 3);
+        assert!(!second_events.has_more);
+        assert_eq!(
+            second_events
+                .events
+                .iter()
+                .map(|event| event.sequence)
+                .collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert!(
+            second_events
+                .events
+                .iter()
+                .enumerate()
+                .all(|(offset, event)| {
+                    event.block_height == 1
+                        && event.block_hash == finalized_cursor.block_hash
+                        && event.event_index
+                            == u32::try_from(offset + 2).expect("small event index")
+                })
+        );
+        let mut tampered_event_cursor = event_cursor;
+        tampered_event_cursor.event_index += 1;
+        assert_eq!(
+            FindSorafsOrderbookEvents::new(Some(finalized_cursor), Some(tampered_event_cursor), 1,)
+                .execute(&view),
+            Err(QueryExecutionFail::Expired)
+        );
     }
 
     #[test]
     fn typed_queries_reject_not_found_and_invalid_limits() {
         let operator = keypair(0x29);
         let authority = account(&operator);
-        let state = state_with_accounts(&[&operator]);
+        let mut state = state_with_accounts(&[&operator]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
 
@@ -3410,25 +4579,401 @@ mod tests {
         );
 
         activate_policy(&mut stx, &authority);
+        stx.apply();
+        block.commit().expect("commit configured orderbook");
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
+        let view = state.view();
         for limit in [0, ORDERBOOK_QUERY_MAX_ITEMS_V1 + 1] {
             assert!(
-                FindSorafsOrderbookOrders::new(None, None, limit)
-                    .execute(&stx)
+                FindSorafsOrderbookOrders::new(None, None, None, limit)
+                    .execute(&view)
                     .is_err()
             );
             assert!(
-                FindSorafsOrderbookReceipts::new(None, None, limit)
-                    .execute(&stx)
+                FindSorafsOrderbookReceipts::new(None, None, None, limit)
+                    .execute(&view)
+                    .is_err()
+            );
+            assert!(
+                FindSorafsOrderbookTrades::new(None, None, limit)
+                    .execute(&view)
+                    .is_err()
+            );
+            assert!(
+                FindSorafsOrderbookChannels::new(None, None, None, limit)
+                    .execute(&view)
+                    .is_err()
+            );
+            assert!(
+                FindSorafsOrderbookEvents::new(None, None, limit)
+                    .execute(&view)
                     .is_err()
             );
         }
         assert!(
-            FindSorafsOrderbookOrders::new(None, None, 1)
-                .execute(&stx)
+            FindSorafsOrderbookOrders::new(None, None, None, 1)
+                .execute(&view)
                 .expect("empty configured orderbook query")
                 .orders
                 .is_empty()
         );
+        let event_page = FindSorafsOrderbookEvents::new(None, None, 1)
+            .execute(&view)
+            .expect("query initial committed orderbook event");
+        assert_eq!(event_page.events.len(), 1);
+        assert_eq!(
+            event_page.events[0].event.kind,
+            SorafsOrderbookLedgerEventKind::PolicyActivated
+        );
+    }
+
+    #[test]
+    fn query_scan_budget_is_inclusive_and_fails_closed() {
+        let limits = OrderbookQueryScanLimitsV1 {
+            max_inspected_records: 2,
+            max_read_bytes: 3,
+        };
+        let mut budget = OrderbookQueryScanBudgetV1::new(limits);
+        budget
+            .inspect(1, "fixture page")
+            .expect("first inspected record is within both bounds");
+        budget
+            .inspect(2, "fixture page")
+            .expect("exact record and byte bounds are inclusive");
+        assert_eq!(
+            budget.inspect(0, "fixture page"),
+            Err(QueryExecutionFail::Conversion(
+                "SoraFS orderbook fixture page query exceeded inspected-record budget 2".to_owned()
+            ))
+        );
+
+        let mut byte_budget = OrderbookQueryScanBudgetV1::new(limits);
+        assert_eq!(
+            byte_budget.inspect(4, "fixture page"),
+            Err(QueryExecutionFail::Conversion(
+                "SoraFS orderbook fixture page query exceeded encoded-read-byte budget 3"
+                    .to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn filtered_pages_fail_closed_before_sparse_or_absent_match_beyond_scan_budget() {
+        let settlement = keypair(0x2C);
+        let buyer = keypair(0x2D);
+        let provider = keypair(0x2E);
+        let authority = account(&settlement);
+        let buyer_id = account(&buyer);
+        let provider_id = account(&provider);
+        let mut state = state_with_accounts(&[&settlement, &buyer, &provider]);
+
+        transact(&mut state, 1, NOW, |transaction| {
+            let policy_digest = activate_policy(transaction, &authority);
+
+            let mut orders = vec![order(&settlement, 1), order(&settlement, 2)];
+            orders.sort_unstable_by_key(|candidate| candidate.order_id);
+            for (index, candidate) in orders.into_iter().enumerate() {
+                let is_sparse_match = index == 1;
+                let record = OrderbookOrderRecord {
+                    order_id: candidate.order_id,
+                    owner: authority.clone(),
+                    canonical_order: encode(&candidate),
+                    admitted_policy_digest: policy_digest,
+                    admitted_at_unix: NOW,
+                    admission_sequence: u64::try_from(index + 1)
+                        .expect("two-record fixture sequence fits u64"),
+                    remaining_gib: if is_sparse_match {
+                        0
+                    } else {
+                        candidate.quantity_gib
+                    },
+                    status: if is_sparse_match {
+                        OrderbookOrderStatusV1::Filled
+                    } else {
+                        OrderbookOrderStatusV1::Open
+                    },
+                    updated_at_unix: NOW,
+                    canonical_cancel: None,
+                    cancelled_at_unix: None,
+                    cancelled_policy_digest: None,
+                };
+                transaction
+                    .world
+                    .smart_contract_state
+                    .insert(order_key(record.order_id), encode(&record));
+            }
+
+            let first_receipt = receipt(&provider, 1, 0, 8, 0, 10);
+            let second_receipt = receipt(&provider, 2, 0, 8, 10, 20);
+            let other_channel_receipt = receipt(&provider, 3, 0, 9, 0, 10);
+            seed_settlement_channel(
+                transaction,
+                &buyer_id,
+                &provider_id,
+                &authority,
+                &first_receipt,
+                100,
+            );
+            seed_settlement_channel(
+                transaction,
+                &buyer_id,
+                &provider_id,
+                &authority,
+                &other_channel_receipt,
+                100,
+            );
+
+            let mut channel_ids = [first_receipt.channel_id, other_channel_receipt.channel_id];
+            channel_ids.sort_unstable();
+            let closed_channel_id = channel_ids[1];
+            let mut closed_channel = read_channel(transaction.world(), closed_channel_id)
+                .expect("read sparse-match channel")
+                .expect("sparse-match channel exists");
+            closed_channel.remaining_bytes = 0;
+            closed_channel.remaining_xor_locked = XorQuantity::zero();
+            closed_channel.status = OrderbookSettlementChannelStatusV1::Closed;
+            closed_channel.updated_at_unix = NOW;
+            transaction
+                .world
+                .smart_contract_state
+                .insert(channel_key(closed_channel_id), encode(&closed_channel));
+
+            let receipt_index = OrderbookSettlementIndexRecord {
+                channel_id: first_receipt.channel_id,
+                trade_id: first_receipt.trade_id,
+                ranges: vec![
+                    OrderbookSettlementRangeRecord {
+                        receipt_id: first_receipt.receipt_id,
+                        start: first_receipt.range.start,
+                        end: first_receipt.range.end,
+                        issued_at_unix: first_receipt.issued_at_unix,
+                    },
+                    OrderbookSettlementRangeRecord {
+                        receipt_id: second_receipt.receipt_id,
+                        start: second_receipt.range.start,
+                        end: second_receipt.range.end,
+                        issued_at_unix: second_receipt.issued_at_unix,
+                    },
+                ],
+            };
+            transaction.world.smart_contract_state.insert(
+                receipt_index_key(first_receipt.channel_id),
+                encode(&receipt_index),
+            );
+            for candidate in [&first_receipt, &second_receipt] {
+                let record = OrderbookSettlementReceiptRecord {
+                    receipt_id: candidate.receipt_id,
+                    channel_id: candidate.channel_id,
+                    trade_id: candidate.trade_id,
+                    canonical_receipt: encode(candidate),
+                    admitted_policy_digest: policy_digest,
+                    admitted_at_unix: NOW,
+                    recorded_by: authority.clone(),
+                };
+                transaction
+                    .world
+                    .smart_contract_state
+                    .insert(receipt_key(record.receipt_id), encode(&record));
+            }
+            Ok(())
+        })
+        .expect("commit sparse filtered-query fixture");
+
+        let view = state.view();
+        let finalized_cursor =
+            resolve_finalized_cursor(&view).expect("resolve committed fixture cursor");
+        let test_limits = OrderbookQueryScanLimitsV1 {
+            max_inspected_records: 1,
+            max_read_bytes: ORDERBOOK_QUERY_MAX_READ_BYTES_V1,
+        };
+
+        let mut order_budget = OrderbookQueryScanBudgetV1::new(test_limits);
+        assert_eq!(
+            query_order_page_with_budget(
+                &FindSorafsOrderbookOrders::new(
+                    None,
+                    Some(OrderbookOrderStatusV1::Filled),
+                    None,
+                    1,
+                ),
+                &view,
+                finalized_cursor,
+                &mut order_budget,
+            ),
+            Err(QueryExecutionFail::Conversion(
+                "SoraFS orderbook order page query exceeded inspected-record budget 1".to_owned()
+            ))
+        );
+
+        let mut receipt_budget = OrderbookQueryScanBudgetV1::new(test_limits);
+        assert_eq!(
+            query_receipt_page_with_budget(
+                &FindSorafsOrderbookReceipts::new(None, Some([0xFF; 32]), None, 1),
+                &view,
+                finalized_cursor,
+                &mut receipt_budget,
+            ),
+            Err(QueryExecutionFail::Conversion(
+                "SoraFS orderbook receipt page query exceeded inspected-record budget 1".to_owned()
+            ))
+        );
+
+        let mut channel_budget = OrderbookQueryScanBudgetV1::new(test_limits);
+        assert_eq!(
+            query_channel_page_with_budget(
+                &FindSorafsOrderbookChannels::new(
+                    None,
+                    Some(OrderbookSettlementChannelStatusV1::Closed),
+                    None,
+                    1,
+                ),
+                &view,
+                finalized_cursor,
+                &mut channel_budget,
+            ),
+            Err(QueryExecutionFail::Conversion(
+                "SoraFS orderbook channel page query exceeded inspected-record budget 1".to_owned()
+            ))
+        );
+    }
+
+    #[test]
+    fn committed_event_journal_resolves_immutable_hashes_and_block_indexes() {
+        let buyer = keypair(0x2A);
+        let authority = account(&buyer);
+        let mut state = state_with_accounts(&[&buyer]);
+        let mut policy_digest = [0; 32];
+        transact(&mut state, 1, NOW, |transaction| {
+            policy_digest = activate_policy(transaction, &authority);
+            Ok(())
+        })
+        .expect("commit policy block");
+        let first = order(&buyer, 1);
+        let second = order(&buyer, 2);
+        transact(&mut state, 2, NOW + 1, |transaction| {
+            SubmitSorafsOrderbookOrder::new(encode(&first), policy_digest)
+                .execute(&authority, transaction)?;
+            SubmitSorafsOrderbookOrder::new(encode(&second), policy_digest)
+                .execute(&authority, transaction)
+        })
+        .expect("commit two-order block");
+
+        let view = state.view();
+        let page = FindSorafsOrderbookEvents::new(None, None, 10)
+            .execute(&view)
+            .expect("query committed event journal");
+        assert_eq!(page.finalized_cursor.height, 2);
+        assert_eq!(page.events.len(), 3);
+        assert_eq!(
+            page.events
+                .iter()
+                .map(|event| (event.sequence, event.block_height, event.event_index))
+                .collect::<Vec<_>>(),
+            vec![(1, 1, 0), (2, 2, 0), (3, 2, 1)]
+        );
+        let first_hash = *iroha_crypto::HashOf::new(&block_header_at(1, NOW)).as_ref();
+        let second_hash = *iroha_crypto::HashOf::new(&block_header_at(2, NOW + 1)).as_ref();
+        assert_eq!(page.events[0].block_hash, first_hash);
+        assert_eq!(page.events[1].block_hash, second_hash);
+        assert_eq!(page.events[2].block_hash, second_hash);
+        assert_eq!(page.finalized_cursor.block_hash, second_hash);
+
+        for (sequence, expected_height, expected_index) in [(1, 1, 0), (2, 2, 0), (3, 2, 1)] {
+            let persisted = read_persisted_event(view.world(), sequence)
+                .expect("read persisted event")
+                .expect("persisted event exists");
+            assert_eq!(persisted.sequence, sequence);
+            assert_eq!(persisted.target_block_height, expected_height);
+            assert_eq!(persisted.event_index, expected_index);
+        }
+
+        let stale_anchor = OrderbookFinalizedCursorV1 {
+            height: 1,
+            block_hash: first_hash,
+        };
+        assert_eq!(
+            FindSorafsOrderbookEvents::new(Some(stale_anchor), None, 10).execute(&view),
+            Err(QueryExecutionFail::Expired)
+        );
+    }
+
+    #[test]
+    fn committed_event_queries_fail_closed_on_corrupt_journals() {
+        let operator = keypair(0x2B);
+        let authority = account(&operator);
+
+        let mut missing_head = state_with_accounts(&[&operator]);
+        transact(&mut missing_head, 1, NOW, |transaction| {
+            activate_policy(transaction, &authority);
+            transaction
+                .world
+                .smart_contract_state
+                .remove(event_journal_head_key().clone());
+            Ok(())
+        })
+        .expect("commit missing-head fixture");
+        assert!(matches!(
+            FindSorafsOrderbookEvents::new(None, None, 10).execute(&missing_head.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let mut malformed_event = state_with_accounts(&[&operator]);
+        transact(&mut malformed_event, 1, NOW, |transaction| {
+            activate_policy(transaction, &authority);
+            transaction
+                .world
+                .smart_contract_state
+                .insert(event_key(1), vec![0xFF; 16]);
+            Ok(())
+        })
+        .expect("commit malformed-event fixture");
+        assert!(matches!(
+            FindSorafsOrderbookEvents::new(None, None, 10).execute(&malformed_event.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let mut orphan_event = state_with_accounts(&[&operator]);
+        transact(&mut orphan_event, 1, NOW, |transaction| {
+            activate_policy(transaction, &authority);
+            let mut orphan = read_persisted_event(transaction.world(), 1)
+                .expect("read initial event")
+                .expect("initial event exists");
+            orphan.sequence = 2;
+            orphan.event_index = 1;
+            transaction
+                .world
+                .smart_contract_state
+                .insert(event_key(2), encode(&orphan));
+            Ok(())
+        })
+        .expect("commit orphan-event fixture");
+        assert!(matches!(
+            FindSorafsOrderbookEvents::new(None, None, 10).execute(&orphan_event.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
+
+        let mut missing_middle = state_with_accounts(&[&operator]);
+        let mut policy_digest = [0; 32];
+        transact(&mut missing_middle, 1, NOW, |transaction| {
+            policy_digest = activate_policy(transaction, &authority);
+            Ok(())
+        })
+        .expect("commit missing-middle policy");
+        let first = order(&operator, 1);
+        let second = order(&operator, 2);
+        transact(&mut missing_middle, 2, NOW + 1, |transaction| {
+            SubmitSorafsOrderbookOrder::new(encode(&first), policy_digest)
+                .execute(&authority, transaction)?;
+            SubmitSorafsOrderbookOrder::new(encode(&second), policy_digest)
+                .execute(&authority, transaction)?;
+            transaction.world.smart_contract_state.remove(event_key(2));
+            Ok(())
+        })
+        .expect("commit missing-middle fixture");
+        assert!(matches!(
+            FindSorafsOrderbookEvents::new(None, None, 10).execute(&missing_middle.view()),
+            Err(QueryExecutionFail::Conversion(_))
+        ));
     }
 
     #[test]
@@ -3687,6 +5232,100 @@ mod tests {
     }
 
     #[test]
+    fn matching_rejects_divergent_parent_custody_before_any_multi_fill_mutation() {
+        let settlement = keypair(0xA8);
+        let buyer = keypair(0xA9);
+        let provider = keypair(0xAA);
+        let treasury = keypair(0xAB);
+        let settlement_id = account(&settlement);
+        let buyer_id = account(&buyer);
+        let provider_id = account(&provider);
+        let state =
+            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xAC);
+        let fixture = seed_two_fill_match(
+            &mut stx,
+            &settlement_id,
+            &buyer_id,
+            &provider_id,
+            &buyer,
+            &provider,
+        );
+
+        let second_parent = stx
+            .world
+            .asset_escrows
+            .get(&fixture.parent_ids[1])
+            .expect("second parent custody")
+            .clone();
+        let poisoned_asset = Asset::new(
+            AssetId::of(
+                second_parent.asset_definition.clone(),
+                second_parent.custody.clone(),
+            ),
+            micro_quantity(1),
+        );
+        let (poisoned_asset_id, poisoned_asset_value) = poisoned_asset.into_key_value();
+        stx.world
+            .assets
+            .insert(poisoned_asset_id, poisoned_asset_value);
+        let before = snapshot_two_fill_match(&stx, &fixture);
+
+        let error = MatchSorafsOrderbook::new(fixture.policy_digest, 4, 2)
+            .execute(&settlement_id, &mut stx)
+            .expect_err("divergent second custody must reject the entire two-fill batch");
+        assert!(
+            error
+                .to_string()
+                .contains("bid order custody balance does not match authoritative escrow record"),
+            "unexpected custody-divergence error: {error}"
+        );
+        assert_two_fill_match_unchanged(&stx, &fixture, &before, [false, false]);
+    }
+
+    #[test]
+    fn matching_rejects_late_channel_marker_before_any_multi_fill_mutation() {
+        let settlement = keypair(0xAD);
+        let buyer = keypair(0xAE);
+        let provider = keypair(0xAF);
+        let treasury = keypair(0xB0);
+        let settlement_id = account(&settlement);
+        let buyer_id = account(&buyer);
+        let provider_id = account(&provider);
+        let state =
+            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 100_000);
+        let mut block = state.block(block_header());
+        let mut stx = block.transaction();
+        seed_test_call_hash(&mut stx, 0xB1);
+        let fixture = seed_two_fill_match(
+            &mut stx,
+            &settlement_id,
+            &buyer_id,
+            &provider_id,
+            &buyer,
+            &provider,
+        );
+
+        let second_child = orderbook_settlement_escrow_id(fixture.channel_ids[1]);
+        crate::smartcontracts::isi::escrow::mark_orderbook_channel_lock(&mut stx, &second_child)
+            .expect("seed a late conflicting channel marker");
+        let before = snapshot_two_fill_match(&stx, &fixture);
+
+        let error = MatchSorafsOrderbook::new(fixture.policy_digest, 4, 2)
+            .execute(&settlement_id, &mut stx)
+            .expect_err("late second marker must reject the entire two-fill batch");
+        assert!(
+            error
+                .to_string()
+                .contains("derived orderbook settlement channel custody marker already exists"),
+            "unexpected duplicate-marker error: {error}"
+        );
+        assert_two_fill_match_unchanged(&stx, &fixture, &before, [false, true]);
+    }
+
+    #[test]
     fn maintenance_expires_signed_orders_with_bounded_revision_cas() {
         let operator = keypair(0x38);
         let buyer = keypair(0x39);
@@ -3764,7 +5403,7 @@ mod tests {
         let buyer_id = account(&buyer);
         let provider_id = account(&provider);
         let treasury_id = account(&treasury);
-        let state =
+        let mut state =
             state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 1_000);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
@@ -3838,25 +5477,143 @@ mod tests {
             .execute(&stx)
             .expect("query receipt by id");
         assert_eq!(queried.receipt_id, first.receipt_id);
-        let first_page = FindSorafsOrderbookReceipts::new(Some(first.channel_id), None, 1)
-            .execute(&stx)
+        stx.apply();
+        block.commit().expect("commit receipt query fixture");
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
+        let view = state.view();
+        let first_page = FindSorafsOrderbookReceipts::new(None, Some(first.channel_id), None, 1)
+            .execute(&view)
             .expect("query first receipt page");
         assert_eq!(first_page.receipts.len(), 1);
         assert!(first_page.has_more);
+        let finalized_cursor = first_page.finalized_cursor;
         let second_page = FindSorafsOrderbookReceipts::new(
+            Some(finalized_cursor),
             Some(first.channel_id),
             first_page.next_after_receipt_id,
             1,
         )
-        .execute(&stx)
+        .execute(&view)
         .expect("query second receipt page");
+        assert_eq!(second_page.finalized_cursor, finalized_cursor);
         assert_eq!(second_page.receipts.len(), 1);
         assert!(!second_page.has_more);
+        let trades = FindSorafsOrderbookTrades::new(Some(finalized_cursor), None, 10)
+            .execute(&view)
+            .expect("query committed trade page");
+        assert_eq!(trades.trades.len(), 1);
+        assert_eq!(trades.trades[0].trade_id, first.trade_id);
+        let channels = FindSorafsOrderbookChannels::new(Some(finalized_cursor), None, None, 10)
+            .execute(&view)
+            .expect("query committed channel page");
+        assert_eq!(channels.channels.len(), 1);
+        assert_eq!(channels.channels[0].channel_id, first.channel_id);
         let status = FindSorafsOrderbookStatus
-            .execute(&stx)
+            .execute(&view)
             .expect("query receipt counters");
         assert_eq!(status.settlement_receipts, 2);
         assert_eq!(status.settlement_channels, 1);
+    }
+
+    #[test]
+    fn trade_and_channel_queries_are_bounded_filtered_and_cursor_stable() {
+        let settlement = keypair(0x4A);
+        let buyer = keypair(0x4B);
+        let provider = keypair(0x4C);
+        let treasury = keypair(0x4D);
+        let authority = account(&settlement);
+        let buyer_id = account(&buyer);
+        let provider_id = account(&provider);
+        let mut state =
+            state_with_settlement_accounts(&settlement, &buyer, &provider, &treasury, 0);
+        let first = receipt(&provider, 1, 1, 8, 0, 10);
+        let second = receipt(&provider, 2, 2, 9, 0, 10);
+        transact(&mut state, 1, NOW, |transaction| {
+            activate_policy(transaction, &authority);
+            seed_settlement_channel(
+                transaction,
+                &buyer_id,
+                &provider_id,
+                &authority,
+                &first,
+                100,
+            );
+            seed_settlement_channel(
+                transaction,
+                &buyer_id,
+                &provider_id,
+                &authority,
+                &second,
+                100,
+            );
+            let mut status = read_status(transaction.world())
+                .expect("read fixture status")
+                .expect("configured status");
+            status.trades = 2;
+            status.settlement_channels = 2;
+            status.open_settlement_channels = 2;
+            transaction
+                .world
+                .smart_contract_state
+                .insert(status_key().clone(), encode(&status));
+            Ok(())
+        })
+        .expect("commit trade/channel query fixture");
+
+        let view = state.view();
+        let first_trades = FindSorafsOrderbookTrades::new(None, None, 1)
+            .execute(&view)
+            .expect("query first trade page");
+        assert_eq!(first_trades.trades.len(), 1);
+        assert!(first_trades.has_more);
+        let anchor = first_trades.finalized_cursor;
+        let second_trades =
+            FindSorafsOrderbookTrades::new(Some(anchor), first_trades.next_after_trade_id, 1)
+                .execute(&view)
+                .expect("query second trade page");
+        assert_eq!(second_trades.trades.len(), 1);
+        assert!(!second_trades.has_more);
+        let mut trade_ids = first_trades
+            .trades
+            .iter()
+            .chain(&second_trades.trades)
+            .map(|trade| trade.trade_id)
+            .collect::<Vec<_>>();
+        trade_ids.sort_unstable();
+        assert_eq!(trade_ids, vec![first.trade_id, second.trade_id]);
+
+        let first_channels = FindSorafsOrderbookChannels::new(
+            Some(anchor),
+            Some(OrderbookSettlementChannelStatusV1::Open),
+            None,
+            1,
+        )
+        .execute(&view)
+        .expect("query first open-channel page");
+        assert_eq!(first_channels.channels.len(), 1);
+        assert!(first_channels.has_more);
+        let second_channels = FindSorafsOrderbookChannels::new(
+            Some(anchor),
+            Some(OrderbookSettlementChannelStatusV1::Open),
+            first_channels.next_after_channel_id,
+            1,
+        )
+        .execute(&view)
+        .expect("query second open-channel page");
+        assert_eq!(second_channels.channels.len(), 1);
+        assert!(!second_channels.has_more);
+        assert!(
+            FindSorafsOrderbookChannels::new(
+                Some(anchor),
+                Some(OrderbookSettlementChannelStatusV1::Closed),
+                None,
+                10,
+            )
+            .execute(&view)
+            .expect("query closed-channel filter")
+            .channels
+            .is_empty()
+        );
     }
 
     #[test]
@@ -4045,6 +5802,42 @@ mod tests {
             .get_mut(&escrow_id)
             .expect("settlement lock")
             .expires_at_ms = None;
+        assert!(
+            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
+                .execute(&authority, &mut stx)
+                .is_err(),
+            "a settlement lock without the channel expiry must fail closed"
+        );
+        stx.world
+            .asset_escrows
+            .get_mut(&escrow_id)
+            .expect("settlement lock")
+            .expires_at_ms = Some((NOW + 100) * 1_000);
+
+        stx.world
+            .provider_owners
+            .remove(ProviderId::new([0x71; 32]));
+        stx.world
+            .provider_owners
+            .insert(ProviderId::new([0x72; 32]), provider_id.clone());
+        assert!(
+            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
+                .execute(&authority, &mut stx)
+                .is_err(),
+            "an unrelated provider id for the same signer must not revive a revoked channel binding"
+        );
+        stx.world
+            .provider_owners
+            .remove(ProviderId::new([0x72; 32]));
+        stx.world
+            .provider_owners
+            .insert(ProviderId::new([0x71; 32]), buyer_id.clone());
+        assert!(
+            RecordSorafsOrderbookSettlementReceipt::new(encode(&candidate), policy_digest)
+                .execute(&authority, &mut stx)
+                .is_err(),
+            "reassigning the channel provider id must revoke the original provider signer"
+        );
         stx.world
             .provider_owners
             .remove(ProviderId::new([0x71; 32]));
@@ -4282,7 +6075,7 @@ mod tests {
     fn corrupted_authoritative_state_fails_closed_before_new_mutation() {
         let buyer = keypair(0x51);
         let authority = account(&buyer);
-        let state = state_with_accounts(&[&buyer]);
+        let mut state = state_with_accounts(&[&buyer]);
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let policy_digest = activate_policy(&mut stx, &authority);
@@ -4297,12 +6090,6 @@ mod tests {
                 .is_err()
         );
         assert!(
-            FindSorafsOrderbookOrders::new(None, None, 10)
-                .execute(&stx)
-                .is_err(),
-            "typed listings must fail closed on corrupt authoritative records"
-        );
-        assert!(
             read_nonce(stx.world(), &authority)
                 .expect("read nonce")
                 .is_none()
@@ -4313,6 +6100,15 @@ mod tests {
                 .get(&order_key(order.order_id))
                 .expect("corrupt state remains"),
             &vec![0xFF; 16]
+        );
+        stx.apply();
+        block.commit().expect("commit corrupt order query fixture");
+        state.push_block_hash_for_testing(iroha_crypto::HashOf::new(&block_header()));
+        assert!(
+            FindSorafsOrderbookOrders::new(None, None, None, 10)
+                .execute(&state.view())
+                .is_err(),
+            "typed listings must fail closed on corrupt committed records"
         );
     }
 

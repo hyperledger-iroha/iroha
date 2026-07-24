@@ -5,32 +5,37 @@ summary: Stream PoR samples from gateways and collect summary metrics.
 
 # SoraFS Proof Streaming
 
-The `sorafs_cli` binary can now request Proof-of-Retrievability (PoR) samples
-or replay recorded Proof-of-Timed Retrieval (PoTR) receipts from a Torii gateway
-and emit structured metrics so operators can monitor proof quality alongside the
-rest of their pipeline. The streaming interface aligns with the unified
-`ProofStreamRequestV1` schema. `sorafs_cli proof stream` already accepts
-`--proof-kind=pdp` for schema-compatible request construction; current Torii
-gateways reject `proof_kind=pdp` until SF-13 provider protocol support lands.
+The `sorafs_cli` binary requests Proof-of-Retrievability (PoR) samples, reads
+the durable status of an existing governed Proof-of-Data-Possession (PDP)
+challenge, or replays signed Proof-of-Timed Retrieval (PoTR) receipts from a
+Torii gateway. The streaming interface follows the single
+`ProofStreamRequestV1` contract. A PDP request must bind a non-zero challenge
+identifier already admitted by the authenticated provider protocol; clients
+cannot synthesize challenges or choose PDP sampling inputs.
 
 ## CLI Usage
 
 ```bash
 export TORII_URL="https://gateway.local/"
+export PROVIDER_ID_HEX="1111111111111111111111111111111111111111111111111111111111111111"
 
 sorafs_cli proof stream \
-  --manifest artifacts/manifest.to \
-  --torii-url "${TORII_URL}" \
-  --provider-id provider::alpha \
+  --manifest=artifacts/manifest.to \
+  --torii-url="${TORII_URL}" \
+  --provider-id-hex="${PROVIDER_ID_HEX}" \
+  --proof-kind=por \
   --samples=128 \
   --stream-token="$(cat stream.token)" \
-  --summary-out artifacts/proof_stream_summary.json \
-  --governance-evidence-dir artifacts/proof_stream_evidence
+  --summary-out=artifacts/proof_stream_summary.json \
+  --governance-evidence-dir=artifacts/proof_stream_evidence
 ```
 
-- The command POSTs to `--torii-url/v1/sorafs/proof/stream` with a Norito payload
+- The command POSTs to `--torii-url/v1/sorafs/proof/stream` with canonical
+  Norito JSON
   matching the `ProofStreamRequestV1` schema (digest, proof kind, nonce,
-  and either `sample_count` or `deadline_ms` depending on the proof kind).
+  and exactly the fields allowed by the selected proof kind). A full regional
+  gateway route may instead be supplied with `--gateway-url`; the retired
+  `--endpoint` and textual `--provider-id` aliases are rejected.
 - PoR `sample_count` is bounded to `1..=500`; oversized requests fail before
   manifest lookup so gateways do not perform unbounded sampling work.
 - The request body supplies `manifest_digest_hex` (BLAKE3-256 of the canonical
@@ -42,16 +47,18 @@ sorafs_cli proof stream \
 - `--summary-out` writes the aggregated metrics to disk so CI pipelines can
   archive results alongside manifests, signatures, and CAR summaries.
 - `--governance-evidence-dir=<dir>` copies the manifest, writes `metadata.json`
-  (CLI version, Torii URL, manifest digest, capture timestamp), and persists the
+  (CLI version, resolved endpoint, manifest digest, capture timestamp), and persists the
   summary JSON in the supplied directory so release packets have ready-to-archive
   evidence for governance reviews.
 - Streams now fail when any gateway item reports `result: failure` or when local
   PoR verification rejects a proof. Tune the budgets via `--max-failures=N` and
   `--max-verification-failures=N` (defaults: `0` for both) when you need to
   allow a small number of retries during rehearsals.
-- `--samples` defaults to `32` for PoR and must not exceed `500`. For PoTR pass
+- `--samples` defaults to `32` for PoR and must not exceed `500`. For PDP pass
+  `--proof-kind=pdp --challenge-id-hex=<64-lowercase-hex>` and omit sampling
+  and deadline options. For PoTR pass
   `--proof-kind=potr` with `--deadline-ms=<millis>`; the stream will return the
-  recorded receipts currently cached by the gateway.
+  recorded durable receipts for the requested manifest, provider, and tier.
 
 ### PoTR HTTP headers
 
@@ -64,10 +71,14 @@ sorafs_cli proof stream \
   `PotrReceiptV1`) and `Sora-PoTR-Status` so clients can verify signed latency
   receipts without issuing a separate API call. Receipts include the requested
   byte range, observed/request timestamps, deterministic request IDs, and the
-  gateway’s Ed25519 signature. Provider signatures remain optional until
-  Dilithium key distribution lands.
-- Gateways validate receipt signatures before caching them; receipts with invalid
-  signatures are dropped instead of being streamed to clients.
+  gateway’s Ed25519 signature and the admitted provider’s governed ML-DSA
+  signature.
+- Gateways validate both signatures and the governed provider key before
+  atomically recording a receipt; invalid receipts are rejected rather than
+  streamed. Every PoTR stream row includes `receipt_b64`, the canonical Norito
+  bytes of that final signed receipt. The CLI verifies both signatures and
+  rejects any JSON identity, result, timing, tier, or trace projection that
+  differs from the signed object.
 
 ### Summary structure
 
@@ -137,15 +148,11 @@ names listed above and can be imported directly with the Prometheus exporter ena
 2. Failure reasons split by taxonomy (timeout, invalid_proof, etc.)
 3. Latency p50/p95 derived from `sorafs_proof_stream_latency_ms_bucket`
 
-## Limitations & Roadmap
+## Operational note
 
-- **Provider signatures.** Gateways attach Ed25519 receipts today; Dilithium3
-  provider attestations remain on the roadmap and will be threaded once council
-  distributes PQ keys to operators (tracked under SF-14 follow-ups).
-- **PDP streaming.** Proof-of-Data-Possession support remains on the roadmap
-  alongside the CDC commitment work (SF-13). The CLI already accepts
-  `--proof-kind=pdp` so callers can generate schema-compatible requests, but
-  current Torii gateways reject `proof_kind=pdp` as an unsupported proof kind
-  until the provider protocol and CDC commitments ship.
 - **Event volume.** The CLI prints per-item NDJSON locally; set
   `--emit-events=false` when you only need the final summary blob for CI.
+- **Promotion boundary.** Protocol and local durability coverage do not by
+  themselves close the readiness lane. Promotion still requires the
+  chain-authoritative repair handoff and genuine multi-provider deployment
+  evidence.

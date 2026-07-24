@@ -65,7 +65,7 @@ sidebar_label: Маркетплейс емкости
 - עוזרי שירות (`CapacityMetadataEntry`, `PricingScheduleV1`, נתיב/מקצה/SLA) יגיעו לשירותי שרת, которые могут переиспользовать CI и כלי עבודה במורד הזרם.【ארגזים/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` צור תצלום מצב על-שרשרת через `/v1/sorafs/capacity/state`, ספקי תקשורים ופנקס עמלות חשבונות Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Покрытие валидации проверяет соблюдение канонических ידיות, обнаружение дубликатов, границы полюдение канонических, שומרים проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【ארגזים/sorafs_manifest/src/capacity.rs:792】
-- כלי עבודה למפעיל: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` מפרט טכני של Norito, מפרט תקליטורים, מטענים של Norito, נקודות בסיס 64 וסיכומי JSON. подготовить גופי `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` וגופי הזמנת שכפול с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_fxture/ifests_fxture/ifests_man:1 живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.### 2. מטוס בקרה Интеграция
+- כלי עבודה למפעיל: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` מפרט טכני של Norito, מפרט תקליטורים, מטענים של Norito, נקודות בסיס 64 וסיכומי JSON. подготовить גופי `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` וגופי הזמנת שכפול с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_fxture/ifests_fxture/ifests_man:1 живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.### 2. מטוס בקרה Интеграция
 
 | Задача | בעלים | Примечания |
 |------|----------------|-------|
@@ -153,7 +153,7 @@ sidebar_label: Маркетплейс емкости
   חבילות ניהול вместе с.
 
 ### מחלוקת Доказательства и slashing
-- מחלוקות Подавайте через `sorafs_manifest_stub capacity dispute` (בדיקות:
+- מחלוקות Подавайте через `sorafs_manifest_builder capacity dispute` (בדיקות:
   `cargo test -p sorafs_car --test capacity_cli`), чтобы מטענים оставались каноничными.
 - Запускайте `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` и наборы
   штрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`), чтобы доказать
@@ -162,7 +162,7 @@ sidebar_label: Маркетплейс емкости
   эскалации; привязывайте אישורי שביתה обратно בדוח אימות.
 
 ### ספקי Смоук-тесты онбординга и выхода
-- Регенерируйте artefacts деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
+- Регенерируйте artefacts деклараций/телеметрии через `sorafs_manifest_builder capacity ...` и
   בדיקות CLI прогоняйте перед подачей (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Отправляйте через Torii (`/v1/sorafs/capacity/declare`), затем фиксируйте
   `/v1/sorafs/capacity/state` плюс скриншоты Grafana. Следуйте flow выхода в

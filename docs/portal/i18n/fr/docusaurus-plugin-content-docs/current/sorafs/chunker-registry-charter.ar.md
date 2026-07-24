@@ -55,7 +55,7 @@ Télécharger `chunker_registry::ensure_charter_compliance()` :
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قدّم PR يحتوي على luminaires والمقترح وتقرير الحتمية وتحديثات السجل.
@@ -88,12 +88,12 @@ Télécharger `chunker_registry::ensure_charter_compliance()` :
 
 ## outillage de توقعات
 
-- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` pour :
+- `sorafs_manifest_chunk_store` et `sorafs_manifest_builder` pour :
   - `--list-profiles` pour la lecture.
   - `--promote-profile=<handle>` لتوليد كتلة البيانات المعتمدة المستخدمة عند ترقية ملف.
   - `--json-out=-` est connecté à la sortie standard et est connecté à une connexion Internet.
 - يتم استدعاء `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`, `provider_advert_stub`). يجب أن تفشل اختبارات CI إذا كانت
+  (`manifest_chunk_store`, `sorafs_provider_advert`). يجب أن تفشل اختبارات CI إذا كانت
   الإدخالات الجديدة تنتهك الميثاق.
 
 ## حفظ السجلات

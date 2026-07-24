@@ -19,7 +19,7 @@ description: luminárias reproduzíveis, exportações Prometheus, e painéis Gr
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی آئینہ دار ہے۔ جب تک پرانا Esfinge دستاویزی مجموعہ مکمل طور پر منتقل نہیں ہو جاتا دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
-یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں Qual é a melhor opção para você یہ `docs/examples/sorafs_capacity_simulation/` میں موجود luminárias determinísticas کے ذریعے quota مذاکرات, failover ہینڈلنگ اور slashing remediation کو ponta a ponta ویلیڈیٹ کرتی ہے۔ Cargas úteis کپیسٹی اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifesto/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں Qual é a melhor opção para você یہ `docs/examples/sorafs_capacity_simulation/` میں موجود luminárias determinísticas کے ذریعے quota مذاکرات, failover ہینڈلنگ اور slashing remediation کو ponta a ponta ویلیڈیٹ کرتی ہے۔ Cargas úteis کپیسٹی اب بھی `sorafs_manifest_builder capacity` استعمال کرتے ہیں؛ manifesto/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`, `sorafs_manifest_stub capacity` کو لپیٹ کر Cargas úteis Norito, blobs base64, corpos de solicitação Torii e resumos JSON تیار کرتا ہے برائے:
+`run_cli.sh`, `sorafs_manifest_builder capacity` کو لپیٹ کر Cargas úteis Norito, blobs base64, corpos de solicitação Torii e resumos JSON تیار کرتا ہے برائے:
 
 - cota مذاکرات والے منظرنامے میں شریک تین provedores کی declarações۔
 - ایک ordem de replicação جو manifesto encenado کو provedores میں تقسیم کرتا ہے۔

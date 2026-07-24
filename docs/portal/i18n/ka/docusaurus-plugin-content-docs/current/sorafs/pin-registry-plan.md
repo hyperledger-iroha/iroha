@@ -78,7 +78,7 @@ Rust Norito სქემები და ვალიდაციის და�
 |-----------|------|----------|
 | Torii სერვისი | გამოაქვეყნეთ `/v1/sorafs/pin` (გაგზავნა), `/v1/sorafs/pin/{cid}` (მოძიება), `/v1/sorafs/aliases` (სია/შეკვრა), `/v1/sorafs/replication` (შეკვეთები/შეკვეთები). უზრუნველყოს პაგინაცია + ფილტრაცია. | ქსელის TL / Core Infra |
 | ატესტაცია | ჩართეთ რეესტრის სიმაღლე/ჰეში პასუხებში; დაამატეთ SDK-ების მიერ მოხმარებული Norito ატესტაციის სტრუქტურა. | ძირითადი ინფრა |
-| CLI | გააფართოვეთ `sorafs_manifest_stub` ან ახალი `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`. | ინსტრუმენტები WG |
+| CLI | გააფართოვეთ `sorafs_manifest_builder` ან ახალი `sorafs_pin` CLI `pin submit`, `alias bind`, `order issue`, `registry export`. | ინსტრუმენტები WG |
 | SDK | კლიენტის საკინძების გენერირება (Rust/Go/TS) Norito სქემიდან; ინტეგრაციის ტესტების დამატება. | SDK გუნდები |
 
 ოპერაციები:

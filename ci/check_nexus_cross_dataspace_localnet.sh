@@ -4,6 +4,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${REPO_ROOT}"
 
+bash ci/check_sumeragi_v2_multilane_release_inventory.sh
+
 # Release/PR evidence must exercise a source-current daemon on a real network.
 # Explicit binary overrides bypass the test-network source fingerprint check.
 unset TEST_NETWORK_BIN_IROHAD KAGAMI_BIN CARGO_BIN_EXE_iroha3d CARGO_BIN_EXE_kagami

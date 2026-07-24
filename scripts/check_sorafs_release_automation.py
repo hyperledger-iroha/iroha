@@ -28,6 +28,58 @@ RELEASE_TARGET_RUNNERS: tuple[tuple[str, str], ...] = (
     ("macos-14", "aarch64-apple-darwin"),
     ("windows-latest", "x86_64-pc-windows-msvc"),
 )
+RELEASE_DOCUMENTS: dict[str, tuple[str, ...]] = {
+    "docs/portal/sidebars.js": ("'sorafs/release-rollback-yank'",),
+    "docs/portal/docs/sorafs/runbooks-index.md": (
+        "[`sorafs/release-rollback-yank`](./release-rollback-yank.md)",
+    ),
+    "docs/source/sorafs_release_pipeline_plan.md": (
+        "builds native Linux x86_64/aarch64",
+        "executes all three binaries from each clean extraction",
+        "`scripts/package_sorafs_cli_candidate.py` assembles the whole platform",
+        "exactly the five expected target-triple checksum manifests",
+        "The five-target CLI archive path is source-complete",
+        "build, publish, and clean-install all six",
+        "`docs/portal/docs/sorafs/release-rollback-yank.md`",
+        "`sorafs-release-authentication` environment",
+        "`scripts/release_manifest_signing.py verify`",
+        "never receives a private key or invokes a signer",
+    ),
+    "docs/portal/docs/sorafs/release-rollback-yank.md": (
+        "# SoraFS Release Rollback and Yank",
+        "`cargo yank --vers <version> <crate>`",
+        "npm deprecate <package>@<version>",
+        "Python/PyPI",
+        "C#/NuGet",
+        "JVM/Android",
+        "Swift Package Manager",
+        "GitHub CLI artifacts",
+        "`withdrawn`, `not_published`, or `failed`",
+        "Never reuse a withdrawn version",
+    ),
+    "docs/portal/docs/sorafs/developer-releases.md": (
+        "sorafs-cli-vX.Y.Z",
+        "all five native candidate archives",
+        "[SoraFS Release Rollback and Yank](./release-rollback-yank.md)",
+        "`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`",
+        "No private key or HSM signing operation",
+    ),
+    "docs/examples/sorafs_release_notes.md": (
+        "## Rollback / Yank Record",
+        "every package row in `release/version-map.toml`",
+        "`<withdrawn | not_published | failed>`",
+    ),
+}
+FORBIDDEN_RELEASE_DOCUMENT_CLAIMS: dict[str, tuple[str, ...]] = {
+    "docs/source/sorafs_release_pipeline_plan.md": (
+        "via cross",
+        "exactly the three expected platform checksum manifests",
+    ),
+    "docs/portal/docs/sorafs/developer-releases.md": (
+        "git tag -s sorafs-v",
+        "invokes the script above",
+    ),
+}
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
@@ -38,12 +90,35 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "scripts/build_sorafs_reference_sdk_release_canary.py",
         "scripts/run_sorafs_reference_sdk_release_evidence.py",
         "scripts/check_workflow_action_pins.py",
+        '- "scripts/build_release_bundle.sh"',
+        '- "scripts/build_release_image.sh"',
+        '- "scripts/generate_release_manifest.py"',
+        '- "scripts/generate_sorafs_cli_release_manifest.py"',
+        '- "scripts/release_manifest_signing.py"',
+        '- "scripts/publish_plan.py"',
+        '- "scripts/run_release_pipeline.py"',
         '- "scripts/requirements.txt"',
         "python3 -m pip install -r scripts/requirements.txt",
         "python3 scripts/check_workflow_action_pins.py",
         "scripts/tests/check_sorafs_reference_sdk_release_evidence_test.py",
         "run: bash ci/check_sorafs_cli_release.sh",
         "scripts/package_sorafs_validate_release.sh",
+        "scripts/package_sorafs_cli_candidate.py",
+        "scripts/tests/package_sorafs_cli_candidate_test.py",
+        '- "scripts/tests/release_profile_validation_test.py"',
+        '- "scripts/tests/release_manifest_signing_test.py"',
+        '- "scripts/tests/release_manifest_signing_test.sh"',
+        '- "scripts/tests/generate_release_manifest_test.py"',
+        '- "scripts/tests/generate_sorafs_cli_release_manifest_test.py"',
+        '- "scripts/tests/publish_plan_test.py"',
+        '- "docs/source/sorafs_release_pipeline_plan*.md"',
+        '- "docs/source/release_dual_track_automation_plan*.md"',
+        '- "docs/source/release_dual_track_runbook*.md"',
+        '- "docs/source/release_artifact_selection*.md"',
+        '- "docs/source/sora_nexus_operator_onboarding*.md"',
+        '- "docs/portal/docs/nexus/nexus-operator-onboarding*.md"',
+        '- "CHANGELOG.md"',
+        '- "LICENSE"',
         "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
         "anchore/scan-action@e1165082ffb1fe366ebaf02d8526e7c4989ea9d2",
         "syft-version: v1.44.0",
@@ -68,7 +143,32 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}.spdx.json",
         "name: Scan platform binary SBOM",
         "output-file: artifacts/sorafs-cli/sorafs-cli-${{ matrix.target }}-vulnerabilities.sarif",
+        "docs/portal/docs/sorafs/release-rollback-yank.md artifacts/sorafs-cli/ROLLBACK-YANK.md",
+        "cp CHANGELOG.md LICENSE artifacts/sorafs-cli/",
+        "name: Rebuild deterministic platform archive and run clean-consumer smoke",
+        "candidate-package-first.json",
+        "candidate-package-replay.json",
+        "artifacts/sorafs-cli/platform-archive",
+        "name: Stage source release scan evidence",
         "name: Finalize platform checksums",
+        "  prepare-release-manifest:",
+        "name: Build the canonical foundational manifest twice",
+        "python3 scripts/generate_sorafs_cli_release_manifest.py create",
+        "name: Upload unsigned foundational manifest for external HSM signing",
+        "  verify-release-auth:",
+        "environment: sorafs-release-authentication",
+        "runs-on: [self-hosted, linux, x64, sorafs-release-auth]",
+        "SORAFS_RELEASE_SIGNATURE_PATH: ${{ vars.SORAFS_RELEASE_SIGNATURE_PATH }}",
+        "SORAFS_RELEASE_PUBLIC_KEY_PATH: ${{ vars.SORAFS_RELEASE_PUBLIC_KEY_PATH }}",
+        "SORAFS_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.SORAFS_RELEASE_MANIFEST_VERIFIER_PATH }}",
+        "SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}",
+        "SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}",
+        "name: Reconcile the foundational manifest with the immutable candidates",
+        "name: Verify the protected external Ed25519 manifest tuple",
+        "python3 scripts/release_manifest_signing.py verify",
+        "name: Upload authenticated foundational manifest tuple",
+        "name: Verify authenticated release-manifest candidate binding before provenance",
+        "needs: [release-gate, package, verify-release-auth]",
         "sigstore/cosign-installer@ba7bc0a3fef59531c69a25acd34668d6d3fe6f22",
         "name: Verify platform package checksums before signing",
         '[[ "${#checksum_files[@]}" -ne 5 ]]',
@@ -111,6 +211,16 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
 }
 
 
+def _workflow_job(source: str, name: str) -> str | None:
+    """Return one top-level workflow job, including its header."""
+
+    match = re.search(
+        rf"(?ms)^  {re.escape(name)}:\n.*?(?=^  [A-Za-z0-9_-]+:\n|\Z)",
+        source,
+    )
+    return match.group(0) if match is not None else None
+
+
 def _validate_workflow_source(relative: str, source: str) -> list[str]:
     """Return deterministic contract errors for one workflow source."""
 
@@ -131,6 +241,221 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             errors.append(f"{relative}: missing contract marker `{marker}`")
 
     if relative.endswith("sorafs-cli-release.yml"):
+        jobs_source = source[source.index("jobs:\n") + len("jobs:\n") :]
+        job_inventory = tuple(
+            re.findall(r"(?m)^  ([A-Za-z0-9_-]+):\n", jobs_source)
+        )
+        expected_job_inventory = (
+            "release-gate",
+            "package",
+            "prepare-release-manifest",
+            "verify-release-auth",
+            "sign",
+        )
+        if job_inventory != expected_job_inventory:
+            errors.append(
+                f"{relative}: release workflow job inventory must be exactly "
+                f"{expected_job_inventory}"
+            )
+        if "${{ secrets." in source:
+            errors.append(
+                f"{relative}: release workflow must not consume GitHub secrets"
+            )
+        lowered_source = source.lower()
+        if any(
+            marker in lowered_source
+            for marker in (
+                "release_manifest_signing.py sign",
+                "--external-signer",
+                "--signing-seed",
+                "signing_seed",
+                "private-key",
+                "private_key",
+                "development-local-signing",
+            )
+        ):
+            errors.append(
+                f"{relative}: GitHub release jobs must not receive private signing "
+                "material or invoke the foundational Ed25519 signer"
+            )
+        if source.count("merge-multiple: false") != 3:
+            errors.append(
+                f"{relative}: candidate downloads must preserve exactly five "
+                "artifact-name directories"
+            )
+        prepare_job = _workflow_job(source, "prepare-release-manifest")
+        auth_job = _workflow_job(source, "verify-release-auth")
+        promotion_job = _workflow_job(source, "sign")
+        promotion_guard = (
+            "if: ${{ startsWith(github.ref, 'refs/tags/sorafs-cli-v') "
+            "|| inputs.sign_artifacts }}"
+        )
+        if prepare_job is None:
+            errors.append(f"{relative}: missing foundational-manifest preparation job")
+        else:
+            if promotion_guard not in prepare_job:
+                errors.append(
+                    f"{relative}: foundational-manifest preparation lacks the "
+                    "reviewed promotion trigger guard"
+                )
+            if "needs: [release-gate, package]" not in prepare_job:
+                errors.append(
+                    f"{relative}: foundational manifest must depend on the release "
+                    "gate and all platform packages"
+                )
+        if auth_job is None:
+            errors.append(f"{relative}: missing protected release-authentication job")
+        else:
+            required_auth_bindings = (
+                "SORAFS_RELEASE_SIGNATURE_PATH: ${{ vars.SORAFS_RELEASE_SIGNATURE_PATH }}",
+                "SORAFS_RELEASE_PUBLIC_KEY_PATH: ${{ vars.SORAFS_RELEASE_PUBLIC_KEY_PATH }}",
+                "SORAFS_RELEASE_MANIFEST_VERIFIER_PATH: ${{ vars.SORAFS_RELEASE_MANIFEST_VERIFIER_PATH }}",
+                "SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT: ${{ vars.SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT }}",
+                "SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256: ${{ vars.SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256 }}",
+            )
+            if any(binding not in auth_job for binding in required_auth_bindings):
+                errors.append(
+                    f"{relative}: release authentication is missing an explicit "
+                    "protected public tuple or trust-anchor binding"
+                )
+            if "needs: [release-gate, prepare-release-manifest]" not in auth_job:
+                errors.append(
+                    f"{relative}: release authentication must consume the gated "
+                    "foundational manifest"
+                )
+            if promotion_guard not in auth_job:
+                errors.append(
+                    f"{relative}: release authentication lacks the reviewed "
+                    "promotion trigger guard"
+                )
+            if "environment: sorafs-release-authentication" not in auth_job:
+                errors.append(
+                    f"{relative}: release authentication must use the protected "
+                    "release-authentication environment"
+                )
+            if (
+                "runs-on: [self-hosted, linux, x64, sorafs-release-auth]"
+                not in auth_job
+            ):
+                errors.append(
+                    f"{relative}: release authentication must use the protected "
+                    "self-hosted release-auth runner"
+                )
+            if "${{ secrets." in auth_job:
+                errors.append(
+                    f"{relative}: release authentication must not receive GitHub secrets"
+                )
+            if any(
+                marker in auth_job
+                for marker in (
+                    "id-token:",
+                    "attestations:",
+                    "artifact-metadata:",
+                    "actions/attest@",
+                    "cosign",
+                )
+            ):
+                errors.append(
+                    f"{relative}: OIDC and provenance authority must not enter the "
+                    "release-authentication job"
+                )
+            lowered_auth = auth_job.lower()
+            forbidden_auth_markers = (
+                "release_manifest_signing.py sign",
+                "--external-signer",
+                "--signing-seed",
+                "signing_seed",
+                "private-key",
+                "private_key",
+                "development-local-signing",
+            )
+            if any(marker in lowered_auth for marker in forbidden_auth_markers):
+                errors.append(
+                    f"{relative}: release authentication must be verification-only "
+                    "and must not receive private signing material"
+                )
+            if (
+                auth_job.count(
+                    "python3 scripts/release_manifest_signing.py verify"
+                )
+                != 2
+            ):
+                errors.append(
+                    f"{relative}: release authentication must verify both the "
+                    "protected tuple and its staged public snapshot"
+                )
+            if (
+                auth_job.count(
+                    "python3 scripts/generate_sorafs_cli_release_manifest.py check"
+                )
+                != 1
+            ):
+                errors.append(
+                    f"{relative}: release authentication must reconcile the signed "
+                    "manifest with the downloaded candidates exactly once"
+                )
+            try:
+                reconcile = auth_job.index(
+                    "name: Reconcile the foundational manifest with the immutable candidates"
+                )
+                external_verify = auth_job.index(
+                    "name: Verify the protected external Ed25519 manifest tuple"
+                )
+                first_native_verify = auth_job.index(
+                    "python3 scripts/release_manifest_signing.py verify"
+                )
+                stage_signature = auth_job.index(
+                    '"$evidence_dir/release_manifest.json.sig"'
+                )
+                second_native_verify = auth_job.index(
+                    "python3 scripts/release_manifest_signing.py verify",
+                    first_native_verify + 1,
+                )
+                upload_auth = auth_job.index(
+                    "name: Upload authenticated foundational manifest tuple"
+                )
+            except ValueError:
+                pass
+            else:
+                if not (
+                    reconcile
+                    < external_verify
+                    <= first_native_verify
+                    < stage_signature
+                    < second_native_verify
+                    < upload_auth
+                ):
+                    errors.append(
+                        f"{relative}: candidate reconciliation, external "
+                        "verification, public snapshot, replay verification, and "
+                        "authentication upload are out of order"
+                    )
+        if promotion_job is None:
+            errors.append(f"{relative}: missing release promotion job")
+        else:
+            if promotion_guard not in promotion_job:
+                errors.append(
+                    f"{relative}: release promotion lacks the reviewed trigger guard"
+                )
+            if (
+                "needs: [release-gate, package, verify-release-auth]"
+                not in promotion_job
+            ):
+                errors.append(
+                    f"{relative}: release promotion must depend on protected "
+                    "Ed25519 manifest authentication"
+                )
+            if (
+                promotion_job.count(
+                    "python3 scripts/generate_sorafs_cli_release_manifest.py check"
+                )
+                != 1
+            ):
+                errors.append(
+                    f"{relative}: release promotion must reconcile the downloaded "
+                    "authenticated manifest with the exact candidate inventory"
+                )
+
         package_matrix = re.search(
             r"(?ms)^  package:\n.*?^      matrix:\n"
             r"(?P<matrix>.*?)^    runs-on: \$\{\{ matrix\.os \}\}",
@@ -201,6 +526,9 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                         "match the native release matrix"
                     )
             try:
+                verify_manifest_binding = sign_job.index(
+                    "name: Verify authenticated release-manifest candidate binding before provenance"
+                )
                 verify_checksums = sign_job.index(
                     "name: Verify platform package checksums before signing"
                 )
@@ -212,7 +540,8 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 pass
             else:
                 if not (
-                    verify_checksums
+                    verify_manifest_binding
+                    < verify_checksums
                     < attest
                     < stage_attestations
                     < sign_blobs
@@ -233,6 +562,10 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
             )
         try:
             package_reference = source.index("name: Package reference validator and FFI header")
+            reproducible_archive = source.index(
+                "name: Rebuild deterministic platform archive and run clean-consumer smoke"
+            )
+            stage_source_scan = source.index("name: Stage source release scan evidence")
             binary_sbom = source.index("name: Generate platform binary SBOM")
             binary_scan = source.index("name: Scan platform binary SBOM")
             checksums = source.index("name: Finalize platform checksums")
@@ -240,10 +573,30 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
         except ValueError:
             pass
         else:
-            if not package_reference < binary_sbom < binary_scan < checksums < upload:
+            if not (
+                package_reference
+                < reproducible_archive
+                < stage_source_scan
+                < binary_sbom
+                < binary_scan
+                < checksums
+                < upload
+            ):
                 errors.append(
-                    f"{relative}: reference packaging, platform SBOM, scan, checksum, and upload steps are out of order"
+                    f"{relative}: reference packaging, reproducible archive, "
+                    "source evidence, platform SBOM, scan, checksum, and upload "
+                    "steps are out of order"
                 )
+        if source.count("python3 scripts/package_sorafs_cli_candidate.py") != 2:
+            errors.append(
+                f"{relative}: deterministic platform candidate must be built "
+                "exactly twice for byte-identical replay"
+            )
+        if source.count('cmp \\\n            "${first_out}/${package_name}') != 2:
+            errors.append(
+                f"{relative}: platform archive and manifest replay comparisons "
+                "must both be enforced"
+            )
     return errors
 
 
@@ -260,6 +613,22 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
             raise ValueError(f"{relative}: workflow must be UTF-8") from error
         errors.extend(_validate_workflow_source(relative, source))
         validated.append(relative)
+    for relative, markers in sorted(RELEASE_DOCUMENTS.items()):
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(f"{relative}: release document must be UTF-8") from error
+        for marker in markers:
+            if marker not in source:
+                errors.append(
+                    f"{relative}: missing release-document contract marker `{marker}`"
+                )
+        for stale_claim in FORBIDDEN_RELEASE_DOCUMENT_CLAIMS.get(relative, ()):
+            if stale_claim in source:
+                errors.append(
+                    f"{relative}: stale release-document claim `{stale_claim}`"
+                )
     if errors:
         raise ValueError("; ".join(errors))
     return {

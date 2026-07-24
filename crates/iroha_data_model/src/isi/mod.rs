@@ -1080,6 +1080,16 @@ impl From<crate::isi::sorafs::SubmitSorafsRepairAppeal> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsProofOutcome> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsProofOutcome) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 macro_rules! impl_sorafs_reserve_instruction_box {
     ($($instruction:ty),+ $(,)?) => {
         $(

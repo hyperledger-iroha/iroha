@@ -245,6 +245,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register_slice::<sorafs::SubmitSorafsRepairTask>,
     InstructionRegistry::register_slice::<sorafs::ApplySorafsRepairTaskAction>,
     InstructionRegistry::register_slice::<sorafs::SubmitSorafsRepairAppeal>,
+    InstructionRegistry::register_slice::<sorafs::SetSorafsProofOutcomeSignerPolicy>,
+    InstructionRegistry::register_slice::<sorafs::SubmitSorafsProofOutcome>,
     InstructionRegistry::register_slice::<sorafs::SetSorafsModerationPolicy>,
     InstructionRegistry::register_slice::<sorafs::SubmitSorafsModerationAppeal>,
     InstructionRegistry::register_slice::<sorafs::RegisterSorafsModerationJurorEligibility>,

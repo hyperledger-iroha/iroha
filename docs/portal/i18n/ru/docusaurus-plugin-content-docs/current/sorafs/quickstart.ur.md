@@ -65,12 +65,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 
 ## 3. Манифест بنائیں اور سائن کریں
 
-План фрагментов, псевдонимы и подписи управления `sorafs-manifest-stub` или `sorafs-manifest-stub`.
+План фрагментов, псевдонимы и подписи управления `sorafs-manifest-builder` или `sorafs-manifest-builder`.
 проявить میں لپیٹیں۔ Однофайловая полезная нагрузка или однофайловая полезная нагрузка درخت پیک کرنے
 Путь к каталогу или путь к каталогу (CLI или лексикографический интерфейс, или лексикографический интерфейс)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

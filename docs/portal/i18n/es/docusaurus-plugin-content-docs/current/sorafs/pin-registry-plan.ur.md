@@ -72,7 +72,7 @@ Tareas:
 |------|-----|-------------|
 | Torii Servicio | `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (búsqueda), `/v1/sorafs/aliases` (listar/enlazar), `/v1/sorafs/replication` (pedidos/recibos) فراہم کریں۔ paginación + filtrado مہیا کریں۔ | Redes TL / Core Infraestructura |
 | Atestación | respuestas میں altura del registro/hash شامل کریں؛ Norito estructura de atestación شامل کریں جسے Los SDK consumen کریں۔ | Infraestructura básica |
-| CLI | `sorafs_manifest_stub` Tarjeta gráfica de usuario `sorafs_pin` Tarjeta gráfica CLI `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | Grupo de Trabajo sobre Herramientas |
+| CLI | `sorafs_manifest_builder` Tarjeta gráfica de usuario `sorafs_pin` Tarjeta gráfica CLI `pin submit`, `alias bind`, `order issue`, `registry export` ہو۔ | Grupo de Trabajo sobre Herramientas |
 | SDK | El esquema Norito y los enlaces de cliente (Rust/Go/TS) generan کریں؛ pruebas de integración شامل کریں۔ | Equipos SDK |
 
 Operaciones:

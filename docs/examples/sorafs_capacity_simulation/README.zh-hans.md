@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` 脚本调用 `sorafs_manifest_stub capacity` 来构建：
+`run_cli.sh` 脚本调用 `sorafs_manifest_builder capacity` 来构建：
 
 - 配额谈判固定集的确定性提供商声明。
 - 与协商场景匹配的复制顺序。

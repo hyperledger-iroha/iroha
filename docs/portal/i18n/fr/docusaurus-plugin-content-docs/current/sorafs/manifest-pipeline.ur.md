@@ -52,7 +52,7 @@ Le code JSON est utilisé pour créer des fichiers JSON.
 - Les identifiants de build et les identifiants de build suivants
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

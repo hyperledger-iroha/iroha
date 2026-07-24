@@ -79,7 +79,7 @@ Sidebar_label: Список контактов
 |--------|--------|------------------|
 | خدمة Torii | Например, `/v1/sorafs/pin` (отправка), `/v1/sorafs/pin/{cid}` (поиск), `/v1/sorafs/aliases` (список/привязка), `/v1/sorafs/replication` (заказы/поступления). توفير ترقيم + ترشيح. | Сетевые TL/Core Infra |
 | Новости | تضمين ارتفاع/هاش реестр в الاستجابات؛ Загрузите Norito для создания SDK. | Основная инфраструктура |
-| интерфейс командной строки | Используйте `sorafs_manifest_stub` в CLI `sorafs_pin` для `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
+| интерфейс командной строки | Используйте `sorafs_manifest_builder` в CLI `sorafs_pin` для `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
 | SDK | Крепления для крепления (Rust/Go/TS) для Norito; اضافة اختبارات تكامل. | Команды SDK |
 
 Ответ:

@@ -65,7 +65,7 @@ Cette ページは `docs/source/sorafs/storage_capacity_marketplace.md` を参�
 - ヘルパー パート (`CapacityMetadataEntry`、`PricingScheduleV1`、検証レーン/割り当て/SLA) 4 つの検証、決定決定、および CI およびツールに関するエラーの再利用可能レポートの作成下流。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` は、`/v1/sorafs/capacity/state` 経由でオンチェーンのスナップショットの詳細を公開します。Norito JSON によるプロバイダーとエントリの組み合わせ宣言決定.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - 正規のアプリケーションを処理するための検証実験、二重検査の検出、レーンごとのボーンズ検査、レプリケーションの割り当ておよびプラージュの検査の保護者による検査の即時検査。 CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- ツール操作: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ペイロードの仕様ファイルを変換 Norito 正規化、BLOB Base64 および JSON を使用して操作を実行し、フィクスチャの準備を行う `/v1/sorafs/capacity/declare`、 `/v1/sorafs/capacity/telemetry` et des ordres de replication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) などは、`cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` 経由で生成されます。
+- ツール操作: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` ペイロードの仕様ファイルを変換 Norito 正規化、BLOB Base64 および JSON を使用して操作を実行し、フィクスチャの準備を行う `/v1/sorafs/capacity/declare`、 `/v1/sorafs/capacity/telemetry` et des ordres de replication avec validation locale.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) などは、`cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` 経由で生成されます。
 
 ### 2. 計画管理の統合
 
@@ -151,13 +151,13 @@ ci-dessous pour garder les critères d'acceptation alignés avec l'implémentati
 - 履歴書 JSON とハッシュ `docs/examples/sorafs_capacity_marketplace_validation/` のアーカイブ。
 
 ### 論争と斬り込みのプルーヴ
-- `sorafs_manifest_stub capacity dispute` 経由の紛争の保管庫 (テスト:
+- `sorafs_manifest_builder capacity dispute` 経由の紛争の保管庫 (テスト:
   `cargo test -p sorafs_car --test capacity_cli`) ペイロードの標準を注ぎます。
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et les suites de pénalité (`record_capacity_telemetry_penalises_persistent_under_delivery`) は、論争を引き起こし、マニエールの決定を拒否するものです。
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` は、preuves と l'escalade をキャプチャします。信頼関係を評価するための承認は必要ありません。
 
 ### プロバイダーとスモーク テストのオンボーディング
-- `sorafs_manifest_stub capacity ...` および CLI の事前テスト (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) を参照してください。
+- `sorafs_manifest_builder capacity ...` および CLI の事前テスト (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`) を参照してください。
 - Torii (`/v1/sorafs/capacity/declare`) キャプチャー `/v1/sorafs/capacity/state` 経由のスーメットレと Grafana のキャプチャー。 `docs/source/sorafs/capacity_onboarding_runbook.md` を実行します。
 - 調停に関する成果物や成果物をアーカイブする
   `docs/examples/sorafs_capacity_marketplace_validation/`。

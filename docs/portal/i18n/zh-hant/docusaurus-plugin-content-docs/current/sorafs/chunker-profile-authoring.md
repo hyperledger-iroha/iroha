@@ -95,9 +95,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   清單摘要，PoR 使用建議的參數進行檢查。
 - `sorafs_manifest_chunk_store --json-out=-` – 將塊存儲報告流式傳輸至
   用於自動比較的標準輸出。
-- `sorafs_manifest_stub --chunker-profile=<handle>` – 確認艙單和 CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` – 確認艙單和 CAR
   計劃嵌入規範句柄和別名。
-- `sorafs_manifest_stub --plan=-` – 反饋之前的 `chunk_fetch_specs`
+- `sorafs_manifest_builder --plan=-` – 反饋之前的 `chunk_fetch_specs`
   來驗證更改後的偏移量/摘要。
 
 在提案中記錄命令輸出（摘要、PoR 根、清單哈希）
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

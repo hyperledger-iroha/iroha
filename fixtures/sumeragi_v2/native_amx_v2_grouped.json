@@ -9,7 +9,74 @@
   "fixture_version": 1,
   "format": "iroha-native-amx-v2-grouped",
   "golden": {
+    "application_evidence": {
+      "active_lane_incarnations": [
+        {
+          "dataspace_id": 12,
+          "lane_id": 8,
+          "lane_incarnation": "hash:8F3BF00C1044E5A52CC20C0B914403FA7A8DCA29636504BA565FE3C1B646EACB#DD4A"
+        }
+      ],
+      "carrier_entrypoint_hashes": [
+        "hash:6161616161616161616161616161616161616161616161616161616161616161#9C14",
+        "hash:6363636363636363636363636363636363636363636363636363636363636363#4692"
+      ],
+      "execution_commitment": {
+        "executed_block_wire_hash": "hash:271576DEB148C553F40354AFCC861C1F9EF1B56E933F68CB17A9E9458D356163#7168",
+        "native_amx_application_manifest_count": 1,
+        "native_amx_application_manifest_root": "hash:C475325424998248F0C4EA89926F5F8E92CC879C5CE4E97A84BACF4E33B4A4E3#DA21",
+        "native_amx_application_manifest_version": 1,
+        "ordinary_writes_root": "hash:1A5A5B04F6090629E915CCC7D9778B613D628129E507972005CDB065C4C09DF3#F0C7",
+        "parent_state_root": "hash:006C20B42142D194F1C1D6FBC8F183684B2724F3A2261457D16328E7BF585B3B#44D4",
+        "post_state_root": "hash:B367329C1BC04D88F963BE38AF8268A82E0FC4E0325D4AEA6D92E7284E8F9853#B8F4",
+        "topup_anchor_count": 0
+      },
+      "manifest_artifacts": [
+        {
+          "leaf": {
+            "application_block_hash": "hash:B63BE9371C5CB4163029A1B698BE7E289B1E283F3AFA390F88AF7D73FA0E41A9#95D6",
+            "application_block_height": 42,
+            "dataspace_id": 12,
+            "descriptor_hash": "hash:4C753A8F4FFFD846CAC4C83498AEA705A182A3D8F6394CE360DBF9F04F0CA639#9281",
+            "executed_block_wire_hash": "hash:271576DEB148C553F40354AFCC861C1F9EF1B56E933F68CB17A9E9458D356163#7168",
+            "lane_id": 8,
+            "lane_incarnation": "hash:8F3BF00C1044E5A52CC20C0B914403FA7A8DCA29636504BA565FE3C1B646EACB#DD4A",
+            "members": [
+              {
+                "entrypoint_hash": "hash:6161616161616161616161616161616161616161616161616161616161616161#9C14",
+                "entrypoint_index": 0,
+                "result_hash": "hash:2BE41A2E9FD3DD38E35ECC01B4A6901A00F5816C2FCEBF194900221DBF2F8AF7#CF1A",
+                "source_id": "ABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB"
+              },
+              {
+                "entrypoint_hash": "hash:6363636363636363636363636363636363636363636363636363636363636363#4692",
+                "entrypoint_index": 1,
+                "result_hash": "hash:FA073E3FA551375934750951BA41FA0728FA0A9D9D7C813CA60D9406B6FD8F35#4EA2",
+                "source_id": "CDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCDCD"
+              }
+            ],
+            "participant_height": 42,
+            "participant_view": 0,
+            "predecessor_descriptor_hash": "hash:183FAC35746059D2B27454062A925E0F23DE77F4BD7C13B8D3F966A099F28A9D#261B",
+            "predecessor_height": 41,
+            "proposal_hash": "hash:2F1EBE9129BC250B36E9A5DCFCE4ACCF9DBC7070ED962D9810E462ED075791F7#9FD4",
+            "settlement_hash": "hash:C11800867A830CA936FADCC946E207BC1055263E28BAFFFAD088209AEC5C85DB#0DED",
+            "version": 1
+          },
+          "leaf_hash": "hash:C475325424998248F0C4EA89926F5F8E92CC879C5CE4E97A84BACF4E33B4A4E3#DA21",
+          "leaf_index": 0,
+          "manifest_leaf_count": 1,
+          "manifest_root": "hash:C475325424998248F0C4EA89926F5F8E92CC879C5CE4E97A84BACF4E33B4A4E3#DA21",
+          "proof": {
+            "audit_path": [],
+            "leaf_index": 0
+          },
+          "version": 1
+        }
+      ]
+    },
     "expected_diagnostics": {
+      "autonomous_lane_executions": [],
       "committed_lane_blocks": [],
       "dataspace_commitments": [],
       "lane_block_sessions": [],
@@ -9431,7 +9498,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/phase",
           "value": "prepare"
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9445,7 +9513,8 @@
             "phase": "commit"
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9456,7 +9525,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/tx_entrypoint_hash",
           "value": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1"
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9469,7 +9539,8 @@
             "3ccd719df58a9ac1b2abbeb2a2e63e732f0c82b6905c005a397a2f128b0b4901"
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9483,7 +9554,8 @@
             "right": 1
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9496,7 +9568,8 @@
             3
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9509,7 +9582,8 @@
             135
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9616,7 +9690,8 @@
             90
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9723,7 +9798,8 @@
             90
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9736,7 +9812,8 @@
             "from": "/golden/receipt_group/native_amx_receipts/0/legs/0"
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9747,7 +9824,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs",
           "value": []
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9761,7 +9839,8 @@
             "source_index": 0
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9774,7 +9853,8 @@
             "from": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/receipts/0/source_id"
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9785,7 +9865,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/receipts/0/source_id",
           "value": "EFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEFEF"
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9796,7 +9877,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/tx_count",
           "value": 1
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9810,7 +9892,8 @@
             "source_index": 0
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9821,7 +9904,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/receipts/1/timestamp_ms",
           "value": 41
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9832,7 +9916,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/total_local_amount",
           "value": "1"
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9845,7 +9930,8 @@
             {}
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9858,7 +9944,8 @@
             {}
           ]
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9868,7 +9955,8 @@
           "op": "remove",
           "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_proposal/descriptor/previous_lane_block_descriptor_hash"
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9881,7 +9969,8 @@
             "from": "/golden/receipt_group/native_amx_receipts/0/source_id"
           }
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9892,7 +9981,8 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/version",
           "value": 1
         }
-      ]
+      ],
+      "validator": "receipt_group"
     },
     {
       "expectation": "reject",
@@ -9903,7 +9993,155 @@
           "path": "/golden/receipt_group/native_amx_receipts/0/source_id",
           "value": "abababababababababababababababababababababababababababababababab"
         }
-      ]
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "stale_same_route_incarnation",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_proposal/descriptor/lane_incarnation",
+          "value": "hash:3785E747544E91837692064BEE0E390F638C80F2028DC30F2656DC168FD7DC81#D9DF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_settlement/lane_incarnation",
+          "value": "hash:3785E747544E91837692064BEE0E390F638C80F2028DC30F2656DC168FD7DC81#D9DF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/prepare_qc/body/participant_lane_incarnation",
+          "value": "hash:3785E747544E91837692064BEE0E390F638C80F2028DC30F2656DC168FD7DC81#D9DF"
+        },
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/commit_qc/body/participant_lane_incarnation",
+          "value": "hash:3785E747544E91837692064BEE0E390F638C80F2028DC30F2656DC168FD7DC81#D9DF"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "same_route_coordinator_view_drift",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_proposal/descriptor/lane_block_view",
+          "value": 10
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "same_route_mixed_role_deferral",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/0/participant_proposal/descriptor/accepted_transaction_hashes/0",
+          "value": "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781"
+        }
+      ],
+      "validator": "receipt_group"
+    },
+    {
+      "expectation": "reject",
+      "id": "stale_participant_application_incarnation",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf/lane_incarnation",
+          "value": "hash:3785E747544E91837692064BEE0E390F638C80F2028DC30F2656DC168FD7DC81#D9DF"
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "same_route_participant_application_marker",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf/lane_id",
+          "value": 7
+        },
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf/dataspace_id",
+          "value": 11
+        },
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf/lane_incarnation",
+          "value": "hash:27146A48934D7179538FC7D9F474067D761989CED98D26A46AF5EB2575A7547D#8337"
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "unanchored_mixed_role_participant",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/receipt_group/native_amx_receipts/0/legs/1/participant_proposal/descriptor/accepted_transaction_hashes/0",
+          "value": "hash:07BAE6F998F2D195BD9481ADDFB26789F771FDD7F6BB476A9C3157F70FB85AB7#9781"
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "manifest_root_tampering",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/manifest_root",
+          "value": "hash:4DB5B2659C2D15DC4F08D8501970ABE42451881A99A2522F09EC976743F64309#2270"
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "manifest_proof_path_tampering",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/proof/audit_path",
+          "value": [
+            "hash:4DB5B2659C2D15DC4F08D8501970ABE42451881A99A2522F09EC976743F64309#2270"
+          ]
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "manifest_proof_position_tampering",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/proof/leaf_index",
+          "value": 1
+        }
+      ],
+      "validator": "application_evidence"
+    },
+    {
+      "expectation": "reject",
+      "id": "application_block_substitution",
+      "mutations": [
+        {
+          "op": "replace",
+          "path": "/golden/application_evidence/manifest_artifacts/0/leaf/application_block_hash",
+          "value": "hash:4DB5B2659C2D15DC4F08D8501970ABE42451881A99A2522F09EC976743F64309#2270"
+        }
+      ],
+      "validator": "application_evidence"
     }
   ],
   "rust_owner": "iroha_data_model::block::consensus"

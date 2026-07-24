@@ -121,18 +121,23 @@ pub use role::{
 pub use sorafs::{
     visit_find_sorafs_moderation_appeal, visit_find_sorafs_moderation_case,
     visit_find_sorafs_moderation_challenge, visit_find_sorafs_moderation_commit,
-    visit_find_sorafs_moderation_juror_eligibility, visit_find_sorafs_moderation_no_show,
-    visit_find_sorafs_moderation_outcome, visit_find_sorafs_moderation_policy,
-    visit_find_sorafs_moderation_reveal, visit_find_sorafs_moderation_status,
-    visit_find_sorafs_orderbook_cancellation_by_order_id, visit_find_sorafs_orderbook_order_by_id,
+    visit_find_sorafs_moderation_events, visit_find_sorafs_moderation_juror_eligibility,
+    visit_find_sorafs_moderation_no_show, visit_find_sorafs_moderation_outcome,
+    visit_find_sorafs_moderation_policy, visit_find_sorafs_moderation_reveal,
+    visit_find_sorafs_moderation_snapshot, visit_find_sorafs_moderation_status,
+    visit_find_sorafs_orderbook_cancellation_by_order_id,
+    visit_find_sorafs_orderbook_channel_by_id, visit_find_sorafs_orderbook_order_by_id,
     visit_find_sorafs_orderbook_orders, visit_find_sorafs_orderbook_policy,
     visit_find_sorafs_orderbook_receipt_by_id, visit_find_sorafs_orderbook_receipts,
-    visit_find_sorafs_orderbook_status, visit_find_sorafs_pop_audit_digest_by_sequence,
+    visit_find_sorafs_orderbook_status, visit_find_sorafs_orderbook_trade_by_id,
+    visit_find_sorafs_pop_audit_digest_by_sequence,
     visit_find_sorafs_pop_commitment_root_by_version,
     visit_find_sorafs_pop_credential_commitment_by_digest, visit_find_sorafs_pop_issuer_policy,
     visit_find_sorafs_pop_registry_status, visit_find_sorafs_pop_revocation_by_nonce_commitment,
-    visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_status,
-    visit_find_sorafs_repair_task,
+    visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
+    visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
+    visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_movement_by_id,
+    visit_find_sorafs_reserve_policy, visit_find_sorafs_reserve_provider_by_id,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -1834,24 +1839,38 @@ pub mod sorafs {
     use super::*;
     use iroha_smart_contract::data_model::query::sorafs::prelude::{
         FindSorafsModerationAppeal, FindSorafsModerationCase, FindSorafsModerationChallenge,
-        FindSorafsModerationCommit, FindSorafsModerationJurorEligibility,
-        FindSorafsModerationNoShow, FindSorafsModerationOutcome, FindSorafsModerationPolicy,
-        FindSorafsModerationReveal, FindSorafsModerationStatus,
+        FindSorafsModerationCommit, FindSorafsModerationEvents,
+        FindSorafsModerationJurorEligibility, FindSorafsModerationNoShow,
+        FindSorafsModerationOutcome, FindSorafsModerationPolicy, FindSorafsModerationReveal,
+        FindSorafsModerationSnapshot, FindSorafsModerationStatus,
         FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
-        FindSorafsOrderbookOrderById, FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy,
-        FindSorafsOrderbookReceiptById, FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
-        FindSorafsOrderbookTradeById, FindSorafsPopAuditDigestBySequence,
+        FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
+        FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
+        FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
+        FindSorafsOrderbookTrades, FindSorafsPopAuditDigestBySequence,
         FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
         FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-        FindSorafsRepairStatus, FindSorafsRepairTask, FindSorafsReserveAppealById,
-        FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
+        FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
+        FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
     pub fn visit_find_sorafs_repair_task<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairTask,
+    ) {
+    }
+
+    /// Authoritative repair-task pages are public operational state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_repair_tasks<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsRepairTasks,
     ) {
     }
 
@@ -1863,6 +1882,17 @@ pub mod sorafs {
     pub fn visit_find_sorafs_repair_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsRepairStatus,
+    ) {
+    }
+
+    /// Committed repair-ledger event pages are public operational state.
+    #[expect(
+        clippy::trivially_copy_pass_by_ref,
+        reason = "the generated Visit dispatch ABI passes every query operation by shared reference"
+    )]
+    pub fn visit_find_sorafs_repair_events<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsRepairEvents,
     ) {
     }
 
@@ -1953,6 +1983,30 @@ pub mod sorafs {
     pub fn visit_find_sorafs_orderbook_receipts<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsOrderbookReceipts,
+    ) {
+        visit_orderbook_read(executor);
+    }
+
+    /// Validate permission to list authoritative matched trades.
+    pub fn visit_find_sorafs_orderbook_trades<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsOrderbookTrades,
+    ) {
+        visit_orderbook_read(executor);
+    }
+
+    /// Validate permission to list authoritative settlement channels.
+    pub fn visit_find_sorafs_orderbook_channels<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsOrderbookChannels,
+    ) {
+        visit_orderbook_read(executor);
+    }
+
+    /// Validate permission to list committed authoritative orderbook events.
+    pub fn visit_find_sorafs_orderbook_events<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsOrderbookEvents,
     ) {
         visit_orderbook_read(executor);
     }
@@ -2156,6 +2210,27 @@ pub mod sorafs {
     pub fn visit_find_sorafs_moderation_status<V: Execute + Visit + ?Sized>(
         _executor: &mut V,
         _query: &FindSorafsModerationStatus,
+    ) {
+    }
+
+    /// A complete snapshot includes every juror eligibility record and requires moderation access.
+    pub fn visit_find_sorafs_moderation_snapshot<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsModerationSnapshot,
+    ) {
+        if executor.context().curr_block.is_genesis() || can_manage_moderation(executor) {
+            return;
+        }
+        deny!(
+            executor,
+            "Can't read the complete authoritative SoraFS moderation snapshot"
+        );
+    }
+
+    /// Payload-free committed moderation events are public transparency state.
+    pub fn visit_find_sorafs_moderation_events<V: Execute + Visit + ?Sized>(
+        _executor: &mut V,
+        _query: &FindSorafsModerationEvents,
     ) {
     }
 
@@ -5469,15 +5544,17 @@ mod sorafs_permission_tests {
         permission::Permission as PermissionObject,
         prelude::{Quantity, ValidationFail},
         query::sorafs::prelude::{
-            FindSorafsModerationAppeal, FindSorafsModerationJurorEligibility,
-            FindSorafsModerationPolicy, FindSorafsModerationStatus,
-            FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookOrderById,
+            FindSorafsModerationAppeal, FindSorafsModerationEvents,
+            FindSorafsModerationJurorEligibility, FindSorafsModerationPolicy,
+            FindSorafsModerationSnapshot, FindSorafsModerationStatus,
+            FindSorafsOrderbookCancellationByOrderId, FindSorafsOrderbookChannelById,
+            FindSorafsOrderbookChannels, FindSorafsOrderbookEvents, FindSorafsOrderbookOrderById,
             FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceiptById,
-            FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus,
-            FindSorafsPopAuditDigestBySequence, FindSorafsPopCommitmentRootByVersion,
-            FindSorafsPopCredentialCommitmentByDigest, FindSorafsPopIssuerPolicy,
-            FindSorafsPopRegistryStatus, FindSorafsPopRevocationByNonceCommitment,
-            FindSorafsPopRevocationPublicationByVersion,
+            FindSorafsOrderbookReceipts, FindSorafsOrderbookStatus, FindSorafsOrderbookTradeById,
+            FindSorafsOrderbookTrades, FindSorafsPopAuditDigestBySequence,
+            FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
+            FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
+            FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         },
         sorafs::{
             capacity::{
@@ -5486,7 +5563,7 @@ mod sorafs_permission_tests {
             },
             moderation_ledger::{
                 MODERATION_APPEAL_INTAKE_VERSION_V1, MODERATION_LEDGER_POLICY_VERSION_V1,
-                ModerationAppealIntakeV1, ModerationLedgerPolicyV1,
+                ModerationAppealIntakeV1, ModerationFinalizedCursorV1, ModerationLedgerPolicyV1,
             },
             pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
@@ -5498,7 +5575,7 @@ mod sorafs_permission_tests {
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
         CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
@@ -6048,6 +6125,31 @@ mod sorafs_permission_tests {
             FindSorafsModerationAppeal::new("appeal-case".to_owned(), "round-1".to_owned()),
             sorafs::visit_find_sorafs_moderation_appeal,
         );
+        assert_allowed_without_permission(
+            FindSorafsModerationEvents::new(
+                ModerationFinalizedCursorV1 {
+                    height: 7,
+                    block_hash: [0x44; 32],
+                },
+                None,
+                16,
+            ),
+            sorafs::visit_find_sorafs_moderation_events,
+        );
+    }
+
+    #[test]
+    fn complete_moderation_snapshot_is_manager_only() {
+        let query = FindSorafsModerationSnapshot::new(8, 16);
+        assert_denied_without_permission(
+            query.clone(),
+            sorafs::visit_find_sorafs_moderation_snapshot,
+        );
+        assert_allowed_with_permission(
+            query,
+            PermissionObject::from(CanManageSorafsModeration),
+            sorafs::visit_find_sorafs_moderation_snapshot,
+        );
     }
 
     #[test]
@@ -6228,19 +6330,44 @@ mod sorafs_permission_tests {
         sorafs::visit_find_sorafs_orderbook_receipt_by_id
     );
     orderbook_query_permission_case!(
+        orderbook_trade_query_requires_operator_permission,
+        FindSorafsOrderbookTradeById::new([0x14; 32]),
+        sorafs::visit_find_sorafs_orderbook_trade_by_id
+    );
+    orderbook_query_permission_case!(
+        orderbook_channel_query_requires_operator_permission,
+        FindSorafsOrderbookChannelById::new([0x15; 32]),
+        sorafs::visit_find_sorafs_orderbook_channel_by_id
+    );
+    orderbook_query_permission_case!(
         orderbook_status_query_requires_operator_permission,
         FindSorafsOrderbookStatus,
         sorafs::visit_find_sorafs_orderbook_status
     );
     orderbook_query_permission_case!(
         orderbook_order_page_query_requires_operator_permission,
-        FindSorafsOrderbookOrders::new(None, None, 10),
+        FindSorafsOrderbookOrders::new(None, None, None, 10),
         sorafs::visit_find_sorafs_orderbook_orders
     );
     orderbook_query_permission_case!(
         orderbook_receipt_page_query_requires_operator_permission,
-        FindSorafsOrderbookReceipts::new(None, None, 10),
+        FindSorafsOrderbookReceipts::new(None, None, None, 10),
         sorafs::visit_find_sorafs_orderbook_receipts
+    );
+    orderbook_query_permission_case!(
+        orderbook_trade_page_query_requires_operator_permission,
+        FindSorafsOrderbookTrades::new(None, None, 10),
+        sorafs::visit_find_sorafs_orderbook_trades
+    );
+    orderbook_query_permission_case!(
+        orderbook_channel_page_query_requires_operator_permission,
+        FindSorafsOrderbookChannels::new(None, None, None, 10),
+        sorafs::visit_find_sorafs_orderbook_channels
+    );
+    orderbook_query_permission_case!(
+        orderbook_event_page_query_requires_operator_permission,
+        FindSorafsOrderbookEvents::new(None, None, 10),
+        sorafs::visit_find_sorafs_orderbook_events
     );
 
     #[test]

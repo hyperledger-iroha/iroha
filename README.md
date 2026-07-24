@@ -50,7 +50,14 @@ Notes:
 - The repo-local Cargo config caps default build parallelism at `jobs = 1` so
   large Rust test builds do not overcommit WSL or memory-constrained VMs. On a
   high-memory machine, override this with `cargo test -j <N>` or
-  `CARGO_BUILD_JOBS=<N> cargo test`.
+  `CARGO_BUILD_JOBS=<N> cargo test`. The dev/test profiles keep the large
+  `iroha_data_model` crate at eight codegen units: 8-, 16-, and 64-unit builds
+  had approximately the same peak, while one unit was substantially worse
+  because coalescing its generated decoder IR creates a larger LLVM module.
+  Sharing the derive-heavy canonical/prefix decoder control flow reduced the
+  exact focused-build high-water mark to 11.466 GiB, but this is still a large
+  single-process frontend/monomorphization load. One Cargo job does not change
+  the internal partition count.
 - Plain `cargo test` skips the oversized private Sumeragi main-loop unit-test
   harness so local WSL runs do not need a ~10 GiB `iroha_core --test` compile.
   Run `cargo test -p iroha_core --lib --features sumeragi-main-loop-tests` on a

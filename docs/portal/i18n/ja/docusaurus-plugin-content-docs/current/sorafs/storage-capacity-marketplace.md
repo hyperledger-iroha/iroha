@@ -52,7 +52,7 @@ SF-2c ロードマップ項目は、storage providers がコミットした容�
 - 共有 helpers (`CapacityMetadataEntry`、`PricingScheduleV1`、lane/assignment/SLA バリデータ) は、決定論的なキー検証とエラーレポートを提供し、CI と downstream tooling が再利用できます。【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` は `/v1/sorafs/capacity/state` で on-chain snapshot を公開し、provider 宣言と fee ledger エントリを決定論的な Norito JSON の背後で統合します。【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - バリデーションカバレッジは、カノニカル handle の強制、重複検出、lane ごとの上限、replication assignment ガード、テレメトリ範囲チェックを行い、リグレッションを CI で即時に検知できるようにします。【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` は、人間可読な specs をカノニカルな Norito payloads、base64 blobs、JSON summaries に変換し、オペレータが `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、replication order の fixtures をローカル検証付きで準備できるようにします。【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures は `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) にあり、`cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` で生成します。
+- Operator tooling: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` は、人間可読な specs をカノニカルな Norito payloads、base64 blobs、JSON summaries に変換し、オペレータが `/v1/sorafs/capacity/declare`、`/v1/sorafs/capacity/telemetry`、replication order の fixtures をローカル検証付きで準備できるようにします。【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures は `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) にあり、`cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` で生成します。
 
 ### 2. コントロールプレーン統合
 
@@ -140,14 +140,14 @@ SF-2c ロードマップ項目は、storage providers がコミットした容�
 - JSON summary と hashes を `docs/examples/sorafs_capacity_marketplace_validation/` にアーカイブし、governance packets と一緒に保存します。
 
 ### Dispute & slashing evidence
-- `sorafs_manifest_stub capacity dispute` で disputes を提出します (tests:
+- `sorafs_manifest_builder capacity dispute` で disputes を提出します (tests:
   `cargo test -p sorafs_car --test capacity_cli`)。payloads がカノニカルに保たれます。
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` とペナルティ系テスト
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) を実行し、disputes と slashes が決定論的に再生されることを証明します。
 - 証拠収集とエスカレーションは `docs/source/sorafs/dispute_revocation_runbook.md` に従い、承認済み strike を validation report にリンクします。
 
 ### Provider onboarding & exit smoke tests
-- `sorafs_manifest_stub capacity ...` で declaration/telemetry artefacts を再生成し、提出前に CLI tests を再実行します (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- `sorafs_manifest_builder capacity ...` で declaration/telemetry artefacts を再生成し、提出前に CLI tests を再実行します (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Torii (`/v1/sorafs/capacity/declare`) 経由で提出し、その後 `/v1/sorafs/capacity/state` と Grafana のスクリーンショットを取得します。`docs/source/sorafs/capacity_onboarding_runbook.md` の exit flow に従ってください。
 - 署名済み artefacts と reconciliation outputs を `docs/examples/sorafs_capacity_marketplace_validation/` にアーカイブします。
 

@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-يجب على تشغيلها إعادة توليد طلبات الحمولة النافعة للانضمام/النزاع عبر `sorafs_manifest_stub capacity {declaration,dispute}` وتسعى إلى اكتشاف أقراص JSON/Norito وتتزايد عادة تذكرة التزايد.
+يجب على تشغيلها إعادة توليد طلبات الحمولة النافعة للانضمام/النزاع عبر `sorafs_manifest_builder capacity {declaration,dispute}` وتسعى إلى اكتشاف أقراص JSON/Norito وتتزايد عادة تذكرة التزايد.
 
 ##مصنوعات الموافقة
 

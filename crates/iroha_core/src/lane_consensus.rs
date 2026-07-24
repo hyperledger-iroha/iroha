@@ -30,6 +30,7 @@ use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
 use crate::{
+    json_macros::{JsonDeserialize, JsonSerialize},
     queue::{LaneQueueReservationKeyV1, RouteLegRole, RoutingPlan},
     tx::AcceptedTransaction,
 };
@@ -446,7 +447,7 @@ impl LaneDrainVoteState {
 }
 
 /// Individual READY vote for one exact autonomous lane executable payload.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct LanePayloadAvailabilityVoteV1 {
     /// Exact payload/session body signed by the committee member.
     pub body: LanePayloadAvailabilityBodyV1,
@@ -2556,7 +2557,7 @@ impl LaneBlockNewViewCertificateCache {
 }
 
 /// Individual lane-local block vote before committee aggregation.
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, JsonSerialize, JsonDeserialize)]
 pub struct LaneBlockVoteV1 {
     /// Body signed by the lane validator.
     pub body: LaneBlockVoteBodyV1,

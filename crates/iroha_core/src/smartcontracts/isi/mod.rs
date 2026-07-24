@@ -44,6 +44,8 @@ pub mod sorafs_moderation;
 pub mod sorafs_orderbook;
 /// Authoritative `SoraFS` proof-of-personhood issuer and registry handlers.
 pub mod sorafs_pop_registry;
+/// Finalized chain-authoritative `SoraFS` PDP and PoTR outcome handlers.
+pub mod sorafs_proof_outcome;
 /// Authoritative `SoraFS` reserve/rent instruction handlers.
 pub mod sorafs_reserve;
 pub mod space_directory;
@@ -218,6 +220,8 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairTask>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApplySorafsRepairTaskAction>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsRepairAppeal>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsProofOutcomeSignerPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SubmitSorafsProofOutcome>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::SetSorafsPopIssuerPolicy>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::CommitSorafsPopCredentialBatch>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::PublishSorafsPopRevocationList>,

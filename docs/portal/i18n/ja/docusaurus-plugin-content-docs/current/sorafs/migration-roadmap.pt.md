@@ -48,7 +48,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | 手順 | マイルストーン | 説明 | 担当 | 出力 |
 |------|---------------|------|------|------|
 | インベントリとタグ付け | M0 | レガシーバンドルの SHA3-256 digest をエクスポートし、移行台帳に追記 (append-only) する。 | Docs, DevRel | `source_path`, `sha3_digest`, `owner`, `planned_manifest_cid` を含む台帳エントリ。 |
-| 決定論的再構築 | M0-M1 | 各リリースアーティファクトで `sorafs_manifest_stub` を実行し、CAR、manifest、署名 envelope、fetch plan を `artifacts/<team>/<alias>/<timestamp>/` に保存する。 | Docs, CI | リリースごとの再現可能な CAR + manifest bundles。 |
+| 決定論的再構築 | M0-M1 | 各リリースアーティファクトで `sorafs_manifest_builder` を実行し、CAR、manifest、署名 envelope、fetch plan を `artifacts/<team>/<alias>/<timestamp>/` に保存する。 | Docs, CI | リリースごとの再現可能な CAR + manifest bundles。 |
 | 検証ループ | M1 | `sorafs_fetch` を staging gateway に対して再生し、chunk 境界/ダイジェストが fixtures と一致するかを確認する。台帳コメントに pass/fail を記録。 | Governance QA | Staging 検証レポート + drift 用 GitHub issue。 |
 
 ### 2. 決定論的 pinning の採用
@@ -57,14 +57,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |------|---------------|------|------|------|
 | Fixture リハーサル | M0 | `fixtures/sorafs_chunker` とローカルの chunk digest を比較する週次 dry-run。`docs/source/sorafs/reports/` にレポートを公開。 | Storage Providers | pass/fail マトリクス付き `determinism-<date>.md`。 |
 | 署名強制 | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` は署名/manifest の逸脱で fail。開発 overrides はガバナンスの waiver を PR に添付。 | Tooling WG | CI ログ、waiver チケットリンク (該当する場合)。 |
-| Expectation flags | M1 | パイプラインは `sorafs_manifest_stub` に明示的な expectations を渡して出力を固定: | Docs CI | expectation flags を参照する更新済みスクリプト (下のコマンド参照)。 |
+| Expectation flags | M1 | パイプラインは `sorafs_manifest_builder` に明示的な expectations を渡して出力を固定: | Docs CI | expectation flags を参照する更新済みスクリプト (下のコマンド参照)。 |
 | Registry-first pinning | M2 | `sorafs pin propose` と `sorafs pin approve` が manifest 提出をラップし、CLI デフォルトは `--require-registry`。 | Governance Ops | Registry CLI 監査ログ、失敗提案のテレメトリ。 |
 | Observability parity | M3 | Prometheus/Grafana ダッシュボードが registry manifests と chunk インベントリの差分でアラートを出し、ops の on-call に接続。 | Observability | ダッシュボードリンク、アラートルール ID、GameDay 結果。 |
 
 #### 正規の公開コマンド
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

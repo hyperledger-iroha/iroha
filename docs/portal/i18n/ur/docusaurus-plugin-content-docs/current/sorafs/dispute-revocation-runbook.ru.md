@@ -40,7 +40,7 @@ ID: تنازعہ کی بحالی کی کتاب
 
 ## 3. تنازعہ فائل کریں
 
-1. `sorafs_manifest_stub capacity dispute` کے لئے JSON مخصوص بنائیں:
+1. `sorafs_manifest_builder capacity dispute` کے لئے JSON مخصوص بنائیں:
 
    ```json
    {
@@ -63,7 +63,7 @@ ID: تنازعہ کی بحالی کی کتاب
 2. سی ایل آئی لانچ کریں:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ ID: تنازعہ کی بحالی کی کتاب
 
 1. ** بینیفٹ ونڈو: ** آئندہ یاد آنے والے فراہم کنندہ کو مطلع کریں ؛ جب پالیسی کی اجازت ہو تو پن والے ڈیٹا کو انخلا کی اجازت دیں۔
 2. ** `ProviderAdmissionRevocationV1` پیدا کریں: **
-   - کسی منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
+   - کسی منظور شدہ وجہ کے ساتھ `sorafs_manifest_builder provider-admission revoke` استعمال کریں۔
    - جائزہ کے دستخط اور ڈائجسٹ چیک کریں۔
 3. ** ایک جائزہ شائع کریں: **
    - Torii پر جائزہ لینے کی درخواست جمع کروائیں۔
@@ -95,7 +95,7 @@ ID: تنازعہ کی بحالی کی کتاب
 
 ## 6. حوالہ مواد
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (تنازعات کا سیکشن)
 - `docs/source/sorafs/provider_admission_policy.md` (ورک فلو جائزہ)
 - مشاہدہ ڈیش بورڈ: `SoraFS / Capacity Providers`

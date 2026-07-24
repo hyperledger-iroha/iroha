@@ -19,7 +19,7 @@ Sidebar_label: محاكاة رانبوك
 هذا الجزء من الزر `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. بعد أن تكون النسخ متزامنة، من خلال مجموعة كبيرة من وثائق أبو الهول، لن يتم تغييرها بشكل كامل.
 :::
 
-هذا هو التدريب على البدء في محاكاة مجموعة من SF-2c وتصور المقاييس المحصلة. قم بالتحقق من التفضيلات المتعلقة بالأمر وتجاوز الفشل والمعالجة من خلال خفض النهاية إلى النهاية باستخدام عناصر التحديد في `docs/examples/sorafs_capacity_simulation/`. تستخدم الحمولات النافعة ذات التحميل المسبق `sorafs_manifest_stub capacity`; استخدم `iroha app sorafs toolkit pack` لتعبئة البيان/CAR.
+هذا هو التدريب على البدء في محاكاة مجموعة من SF-2c وتصور المقاييس المحصلة. قم بالتحقق من التفضيلات المتعلقة بالأمر وتجاوز الفشل والمعالجة من خلال خفض النهاية إلى النهاية باستخدام عناصر التحديد في `docs/examples/sorafs_capacity_simulation/`. تستخدم الحمولات النافعة ذات التحميل المسبق `sorafs_manifest_builder capacity`; استخدم `iroha app sorafs toolkit pack` لتعبئة البيان/CAR.
 
 ## 1. تصميم عناصر CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` يشير إلى `sorafs_manifest_stub capacity`، لإرسال الحمولات الصافية Norito، وbase64-blob، والاتصال Torii، وJSON-сводки لل:
+`run_cli.sh` يشير إلى `sorafs_manifest_builder capacity`، لإرسال الحمولات الصافية Norito، وbase64-blob، والاتصال Torii، وJSON-сводки لل:
 
 - ثلاثة إعلانات من مقدمي العروض، سعداء بالسيناريوهات التي تم تقديمها لهم.
 - نشر واحد للنسخ المتماثلة، متضمنًا بيانًا منظمًا من خلال تقديم العروض.

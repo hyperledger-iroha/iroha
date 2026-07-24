@@ -1602,7 +1602,7 @@ def multi_fetch_local(
     ----------
     plan:
         JSON string (or mapping/path) describing the chunk fetch plan emitted by
-        `sorafs_manifest_stub`.
+        `sorafs_manifest_builder`.
     providers:
         Iterable of :class:`SorafsLocalProviderSpec` definitions. Each entry points at a local
         payload file (tests reuse the shared fixture bundle).

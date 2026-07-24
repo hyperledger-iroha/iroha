@@ -131,12 +131,23 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         let installedSet: KagemushaRecursiveSpendInstalledArtifactSetV4
     }
 
-    // Recursive only so a lifecycle call made from one of the public callback
-    // surfaces can fail immediately. A plain NSLock would deadlock the calling
-    // thread before the coordinator could report the contract violation.
-    private let lock = NSRecursiveLock()
+    /// A completely streamed and finalized candidate whose atomic native
+    /// install was deferred because another proof operation held the worker.
+    private struct PendingCandidate {
+        let manifest: KagemushaRecursiveSpendArtifactManifestArchive
+        let binding: KagemushaRecursiveSpendArtifactBindingV4
+        let artifacts: [ArtifactIdentity]
+        let session: any KagemushaRecursiveSpendArtifactInstallSessionDriver
+    }
+
+    // One process-wide, non-blocking permit guards every expensive artifact
+    // read and native lifecycle operation. The per-instance lock below only
+    // protects small state snapshots and is never held across caller code or
+    // native calls.
+    private let stateLock = NSLock()
     private let sessionFactory: KagemushaRecursiveSpendArtifactSessionFactory
     private var active: ActiveGeneration?
+    private var pending: PendingCandidate?
     private var publicCallbackActive = false
     private var publicCallbackViolation: KagemushaRecursiveSpendError?
 
@@ -154,93 +165,120 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
         binding: KagemushaRecursiveSpendArtifactBindingV4,
         artifacts: [KagemushaRecursiveSpendArtifactStream]
     ) throws -> KagemushaRecursiveSpendInstalledArtifactLease {
-        lock.lock()
-        defer { lock.unlock() }
         try rejectReentrantLifecycleCall()
-
-        guard binding.manifestSHA256 == manifest.sha256 else {
-            throw KagemushaRecursiveSpendError.invalidField(
-                "artifactBinding.manifestSHA256"
-            )
-        }
-        let manifestGeneration = try KagemushaRecursiveSpendCodecs
-            .decodeArtifactManifestGeneration(manifest.noritoArchive)
-        guard Data(manifestGeneration.utf8) == Data(binding.generation.utf8) else {
-            throw KagemushaRecursiveSpendError.invalidField(
-                "artifactBinding.generation"
-            )
-        }
-        guard artifacts.count == Self.requiredArtifactCount else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactSet.count")
-        }
-        guard Set(artifacts.map(\.expectedSHA256)).count
-                == Self.requiredArtifactCount else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactSet.duplicate")
-        }
-        guard artifacts.map(\.role)
-                == KagemushaRecursiveSpendArtifactRoleV4.allCases else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactSet.roleOrder")
-        }
-        let identity = artifacts.map {
-            ArtifactIdentity(
-                role: $0.role,
-                sha256: $0.expectedSHA256,
-                byteCount: $0.byteCount
-            )
-        }
-
-        if let active,
-           active.binding == binding,
-           active.manifestSHA256 == manifest.sha256 {
-            guard active.artifacts == identity else {
-                throw KagemushaRecursiveSpendError.invalidField("artifactSet.identity")
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            guard binding.manifestSHA256 == manifest.sha256 else {
+                throw KagemushaRecursiveSpendError.invalidField(
+                    "artifactBinding.manifestSHA256"
+                )
             }
-            if try active.session.isInstalled() {
-                return lease(for: active)
+            let manifestGeneration = try KagemushaRecursiveSpendCodecs
+                .decodeArtifactManifestGeneration(manifest.noritoArchive)
+            guard Data(manifestGeneration.utf8) == Data(binding.generation.utf8) else {
+                throw KagemushaRecursiveSpendError.invalidField(
+                    "artifactBinding.generation"
+                )
             }
-            // Native state was removed or replaced outside this owner. The old
-            // token must never regain authority over a newly installed set.
-            self.active = nil
-        }
+            guard artifacts.count == Self.requiredArtifactCount else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactSet.count")
+            }
+            guard Set(artifacts.map(\.expectedSHA256)).count
+                    == Self.requiredArtifactCount else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactSet.duplicate")
+            }
+            guard artifacts.map(\.role)
+                    == KagemushaRecursiveSpendArtifactRoleV4.allCases else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactSet.roleOrder")
+            }
+            let identity = artifacts.map {
+                ArtifactIdentity(
+                    role: $0.role,
+                    sha256: $0.expectedSHA256,
+                    byteCount: $0.byteCount
+                )
+            }
 
-        return try installCandidate(
-            manifest: manifest,
-            binding: binding,
-            artifacts: artifacts,
-            identity: identity
-        )
+            if let pending = pendingSnapshot() {
+                let sameRelease = pending.manifest == manifest
+                    && pending.binding == binding
+                if sameRelease, pending.artifacts == identity {
+                    return try installFinalizedCandidate(
+                        pending.session,
+                        manifest: manifest,
+                        binding: binding,
+                        identity: identity
+                    )
+                }
+                try cancelPendingCandidate()
+                if sameRelease {
+                    throw KagemushaRecursiveSpendError.invalidField("artifactSet.identity")
+                }
+            }
+
+            if let active = activeSnapshot(),
+               active.binding == binding,
+               active.manifestSHA256 == manifest.sha256 {
+                guard active.artifacts == identity else {
+                    throw KagemushaRecursiveSpendError.invalidField("artifactSet.identity")
+                }
+                if try active.session.isInstalled() {
+                    return lease(for: active)
+                }
+                // Native state was removed or replaced outside this owner. The old
+                // token must never regain authority over a newly installed set.
+                clearActive(ifToken: active.token)
+            }
+
+            return try installCandidate(
+                manifest: manifest,
+                binding: binding,
+                artifacts: artifacts,
+                identity: identity
+            )
+        }
     }
 
     /// Explicitly removes the coordinator's current native generation.
     /// Existing leases become stale only after removal succeeds (or native has
     /// already reported the generation absent).
     public func uninstallCurrent() throws {
-        lock.lock()
-        defer { lock.unlock() }
         try rejectReentrantLifecycleCall()
-        guard let active else { return }
-        if try active.session.isInstalled() {
-            try active.session.uninstall()
+        try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try cancelPendingCandidate()
+            guard let active = activeSnapshot() else { return }
+            if try active.session.isInstalled() {
+                try active.session.uninstall()
+            }
+            clearActive(ifToken: active.token)
         }
-        self.active = nil
+    }
+
+    /// Cancel a fully finalized candidate retained after a busy native install.
+    ///
+    /// This does not alter the currently installed generation.
+    public func cancelPendingInstallation() throws {
+        try rejectReentrantLifecycleCall()
+        try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            try cancelPendingCandidate()
+        }
     }
 
     fileprivate func withInstalledArtifactSet<T>(
         token: UUID,
         _ body: (KagemushaRecursiveSpendInstalledArtifactSetV4) throws -> T
     ) throws -> T {
-        lock.lock()
-        defer { lock.unlock() }
         try rejectReentrantLifecycleCall()
-        guard let active, active.token == token else {
-            throw KagemushaRecursiveSpendError.invalidField("artifactLease.stale")
-        }
-        guard try active.session.isInstalled() else {
-            self.active = nil
-            throw KagemushaRecursiveSpendError.invalidField("artifactLease.stale")
-        }
-        return try withProtectedPublicCallback {
-            try body(active.installedSet)
+        return try KagemushaRecursiveSpendWorkerPermit.withPermit {
+            guard let active = activeSnapshot(), active.token == token else {
+                throw KagemushaRecursiveSpendError.invalidField("artifactLease.stale")
+            }
+            guard try active.session.isInstalled() else {
+                clearActive(ifToken: active.token)
+                throw KagemushaRecursiveSpendError.invalidField("artifactLease.stale")
+            }
+            return try withProtectedPublicCallback {
+                try body(active.installedSet)
+            }
         }
     }
 
@@ -255,7 +293,6 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
             try? candidate.cancel()
             throw KagemushaRecursiveSpendError.invalidField("artifactSession.identity")
         }
-        var installReturned = false
         do {
             for artifact in artifacts {
                 let ingestion = try candidate.beginArtifact(
@@ -274,8 +311,14 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
                             throw streamFailure
                         }
                         do {
+                            guard !bytes.isEmpty,
+                                  bytes.count <= KagemushaRecursiveSpend
+                                    .artifactMaximumChunkBytes else {
+                                throw KagemushaRecursiveSpendError.invalidField(
+                                    "artifact.chunk"
+                                )
+                            }
                             guard offset == expectedOffset,
-                                  !bytes.isEmpty,
                                   expectedOffset <= artifact.byteCount,
                                   UInt64(bytes.count)
                                     <= artifact.byteCount - expectedOffset else {
@@ -303,7 +346,26 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
                 }
                 try ingestion.finalize()
             }
+        } catch {
+            try? candidate.cancel()
+            throw error
+        }
+        return try installFinalizedCandidate(
+            candidate,
+            manifest: manifest,
+            binding: binding,
+            identity: identity
+        )
+    }
 
+    private func installFinalizedCandidate(
+        _ candidate: any KagemushaRecursiveSpendArtifactInstallSessionDriver,
+        manifest: KagemushaRecursiveSpendArtifactManifestArchive,
+        binding: KagemushaRecursiveSpendArtifactBindingV4,
+        identity: [ArtifactIdentity]
+    ) throws -> KagemushaRecursiveSpendInstalledArtifactLease {
+        var installReturned = false
+        do {
             let installedSet = try candidate.install()
             installReturned = true
             guard installedSet.binding == binding,
@@ -323,28 +385,82 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
                 session: candidate,
                 installedSet: installedSet
             )
+            stateLock.lock()
+            pending = nil
             active = generation
+            stateLock.unlock()
             return lease(for: generation)
+        } catch KagemushaRecursiveSpendError.proofWorkerBusy where !installReturned {
+            // Busy is the one native failure that leaves every finalized spool
+            // valid. Retain this exact identity so a matching acquire retries
+            // only the atomic install and never invokes its streams again.
+            let retained = PendingCandidate(
+                manifest: manifest,
+                binding: binding,
+                artifacts: identity,
+                session: candidate
+            )
+            stateLock.lock()
+            pending = retained
+            stateLock.unlock()
+            throw KagemushaRecursiveSpendError.proofWorkerBusy
         } catch {
+            stateLock.lock()
+            pending = nil
+            if installReturned {
+                active = nil
+            }
+            stateLock.unlock()
             // Native install is atomic. Digest-guarded uninstall is used only
-            // if this candidate became active; otherwise pending streams are
-            // cancelled and the prior generation remains usable.
+            // if this candidate became active; otherwise its finalized streams
+            // are cancelled and the prior generation remains usable.
             if installReturned {
                 // Once native reports a successful atomic install the prior
                 // generation has been replaced. If a postcondition then fails,
                 // invalidate its app-layer token immediately rather than leave
                 // a phantom prior generation for a later call to discover.
-                active = nil
                 try? candidate.uninstall()
             } else {
                 // Do not use manifest-scoped `isInstalled()` to infer that a
                 // pending candidate owns native state. The same exact manifest
                 // may already be active outside a reconstructed coordinator;
-                // digest-uninstalling it after a stream failure would destroy
+                // digest-uninstalling it after a failed install would destroy
                 // a generation this candidate never installed.
                 try? candidate.cancel()
             }
             throw error
+        }
+    }
+
+    private func cancelPendingCandidate() throws {
+        stateLock.lock()
+        let pending = self.pending
+        self.pending = nil
+        stateLock.unlock()
+        guard let pending else { return }
+        // Session cancellation is terminal even when one native handle reports
+        // an error: the production driver closes the coordinator and drains all
+        // remaining handles before returning its first failure.
+        try pending.session.cancel()
+    }
+
+    private func activeSnapshot() -> ActiveGeneration? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return active
+    }
+
+    private func pendingSnapshot() -> PendingCandidate? {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return pending
+    }
+
+    private func clearActive(ifToken token: UUID) {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        if active?.token == token {
+            active = nil
         }
     }
 
@@ -354,25 +470,33 @@ public final class KagemushaRecursiveSpendArtifactCoordinator: @unchecked Sendab
     private func withProtectedPublicCallback<T>(
         _ body: () throws -> T
     ) throws -> T {
+        stateLock.lock()
         precondition(!publicCallbackActive)
         publicCallbackActive = true
         publicCallbackViolation = nil
+        stateLock.unlock()
         do {
             let result = try body()
+            stateLock.lock()
             let violation = publicCallbackViolation
             publicCallbackActive = false
             publicCallbackViolation = nil
+            stateLock.unlock()
             if let violation { throw violation }
             return result
         } catch {
+            stateLock.lock()
             let violation = publicCallbackViolation
             publicCallbackActive = false
             publicCallbackViolation = nil
+            stateLock.unlock()
             throw violation ?? error
         }
     }
 
     private func rejectReentrantLifecycleCall() throws {
+        stateLock.lock()
+        defer { stateLock.unlock() }
         guard publicCallbackActive else { return }
         let violation = KagemushaRecursiveSpendError.invalidField(
             "artifactCoordinator.reentrant"

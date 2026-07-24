@@ -1050,6 +1050,9 @@ fn validate_native_amx_receipt_against_plan_with_predecessor_policy(
     }
     let mut seen_participants = BTreeSet::new();
     for leg in &receipt.legs {
+        crate::native_amx::native_amx_participant_application_role(receipt, leg).map_err(
+            |reason| format!("native AMX participant application role is invalid: {reason}"),
+        )?;
         let participant = (
             leg.lane_id,
             leg.dataspace_id,
@@ -28787,7 +28790,9 @@ mod tests {
             coordinator_proposal,
         );
         body.participant_proposal_hash = participant_proposal.proposal_hash;
-        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body.participant_settlement_commitment = body
+            .computed_grouped_participant_settlement_commitment(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         let preimage = body.signature_preimage();
         let signatures = ordered_keypairs
             .iter()
@@ -28880,7 +28885,10 @@ mod tests {
                     prepare_qc.validator_set.clone(),
                     &coordinator_proposal,
                 );
-                let participant_settlement = prepare_qc.body.computed_participant_settlement();
+                let participant_settlement = prepare_qc
+                    .body
+                    .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
+                    .expect("single-source test fixture settlement is valid");
                 let participant_settlement_hash =
                     iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
                         .expect("fixture participant settlement hashes");
@@ -29100,6 +29108,15 @@ mod tests {
         coordinator_leg.participant_proposal.proposal_hash = coordinator_leg
             .participant_proposal
             .computed_proposal_hash();
+        coordinator_leg.participant_settlement.lane_incarnation = coordinator_leg
+            .participant_proposal
+            .descriptor
+            .lane_incarnation;
+        coordinator_leg.participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(
+                &coordinator_leg.participant_settlement,
+            )
+            .expect("stale same-route settlement hashes");
         for body in [
             &mut coordinator_leg.prepare_qc.body,
             &mut coordinator_leg.commit_qc.body,
@@ -29109,6 +29126,8 @@ mod tests {
                 .descriptor
                 .lane_incarnation;
             body.participant_proposal_hash = coordinator_leg.participant_proposal.proposal_hash;
+            body.participant_settlement_commitment =
+                Hash::from(coordinator_leg.participant_settlement_hash);
         }
         assert!(matches!(
             ValidBlock::validate_native_amx_participant_groups(&bundle),

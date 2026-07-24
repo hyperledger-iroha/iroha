@@ -80,7 +80,7 @@ esquemas Norito в Rust и помощниках по проверке подли
 |------------|--------|-----------------|
 | Сервис Torii | Экспорт `/v1/sorafs/pin` (отправка), `/v1/sorafs/pin/{cid}` (поиск), `/v1/sorafs/aliases` (список/привязка), `/v1/sorafs/replication` (заказы/поступления). Fornecer paginacao + фильтрем. | Сетевые TL/Core Infra |
 | Атестакао | Включите изменения/хеширование реестра для ответов; дополнительная проверка подлинности Norito для использования нескольких SDK. | Основная инфраструктура |
-| интерфейс командной строки | Estender `sorafs_manifest_stub` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
+| интерфейс командной строки | Estender `sorafs_manifest_builder` или новый CLI `sorafs_pin` с `pin submit`, `alias bind`, `order issue`, `registry export`. | Инструментальная рабочая группа |
 | SDK | Добавлены клиентские привязки (Rust/Go/TS) для данной задачи Norito; дополнительные яички для интеграции. | Команды SDK |
 
 Оперы:

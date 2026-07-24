@@ -990,6 +990,7 @@ function createSumeragiDiagnosticsPayload(overrides = {}) {
     lane_governance_sealed_aliases: [],
     lane_governance: [],
     native_amx_participant_applications: [],
+    autonomous_lane_executions: [],
     ...overrides,
   };
 }
@@ -11095,6 +11096,306 @@ function sumeragiDiagnosticsClientForPayload(payload) {
   });
 }
 
+function sumeragiTypedClientForRawJson(path, textBody, headers = {}) {
+  return new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      assert.equal(url, `${BASE_URL}${path}`);
+      return createResponse({
+        status: 200,
+        jsonData: { response_json_must_not_be_used: true },
+        textBody,
+        headers: {
+          "content-type": "application/json",
+          ...headers,
+        },
+      });
+    },
+  });
+}
+
+function replaceJsonStringPlaceholder(text, placeholder, integerToken) {
+  const needle = JSON.stringify(placeholder);
+  const occurrences = text.split(needle).length - 1;
+  assert(occurrences > 0, `expected at least one ${placeholder} placeholder`);
+  return text.replaceAll(needle, integerToken);
+}
+
+test("getSumeragiStatusTyped preserves exact u64 tokens from the raw HTTP body", async () => {
+  const activeHeight = "__SUMERAGI_ACTIVE_HEIGHT__";
+  const committedHeight = "__SUMERAGI_COMMITTED_HEIGHT__";
+  const maximum = "__SUMERAGI_U64_MAX__";
+  const payload = createSumeragiV2StatusPayload({
+    height: activeHeight,
+    pending_persistence_id: maximum,
+  });
+  payload.last_committed_height = committedHeight;
+  payload.height_context.epoch_end_height = maximum;
+  payload.last_commit_qc.certificate.round.height = committedHeight;
+  payload.last_commit_qc.certificate.proposal_round.height = committedHeight;
+  payload.liveness.prepare_quorums[0].round.height = activeHeight;
+  payload.liveness.prepare_quorums[0].proposal_round.height = activeHeight;
+  payload.liveness.outbound_intents[0].round.height = activeHeight;
+  payload.liveness.outbound_intents[0].proposal_round.height = activeHeight;
+  payload.liveness.last_progress.round.height = activeHeight;
+
+  let text = JSON.stringify(payload);
+  text = replaceJsonStringPlaceholder(
+    text,
+    activeHeight,
+    "9223372036854775808",
+  );
+  text = replaceJsonStringPlaceholder(
+    text,
+    committedHeight,
+    "9223372036854775807",
+  );
+  text = text.replaceAll(JSON.stringify(maximum), "18446744073709551615");
+  assert(!text.includes(maximum));
+
+  const client = sumeragiTypedClientForRawJson("/v1/sumeragi/status", text);
+  const status = await client.getSumeragiStatusTyped();
+  assert.equal(status.height, 9223372036854775808n);
+  assert.equal(status.last_committed_height, 9223372036854775807n);
+  assert.equal(status.pending_persistence_id, 18446744073709551615n);
+  assert.equal(status.height_context.epoch_end_height, 18446744073709551615n);
+  assert.equal(status.leader, 1);
+  assert.equal(typeof status.leader, "number");
+});
+
+test("getSumeragiDiagnosticsTyped preserves Native application u64 boundaries", async () => {
+  const predecessor = "__NATIVE_PREDECESSOR_HEIGHT__";
+  const participant = "__NATIVE_PARTICIPANT_HEIGHT__";
+  const maximum = "__NATIVE_U64_MAX__";
+  const payload = createSumeragiDiagnosticsPayload({
+    pipeline_execution: {
+      ...createSumeragiDiagnosticsPayload().pipeline_execution,
+      tx_vertices_total: maximum,
+    },
+    native_amx_participant_applications: [
+      {
+        lane_id: 3,
+        dataspace_id: maximum,
+        lane_incarnation: fakeSumeragiHash(0x65),
+        participant_height: participant,
+        participant_view: maximum,
+        predecessor_height: predecessor,
+        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+        descriptor_hash: fakeSumeragiHash(0x73),
+        proposal_hash: fakeSumeragiHash(0x69),
+        settlement_hash: fakeSumeragiHash(0x6b),
+        source_count: 4096,
+        application_block_height: maximum,
+        application_block_hash: fakeSumeragiHash(0x79),
+        state: "durably_applied",
+      },
+    ],
+  });
+  let text = JSON.stringify(payload);
+  text = replaceJsonStringPlaceholder(
+    text,
+    predecessor,
+    "9223372036854775807",
+  );
+  text = replaceJsonStringPlaceholder(
+    text,
+    participant,
+    "9223372036854775808",
+  );
+  text = text.replaceAll(JSON.stringify(maximum), "18446744073709551615");
+  assert(!text.includes(maximum));
+
+  const client = sumeragiTypedClientForRawJson(
+    "/v1/sumeragi/diagnostics",
+    text,
+  );
+  const diagnostics = await client.getSumeragiDiagnosticsTyped();
+  const application = diagnostics.native_amx_participant_applications[0];
+  assert.equal(diagnostics.pipeline_execution.tx_vertices_total, 18446744073709551615n);
+  assert.equal(application.dataspace_id, 18446744073709551615n);
+  assert.equal(application.predecessor_height, 9223372036854775807n);
+  assert.equal(application.participant_height, 9223372036854775808n);
+  assert.equal(application.participant_view, 18446744073709551615n);
+  assert.equal(application.application_block_height, 18446744073709551615n);
+  assert.equal(application.source_count, 4096);
+  assert.equal(typeof application.source_count, "number");
+});
+
+test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt identities", async () => {
+  const authority = "__NATIVE_AUTHORITY_HEIGHT__";
+  const coordinatorHeight = "__NATIVE_COORDINATOR_HEIGHT__";
+  const participantPredecessor = "__NATIVE_PARTICIPANT_PREDECESSOR__";
+  const participantHeight = "__NATIVE_PARTICIPANT_BLOCK_HEIGHT__";
+  const maximum = "__NATIVE_RECEIPT_U64_MAX__";
+  const coordinatorDataspace = "__NATIVE_COORDINATOR_DATASPACE__";
+  const participantDataspace = "__NATIVE_PARTICIPANT_DATASPACE__";
+  const nativeReceipts = [
+    createNativeAmxReceiptFixture({}, 0),
+    createNativeAmxReceiptFixture({}, 1),
+  ];
+  for (const receipt of nativeReceipts) {
+    receipt.dataspace_id = coordinatorDataspace;
+    receipt.authority_context_height = authority;
+    receipt.lane_block_height = coordinatorHeight;
+    receipt.lane_block_view = maximum;
+    for (const leg of receipt.legs) {
+      leg.dataspace_id = participantDataspace;
+      const descriptor = leg.participant_proposal.descriptor;
+      descriptor.dataspace_id = participantDataspace;
+      descriptor.proposal_height = authority;
+      descriptor.previous_lane_block_height = participantPredecessor;
+      descriptor.lane_block_height = participantHeight;
+      descriptor.lane_block_view = maximum;
+      leg.participant_settlement.dataspace_id = participantDataspace;
+      leg.participant_settlement.block_height = participantHeight;
+      for (const settlementReceipt of leg.participant_settlement.receipts) {
+        settlementReceipt.timestamp_ms = authority;
+      }
+      for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+        qc.body.round.height = authority;
+        qc.body.epoch = maximum;
+        qc.body.coordinator_dataspace_id = coordinatorDataspace;
+        qc.body.participant_dataspace_id = participantDataspace;
+        qc.body.participant_previous_block_height = participantPredecessor;
+        qc.body.participant_lane_block_height = participantHeight;
+        qc.body.participant_lane_block_view = maximum;
+        qc.body.authority_context_height = authority;
+        qc.body.planned_coordinator_block_height = coordinatorHeight;
+        qc.body.coordinator_lane_block_view = maximum;
+      }
+    }
+  }
+  const settlement = createLaneSettlementCommitment({
+    block_height: coordinatorHeight,
+    dataspace_id: coordinatorDataspace,
+    tx_count: 2,
+    native_amx_receipts: nativeReceipts,
+  });
+  const payload = createSumeragiDiagnosticsPayload({
+    lane_settlement_commitments: [settlement],
+  });
+  let text = JSON.stringify(payload);
+  const replacements = [
+    [authority, "9223372036854775808"],
+    [coordinatorHeight, "9223372036854775809"],
+    [participantPredecessor, "9223372036854775810"],
+    [participantHeight, "9223372036854775811"],
+    [maximum, "18446744073709551615"],
+    [coordinatorDataspace, "9223372036854775812"],
+    [participantDataspace, "9223372036854775813"],
+  ];
+  for (const [placeholder, token] of replacements) {
+    text = replaceJsonStringPlaceholder(text, placeholder, token);
+  }
+
+  const diagnostics = await sumeragiTypedClientForRawJson(
+    "/v1/sumeragi/diagnostics",
+    text,
+  ).getSumeragiDiagnosticsTyped();
+  const decodedSettlement = diagnostics.lane_settlement_commitments[0];
+  const decodedReceipt = decodedSettlement.native_amx_receipts[0];
+  const decodedLeg = decodedReceipt.legs[0];
+  assert.equal(decodedSettlement.block_height, 9223372036854775809n);
+  assert.equal(decodedSettlement.dataspace_id, 9223372036854775812n);
+  assert.equal(decodedReceipt.authority_context_height, 9223372036854775808n);
+  assert.equal(decodedReceipt.lane_block_view, 18446744073709551615n);
+  assert.equal(decodedLeg.dataspace_id, 9223372036854775813n);
+  assert.equal(
+    decodedLeg.prepare_qc.body.participant_previous_block_height,
+    9223372036854775810n,
+  );
+  assert.equal(
+    decodedLeg.participant_proposal.descriptor.lane_block_height,
+    9223372036854775811n,
+  );
+  assert.equal(decodedLeg.prepare_qc.body.epoch, 18446744073709551615n);
+});
+
+test("getSumeragiDiagnosticsTyped rejects non-u64 Native integer spellings", async () => {
+  const placeholder = "__NATIVE_PARTICIPANT_VIEW__";
+  const payload = createSumeragiDiagnosticsPayload({
+    native_amx_participant_applications: [
+      {
+        lane_id: 3,
+        dataspace_id: 8,
+        lane_incarnation: fakeSumeragiHash(0x65),
+        participant_height: 8,
+        participant_view: placeholder,
+        predecessor_height: 7,
+        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+        descriptor_hash: fakeSumeragiHash(0x73),
+        proposal_hash: fakeSumeragiHash(0x69),
+        settlement_hash: fakeSumeragiHash(0x6b),
+        source_count: 2,
+        application_block_height: 10,
+        application_block_hash: fakeSumeragiHash(0x79),
+        state: "durably_applied",
+      },
+    ],
+  });
+  const template = JSON.stringify(payload);
+  const cases = [
+    ["overflow", "18446744073709551616", /exceeds its protocol bound/],
+    ["negative", "-1", /must be >= 0/],
+    ["negative zero", "-0", /must be an unsigned integer/],
+    ["quoted integer", "\"9223372036854775808\"", /must be an unsigned integer/],
+    ["fraction", "1.5", /must be canonical integers/],
+    ["exponent", "1e3", /must be canonical integers/],
+    ["leading zero", "01", /must not contain leading zeroes/],
+    ["malformed number", "1.", /must be canonical integers/],
+  ];
+  for (const [label, token, pattern] of cases) {
+    const text = replaceJsonStringPlaceholder(template, placeholder, token);
+    const client = sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      text,
+    );
+    await assert.rejects(
+      client.getSumeragiDiagnosticsTyped(),
+      pattern,
+      label,
+    );
+  }
+});
+
+test("typed Sumeragi JSON rejects duplicate keys, trailing input, and oversized bodies", async () => {
+  const valid = JSON.stringify(createSumeragiDiagnosticsPayload());
+  const duplicate = valid.replace(/^\{/u, "{\"tx_queue_depth\":0,");
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      duplicate,
+    ).getSumeragiDiagnosticsTyped(),
+    /duplicate object key "tx_queue_depth"/,
+  );
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      `${valid} false`,
+    ).getSumeragiDiagnosticsTyped(),
+    /trailing input/,
+  );
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      valid,
+      { "content-length": String(16 * 1024 * 1024 + 1) },
+    ).getSumeragiDiagnosticsTyped(),
+    /16777216-byte response limit/,
+  );
+  const invalidUtf8Client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        arrayData: new Uint8Array([0xff]),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    invalidUtf8Client.getSumeragiDiagnosticsTyped(),
+    /must be valid UTF-8/,
+  );
+});
+
 test("getSumeragiDiagnosticsTyped parses bounded native application evidence", async () => {
   const payload = createSumeragiDiagnosticsPayload({
     npos: {
@@ -11149,6 +11450,54 @@ test("getSumeragiDiagnosticsTyped rejects native application evidence above the 
   await assert.rejects(
     sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
     /native_amx_participant_applications exceeds its protocol item bound/,
+  );
+});
+
+test("getSumeragiDiagnosticsTyped parses autonomous execution stages and explicit conflict", async () => {
+  const row = {
+    lane_id: 3, dataspace_id: 8, lane_incarnation: fakeSumeragiHash(0x65),
+    lane_block_height: 8, lane_block_view: 1,
+    proposal_height: 10, proposal_view: 2,
+    proposal_hash: fakeSumeragiHash(0x69),
+    descriptor_hash: fakeSumeragiHash(0x73),
+    executable_payload_hash: fakeSumeragiHash(0x74),
+    source_bundle_hash: fakeSumeragiHash(0x75),
+    merge_entry_hash: fakeSumeragiHash(0x76),
+    application_block_height: 12,
+    application_block_hash: fakeSumeragiHash(0x77),
+    reservation_count: 2, transaction_count: 2,
+    highest_durable_stage: "kura_wsv_application_receipt_durable",
+    stuck_reason: "queue_finalization_unverifiable",
+  };
+  const payload = createSumeragiDiagnosticsPayload({
+    autonomous_lane_executions: [row],
+  });
+  const diagnostics = await sumeragiDiagnosticsClientForPayload(payload)
+    .getSumeragiDiagnosticsTyped();
+  assert.equal(diagnostics.autonomous_lane_executions[0].merge_entry_hash, row.merge_entry_hash);
+
+  payload.autonomous_lane_executions = [row, { ...row }];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /strictly ordered/,
+  );
+  payload.autonomous_lane_executions = [row];
+  row.reservation_count = 1;
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /reservation and transaction counts disagree/,
+  );
+  row.highest_durable_stage = "conflict";
+  row.stuck_reason = "evidence_conflict";
+  assert.equal(
+    (await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped())
+      .autonomous_lane_executions[0].stuck_reason,
+    "evidence_conflict",
+  );
+  row.stuck_reason = "awaiting_merge_selection";
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /stage and stuck reason disagree/,
   );
 });
 

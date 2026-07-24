@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Los operadores que utilizan la tecnología de generación de cargas útiles incluyen la integración/descarga de datos `sorafs_manifest_stub capacity {declaration,dispute}` y la configuración de la información JSON/Norito bytes incluidos en el ticket de gobernanza.
+Los operadores que utilizan la tecnología de generación de cargas útiles incluyen la integración/descarga de datos `sorafs_manifest_builder capacity {declaration,dispute}` y la configuración de la información JSON/Norito bytes incluidos en el ticket de gobernanza.
 
 ## Aprobación de Артефакты| Artefacto | Camino | blake2b-256 |
 |----------|------|-------------|

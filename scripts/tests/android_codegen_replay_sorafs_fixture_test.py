@@ -359,7 +359,7 @@ def test_test_council_signing_seed_rejects_symlink_and_existing_output(
     assert target.read_bytes() == b"target"
 
 
-def test_manifest_stub_receives_only_ephemeral_signing_key_path(
+def test_manifest_builder_receives_only_ephemeral_signing_key_path(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -370,7 +370,7 @@ def test_manifest_stub_receives_only_ephemeral_signing_key_path(
 
     monkeypatch.setattr(MODULE.subprocess, "run", run)
     key_path = tmp_path / "council-signing.seed"
-    MODULE.run_manifest_stub(
+    MODULE.run_manifest_builder(
         "cargo",
         tmp_path / "payload.bin",
         tmp_path / "plan.json",
@@ -648,10 +648,10 @@ def test_main_rejects_nonfuture_retention_before_subprocess(
     chunker_fixture = tmp_path / "chunker.json"
     chunker_fixture.write_text("{}", encoding="utf-8")
 
-    def fail_manifest_stub(*_args, **_kwargs) -> None:
+    def fail_manifest_builder(*_args, **_kwargs) -> None:
         raise AssertionError("stale retention reached manifest replay")
 
-    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+    monkeypatch.setattr(MODULE, "run_manifest_builder", fail_manifest_builder)
 
     try:
         MODULE.main(
@@ -698,10 +698,10 @@ def test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_l
     chunker_fixture = tmp_path / "chunker.json"
     chunker_fixture.write_text("{}", encoding="utf-8")
 
-    def fail_manifest_stub(*_args, **_kwargs) -> None:
+    def fail_manifest_builder(*_args, **_kwargs) -> None:
         raise AssertionError("manifest replay must not run for unsafe metadata paths")
 
-    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+    monkeypatch.setattr(MODULE, "run_manifest_builder", fail_manifest_builder)
 
     try:
         MODULE.main(
@@ -754,10 +754,10 @@ def test_main_rejects_unsafe_fixture_name_before_subprocess_without_leaking(
     chunker_fixture = tmp_path / "chunker.json"
     chunker_fixture.write_text("{}", encoding="utf-8")
 
-    def fail_manifest_stub(*_args, **_kwargs) -> None:
+    def fail_manifest_builder(*_args, **_kwargs) -> None:
         raise AssertionError("manifest replay must not run for unsafe fixture names")
 
-    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+    monkeypatch.setattr(MODULE, "run_manifest_builder", fail_manifest_builder)
 
     try:
         MODULE.main(
@@ -810,10 +810,10 @@ def test_main_rejects_unsafe_profile_before_subprocess_without_leaking(
     chunker_fixture = tmp_path / "chunker.json"
     chunker_fixture.write_text("{}", encoding="utf-8")
 
-    def fail_manifest_stub(*_args, **_kwargs) -> None:
+    def fail_manifest_builder(*_args, **_kwargs) -> None:
         raise AssertionError("manifest replay must not run for unsafe profile handles")
 
-    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+    monkeypatch.setattr(MODULE, "run_manifest_builder", fail_manifest_builder)
 
     try:
         MODULE.main(
@@ -866,10 +866,10 @@ def test_main_rejects_unsafe_display_metadata_file_before_subprocess_without_lea
     chunker_fixture = tmp_path / "chunker.json"
     chunker_fixture.write_text("{}", encoding="utf-8")
 
-    def fail_manifest_stub(*_args, **_kwargs) -> None:
+    def fail_manifest_builder(*_args, **_kwargs) -> None:
         raise AssertionError("manifest replay must not run for unsafe metadata files")
 
-    monkeypatch.setattr(MODULE, "run_manifest_stub", fail_manifest_stub)
+    monkeypatch.setattr(MODULE, "run_manifest_builder", fail_manifest_builder)
 
     try:
         MODULE.main(

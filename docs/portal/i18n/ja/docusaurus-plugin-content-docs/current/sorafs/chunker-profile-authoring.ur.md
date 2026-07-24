@@ -85,8 +85,8 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 
 - `sorafs_manifest_chunk_store --profile=<handle>` — 提案されたパラメータ、チャンク メタデータ、マニフェスト ダイジェスト、PoR チェック、およびパラメータ
 - `sorafs_manifest_chunk_store --json-out=-` — チャンクストア レポート、標準出力、ストリーム、自動比較。
-- `sorafs_manifest_stub --chunker-profile=<handle>` — マニフェストの確認 CAR 計画の正規ハンドル エイリアスの埋め込み ہیں۔
-- `sorafs_manifest_stub --plan=-` — `chunk_fetch_specs` フィード変更 オフセット/ダイジェスト検証 ہوں۔
+- `sorafs_manifest_builder --chunker-profile=<handle>` — マニフェストの確認 CAR 計画の正規ハンドル エイリアスの埋め込み ہیں۔
+- `sorafs_manifest_builder --plan=-` — `chunk_fetch_specs` フィード変更 オフセット/ダイジェスト検証 ہوں۔
 
 コマンド出力 (ダイジェスト、PoR ルート、マニフェスト ハッシュ) 提案書作成 レビュー担当者による逐語的な再現
 
@@ -114,7 +114,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # manifest + CAR generate کریں اور chunk fetch specs capture کریں
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -123,7 +123,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # محفوظ fetch plan کے ساتھ دوبارہ چلائیں (stale offsets سے بچاتا ہے)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

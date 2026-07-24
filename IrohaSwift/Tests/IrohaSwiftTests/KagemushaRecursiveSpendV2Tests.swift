@@ -3,6 +3,39 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaRecursiveSpendTests: XCTestCase {
+    func testNativeBusyStatusIsRetryableAtThePublicLifecycleBoundary() {
+        XCTAssertEqual(NativeBridgeError.fromStatus(-318), .kagemushaBusy)
+        XCTAssertEqual(
+            KagemushaRecursiveSpendError.proofWorkerBusy.errorDescription,
+            "Another Kagemusha proof operation is active; retry after it completes."
+        )
+    }
+
+    func testTopUpShieldBusyStatusMapsToRetryableError() throws {
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources/IrohaSwift/KagemushaRecursiveSpendV4.swift"),
+            encoding: .utf8
+        )
+        let start = try XCTUnwrap(
+            source.range(of: "    public func buildUnsigned() throws")
+        )
+        let tail = source[start.lowerBound...]
+        let end = try XCTUnwrap(
+            tail.range(of: "/// Canonical unsigned ABI-21 online-to-offline request fields.")
+        )
+        let implementation = String(tail[..<end.lowerBound])
+
+        XCTAssertTrue(implementation.contains("catch NativeBridgeError.kagemushaBusy"))
+        XCTAssertTrue(implementation.contains(
+            "throw KagemushaRecursiveSpendError.proofWorkerBusy"
+        ))
+    }
+
     func testTopUpWitnessBindingRetriesOnlySnapshotDriftAndKeepsMatchedSnapshot() throws {
         let packageRoot = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()

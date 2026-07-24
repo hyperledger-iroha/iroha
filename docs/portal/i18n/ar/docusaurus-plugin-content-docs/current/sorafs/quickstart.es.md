@@ -65,11 +65,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. قم ببناء بيان ثابت
 
 قم بتضمين خطة القطع والأسماء المستعارة وشركات الإدارة في بيان مستخدم
-`sorafs-manifest-stub`. يعرض أمر التفريغ حمولة من ملف واحد فقط؛ باسا
+`sorafs-manifest-builder`. يعرض أمر التفريغ حمولة من ملف واحد فقط؛ باسا
 مسار الدليل لتجميع شجرة (CLI يقوم بالتسجيل في ترتيب المعجم).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

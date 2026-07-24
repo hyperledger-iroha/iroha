@@ -119,7 +119,7 @@ groups:
    - Выполните команду `iroha app sorafs providers list` и проверьте, есть ли возможность объявлять о необходимости репликации.
    - Проверьте датчики `torii_sorafs_capacity_*` для подтверждения обеспечения GiB и успеха PoR.
 3. **Реплика ретрибута**
-   - Новые заказы отправляются через `sorafs_manifest_stub capacity replication-order`, когда в списке невыполненной работы (`stat="avg"`) появляются 5 эпох (или empacotamento de Manifest/CAR USA `iroha app sorafs toolkit pack`).
+   - Новые заказы отправляются через `sorafs_manifest_builder capacity replication-order`, когда в списке невыполненной работы (`stat="avg"`) появляются 5 эпох (или empacotamento de Manifest/CAR USA `iroha app sorafs toolkit pack`).
    - Уведомлять об управлении псевдонимами в привязках к активным манифестам (неожиданно в `torii_sorafs_registry_aliases_total`).
 4. **Результат документального исследования**
    - Регистрируйте заметки об инцидентах и журналы операций SoraFS с временными метками и дайджестами манифестных событий.

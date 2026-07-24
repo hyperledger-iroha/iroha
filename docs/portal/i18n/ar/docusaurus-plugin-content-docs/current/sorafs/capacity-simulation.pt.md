@@ -19,7 +19,7 @@ Sidebar_label: Runbook لمحاكاة القدرات
 هذه الصفحة مخصصة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-يشرح دليل التشغيل هذا كيفية تنفيذ مجموعة محاكاة لسوق القدرة SF-2c وتصور المقاييس الناتجة. إنه التحقق من صحة التفاوض على القطع أو معالجة الفشل أو معالجة قطع النقطة باستخدام محددات التركيبات في `docs/examples/sorafs_capacity_simulation/`. توجد حمولات السعة الصافية usam `sorafs_manifest_stub capacity`; استخدم `iroha app sorafs toolkit pack` لتدفقات سعة البيان/CAR.
+يشرح دليل التشغيل هذا كيفية تنفيذ مجموعة محاكاة لسوق القدرة SF-2c وتصور المقاييس الناتجة. إنه التحقق من صحة التفاوض على القطع أو معالجة الفشل أو معالجة قطع النقطة باستخدام محددات التركيبات في `docs/examples/sorafs_capacity_simulation/`. توجد حمولات السعة الصافية usam `sorafs_manifest_builder capacity`; استخدم `iroha app sorafs toolkit pack` لتدفقات سعة البيان/CAR.
 
 ## 1.Gerar artefatos de CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` مغلف `sorafs_manifest_stub capacity` لإصدار الحمولات الصافية Norito وblobs base64 ومجموعة الطلبات لـ Torii واستئناف JSON لـ:
+`run_cli.sh` مغلف `sorafs_manifest_builder capacity` لإصدار الحمولات الصافية Norito وblobs base64 ومجموعة الطلبات لـ Torii واستئناف JSON لـ:
 
 - ثلاثة إقرارات من الموردين الذين شاركوا في سيناريو مفاوضات القطع.
 - ترتيب النسخ المتماثل لتقسيم البيان على مراحل بين هؤلاء المراجعين.

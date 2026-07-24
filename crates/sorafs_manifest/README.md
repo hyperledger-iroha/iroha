@@ -36,7 +36,7 @@ let digest = manifest.digest().expect("hash manifest");
 
 ### CLI helper
 
-The `sorafs_manifest_stub` binary emits chunk metadata and a manifest for
+The `sorafs_manifest_builder` binary emits chunk metadata and a manifest for
 the provided input. It accepts alias claims, governance signatures, metadata,
 and can optionally write the encoded Norito payload to disk. The tool now emits
 spec-compliant CARv2 archives and will compute both the CAR **payload** digest,
@@ -44,7 +44,7 @@ the full archive digest/size, and the raw CID for you (it verifies any values
 you pass via `--car-digest`/`--car-size`/`--car-cid`).
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_stub \
+cargo run -p sorafs_car --bin sorafs_manifest_builder \
   ./docs.tar \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --min-replicas=3 \
@@ -110,13 +110,12 @@ cargo run -p sorafs_car --bin sorafs_manifest_stub \
 - `--por-sample=count` (with optional `--por-sample-seed=value`) draws unique PoR
   leaf samples; `--por-sample-out=path` writes the JSON array of sampled proofs,
   and the report marks `por_samples_truncated` if the request exceeded the tree size.
-- `--signing-key=hex` (provider helper) accepts a hex-encoded 32- or 64-byte
-  Ed25519 key inlined on the command line.
-- `--public-key-out=path` / `--signature-out=path` export the computed key and
-  signature alongside the Norito advert.
-- `--signing-key-file=path` (provider helper) accepts a 32-byte Ed25519 seed or
-  64-byte expanded key, derives the public key, and signs the advert body for
-  you. When using this flag, omit `--public-key`/`--signature`.
+- `sorafs_provider_advert --prepare` accepts only a raw 32-byte public-key file
+  plus its reviewed SHA-256 fingerprint and writes the exact canonical payload
+  for an external Ed25519/HSM signer.
+- `sorafs_provider_advert --emit` requires that reviewed signing-payload file
+  plus the exact raw public key and raw 64-byte external signature. The
+  production tool has no private-key or inline key/signature option.
 
 The tool prints a JSON report (chunk digests, manifest snapshot with alias/metadata
 details, CAR root/codec, payload + archive digests, raw CAR CID) and
@@ -129,37 +128,49 @@ multi-source downloaders can feed directly into the SoraFS fetch orchestrator.
 To inspect the registered chunker profiles (and their IDs), run:
 
 ```
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 ```
 
-### Provider advert helper
+### Provider advert production builder
 
-`sorafs_provider_advert_stub` assembles a `ProviderAdvertV1` payload for
-storage nodes. It validates TTLs, QoS parameters, path-diversity policies, and
-signatures before writing the Norito bytes and a JSON summary. You can either
-provide an existing signature/public key or let the CLI sign with an Ed25519
-secret key via `--signing-key-file` (seed/expanded key) or `--signing-key=hex`.
-Example:
+`sorafs_provider_advert` assembles a `ProviderAdvertV1` payload for storage
+nodes. It validates TTLs, QoS parameters, path-diversity policies, the exact
+reviewed signer key/fingerprint, and an external Ed25519 signature before
+writing Norito bytes. The two-phase handoff keeps all private keys outside the
+process:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
-  --emit \
-  --chunker-profile=sorafs.sf1@1.0.0 \
-  --provider-id=001122... \
-  --stake-pool-id=ffeedd... \
-  --stake-amount=5000000 \
-  --availability=hot \
-  --max-latency-ms=1500 \
-  --max-streams=32 \
-  --capability=torii \
-  --capability=quic \
-  --capability=range:64 \
-  --endpoint=torii:storage.example.com \
-  --endpoint-meta=region:global \
-  --topic=sorafs.sf1.primary:global \
-  --signing-key=deadbeef... \
-  --public-key-out=provider.pub \
-  --signature-out=provider.sig \
+advert_args=(
+  --chunker-profile=sorafs.sf1@1.0.0
+  --provider-id=001122...
+  --stake-pool-id=ffeedd...
+  --stake-amount=5000000
+  --availability=hot
+  --max-latency-ms=1500
+  --max-streams=32
+  --capability=torii
+  --capability=quic
+  --capability=range:64
+  --endpoint=torii:storage.example.com
+  --endpoint-meta=region:global
+  --topic=sorafs.sf1.primary:global
+  --issued-at=1700000000
+)
+
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+  --prepare "${advert_args[@]}" \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-out=provider-advert.signing-payload
+
+# Sign provider-advert.signing-payload with the governed external HSM.
+
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+  --emit "${advert_args[@]}" \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-file=provider-advert.signing-payload \
+  --signature-file=provider.sig \
   --advert-out=provider.advert \
   --json-out=provider.report.json
 
@@ -175,8 +186,8 @@ downstream fetchers can tune multi-source scheduling.
 The JSON report mirrors the validated fields (stake, capabilities, endpoints,
 rendezvous topics, signature metadata), stores the Norito bytes as hex, and
 sets `signature_verified=true` when the signature check succeeds. Pass
-`--verify --advert=<path>` to validate an existing advert; the command checks
-expiry, path/QoS guard rails, and ed25519 signatures before printing the same
-JSON payload. When signing, you may persist the derived public key and signature
-via `--public-key-out` / `--signature-out`. Use this tool in CI to refresh or
-audit provider adverts alongside manifest updates.
+`--verify --advert=<path> --public-key-file=<path>
+--public-key-fingerprint-sha256=<reviewed-hex>` to validate an existing advert.
+The command rejects symlinks, hard links, unsafe permissions, path replacement,
+malformed raw material, and signer/fingerprint mismatches before printing the
+same JSON payload.

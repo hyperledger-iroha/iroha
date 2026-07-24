@@ -101,9 +101,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   manifest digest、PoR チェックを再実行する。
 - `sorafs_manifest_chunk_store --json-out=-` — chunk-store レポートを stdout にストリームし、
   自動比較に使う。
-- `sorafs_manifest_stub --chunker-profile=<handle>` — manifests と CAR プランが正規ハンドルと
+- `sorafs_manifest_builder --chunker-profile=<handle>` — manifests と CAR プランが正規ハンドルと
   aliases を埋め込んでいることを確認する。
-- `sorafs_manifest_stub --plan=-` — 以前の `chunk_fetch_specs` を再入力し、変更後の
+- `sorafs_manifest_builder --plan=-` — 以前の `chunk_fetch_specs` を再入力し、変更後の
   offsets/digests を検証する。
 
 コマンド出力（digests、PoR ルート、manifest ハッシュ）を提案に記録し、レビュー担当が
@@ -141,7 +141,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # manifest + CAR を生成し、chunk fetch specs を収集
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -150,7 +150,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # 保存した fetch plan で再実行（古い offsets を防ぐ）
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

@@ -19,7 +19,7 @@ description: luminaires reproductibles, exports Prometheus, et tableaux de bord 
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی آئینہ دار ہے۔ Il s'agit d'un Sphinx en pleine forme qui s'est avéré être un bon moyen de le faire. رکھیں۔
 :::
 
-Il s'agit d'un modèle SF-2c de type SF-2c. اور حاصل شدہ میٹرکس کیسے دیکھیں۔ `docs/examples/sorafs_capacity_simulation/` propose des appareils déterministes et des quotas pour le basculement et la réduction des corrections de bout en bout. کرتی ہے۔ Charges utiles pour `sorafs_manifest_stub capacity` Charges utiles pour `sorafs_manifest_stub capacity` manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+Il s'agit d'un modèle SF-2c de type SF-2c. اور حاصل شدہ میٹرکس کیسے دیکھیں۔ `docs/examples/sorafs_capacity_simulation/` propose des appareils déterministes et des quotas pour le basculement et la réduction des corrections de bout en bout. کرتی ہے۔ Charges utiles pour `sorafs_manifest_builder capacity` Charges utiles pour `sorafs_manifest_builder capacity` manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`, `sorafs_manifest_stub capacity` pour les charges utiles Norito, les blobs base64, les corps de requête Torii et les résumés JSON pour les détails برائے:
+`run_cli.sh`, `sorafs_manifest_builder capacity` pour les charges utiles Norito, les blobs base64, les corps de requête Torii et les résumés JSON pour les détails برائے:
 
 - quotas de fournisseurs et de déclarations
 - L'ordre de réplication et les manifestes par étapes et les fournisseurs et les fournisseurs de services de réplication.

@@ -383,13 +383,27 @@ sources the participant committee authorized. Unlike ordinary asynchronous lane 
 carrier containing Native AMX work is admissible only after every participant leg supplies matching
 Prepare and Commit QCs for that exact finality object.
 
-The durable Native AMX signing claim is keyed by participant lane, dataspace, incarnation, height,
-view, phase, and signer. A claimed slot may be retried only with the same proposal and settlement
-hashes; a different source may share the claim only when it belongs to that same batched proposal
-and settlement. Commit repeats the complete participant identity certified by Prepare and carries
-the exact matching PrepareQC. A conflicting proposal or settlement for an already claimed slot
-fails closed across restart. Global round view monotonicity remains an independent guard and never
-forces equality with the participant lane view.
+Grouped participant application is atomic and bounded to 1–4,096 ordered,
+unique sources. The group must match the exact transaction count and timestamp,
+contain the current source exactly once, and carry zero participant effects,
+zero nested fee receipts, and zero nested Native receipts. A block in which one
+route has mixed coordinator and participant roles uses the same block-wide
+anchor and defers the role-sensitive check until the complete group is
+available.
+
+The versioned durable Native AMX source-session claim binds the source ID, typed transaction
+entrypoint hash, plan digest, global round context, authority height, coordinator
+route/incarnation/planned height/view/proposal, and every participant route/incarnation. The
+grouped participant slot claim remains separate and binds the participant proposal and settlement
+hashes for the exact lane height, view, phase, and signer. A claimed source or slot may be retried
+only with the same complete identities. Legacy entries are rejected; they may
+not be replaced by a weaker projection, and any future rebuild must come from
+authenticated canonical evidence. Before Prepare or Commit signing, and again at admission,
+the guard requires the active incarnation, exact predecessor height and descriptor hash, and the
+contiguous next lane height. Commit repeats the complete participant identity certified by Prepare
+and carries the exact matching PrepareQC. A source, session, proposal, predecessor, or settlement
+conflict fails closed across restart. Global round view monotonicity remains an independent guard
+and never forces equality with the participant lane view.
 
 Participant finality is control-only. Exactly one coordinator ownership executes each AMX source
 and commits its state transition; participant proposals are not executable-payload handoffs and
@@ -398,28 +412,47 @@ preflight the settlement against the frozen state, but preflight cannot mutate S
 participant settlement binds the proposal, included sources, resulting effect commitment, and
 participant coordinates. It does not recursively contain the Native AMX receipt whose leg commits
 its hash, avoiding a receipt-to-settlement hash cycle.
+One shared participant-application predicate is used by block validation,
+Kura, State frontiers, recovery, diagnostics, drain, and retirement. A
+coordinator leg on the same route is not a separate participant application
+and produces no marker, receipt, index row, diagnostic row, or drain blocker.
 
-After the carrier global block is decided and its coordinator results are applied, Kura persists an
-idempotent participant application receipt linking the participant proposal and settlement to that
-canonical block and result. Only that durable acknowledgement advances the participant lane
-frontier. A crash after global application but before the participant receipt leaves the old
-frontier blocked; restart reconstructs and persists the receipt from the canonical block without
-executing the transaction again. Lane draining, retirement, and same-ID recreation treat such an
-unapplied participant slot as live work, so autoscaling cannot destroy its storage generation or
-admit the next incarnation early.
+The globally finalized execution commitment contains a canonical Native application manifest root.
+Each route/incarnation leaf binds the predecessor, proposal, settlement, ordered source/result
+membership, and canonical application-block identity; Kura retains the leaf and Merkle proof with
+the idempotent participant application receipt. Publication makes participant finality and the
+manifest durable first, then writes the exact receipt and route/incarnation-keyed latest index, and
+only then advances the replicated participant frontier. The canonical executed wire remains
+available until that evidence is durable. After body pruning, validation uses the
+QC-authenticated manifest root and proof; old hash-only evidence remains blocked unless the
+canonical wire is recovered from authenticated storage or QC signers.
+
+A crash after global application but before the receipt or index leaves the old frontier blocked.
+Startup repair revalidates the block, checkpoint, finality, manifest root/proof, and exact group
+under the sidecar publication guard, then idempotently completes the missing sidecars without
+executing the transaction again. Startup also reconstructs the bounded latest index explicitly;
+steady-state lookup does not reverse-scan history. Lane draining, retirement, archive, purge, disk
+accounting, and same-ID recreation all recognize the receipt, manifest, and index artifacts. An
+unapplied or unverifiable participant slot remains live work, so autoscaling cannot destroy its
+storage generation or admit the next incarnation early.
 
 A fresh lane height always starts at lane view zero, independently of the winning global proposal
-view. The global proposer signs an executable-payload handoff naming the exact locked block and
-fans it to the whole frozen lane committee. Any exact committee member may authenticate those same
-bytes under its own BLS key, so an offline deterministic lane author does not stall the lane. The
-payload digest excludes the producer but includes the global anchor and executable body; Kura
-accepts producer-signature variants only when the origin proposal and body are identical. V2 does
-not admit unanchored, hintless payloads: without the globally locked ownership there is no
-deterministic promotion rule capable of preventing a Byzantine producer from permanently splitting
-first-write lane slots. A globally hinted payload also carries no producer-selected reservation,
-routing-plan, or Native AMX metadata. Those fields are not committed by the global ownership record,
-so V2 reconstructs the compatibility payload only from its exact committed entrypoints and rejects a
-committee member that tries to race an alternate execution policy into Kura's first-write slot.
+view. Before a global body is locked, the deterministic height-rotated author for each active route
+may reserve one bounded FIFO batch. The durable reservation keys, entrypoints, routing plans, and
+Native AMX receipts are signed into one hint-free executable payload and persisted before fanout.
+Ingress accepts only the exact scheduled author, active incarnation, view-zero proposal,
+applied-or-snapshot predecessor, frozen committee, and canonical reservation identities. A second
+producer or different payload for the same slot is rejected.
+
+Hint-free means “awaiting its carrier,” not independently executable. The global leader may include
+the exact autonomous envelope in its candidate; until the resulting global lock supplies that
+anchor, validators keep the payload in the bounded pending set and release no READY vote. After the
+lock, Kura persists the same payload and execution input before READY/Prepare/Commit can advance.
+If the scheduled author is unavailable, the runner waits only for the configured bounded interval
+and then permits ordinary carrier execution; it does not let another committee member replace the
+author or reservation claim. The separate globally planned compatibility path carries no autonomous
+reservation metadata and is reconstructed only from its exact committed entrypoints.
+
 The crash-atomic Kura lane-geometry marker is a universal active-segment boundary, not an
 autonomous-payload special case. Globally anchored lane-ownership sidecars, autonomous payloads,
 certified lane sessions, globally anchored or autonomous execution inputs, direct-execution
@@ -613,40 +646,55 @@ that a delayed decisive CommitQC can still require.
 Static trusted peers are bootstrap seeds only. Once finalized world membership is non-empty, v2
 advertises exactly that membership and evicts connected seeds which are no longer present. A local
 node that was previously admitted and is later absent clears its queues, disconnects both network
-and gossiper topology, and publishes `local_peer_removed = true`; this also applies when the
-finalized peer set becomes empty. A never-admitted observer may retain bootstrap connectivity while
-the world is still empty.
+and gossiper topology, and sets the process-local removed-membership telemetry
+state; this also applies when the finalized peer set becomes empty. A
+never-admitted observer may retain bootstrap connectivity while the world is
+still empty.
 
-The authoritative JSON status flattens the reducer status and also publishes canonical lane
-settlement commitments, relay envelopes, `lane_payload_ownerships`, `committed_lane_blocks`, and
-`lane_block_sessions`. The Norito representation is the typed `SumeragiV2StatusResponse` envelope:
-its `authoritative` field contains the same reducer status and its lane vectors and
-`local_peer_removed` flag are identical to the JSON projection. Nexus-disabled nodes return all
-lane-detail arrays empty. The OpenAPI schema requires the lane arrays plus the local-removal flag so
-route probes and operators do not mistake a missing projection for lane progress.
-The response and producer caches enforce protocol resource caps: at most 128 settlement
-commitments, 64 relay envelopes, 128 payload-ownership records, 128 committed-lane summaries, and
-128 live lane-block sessions. Oversized typed or JSON responses fail closed instead of turning
-operator status into an unbounded allocation surface.
+`GET /v1/sumeragi/status` returns only the authoritative `SumeragiV2Status`.
+It contains the reducer's protocol and build/configuration fingerprints, restart flag, frozen
+height context, height, view, phase, leader, QC/TC references, body and persistence state, commit
+frontier, and bounded liveness state. `GET /v1/sumeragi/status/sse` streams the same authoritative
+shape. Lane sidecars, queue pressure, Native application evidence, and autonomous execution stages
+do not appear on either status surface.
 
-The authoritative snapshot also carries the active frozen epoch, epoch end, consensus mode, raw
-32-byte leader seed, validator count, and dual-quorum parameters. Its latest durable CommitQC
-summary is evaluated under that certificate's own retained height context, including exact signer
-and voting-power totals across an epoch boundary. Local diagnostics are kept in a separate
-`operator` member: process-monotonic v2 view-install and busy-deferral counters, bounded adapter
-queue occupancy, and an exact transaction-queue pressure sample. The shared typed validator rejects
-payload-ownership rows whose canonical replay hashes do not recompute, committed-lane rows with
-unknown execution labels, mismatched payload-availability flags, or impossible certified quorums,
-and live session rows with impossible vote/quorum counts. Torii and the Rust client also reject
-impossible queue bounds, inconsistent commit identity, unsupported protocol versions, and commit
-summaries that do not satisfy both frozen quorum dimensions.
+`GET /v1/sumeragi/diagnostics` returns the non-authoritative
+`SumeragiDiagnosticsStatus`. It includes pipeline and queue pressure, lane
+commitments and settlements, relay envelopes, payload ownership, committed
+lane blocks, live lane sessions, governance state,
+`native_amx_participant_applications`, and
+`autonomous_lane_executions`. Nexus-disabled nodes return the lane-detail vectors empty. The Native
+and autonomous evidence vectors are derived from State plus revalidated Kura
+evidence (and the durable queue finalization view), rather than a process-local
+completion cache. The Native vector is deterministically ordered and bounded to
+one record per active route/incarnation; each record exposes the participant
+height/view, predecessor, descriptor, proposal, settlement, grouped source
+count, optional application block, and one of
+`certified_pending_carrier`, `committed_evidence_pending`,
+`durably_applied`, or `conflict`. Conflicting same-height identities are
+reported as `conflict`, never selected by arrival or filesystem order. The
+autonomous vector is restart-stable, bounded, and advances from durable
+reservation evidence through lane certification,
+bundle/merge/carrier/application evidence, and finally `queue_finalized`;
+disagreement is `conflict`. Diagnostics describe durable progress but never
+authorize it.
+
+The status snapshot's latest durable CommitQC summary is evaluated under that certificate's own
+retained height context, including exact signer and voting-power totals across an epoch boundary.
+Its typed validator rejects impossible phases, body states, persistence identities, and certificate
+contexts. The diagnostics producer and typed validators independently enforce
+active-incarnation derivation, deterministic ordering, vector and group bounds,
+complete application-block pairs, queue limits, recomputable payload
+ownership, known execution labels, and possible certified quorums. Oversized or
+inconsistent typed or JSON responses fail closed instead of turning operator
+diagnostics into an unbounded allocation surface.
 
 Every proposal-authenticating outbound-intent diagnostic carries its exact `proposal_round` in
 addition to the intent's finality `round`; timeout intents carry no proposal round. Proposal and
 Prepare intents require equal rounds, while Commit intents may retain an earlier authenticated
 proposal origin after a view change.
 
-The JSON projection follows the Norito JSON contract exactly. Fixed byte arrays such as
+Both JSON projections follow the Norito JSON contract exactly. Fixed byte arrays such as
 `height_context.epoch_seed`, settlement `source_id`, and relay `manifest_root` are uppercase hex
 strings of the exact byte width; they are not JSON byte arrays. Unit enums remain tagged objects:
 for example mode is `{"mode":"permissioned","details":null}`, reducer phase is
@@ -657,7 +705,7 @@ zeroes are rejected) so JavaScript clients do not lose precision. Liquidity and 
 their declared Norito tags, for example `{"profile":"Tier1","state":null}` and
 `{"bucket":"Stable","state":null}`.
 
-Each `lane_relay_envelopes` entry exposes the actual relay record: `block_header`, nullable `qc`,
+Each diagnostics `lane_relay_envelopes` entry exposes the actual relay record: `block_header`, nullable `qc`,
 nullable `da_commitment_hash`, its settlement commitment and hash, and RBC byte total. Optional
 `lane_block_descriptor_hash`, uppercase-hex `manifest_root`, and `fastpq_proof` are omitted when
 absent. The JSON wire does not contain the retired synthetic `block_hash` or `commit_qc` keys.
@@ -778,6 +826,18 @@ The review proof is recorded in `docs/formal/sumeragi_v2/PROOF.md`; the adjacent
 generated source-bound evidence state exactly which obligations were mechanically discharged. The
 release checker rejects stale counts, unproved obligations, proof escapes, and the retired
 favourable-network liveness corridor.
+
+## Multilane release evidence
+
+The production paths described above are implemented behavior, not a release
+attestation. The multilane gates remain open until fresh artifacts pass for
+focused/adversarial unit coverage; source-bound TLC and Apalache positives plus
+every expected mutation; unskipped four-peer DA/RBC lifecycle suites; 10/10
+twelve-peer corridor seeds and the two-hour fault soak; cross-SDK parity;
+five paired pinned-hardware one-versus-four-lane scaling runs; and the
+prescribed locked/offline full-workspace build, test, strict Clippy,
+formatting, and legacy-codec checks. This document makes no claim that those
+four-peer, twelve-peer, soak, scaling, or full-workspace runs have passed.
 
 ## Taira profile
 

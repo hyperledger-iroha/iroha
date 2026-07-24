@@ -387,6 +387,7 @@ private func nativeAmxDiagnosticsPayload(
             "application_block_hash": nativeAmxTestHash(0xA2),
             "state": "durably_applied",
         ]],
+        "autonomous_lane_executions": [],
     ])
 }
 
@@ -1483,7 +1484,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_eq_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
@@ -1493,7 +1494,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_ep_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
@@ -11970,7 +11971,7 @@ final class ToriiClientTests: XCTestCase {
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
-                changingArtifact { $0["max_proof_bytes"] = 16 * 1_024 * 1_024 + 1 },
+                changingArtifact { $0["max_proof_bytes"] = 21_765 },
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
@@ -17271,6 +17272,54 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(application.sourceCount, 2)
         XCTAssertEqual(application.applicationBlockHeight, 42)
         XCTAssertEqual(application.state, .durablyApplied)
+    }
+
+    func testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict() throws {
+        var row: [String: Any] = [
+            "lane_id": 9, "dataspace_id": 13,
+            "lane_incarnation": nativeAmxTestHash(0xB8),
+            "lane_block_height": 8, "lane_block_view": 1,
+            "proposal_height": 10, "proposal_view": 2,
+            "proposal_hash": nativeAmxTestHash(0x60),
+            "descriptor_hash": nativeAmxTestHash(0x9E),
+            "executable_payload_hash": nativeAmxTestHash(0x61),
+            "source_bundle_hash": nativeAmxTestHash(0x62),
+            "merge_entry_hash": nativeAmxTestHash(0x63),
+            "application_block_height": 42,
+            "application_block_hash": nativeAmxTestHash(0xA2),
+            "reservation_count": 2, "transaction_count": 2,
+            "highest_durable_stage": "kura_wsv_application_receipt_durable",
+            "stuck_reason": "queue_finalization_unverifiable",
+        ]
+        let data = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        let snapshot = try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
+        XCTAssertEqual(snapshot.autonomousLaneExecutions.first?.mergeEntryHash,
+                       nativeAmxTestHash(0x63))
+
+        let duplicate = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row, row]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: duplicate)
+        )
+        row["reservation_count"] = 1
+        let mismatchedCounts = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: mismatchedCounts)
+        )
+        row["highest_durable_stage"] = "conflict"
+        row["stuck_reason"] = "evidence_conflict"
+        let conflict = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: conflict)
+        )
     }
 
     func testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows() throws {

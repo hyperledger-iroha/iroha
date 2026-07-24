@@ -51,7 +51,7 @@ SDKs). היא אוכפת את האינווריאנטים של alias ו-handle ש
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - יש להגיש PR הכולל fixtures, הצעה, דוח דטרמיניזם ועדכוני רישום.
@@ -86,12 +86,12 @@ SDKs). היא אוכפת את האינווריאנטים של alias ו-handle ש
 
 ## ציפיות tooling
 
-- `sorafs_manifest_chunk_store` ו-`sorafs_manifest_stub` חושפים:
+- `sorafs_manifest_chunk_store` ו-`sorafs_manifest_builder` חושפים:
   - `--list-profiles` לבדיקת הרישום.
   - `--promote-profile=<handle>` כדי לייצר את בלוק המטאדאטה הקנוני המשמש לקידום פרופיל.
   - `--json-out=-` כדי להזרים דוחות ל-stdout ולאפשר לוגים של ביקורת שניתנים לשחזור.
 - `ensure_charter_compliance()` מופעלת בעת אתחול הבינאריים הרלוונטיים
-  (`manifest_chunk_store`, `provider_advert_stub`). בדיקות CI חייבות להיכשל אם
+  (`manifest_chunk_store`, `sorafs_provider_advert`). בדיקות CI חייבות להיכשל אם
   רשומות חדשות מפרות את האמנה.
 
 ## שמירת רשומות

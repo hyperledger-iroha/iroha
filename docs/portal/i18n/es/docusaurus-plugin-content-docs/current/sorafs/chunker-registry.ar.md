@@ -81,8 +81,8 @@ Esta es la versión CARv1 + SHA-256 del sistema operativo (`Accept-Chunker` + `A
 | المكون | الحالة | ملاحظات |
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | Conecte el cable + el bloque y el bloque `--json-out=-` y el bloque `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifiesto قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق sin conexión فقط؛ يجب إنتاج anuncios de proveedores عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ قديم | مُنشئ manifiesto قديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` لإعادة التحقق الحتمية. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (organizador de desarrollo) | ✅ مدعوم | يقرأ `chunk_fetch_specs` y حمولة قدرة `range` y يجمع إخراج CARv2. |
 | Accesorios para SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض المعتمد يظهر أولاً في كل قائمة بدائل ويُوقَّع بواسطة أظرف المجلس. |
 | Puerta de enlace Torii | ✅ مدعوم | يطبق كامل قواعد `Accept-Chunker`, y ويتضمن ترويسات `Content-Chunker`, y ويعرض Bridge CARv1 para degradar la versión. |
@@ -133,12 +133,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ ejecución de carga -p sorafs_manifest --bin sorafs_manifest_stub --list-chunker-profiles
+$ ejecución de carga -p sorafs_manifest --bin sorafs_manifest_builder --list-chunker-profiles
 [
   {
     "id_perfil": 1,
@@ -199,4 +199,4 @@ Programación CARv1+SHA-2:* **المسار الأساسي** – CARv2, resumen d
   `fixtures/sorafs_chunker` Otras funciones
   `fuzz/sorafs_chunker`. Utilice Rust, Go y Node para crear aplicaciones.
 * Utilice `chunker_registry::lookup_by_profile` para conectar los dispositivos `ChunkProfile::DEFAULT` a sus terminales.
-* تتضمن manifiesta الناتجة عن `iroha app sorafs toolkit pack` y `sorafs_manifest_stub` بيانات السجل.
+* تتضمن manifiesta الناتجة عن `iroha app sorafs toolkit pack` y `sorafs_manifest_builder` بيانات السجل.

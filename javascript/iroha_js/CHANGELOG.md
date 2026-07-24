@@ -180,12 +180,14 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   SharedArrayBuffer-backed inputs are rejected, while genuine cross-realm
   ArrayBuffers remain supported. Code-byte, simulation, derivation, and proof
   responses now enforce declared and streamed endpoint-specific byte caps
-  before fatal UTF-8 decoding and strict JSON parsing. Validation-fee policy
-  verification now uses strict
-  uncofactored Ed25519 verification, rejects duplicate governance keyset ids,
-  bounds adversarial inputs before allocation, and fails closed on unaudited
-  overlay instruction families. IVM proof polling validates options before job
-  creation and best-effort cancels failed or aborted jobs.
+  before fatal UTF-8 decoding and strict JSON parsing. Validation-fee authority
+  now comes only from bounded Parliament proof pages verified by the ABI 21
+  native bridge against an immutable ledger binding and durable checkpoint;
+  caller-supplied policy signatures and keysets were removed. Proved-IVM
+  submission quotes the exact unsigned payload, rebuilds the signature-bound
+  fee intent, and signs only that rebuilt transaction. IVM proof polling
+  validates options before job creation and best-effort cancels failed or
+  aborted jobs.
 
 ## [0.0.3] - 2026-07-11
 

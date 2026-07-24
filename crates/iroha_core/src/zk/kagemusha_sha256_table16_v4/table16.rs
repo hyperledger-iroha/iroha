@@ -33,7 +33,6 @@ use spread_table::*;
 
 use crate::zk::kagemusha_sha256_table16_v4::{
     AssignedBits, AssignedBlockWord, BlockWord, PaddedByte, Sha256Instructions,
-    canonical_padding_suffix,
 };
 
 #[derive(Clone, Debug)]
@@ -247,35 +246,8 @@ impl<F: PrimeField> Table16Chip<F> {
         })
     }
 
-    /// Chip configuration from cap gate.
-    pub fn configure_with_columns(
-        meta: &mut ConstraintSystem<F>,
-        advice_columns: &[Column<Advice>; 7],
-    ) -> <Self as Chip<F>>::Config {
-        let shared = Self::configure_shared(meta);
-        let input_tag = meta.advice_column();
-        let input_dense = meta.advice_column();
-        let input_spread = meta.advice_column();
-        let [message_schedule, a_3, a_4, a_6, a_7, a_8, a_9] = *advice_columns;
-        Self::configure_lane(
-            meta,
-            &shared,
-            [
-                input_tag,
-                input_dense,
-                input_spread,
-                a_3,
-                a_4,
-                message_schedule,
-                a_6,
-                a_7,
-                a_8,
-                a_9,
-            ],
-        )
-    }
-
     /// Configures a circuit to include this chip.
+    #[cfg(test)]
     pub fn configure(meta: &mut ConstraintSystem<F>) -> <Self as Chip<F>>::Config {
         Self::configure_lanes::<1>(meta)
             .into_iter()
@@ -285,12 +257,13 @@ impl<F: PrimeField> Table16Chip<F> {
 
     /// Copy-binds range-checked source bytes into canonical, padded SHA-256
     /// blocks and constrains their big-endian packing into 32-bit words.
+    #[cfg(test)]
     pub(crate) fn canonical_blocks(
         &self,
         layouter: &mut impl Layouter<F>,
         input: &[super::AssignedByte<F>],
     ) -> Result<Vec<[AssignedBlockWord<F>; super::BLOCK_SIZE]>, Error> {
-        let suffix = canonical_padding_suffix(input.len()).ok_or(Error::Synthesis)?;
+        let suffix = super::canonical_padding_suffix(input.len()).ok_or(Error::Synthesis)?;
         let padded_len = input
             .len()
             .checked_add(suffix.len())

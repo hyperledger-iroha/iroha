@@ -132,12 +132,20 @@ pub(crate) fn write_polynomial_slice<W: io::Write, F: SerdePrimeField, B>(
     writer: &mut W,
     format: SerdeFormat,
 ) {
-    writer
-        .write_all(&(slice.len() as u32).to_be_bytes())
-        .unwrap();
+    write_polynomial_slice_streaming(slice, writer, format).unwrap();
+}
+
+/// Writes a polynomial slice without consuming it and propagates sink errors.
+pub(crate) fn write_polynomial_slice_streaming<W: io::Write, F: SerdePrimeField, B>(
+    slice: &[Polynomial<F, B>],
+    writer: &mut W,
+    format: SerdeFormat,
+) -> io::Result<()> {
+    writer.write_all(&(slice.len() as u32).to_be_bytes())?;
     for poly in slice.iter() {
-        poly.write(writer, format);
+        poly.write_streaming(writer, format)?;
     }
+    Ok(())
 }
 
 /// Gets the total number of bytes of a slice of polynomials, assuming all polynomials are the same length

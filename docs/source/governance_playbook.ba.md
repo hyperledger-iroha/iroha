@@ -66,7 +66,7 @@ distest, һаҡлау тегы, һәм Norito артефакттары идар�
    шлюздар.
 2. Ҡул ҡуйылған конверт менән манифест стаб тикшерергә:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

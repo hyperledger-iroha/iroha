@@ -35906,7 +35906,7 @@
     },
     "/v1/sorafs/moderation/ballots/tally": {
       "post": {
-        "description": "Finalize a local SoraFS moderation ballot tally after quorum and reveal-window checks. The request requires canonical app authentication.",
+        "description": "Submit the native FinalizeSorafsModerationCase instruction through the configured durable transaction orchestrator. Pending requests return 202; finalized replays return the committed case projection. The route fails closed when finalized-chain orchestration is unavailable and never mutates the local ballot runtime.",
         "requestBody": {
           "content": {
             "application/json": {
@@ -35929,7 +35929,7 @@
             "description": "Successful response"
           }
         },
-        "summary": "Finalize a moderation ballot tally.",
+        "summary": "Submit authoritative moderation finalization.",
         "tags": [
           "SoraFS"
         ],

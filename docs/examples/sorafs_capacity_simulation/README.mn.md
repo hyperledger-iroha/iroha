@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` скрипт нь дараахийг бүтээхийн тулд `sorafs_manifest_stub capacity`-г дууддаг:
+`run_cli.sh` скрипт нь дараахийг бүтээхийн тулд `sorafs_manifest_builder capacity`-г дууддаг:
 
 - Квотын тохиролцооны багцад зориулсан тодорхой үйлчилгээ үзүүлэгчийн мэдэгдлүүд.
 - Хэлэлцээрийн хувилбарт тохирсон хуулбарлах дараалал.

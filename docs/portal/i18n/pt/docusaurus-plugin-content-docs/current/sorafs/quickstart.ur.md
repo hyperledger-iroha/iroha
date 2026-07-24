@@ -65,12 +65,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 
 ## 3. manifesto بنائیں اور سائن کریں
 
-plano de bloco, aliases, assinaturas de governança e `sorafs-manifest-stub` کے ذریعے
+plano de bloco, aliases, assinaturas de governança e `sorafs-manifest-builder` کے ذریعے
 manifesto نیچے دی گئی کمانڈ carga útil de arquivo único دکھاتی ہے؛ درخت پیک کرنے
 کے لیے caminho do diretório دیں (CLI اسے lexicográfico ترتیب میں چلتا ہے)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

@@ -1764,6 +1764,7 @@ class _MockState:
             "lane_governance_sealed_aliases": [],
             "lane_governance": [],
             "native_amx_participant_applications": [],
+            "autonomous_lane_executions": [],
         }
         self.sumeragi_leader = {
             "leader_index": 3,

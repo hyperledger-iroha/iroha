@@ -92,13 +92,15 @@ prevents copied signatures from changing TTL or policy. Ed25519 is the only
 accepted first-release algorithm; the multi-signature enum value remains
 reserved.
 
-For operator tooling, the repository ships `sorafs_provider_advert_stub`.
-It validates the inputs, emits the Norito advertisement blob, and produces a
-JSON summary for dashboards:
+For operator tooling, the repository ships `sorafs_provider_advert`. Production
+signing is private-key-free and uses a two-phase external Ed25519/HSM handoff.
+The first phase writes the exact canonical signing payload; after the external
+signer returns a raw 64-byte signature, the second phase verifies the reviewed
+payload, signer key, SHA-256 key fingerprint, and signature before emitting the
+Norito advert:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
-  --emit \
+advert_args=(
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \
   --stake-pool-id=ffeedd... \
@@ -114,10 +116,25 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --transport-hint=quic:1 \
   --endpoint=torii:storage.example.com \
   --topic=sorafs.sf1.primary:global \
-  --signing-key-file=provider.key \
-  # or alternatively --signing-key=<hex seed> \
-  --public-key-out=provider.pub \
-  --signature-out=provider.sig \
+  --issued-at=1700000000
+)
+
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+  --prepare "${advert_args[@]}" \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-out=provider-advert.signing-payload \
+  --json-out=provider-advert.signing-request.json
+
+# Send provider-advert.signing-payload to the governed PKCS#11/HSM signer.
+# The signer returns exactly 64 raw Ed25519 signature bytes in provider.sig.
+
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+  --emit "${advert_args[@]}" \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-file=provider-advert.signing-payload \
+  --signature-file=provider.sig \
   --advert-out=provider.advert \
   --json-out=provider.report.json
 
@@ -126,11 +143,14 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
 # scripts remain stable if IDs change.
 ```
 
-Provider, stake-pool, signing-key, public-key, signature, capability-payload,
-and endpoint-metadata hex must be lowercase, even-length, prefix-free, and
+Provider, stake-pool, capability-payload, endpoint-metadata, and reviewed
+fingerprint hex must be lowercase, even-length, prefix-free, and
 whitespace-free. Fixed-width identifiers such as `--provider-id` and
-`--stake-pool-id` must be exactly 32 bytes (64 hex characters); the helper does
-not left-pad short values before signing.
+`--stake-pool-id` must be exactly 32 bytes (64 hex characters); the tool does
+not left-pad short values before signing. Public-key, signing-payload, signature,
+and advert inputs must be bounded direct regular files with stable identity:
+symlinks, hard links, mutable group/world permissions, path replacement, and
+wrong-length raw key/signature material fail closed.
 
 `--range-capability` emits the `CapabilityType::ChunkRangeFetch` TLV with a
 structured payload (`ProviderCapabilityRangeV1`). Providers declare the largest
@@ -603,14 +623,15 @@ and submit fetch requests in `max_chunk_span`-bounded slices. The CLI’s
 end-to-end tests cover this flow and expose the resulting provider receipts so
 integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 
-For audits, run `sorafs_provider_advert_stub --verify --advert=<path> [--now=unix_ts]` to
-validate signatures, enforce TTL/path/QoS rules, and print a JSON summary of an
-existing advert (optionally with `--json-out` to persist the summary). The JSON
-payload includes `signature_verified=true` when the Ed25519 signature matches the
-complete canonical envelope, and explicitly reports `signature_strict`. Torii only
-ingests adverts where this field is `true`. Operators can export the derived
-key/signature via `--public-key-out`/`--signature-out`, and the CLI accepts raw
-signatures when preceded by `--council-signature-public-key`.
+For audits, run
+`sorafs_provider_advert --verify --advert=<path> --public-key-file=<raw-key-path>
+--public-key-fingerprint-sha256=<reviewed-hex> [--now=unix_ts]`. Verification
+requires the advert signer to equal the exact reviewed raw public key, validates
+the fingerprint and Ed25519 signature, enforces TTL/path/QoS rules, and prints a
+JSON summary (optionally via `--json-out`). The JSON payload includes
+`signature_verified=true` only when the signature matches the complete canonical
+envelope and explicitly reports `signature_strict`. Torii only ingests adverts
+where this field is `true`.
 
 ### TTL, Refresh, and Expiry
 

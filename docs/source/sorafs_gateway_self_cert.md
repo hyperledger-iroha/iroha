@@ -1,144 +1,107 @@
 ---
 title: SoraFS Gateway Self-Certification Kit
-summary: Operator workflow for generating signed gateway attestation bundles (SF-5a).
+summary: Operator workflow for signed gateway attestations bound to a verified aggregate release manifest (SF-5a).
 ---
 
 # SoraFS Gateway Self-Certification Kit
 
-This guide explains how operators run the self-cert harness, produce a signed
-attestation bundle, and archive the results as part of the onboarding checklist.
+`scripts/sorafs_gateway_self_cert.sh` verifies the candidate’s canonical
+aggregate release manifest before it starts the gateway harness. The manifest
+must be accompanied by the governed raw Ed25519 signature/public-key tuple and
+must verify through an explicitly SHA256-pinned `sorafs-validate` binary. The
+harness then produces the gateway report, signed Norito attestation, and
+human-readable summary.
 
-## Deliverables
+## Required runtime inputs
 
-- **Harness runner:** `cargo xtask sorafs-gateway-attest` executes the replay + load scenarios, verifies success, and emits artefacts (`sorafs_gateway_report.json`, attestation `.to`, human summary).
-- **Wrapper script:** `scripts/sorafs_gateway_self_cert.sh` wraps the xtask command with friendly flags so Ops can call it from CI or shell. It uses `cargo xtask` when available and falls back to `cargo run -p xtask --bin xtask -- ...`.
-- **Report template:** `docs/source/examples/sorafs_gateway_self_cert_template.json` demonstrates the JSON structure captured in every run (helpful for dashboard ingestion or compliance reviews).
+The wrapper has no fixture or identity defaults. Supply every item either as a
+flag or through a runtime `key=value` config:
 
-## Prerequisites
+- `signing_key`: runtime Ed25519 private key used only for the gateway
+  attestation.
+- `signer`: admitted operator account recorded in the attestation.
+- `gateway`: explicit regional gateway base URL; there is no fixture/default
+  target.
+- `release_manifest`: canonical aggregate `release_manifest.json`.
+- `release_manifest_signature`: exactly 64 raw Ed25519 signature bytes.
+- `release_manifest_public_key`: exactly 32 raw Ed25519 public-key bytes.
+- `trusted_signing_fingerprint`: reviewed SHA256 of that raw public key.
+- `release_manifest_verifier`: reviewed `sorafs-validate` executable.
+- `trusted_release_manifest_verifier_sha256`: reviewed SHA256 of that exact
+  executable.
 
-- Workspace with Rust/Cargo available. `cargo xtask --help` should list
-  `sorafs-gateway-attest` when the cargo-xtask shim is installed; otherwise the
-  wrapper falls back to `cargo run -p xtask --bin xtask -- ...`.
-- Config file (key=value) that records the signing key path, signer account, and
-  any optional manifest verification inputs. See
-  `docs/examples/sorafs_gateway_self_cert.conf` for a template.
-- Access to the staging/production gateway endpoint you want to certify.
-- Ed25519 signing key in hex (no prefix) tied to the operator’s admission account.
-- Optional: custom output directory; defaults to `artifacts/sorafs_gateway_attest`.
+Private keys, HSM credentials, gateway bearer tokens, and other runtime secrets
+must not be committed. Start from
+`docs/examples/sorafs_gateway_self_cert.conf`, copy it into protected runtime
+storage, and replace every placeholder.
 
-## Running the Kit
-
-- Provide options directly or place them in a config file (see
-  `docs/examples/sorafs_gateway_self_cert.conf`). Flags override config entries.
+## Run
 
 ```bash
-./scripts/sorafs_gateway_self_cert.sh \
-  --config docs/examples/sorafs_gateway_self_cert.conf \
-  --manifest-bundle path/to/updated_manifest.bundle.json
+scripts/sorafs_gateway_self_cert.sh \
+  --config /run/sorafs-release/gateway-self-cert.conf
 ```
 
-- The script forwards arguments to `sorafs-gateway-attest` and, when manifest
-  inputs are present, to `sorafs_cli manifest verify-signature`.
-- `--gateway` is optional; omit it (or remove it from the config file) to use the
-  harness’ default fixture target.
-- Use `--workspace` if the repository root differs from your current directory.
+Command-line flags override config values. Unknown config keys and retired
+signature-bundle fields are rejected. Supply the required gateway in the config
+or with `--gateway`; use `--workspace` for the repository root and `--out` for a
+new evidence directory.
 
-## Output Artefacts
+Verification occurs before `cargo xtask sorafs-gateway-attest`. A bad signer
+fingerprint, changed verifier digest, malformed key/signature, missing input, or
+native verification failure prevents the harness from running.
 
-The run creates three files:
+## Output artifacts
+
+The output directory contains:
 
 | File | Description |
 |------|-------------|
-| `sorafs_gateway_report.json` | Canonical Norito/JSON run report (matches the template under `docs/source/examples/`). |
-| `sorafs_gateway_attestation.to` | Signed Norito envelope containing payload hash, signer metadata, and Ed25519 signature. |
-| `sorafs_gateway_attestation.txt` | Human-readable summary suitable for change tickets. |
+| `release_manifest.verify.json` | Payload-free receipt containing the manifest hash, signer fingerprint, verifier protocol/path/SHA256, and `signature_verified=true`. |
+| `sorafs_gateway_report.json` | Canonical run report and scenario metrics. |
+| `sorafs_gateway_attestation.to` | Signed Norito attestation envelope. |
+| `sorafs_gateway_attestation.txt` | Human-readable change-ticket summary. |
 
-The JSON report includes:
-- Gateway metadata (`gateway.target`, optional `gateway.version` when provided via env/flags).
-- Scenario results and metrics (see template).
-- Stream-token refusal counters, chunk retry rate, provider reports.
-- Payload hash + signature block.
+Archive those files together with the aggregate release manifest, raw public
+key, and raw signature. Do not archive the gateway attestation private key or
+signer/HSM session material.
 
-## Verifying the Attestation
+## Verify the gateway attestation
 
-1. Inspect the summary: `cat artifacts/.../sorafs_gateway_attestation.txt`.
-2. Verify the signature using `norito::decode_from_bytes` or the helper in `xtask`:
-   ```bash
-   cargo xtask sorafs-gateway-attest --verify \
-     artifacts/.../sorafs_gateway_attestation.to
-   ```
-3. Archive `sorafs_gateway_report.json` and the summary in the onboarding ticket; submit the `.to` envelope to governance tooling if required.
+```bash
+cargo xtask sorafs-gateway-attest --verify \
+  artifacts/.../sorafs_gateway_attestation.to
+```
 
-## Optional Manifest Verification
+The gateway-attestation signature is independent of the release-manifest
+signature. Both receipts are required for a production self-cert packet.
 
-If no flags or config values are supplied the script falls back to the sample
-fixtures under `fixtures/sorafs_manifest/ci_sample/` (including the sample key
-`gateway_attestor.hex`), allowing a dry-run out of the box. Provide `--manifest`
-(either via the config file or through flags) together with either:
+## Output-path safety
 
-- `--manifest-bundle` (preferred, verifies bundle metadata and signature), or
-- `--manifest-signature` plus `--public-key-hex` (detached signature flow).
+The wrapper rejects symlinked/non-regular inputs, symlinked output directories,
+symlinked parent components, and pre-existing release verification receipts. It
+does not overwrite release authenticity evidence. Keep the output directory on
+operator-controlled storage.
 
-The wrapper invokes `sorafs_cli manifest verify-signature` after the harness
-completes and writes the verification summary to
-`<out>/manifest.verify.summary.json`. You can pass `--chunk-plan`,
-`--chunk-summary`, or `--chunk-digest-sha3` so the CLI also cross-checks chunk
-digests and metadata embedded in the bundle.
+## Denylist diff evidence
 
-## Output Path Safety
+For a governed denylist rotation, add both:
 
-`scripts/sorafs_gateway_self_cert.sh` fails before running the attestation
-harness when `--out` is a symlink, points at a non-directory target, or sits
-under a symlinked parent component. Manifest verification summaries and
-denylist diff reports are also rejected when their final path is a symlink,
-their existing target is not a regular file, or their parent chain contains a
-symlink. This keeps gateway self-cert evidence from being written through
-ambiguous filesystem aliases while still allowing the wrapper to create missing
-ordinary output directories.
+```text
+denylist_old_bundle=/path/to/previous.json
+denylist_new_bundle=/path/to/current.json
+```
 
-## Denylist Diff Evidence (MINFO-6)
-
-When rotating SoraFS gateway denylists, governance expects a before/after trail
-highlighting every entry that changed. The self-cert wrapper now wires directly
-into the `cargo xtask sorafs-gateway denylist diff` helper:
-
-- Provide `--denylist-old <bundle.json>` and `--denylist-new <bundle.json>`
-  (either via flags or config). The script validates both paths exist and then
-  executes the diff command. Supply `--denylist-report <path>` to override where
-  the JSON report lands; otherwise it defaults to
-  `<out>/denylist_diff.json`.
-- The command prints the counts of added/removed entries and leaves a JSON
-  evidence bundle mirroring the xtask output (MINFO-6 audit format). Attach this
-  to the Ministry governance packets alongside the attestation artefacts.
-- When only one of the `--denylist-*` flags is present the script skips the
-  diff run and emits a warning, preventing partial runs from producing
-  misleading evidence.
+Optionally set `denylist_report`; otherwise the report is written to
+`<out>/denylist_diff.json`. Supplying only one denylist input produces a warning
+and no diff. Attach the resulting report to the same governance packet.
 
 ## Troubleshooting
 
-- If any scenario fails, the xtask command aborts and no attestation is produced. Review the harness output and follow the refusal guidance in `docs/source/sorafs_gateway_refusal_guidance.md` before re-running.
-- Persistent 5xx or refusal spikes should be treated as incidents; collect telemetry from the dashboards listed in the deployment handbook.
-
-## Automation Tips
-
-- Integrate the script into CI pipelines (e.g., GitHub Actions) to generate a fresh attestation after each gateway rollout.
-- `.github/workflows/sorafs-gateway-self-cert.yml` consumes a config file and
-  archives both the attestation outputs and `manifest.verify.summary.json`, keeping
-  the verification run reproducible without relying on environment variables.
-- Trigger the workflow with:
-
-  ```bash
-  gh workflow run sorafs-gateway-self-cert \
-    --ref main \
-    --field config_path=docs/examples/sorafs_gateway_self_cert.conf
-  ```
-- Keep the manifest artefacts alongside the gateway outputs so CI can call the
-  script with `--manifest`/`--manifest-bundle` and fail fast on signature drift.
-- Use `--gateway-manifest-id` / related flags on `sorafs-fetch` (see the deployment handbook) for supplementary smoke tests prior to running the full self-cert suite.
-
-## References
-
-- Deployment & operations handbook: `docs/source/sorafs_gateway_deployment_handbook.md`
-- Conformance/load harness: `docs/source/sorafs_gateway_conformance.md`
-- Report template: `docs/source/examples/sorafs_gateway_self_cert_template.json`
-- Config template: `docs/examples/sorafs_gateway_self_cert.conf`
+- A release verification failure is a release blocker, not a reason to bypass
+  self-certification. Re-acquire the governed public artifacts and re-confirm
+  the reviewed signer/verifier digests.
+- If a gateway scenario fails, review the harness output and follow
+  `docs/source/sorafs_gateway_refusal_guidance.md`.
+- Re-run independently for each regional gateway administrator and keep the
+  receipts distinct.

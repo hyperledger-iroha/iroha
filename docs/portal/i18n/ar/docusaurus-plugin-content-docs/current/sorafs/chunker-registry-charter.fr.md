@@ -62,7 +62,7 @@ Sidebar_label: مقطع تسجيل المخطط
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - عرض تركيبات محتوى العلاقات العامة، والاقتراح، وتقرير التحديد، وما إلى ذلك
@@ -97,14 +97,14 @@ Sidebar_label: مقطع تسجيل المخطط
 
 ## أدوات الحضور
 
-- `sorafs_manifest_chunk_store` و`sorafs_manifest_stub` المكشوف :
+- `sorafs_manifest_chunk_store` و`sorafs_manifest_builder` المكشوف :
   - `--list-profiles` لفحص السجل.
   - `--promote-profile=<handle>` لإنشاء كتلة métadonnées canonique utilisé
     أثناء الترويج للملف الشخصي.
   - `--json-out=-` لدفق التقارير عبر الوضع القياسي، مما يسمح بسجلات العرض
     الاستنساخ.
 - `ensure_charter_compliance()` تم استدعاؤه للبدء في الثنائيات المعنية
-  (`manifest_chunk_store`، `provider_advert_stub`). اختبارات CI تفعل ذلك
+  (`manifest_chunk_store`، `sorafs_provider_advert`). اختبارات CI تفعل ذلك
   دي نوفيلس تدخل عنيفة على الرسم البياني.
 
 ## التسجيل

@@ -115,7 +115,7 @@ groups:
    - شغّل `iroha app sorafs providers list` وتأكد ان الفانتازيا عنها تطابق التكرار.
    - مقياس المراجعة `torii_sorafs_capacity_*` لتاكيد GiB المجهزة ونجاح PoR.
 3. **عادة اسناد التكرار**
-   - اصدر اوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عندما ينخفض التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف المانيفست/CAR يستخدم `iroha app sorafs toolkit pack`).
+   - اصدر اوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عندما ينخفض التراكم (`stat="avg"`) عن 5 ايبوكات (تغليف المانيفست/CAR يستخدم `iroha app sorafs toolkit pack`).
    - اخطر الـ تورا اذا كانت الأسماء المستعارة جيدة لربط البيان النشط (انخفاض غير متوقع في `torii_sorafs_registry_aliases_total`).
 4. **توثيق النتيجة**
    - سجل الأحداث في سجل العمليات SoraFS مع الطوابع الزمنية والملخصات المتاثرة.

@@ -119,7 +119,7 @@ groups:
    - Exécuter `iroha app sorafs providers list` и проверка того, что емкости сообщают о необходимости репликации.
    - Проверка датчиков `torii_sorafs_capacity_*` для подтверждения предоставления GiB и успешного PoR.
 3. **Переназначение репликации**
-   - Выполнение новых заказов через `sorafs_manifest_stub capacity replication-order` или в случае невыполненной работы (`stat="avg"`) происходит в течение 5 эпох (l'empaquetage Manifest/CAR использует `iroha app sorafs toolkit pack`).
+   - Выполнение новых заказов через `sorafs_manifest_builder capacity replication-order` или в случае невыполненной работы (`stat="avg"`) происходит в течение 5 эпох (l'empaquetage Manifest/CAR использует `iroha app sorafs toolkit pack`).
    - Уведомление об управлении, если псевдонимы не связаны с привязками манифестных действий (без внимания `torii_sorafs_registry_aliases_total`).
 4. **Документация результатов**
    - Отправитель заметок об инцидентах в журнале операций SoraFS с временными метками и дайджестами заявленных проблем.

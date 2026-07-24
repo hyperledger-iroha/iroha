@@ -95,9 +95,9 @@ CLIS کے لئے CHUNK اسٹور اور `--json-out=-` کے ساتھ ظاہر �
   تجویز کردہ پیرامیٹرز کے ساتھ ظاہر اور پور چیک کے لئے۔
 - `sorafs_manifest_chunk_store --json-out=-`- STDOUT پر نشر شدہ CHUNK اسٹور کی رپورٹ
   خودکار موازنہ کے لئے۔
-- `sorafs_manifest_stub --chunker-profile=<handle>` - ظاہر اور کار کے منصوبوں کی تصدیق کریں
+- `sorafs_manifest_builder --chunker-profile=<handle>` - ظاہر اور کار کے منصوبوں کی تصدیق کریں
   منظور شدہ ہینڈل اور تبدیلیاں شامل ہیں۔
-- `sorafs_manifest_stub --plan=-` - چیک کرنے کے لئے پچھلا `chunk_fetch_specs` کو ریفڈ کریں
+- `sorafs_manifest_builder --plan=-` - چیک کرنے کے لئے پچھلا `chunk_fetch_specs` کو ریفڈ کریں
   تبدیلی کے بعد آفسیٹس/ہضم۔
 
 تجویز میں کمانڈ آؤٹ پٹس (ہضم ، پور کی جڑیں ، ظاہر ہیش) ریکارڈ کریں تاکہ ...
@@ -135,7 +135,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # توليد manifest + CAR والتقاط chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -144,7 +144,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # إعادة التشغيل باستخدام خطة fetch المحفوظة (تمنع offsets القديمة)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

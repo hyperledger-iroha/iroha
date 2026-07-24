@@ -40,7 +40,7 @@ Sidebar_label: تشغيل الدليل والإلغاء
 
 ##3. تقديم متناقض
 
-1. أنشئ موصفة JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. أنشئ موصفة JSON لـ `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: تشغيل الدليل والإلغاء
 2. شغّل CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ Sidebar_label: تشغيل الدليل والإلغاء
 
 1. **نافذة الدوثر:** أخطر المتحكم بقرب الإلغاء؛ واسمح بتوفر البيانات المثبتة عندما تسمح السياسة.
 2. **أنشئ `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` مع شخص مؤهل.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` مع شخص مؤهل.
    - تحقّق من التواقيع وملخص الإلغاء.
 3. **نشر الإلغاء:**
    - أرسل طلب الإلغاء إلى Torii.
@@ -93,7 +93,7 @@ Sidebar_label: تشغيل الدليل والإلغاء
 
 ## 6. مواد مرجعية
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم الرقابة)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - لوحة المراقبة: `SoraFS / Capacity Providers`

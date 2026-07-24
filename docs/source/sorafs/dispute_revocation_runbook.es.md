@@ -35,7 +35,7 @@ datos ocurra de forma determinista.
 
 ## 3. Presentar la disputa
 
-1. Crear un JSON spec para `sorafs_manifest_stub capacity dispute`:
+1. Crear un JSON spec para `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -58,7 +58,7 @@ datos ocurra de forma determinista.
 2. Ejecutar el CLI:
 
    ```
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ datos ocurra de forma determinista.
 1. **Ventana de gracia:** notificar al provider de la revocacion inminente; permitir
    evacuacion de datos pinneados cuando la politica lo permita.
 2. **Generar `ProviderAdmissionRevocationV1`:**
-   - Usar `sorafs_manifest_stub provider-admission revoke` con la razon aprobada.
+   - Usar `sorafs_manifest_builder provider-admission revoke` con la razon aprobada.
    - Verificar firmas y digest de revocacion.
 3. **Publicar revocacion:**
    - Enviar el request de revocacion a Torii.
@@ -96,7 +96,7 @@ datos ocurra de forma determinista.
 
 ## 6. Material de referencia
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (seccion de disputas)
 - `docs/source/sorafs/provider_admission_policy.md` (workflow de revocacion)
 - Dashboard de observabilidad: `SoraFS / Capacity Providers`

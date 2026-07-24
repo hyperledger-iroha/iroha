@@ -56,7 +56,7 @@ description: کیپیسٹی مارکیٹ پلیس, ordens de replicação, ٹی�
 - Ajudantes compartilhados (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de pista/atribuição/SLA) validação de chave determinística اور relatório de erros فراہم کرتے ہیں جنہیں CI اور reutilização de ferramentas downstream کر سکتے ہیں۔【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` اب instantâneo on-chain کو `/v1/sorafs/capacity/state` کے ذریعے expor کرتا ہے، declarações de provedor اور entradas de razão de taxas کو Norito JSON determinístico کے پیچھے جوڑ کر۔【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Cobertura de validação aplicação de identificador canônico, detecção de duplicatas, limites por pista, guardas de atribuição de replicação e verificações de intervalo de telemetria کو exercício کرتی ہے تاکہ regressões فوراً CI میں ظاہر ہوں۔【crates/sorafs_manifest/src/capacity.rs:792】
-- Ferramentas do operador: especificações legíveis por humanos `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` e cargas úteis canônicas Norito, blobs base64 e resumos JSON میں تبدیل کرتا ہے تاکہ operadores `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` اور dispositivos de ordem de replicação کو validação local کے ساتھ estágio کر سکیں۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Dispositivos de referência `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order` سے gerar ہوتی ہیں۔
+- Ferramentas do operador: especificações legíveis por humanos `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` e cargas úteis canônicas Norito, blobs base64 e resumos JSON میں تبدیل کرتا ہے تاکہ operadores `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` اور dispositivos de ordem de replicação کو validação local کے ساتھ estágio کر سکیں۔【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Dispositivos de referência `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) میں ہیں اور `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order` سے gerar ہوتی ہیں۔
 
 ### 2. Integração do plano de controle| Tarefa | Proprietário(s) | Notas |
 |------|----------|-------|
@@ -140,14 +140,14 @@ description: کیپیسٹی مارکیٹ پلیس, ordens de replicação, ٹی�
   pacotes de governança
 
 ### Disputa e redução de evidências
-- disputas `sorafs_manifest_stub capacity dispute` کے ذریعے فائل کریں (testes:
+- disputas `sorafs_manifest_builder capacity dispute` کے ذریعے فائل کریں (testes:
   `cargo test -p sorafs_car --test capacity_cli`) Cargas úteis canônicas رہیں۔
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e suítes de penalidade
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) چلائیں تاکہ disputas اور corta repetição determinística ثابت ہوں۔
 - captura de evidências e escalonamento کے لیے `docs/source/sorafs/dispute_revocation_runbook.md` فالو کریں؛ aprovações de greve e relatório de validação میں واپس لنک کریں۔
 
 ### Testes de fumaça de integração e saída do provedor
-- artefatos de declaração/telemetria کو `sorafs_manifest_stub capacity ...` سے regenerar کریں اور submissão سے پہلے repetição de testes CLI کریں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
+- artefatos de declaração/telemetria کو `sorafs_manifest_builder capacity ...` سے regenerar کریں اور submissão سے پہلے repetição de testes CLI کریں (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)۔
 - Torii (`/v1/sorafs/capacity/declare`) کے ذریعے enviar کریں پھر `/v1/sorafs/capacity/state` اور Grafana captura de captura de tela کریں۔ `docs/source/sorafs/capacity_onboarding_runbook.md` fluxo de saída de fluxo de saída
 - artefatos assinados e saídas de reconciliação کو `docs/examples/sorafs_capacity_marketplace_validation/` arquivo میں کریں۔
 

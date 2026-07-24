@@ -67,9 +67,24 @@ if [[ "$profile" == "--release" ]]; then
     export IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root"
     export IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh"
   fi
+  for scaling_digest_name in \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
+    IROHA_RELEASE_SCALING_IROHAD_SHA256 \
+    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
+    if [[ ! "${!scaling_digest_name:-}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "production release requires authenticated lowercase SHA-256 scaling trust anchor ${scaling_digest_name}" >&2
+      exit 1
+    fi
+  done
+  if [[ -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" ]]; then
+    echo "production release requires IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST from the authenticated bootstrap environment" >&2
+    exit 1
+  fi
 fi
 readonly inherited_cargo_cache_home="${CARGO_HOME:-${HOME:-}/.cargo}"
 cd "$repo_root"
+bash ci/check_sumeragi_v2_multilane_release_inventory.sh
 # Every real-network leg in this parent shell must fail rather than translate a
 # socket/sandbox denial into a successful developer skip.
 export IROHA_TEST_REQUIRE_NETWORK=1
@@ -183,6 +198,21 @@ if [[ "$profile" == "--release" && "${IROHA_RELEASE_SEALED_WORKTREE:-0}" != 1 ]]
     exit 1
   fi
   readonly release_bootstrap_evidence_dir
+  release_scaling_evidence_manifest="$(
+    canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
+  )" || {
+    echo "the configured G-SCALE evidence manifest is unavailable" >&2
+    exit 1
+  }
+  if [[ "$release_scaling_evidence_manifest" \
+      != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
+    || "${release_scaling_evidence_manifest##*/}" != scaling_evidence.json \
+    || ! -f "$release_scaling_evidence_manifest" \
+    || -L "$release_scaling_evidence_manifest" ]]; then
+    echo "G-SCALE evidence must be an absolute canonical regular non-symlink scaling_evidence.json" >&2
+    exit 1
+  fi
+  readonly release_scaling_evidence_manifest
   release_git_bin="$(canonical_git_executable)" || {
     echo "a resolved Git executable is required for the release corridor" >&2
     exit 1
@@ -487,6 +517,11 @@ PY
     IROHA_RELEASE_CANDIDATE_IDENTITY_PATH="$candidate_identity_path" \
     IROHA_RELEASE_EXPECTED_IDENTITY_PATH="$sealed_identity_path" \
     IROHA_RELEASE_AGGREGATE_RECEIPT_PATH="$aggregate_receipt_path" \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256="$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
+    IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST="$release_scaling_evidence_manifest" \
+    IROHA_RELEASE_SCALING_IROHAD_SHA256="$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
+    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256="$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256="$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
     IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT="$repo_root" \
     IROHA_RELEASE_BOOTSTRAP_RUNNER="$repo_root/scripts/run_sumeragi_v2_release_gates.sh" \
     IROHA_RELEASE_TLAPM_BIN="$release_tlapm_bin" \
@@ -543,6 +578,11 @@ verify_release_identity() {
     || -z "${IROHA_RELEASE_EXPECTED_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_CANDIDATE_IDENTITY_PATH:-}" \
     || -z "${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH:-}" \
+    || -z "${IROHA_RELEASE_SCALING_CONFIGURATION_SHA256:-}" \
+    || -z "${IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST:-}" \
+    || -z "${IROHA_RELEASE_SCALING_IROHAD_SHA256:-}" \
+    || -z "${IROHA_RELEASE_SCALING_IROHA_CLI_SHA256:-}" \
+    || -z "${IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256:-}" \
     || -z "${IROHA_RELEASE_BOOTSTRAP_CANDIDATE_ROOT:-}" \
     || -z "${IROHA_RELEASE_BOOTSTRAP_RUNNER:-}" \
     || -z "${IROHA_RELEASE_PYTHON_BIN:-}" \
@@ -572,7 +612,9 @@ verify_release_identity() {
     || ! -f "$IROHA_RELEASE_SIGNATURE_RAW_COMMIT" \
     || ! -f "$IROHA_RELEASE_SIGNATURE_CARGO_LOCK" \
     || ! -f "$IROHA_RELEASE_SIGNATURE_ALLOWED_SIGNERS" \
-    || ! -f "$IROHA_RELEASE_SIGNATURE_REVOCATION" ]]; then
+    || ! -f "$IROHA_RELEASE_SIGNATURE_REVOCATION" \
+    || ! -f "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
+    || -L "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" ]]; then
     echo "production release corridor must run from its signed, sealed detached worktree" >&2
     return 1
   fi
@@ -587,8 +629,29 @@ verify_release_identity() {
       return 1
     fi
   done
+  local scaling_digest_name
+  for scaling_digest_name in \
+    IROHA_RELEASE_SCALING_CONFIGURATION_SHA256 \
+    IROHA_RELEASE_SCALING_IROHAD_SHA256 \
+    IROHA_RELEASE_SCALING_IROHA_CLI_SHA256 \
+    IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256; do
+    if [[ ! "${!scaling_digest_name}" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "scaling trust anchor ${scaling_digest_name} changed at ${checkpoint}" >&2
+      return 1
+    fi
+  done
   if [[ ! "$IROHA_RELEASE_EXPECTED_SIGNER_FINGERPRINT" =~ ^SHA256:[A-Za-z0-9+/]{43}$ ]]; then
     echo "signed release fingerprint trust anchor changed at ${checkpoint}" >&2
+    return 1
+  fi
+  local observed_scaling_manifest
+  if ! observed_scaling_manifest="$(
+    canonical_path "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST"
+  )" \
+    || [[ "$observed_scaling_manifest" \
+        != "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
+      || "${observed_scaling_manifest##*/}" != scaling_evidence.json ]]; then
+    echo "G-SCALE evidence path changed or became noncanonical at ${checkpoint}" >&2
     return 1
   fi
   local observed_target expected_target
@@ -635,6 +698,13 @@ verify_release_identity() {
 }
 
 verify_release_identity "release corridor entry"
+if [[ "$profile" == "--release" ]]; then
+  readonly IROHA_RELEASE_SCALING_CONFIGURATION_SHA256
+  readonly IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST
+  readonly IROHA_RELEASE_SCALING_IROHAD_SHA256
+  readonly IROHA_RELEASE_SCALING_IROHA_CLI_SHA256
+  readonly IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256
+fi
 
 # Both profiles are release evidence. Bind the complete corridor, including the
 # PR matrix, to one checkout manifest and one content-addressed build root.
@@ -705,7 +775,7 @@ if [[ "$profile" == "--release" ]]; then
   export TLA2TOOLS_JAR="$IROHA_RELEASE_TLA2TOOLS_JAR"
   export JAVA_BIN="$IROHA_RELEASE_JAVA_BIN"
   export SUMERAGI_V2_TLC_PROFILE=ci
-  export SUMERAGI_TLAPS_THREADS=4
+  export SUMERAGI_TLAPS_THREADS=1
   export CARGO_NET_OFFLINE=true
   export CARGO_HOME="$IROHA_RELEASE_CARGO_HOME"
   export CARGO="$IROHA_RELEASE_CARGO_BIN"
@@ -797,6 +867,20 @@ elif kind == "node":
     if len(passed) != 1 or lines.count("# fail 0") != 1:
         raise SystemExit("ambiguous Node test transcript")
     print(passed[0].group(1))
+elif kind == "native-amx-sdk":
+    matches = [
+        re.fullmatch(
+            r"native-amx-v2-grouped-parity surface=[a-z]+ tests=([0-9]+) "
+            r"fixture_sha256=[0-9a-f]{64} "
+            r"suite_source_manifest_sha256=[0-9a-f]{64}",
+            line,
+        )
+        for line in lines
+    ]
+    matches = [match for match in matches if match]
+    if len(matches) != 1:
+        raise SystemExit("ambiguous grouped Native AMX V2 SDK transcript")
+    print(matches[0].group(1))
 elif kind == "command":
     print(0)
 else:
@@ -806,6 +890,15 @@ PY
     echo "release corridor leg ${leg_id} has invalid test output" >&2
     return 1
   }
+  if [[ "$kind" == "native-amx-sdk" ]]; then
+    local expected_surface="${leg_id#native-amx-grouped-}"
+    local expected_marker
+    expected_marker="native-amx-v2-grouped-parity surface=${expected_surface} tests=${observed_test_count} fixture_sha256=${native_amx_grouped_fixture_sha256:-} suite_source_manifest_sha256=${native_amx_grouped_suite_source_manifest_sha256:-}"
+    if [[ "$(grep -Fxc -- "$expected_marker" "$log_path" || true)" != 1 ]]; then
+      echo "release corridor leg ${leg_id} is not bound to the exact grouped Native AMX V2 corpus and suite sources" >&2
+      return 1
+    fi
+  fi
   if [[ "$kind" == "cargo-module" ]]; then
     if ((observed_test_count == 0 || observed_test_count < required_test_count)); then
       echo "release corridor module ${leg_id} ran fewer tests than its required inventory" >&2
@@ -1463,7 +1556,7 @@ for required_test in "${required_production_liveness_tests[@]}"; do
   fi
 done
 
-# Keep the multilane closure-critical negative tests explicit even when they do
+# Keep the multilane closure-critical focused tests explicit even when they do
 # not belong to the historic 515-test liveness inventory above. The later
 # source-sealed workspace leg executes these non-ignored tests; this preflight
 # prevents a rename, deletion, or accidental `#[ignore]` from hiding behind
@@ -1473,22 +1566,67 @@ required_multilane_core_focus_tests=(
   native_amx::tests::signing_guard_is_restart_safe_idempotent_and_rejects_body_equivocation
   kura::tests::native_amx_manifest_artifact_rejects_leaf_or_proof_tampering
   kura::tests::native_amx_latest_index_rebuilds_idempotently_after_receipt_append_crash
+  kura::tests::native_amx_retention_window_advances_base_and_bounds_index
+  kura::tests::native_amx_latest_index_startup_rejects_oversized_append_indexes_before_scanning
+  kura::tests::native_amx_latest_index_startup_rejects_oversized_aggregate_data_before_scanning
+  kura::tests::native_amx_latest_index_startup_truncates_unindexed_append_tail
+  kura::tests::native_amx_latest_index_startup_leaves_missing_evidence_repair_pending
+  kura::tests::native_amx_latest_index_startup_rejects_present_invalid_manifest_proof
+  kura::tests::native_amx_drain_evidence_requires_exact_manifest_receipt_finality_and_latest_index
+  kura::tests::native_amx_retirement_scan_rejects_old_incarnation_evidence_after_aba_recreation
+  sumeragi::v2_lane_work::tests::native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash
+  sumeragi::v2_lane_work::tests::native_participant_recovery_marker_rejects_malformed_height_source_and_aba_shapes
+  sumeragi::v2_lane_work::tests::native_participant_recovery_authority_rejects_missing_leaf_execution_and_finality_drift
+  sumeragi::v2_lane_work::tests::native_participant_recovery_wire_request_is_certificate_free_and_frame_bounded
+  sumeragi::v2_lane_work::tests::native_participant_pruned_carrier_response_repairs_exact_evidence_and_retires_request
+  sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops
+  sumeragi::v2_lane_work::tests::historical_recovery_request_survives_current_state_key_pruning
+  sumeragi::v2_lane_work::tests::historical_recovery_request_rejects_stale_incarnation_and_unanchored_view
   queue::reservation_journal::tests::crash_at_every_operation_frame_write_boundary_is_prefix_atomic
   queue::tests::concurrent_lane_reserve_attempts_cannot_duplicate_one_transaction
+  queue::tests::lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary
+  kura::tests::committed_merge_reservation_lookup_reconstructs_from_canonical_indexes_after_restart
+  kura::tests::merge_frontier_startup_requires_geometry_only_after_committed_execution
+  kura::tests::committed_merge_reservation_lookup_fails_closed_on_log_mutation
+  kura::tests::committed_merge_reservation_lookup_requires_complete_unique_transaction_index
+  kura::lane_geometry::tests::native_amx_archive_is_admissible_accounted_and_purged_without_touching_sibling
+  kura::lane_geometry::tests::native_amx_archive_gc_rejects_malformed_truncated_and_oversized_evidence
+  kura::lane_geometry::tests::native_amx_archive_gc_rejects_symlinked_evidence_without_following_it
+  kura::lane_geometry::tests::zero_file_create_intent_rolls_back_to_a_sealed_image_and_replays
   state::tests::merge_execution_predecessor_rejects_wrong_frontier_hash
+  state::tests::merge_execution_canonical_order_is_route_first
+  state::tests::autonomous_lane_diagnostic_queue_finalization_is_terminal
   sumeragi::v2_lane_work::tests::autonomous_local_author_reserves_fifo_before_durable_hint_free_publication
   sumeragi::v2_lane_work::tests::autonomous_restart_hydrates_durable_hint_free_payload_and_queue_owner
+  sumeragi::v2_apply::tests::live_merge_publication_persists_application_receipt_before_retry
+  sumeragi::v2_apply::tests::committed_merge_reservation_is_finalized_exactly_once
+  sumeragi::v2_apply::tests::startup_reconciliation_consumes_replayed_committed_merge_reservation
+  sumeragi::v2_apply::tests::autonomous_reservation_cross_store_crash_matrix_preserves_fifo_exactly_once
+  kura::tests::terminal_frontier_compaction_retains_every_later_pending_slot
+  kura::tests::terminal_frontier_compaction_fails_before_replacing_malformed_pending_slot
+  kura::tests::terminal_auxiliary_cleanup_resumes_after_each_mutation_budget
+  kura::tests::autonomous_lane_slot_retirement_rejects_conflict_and_incarnation_aba
+  kura::tests::merge_application_receipt_is_first_release_retirement_admissible_and_fails_closed_after_lane_recreation
+  state::tests::certified_autoscale_scale_in_rechecks_late_authenticated_unmerged_relay
+  state::tests::certified_autoscale_scale_in_rechecks_late_unapplied_certified_lane_block
+  state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
+  state::tests::autonomous_lane_diagnostic_same_identity_drift_is_conflict
+  state::tests::autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall
 )
 required_multilane_data_model_focus_tests=(
   block::consensus::tests::native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift
   block::consensus::tests::native_amx_mixed_role_marker_defers_only_separate_participant_anchor
+  block::consensus::tests::native_amx_application_evidence_negative_corpus_fails_closed
+  block::consensus::tests::native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups
+  block::consensus::tests::autonomous_lane_execution_diagnostics_roundtrip_order_and_bound
+  block::consensus::tests::autonomous_lane_execution_conflict_is_explicit_and_fail_closed
   block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
 )
 required_multilane_integration_lib_focus_tests=(
   sandbox::tests::sandboxed_network_start_helper_preserves_optional_developer_skip
   sandbox::tests::sandboxed_network_start_helper_fails_required_release_scenario
 )
-readonly expected_multilane_focus_test_count=14
+readonly expected_multilane_focus_test_count=59
 if (( ${#required_multilane_core_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
     + ${#required_multilane_integration_lib_focus_tests[@]}
@@ -1533,6 +1671,64 @@ for required_test in "${required_multilane_integration_lib_focus_tests[@]}"; do
     exit 1
   fi
 done
+
+# These are the two real-network four-peer acceptance gates. Keep their exact
+# harness/name inventory source-bound and non-ignored even though ordinary
+# developer runs may opt out inside the test body.
+readonly multilane_autoscale_four_peer_release_test="nexus::autoscale_localnet::nexus_autoscale_four_peer_release_lifecycle_recreates_lane_and_rejects_stale_artifacts"
+readonly multilane_native_amx_rotating_release_test="native_amx_rotating_validator_fault_soak_preserves_independent_participant_qcs"
+multilane_nexus_release_test_list="$(
+  cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list
+)"
+multilane_nexus_release_ignored_test_list="$(
+  cargo test --locked --offline -p integration_tests --test nexus_and_streaming -- --list --ignored
+)"
+multilane_native_release_test_list="$(
+  cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list
+)"
+multilane_native_release_ignored_test_list="$(
+  cargo test --locked --offline -p integration_tests --test native_amx_routing -- --list --ignored
+)"
+for required_test_spec in \
+  "nexus_and_streaming|${multilane_autoscale_four_peer_release_test}" \
+  "native_amx_routing|${multilane_native_amx_rotating_release_test}"; do
+  IFS='|' read -r required_target required_test <<<"$required_test_spec"
+  if [[ "$required_target" == "nexus_and_streaming" ]]; then
+    required_test_list="$multilane_nexus_release_test_list"
+    required_ignored_test_list="$multilane_nexus_release_ignored_test_list"
+  else
+    required_test_list="$multilane_native_release_test_list"
+    required_ignored_test_list="$multilane_native_release_ignored_test_list"
+  fi
+  if [[ "$(grep -Fxc -- "${required_test}: test" <<<"$required_test_list" || true)" != 1 ]]; then
+    echo "missing or renamed mandatory four-peer multilane release test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$required_ignored_test_list"; then
+    echo "mandatory four-peer multilane release test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+
+# The source-binding checker derives this same ordered corpus from the formal
+# ledger. Keep an independent fixed release count and terminal contract marker
+# so the runner and ledger cannot silently agree to drop a mutation together.
+readonly expected_multilane_formal_mutation_count=27
+observed_multilane_formal_mutation_count="$(
+  grep -Ec '^run_mutant [a-z0-9-]+ ' \
+    scripts/formal/run_sumeragi_v2_multilane_mutations.sh
+)"
+if ((observed_multilane_formal_mutation_count
+    != expected_multilane_formal_mutation_count)); then
+  echo "expected exactly ${expected_multilane_formal_mutation_count} multilane formal mutations, found ${observed_multilane_formal_mutation_count}" >&2
+  exit 1
+fi
+if ! grep -Fqx -- \
+  'echo "[tlc] all 27 multilane mutations produced their exact named counterexamples; no deductive proof status was changed"' \
+  scripts/formal/run_sumeragi_v2_multilane_mutations.sh; then
+  echo "multilane mutation runner lacks the exact 27-mutation completion contract" >&2
+  exit 1
+fi
 
 production_liveness_modules=(
   kura::tests
@@ -1809,6 +2005,55 @@ run_corridor_leg \
   cargo test --locked --offline -p iroha_data_model --test "$cross_sdk_fixture_target" \
     sumeragi_v2_cross_sdk_fixtures:: -- --test-threads=1
 
+# Execute every maintained consumer of the Rust-owned grouped Native AMX V2
+# golden and negative corpus in the source-sealed production corridor. Each
+# suite emits one exact marker that binds its observed test count to both the
+# fixture bytes and the fixed suite-source inventory.
+readonly native_amx_grouped_parity_harness="ci/run_native_amx_v2_grouped_sdk_parity.sh"
+native_amx_grouped_fixture_sha256="$(
+  bash "$native_amx_grouped_parity_harness" --fixture-sha256
+)"
+native_amx_grouped_suite_source_manifest_sha256="$(
+  bash "$native_amx_grouped_parity_harness" --suite-source-manifest-sha256
+)"
+if [[ ! "$native_amx_grouped_fixture_sha256" =~ ^[0-9a-f]{64}$ \
+  || ! "$native_amx_grouped_suite_source_manifest_sha256" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "grouped Native AMX V2 parity harness returned an invalid source digest" >&2
+  exit 1
+fi
+readonly native_amx_grouped_fixture_sha256
+readonly native_amx_grouped_suite_source_manifest_sha256
+if [[ "$profile" == "--release" ]]; then
+  native_amx_grouped_parity_surfaces=(
+    openapi
+    python
+    javascript
+    swift
+    kotlin
+    java
+  )
+  native_amx_grouped_parity_test_counts=(
+    4
+    35
+    37
+    2
+    6
+    5
+  )
+  for native_amx_grouped_parity_index in \
+    "${!native_amx_grouped_parity_surfaces[@]}"; do
+    native_amx_grouped_parity_surface="${native_amx_grouped_parity_surfaces[$native_amx_grouped_parity_index]}"
+    native_amx_grouped_parity_test_count="${native_amx_grouped_parity_test_counts[$native_amx_grouped_parity_index]}"
+    run_corridor_leg \
+      "native-amx-grouped-${native_amx_grouped_parity_surface}" \
+      native-amx-sdk \
+      "$native_amx_grouped_parity_test_count" \
+      "bash ${native_amx_grouped_parity_harness} ${native_amx_grouped_parity_surface}" \
+      bash "$native_amx_grouped_parity_harness" \
+        "$native_amx_grouped_parity_surface"
+  done
+fi
+
 js_status_contract_file="javascript/iroha_js/test/toriiClient.test.js"
 required_js_status_contract_tests=(
   "getSumeragiStatusTyped validates and normalizes authoritative v2 status"
@@ -1977,16 +2222,16 @@ if [[ "$profile" == "--release" ]]; then
   release_bootstrap_pipeline_status=("${PIPESTATUS[@]}")
   set -e
   release_bootstrap_pass_summary="$(
-    grep -Ec '^71 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    grep -Ec '^82 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
       "$release_bootstrap_contract_log" || true
   )"
   if ((release_bootstrap_pipeline_status[0] != 0 || release_bootstrap_pipeline_status[1] != 0)) \
     || [[ "$release_bootstrap_pass_summary" != 1 ]]; then
-    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 71 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
+    echo "Sumeragi v2 release-bootstrap preflight did not run exactly 82 passing tests (pytest=${release_bootstrap_pipeline_status[0]}, tee=${release_bootstrap_pipeline_status[1]})" >&2
     exit 1
   fi
   record_corridor_log \
-    preflight-release-bootstrap pytest 71 \
+    preflight-release-bootstrap pytest 82 \
     "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_bootstrap_contract_files[*]}" \
     "$release_bootstrap_contract_log" \
     "${release_bootstrap_pipeline_status[0]}" "${release_bootstrap_pipeline_status[1]}"
@@ -2033,20 +2278,54 @@ PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovi
 release_receipt_pipeline_status=("${PIPESTATUS[@]}")
 set -e
 release_receipt_pass_summary="$(
-  grep -Ec '^189 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+  grep -Ec '^221 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
     "$release_receipt_contract_log" || true
 )"
 if ((release_receipt_pipeline_status[0] != 0 || release_receipt_pipeline_status[1] != 0)) \
   || [[ "$release_receipt_pass_summary" != 1 ]]; then
-  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 189 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
+  echo "Sumeragi v2 aggregate-receipt contract preflight did not run exactly 221 passing tests (pytest=${release_receipt_pipeline_status[0]}, tee=${release_receipt_pipeline_status[1]})" >&2
   exit 1
 fi
 record_corridor_log \
-  preflight-release-receipt pytest 189 \
+  preflight-release-receipt pytest 221 \
   "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${release_receipt_contract_files[*]}" \
   "$release_receipt_contract_log" \
   "${release_receipt_pipeline_status[0]}" "${release_receipt_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$release_receipt_contract_log"
+
+# Seal the benchmark collector and independent validator themselves before
+# trusting a G-SCALE bundle. These tests execute no benchmark and no Cargo
+# command; they exercise exact pair ordering, non-weakenable thresholds,
+# source binding, bounded artifacts, and every fail-fast collection boundary.
+multilane_scaling_contract_files=(
+  scripts/tests/validate_multilane_scaling_evidence_test.py
+  scripts/tests/run_multilane_scaling_gate_test.py
+)
+multilane_scaling_contract_log="$(
+  corridor_contract_log_path preflight-multilane-scaling
+)"
+set +e
+PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider \
+  "${multilane_scaling_contract_files[@]}" 2>&1 | tee "$multilane_scaling_contract_log"
+multilane_scaling_pipeline_status=("${PIPESTATUS[@]}")
+set -e
+multilane_scaling_pass_summary="$(
+  grep -Ec '^52 passed in [0-9]+([.][0-9]+)?s( \([0-9]+:[0-5][0-9]:[0-5][0-9]\))?$' \
+    "$multilane_scaling_contract_log" || true
+)"
+if ((multilane_scaling_pipeline_status[0] != 0 \
+    || multilane_scaling_pipeline_status[1] != 0)) \
+  || [[ "$multilane_scaling_pass_summary" != 1 ]]; then
+  echo "G-SCALE runner/validator preflight did not run exactly 52 passing tests (pytest=${multilane_scaling_pipeline_status[0]}, tee=${multilane_scaling_pipeline_status[1]})" >&2
+  exit 1
+fi
+record_corridor_log \
+  preflight-multilane-scaling pytest 52 \
+  "PYTHONDONTWRITEBYTECODE=1 PYTHONHASHSEED=0 python3 -m pytest -q -p no:cacheprovider ${multilane_scaling_contract_files[*]}" \
+  "$multilane_scaling_contract_log" \
+  "${multilane_scaling_pipeline_status[0]}" \
+  "${multilane_scaling_pipeline_status[1]}"
+((corridor_enabled)) || rm -f -- "$multilane_scaling_contract_log"
 
 # Run the complete fail-closed proof-ledger, Verus-evidence, and TLC-trace
 # normalizer contract corpus before trusting any expensive formal result. The
@@ -2129,7 +2408,7 @@ record_corridor_log \
   "${taira_soak_pipeline_status[0]}" "${taira_soak_pipeline_status[1]}"
 ((corridor_enabled)) || rm -f -- "$taira_soak_contract_log"
 if ((corridor_enabled)); then
-  readonly expected_corridor_leg_count=64
+  readonly expected_corridor_leg_count=71
   if ((corridor_leg_index != expected_corridor_leg_count)); then
     echo "release corridor recorded ${corridor_leg_index} legs, expected ${expected_corridor_leg_count}" >&2
     exit 1
@@ -2144,6 +2423,9 @@ if ((corridor_enabled)); then
   corridor_rustc_path="$(canonical_executable rustc)"
   corridor_python_path="$(canonical_executable python3)"
   corridor_node_path="$(canonical_executable node)"
+  corridor_swift_path="$(canonical_executable swift)"
+  corridor_swift_version="$("$corridor_swift_path" --version)"
+  corridor_swift_version="${corridor_swift_version%%$'\n'*}"
   corridor_bash_path="$(canonical_executable bash)"
   corridor_git_path="$(canonical_executable git)"
   corridor_cargo_home="$(canonical_path "$CARGO_HOME")"
@@ -2170,12 +2452,19 @@ if ((corridor_enabled)); then
     python3_sha256 "$(sha256_file "$corridor_python_path")" \
     node_path "$corridor_node_path" \
     node_sha256 "$(sha256_file "$corridor_node_path")" \
+    swift_path "$corridor_swift_path" \
+    swift_sha256 "$(sha256_file "$corridor_swift_path")" \
+    swift_version "$corridor_swift_version" \
     bash_path "$corridor_bash_path" \
     bash_sha256 "$(sha256_file "$corridor_bash_path")" \
     git_path "$corridor_git_path" \
     git_sha256 "$(sha256_file "$corridor_git_path")" \
     cargo_home_path "$corridor_cargo_home" \
     repo_cargo_config_sha256 "$(sha256_file "$repo_root/.cargo/config.toml")" \
+    native_amx_grouped_fixture_sha256 "$native_amx_grouped_fixture_sha256" \
+    native_amx_grouped_suite_source_manifest_sha256 \
+      "$native_amx_grouped_suite_source_manifest_sha256" \
+    native_amx_grouped_negative_control_count 34 \
     tlc_profile "$SUMERAGI_V2_TLC_PROFILE" \
     tlaps_threads "$SUMERAGI_TLAPS_THREADS" \
     >"$corridor_completion_tmp"
@@ -2184,6 +2473,33 @@ fi
 verify_release_identity "after release contract preflights"
 
 if [[ "$profile" == "--release" ]]; then
+  scaling_preflight_report="${IROHA_RELEASE_HOST_ROOT}/scaling-validation-preflight.json"
+  rm -f -- "$scaling_preflight_report"
+  "$IROHA_RELEASE_PYTHON_BIN" -I -S \
+    scripts/nexus/validate_multilane_scaling_evidence.py \
+    "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
+    --report "$scaling_preflight_report" \
+    --expected-source-revision "$release_head_commit" \
+    --expected-workspace-source-sha256 "$release_source_manifest_sha256" \
+    --expected-validator-sha256 "$(
+      sha256_file scripts/nexus/validate_multilane_scaling_evidence.py
+    )" \
+    --expected-trial-harness-sha256 \
+      "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
+    --expected-configuration-sha256 \
+      "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
+    --expected-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
+    --expected-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
+    --expected-repository-root "$repo_root" \
+    --quiet
+  if [[ ! -s "$scaling_preflight_report" \
+    || -L "$scaling_preflight_report" ]]; then
+    echo "source-bound G-SCALE validation did not publish its preflight report" >&2
+    exit 1
+  fi
+  rm -f -- "$scaling_preflight_report"
+  verify_release_identity "after source-bound G-SCALE validation"
+
   # Fail before 160 real-network runs when the strict deductive ledger or its
   # source-bound backend evidence is not release-complete.
   formal_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/formal-completion-path"
@@ -2209,6 +2525,40 @@ if [[ "$profile" == "--release" && ! -s "$seed_completion_path_file" ]]; then
   exit 1
 fi
 verify_release_identity "after deterministic seed matrix"
+
+if [[ "$profile" == "--release" ]]; then
+  multilane_four_peer_completion_path_file="${IROHA_RELEASE_HOST_ROOT}/multilane-four-peer-completion-path"
+  rm -f -- "$multilane_four_peer_completion_path_file"
+  IROHA_MULTILANE_FOUR_PEER_COMPLETION_PATH_FILE="$multilane_four_peer_completion_path_file" \
+    bash scripts/run_nexus_cross_dataspace_atomic_swap.sh \
+      --release \
+      --capture \
+      --no-skip-build \
+      --test-threads 1 \
+      --multilane-four-peer-release
+  if [[ ! -s "$multilane_four_peer_completion_path_file" ]]; then
+    echo "mandatory four-peer multilane release gates did not publish a completion path" >&2
+    exit 1
+  fi
+  multilane_four_peer_completion_path="$(<"$multilane_four_peer_completion_path_file")"
+  if [[ ! -f "$multilane_four_peer_completion_path" \
+    || -L "$multilane_four_peer_completion_path" ]]; then
+    echo "four-peer multilane completion must be a regular non-symlink file" >&2
+    exit 1
+  fi
+  for required_line in \
+    $'mode\tmandatory-four-peer-multilane-release' \
+    $'expected_runs\t2' \
+    $'passed_runs\t2' \
+    $'failed_runs\t0' \
+    $'skipped_runs\t0'; do
+    if ! grep -Fqx -- "$required_line" "$multilane_four_peer_completion_path"; then
+      echo "four-peer multilane completion is missing exact accounting: ${required_line}" >&2
+      exit 1
+    fi
+  done
+  verify_release_identity "after mandatory four-peer multilane release gates"
+fi
 
 # G-12P is a distinct real-network gate from the reducer seed matrix above.
 # Its launcher starts ten fresh 12-peer networks, uses one canonical seed per
@@ -2407,7 +2757,16 @@ verify_release_identity "before aggregate release receipt publication"
   --seed-completion "$seed_completion_path" \
   --chaos-completion "$chaos_completion_path" \
   --taira-completion "$taira_completion_path" \
+  --g12-seed-completion "$nexus_cross_completion_path" \
+  --g12-fault-soak-completion "$nexus_cross_soak_completion_path" \
+  --scaling-evidence-manifest "$IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST" \
+  --expected-scaling-trial-harness-sha256 \
+    "$IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256" \
+  --expected-scaling-configuration-sha256 \
+    "$IROHA_RELEASE_SCALING_CONFIGURATION_SHA256" \
+  --expected-scaling-irohad-sha256 "$IROHA_RELEASE_SCALING_IROHAD_SHA256" \
+  --expected-scaling-iroha-cli-sha256 "$IROHA_RELEASE_SCALING_IROHA_CLI_SHA256" \
   --repository-root "$repo_root" \
   --output "$IROHA_RELEASE_AGGREGATE_RECEIPT_PATH"
 
-echo "Sumeragi v2 production release gates passed, including strict 10/10 G-12P, the two-hour G-12P fault soak, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2
+echo "Sumeragi v2 production release gates passed, including strict 10/10 G-12P, the two-hour G-12P fault soak, sealed G-SCALE evidence, 100,000 heights, and the 24-hour Taira soak; receipt=${IROHA_RELEASE_AGGREGATE_RECEIPT_PATH}" >&2

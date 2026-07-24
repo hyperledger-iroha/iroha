@@ -38,7 +38,7 @@ Sidebar_label: دليل النزاعات والإلغاءات
 
 ## 3. عرض النزاع
 
-1. إنشاء مواصفات JSON لـ `sorafs_manifest_stub capacity dispute`:
+1. إنشاء مواصفات JSON لـ `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -61,7 +61,7 @@ Sidebar_label: دليل النزاعات والإلغاءات
 2. تنفيذ CLI:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ Sidebar_label: دليل النزاعات والإلغاءات
 
 ## 4. الإخلاء والإلغاء1. **نافذة الرحمة:** إشعار للمورد بشأن الإلغاء الوشيك؛ السماح بإخلاء البيانات المفقودة عندما تسمح السياسة بذلك.
 2. ** الأجناس `ProviderAdmissionRevocationV1`:**
-   - الولايات المتحدة الأمريكية `sorafs_manifest_stub provider-admission revoke` مع الحل المناسب.
+   - الولايات المتحدة الأمريكية `sorafs_manifest_builder provider-admission revoke` مع الحل المناسب.
    - التحقق من الشركة وملخص الإلغاء.
 3. **نشر الإلغاء:**
    - أرسل طلب الإلغاء إلى Torii.
@@ -91,7 +91,7 @@ Sidebar_label: دليل النزاعات والإلغاءات
 
 ## 6. المواد المرجعية
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم المنازعات)
 - `docs/source/sorafs/provider_admission_policy.md` (تدفق الإلغاء)
 - لوحة معلومات المراقبة: `SoraFS / Capacity Providers`

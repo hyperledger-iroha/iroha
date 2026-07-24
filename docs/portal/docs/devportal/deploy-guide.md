@@ -2,22 +2,22 @@
 id: deploy-guide
 title: SoraFS Deployment Guide
 sidebar_label: Deployment Guide
-description: Promote the developer portal through the SoraFS pipeline with deterministic builds, Sigstore signing, and rollback drills.
+description: Promote the developer portal through deterministic SoraFS builds, governed Ed25519 release authentication, and rollback drills.
 ---
 
 ## Overview
 
 This playbook converts roadmap items **DOCS-7** (SoraFS publishing) and **DOCS-8**
 (CI/CD pin automation) into an actionable procedure for the developer portal.
-It covers the build/lint phase, SoraFS packaging, Sigstore-backed manifest
-signing, alias promotion, verification, and rollback drills so every preview and
-release artefact is reproducible and auditable.
+It covers the build/lint phase, SoraFS packaging, aggregate release-manifest
+authentication, alias promotion, verification, and rollback drills so every
+preview and release artefact is reproducible and auditable.
 
 The flow assumes you have the `sorafs_cli` binary (built with
-`sorafs_orchestrator` Cargo target), access to a Torii endpoint with pin-registry permissions, and
-OIDC credentials for Sigstore. Store long-lived secrets (`IROHA_PRIVATE_KEY`,
-`SIGSTORE_ID_TOKEN`, Torii tokens) in your CI vault; local runs can source them
-from shell exports.
+`sorafs_orchestrator` Cargo target), access to a Torii endpoint with pin-registry
+permissions, and a protected release job with the governed Ed25519/HSM signer.
+Store long-lived secrets (`IROHA_PRIVATE_KEY`, HSM credentials, Torii tokens) in
+your CI vault; local content builds do not receive release signing material.
 
 ## Prerequisites
 
@@ -25,8 +25,10 @@ from shell exports.
 - `sorafs_cli` from `cargo run -p sorafs_orchestrator --bin sorafs_cli`.
 - Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
   that can submit manifests and aliases.
-- OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a
-  `SIGSTORE_ID_TOKEN`.
+- Protected access to the governed external Ed25519/HSM signer, reviewed raw
+  public key and fingerprint, and the reviewed native release-manifest verifier
+  plus its SHA256. Keep all signer and verifier inputs outside content-build
+  jobs.
 - Optional: `examples/sorafs_cli_quickstart.sh` for dry runs and
   `docs/source/sorafs_ci_templates.md` for GitHub/GitLab workflow scaffolding.
 - Configure the Try it OAuth variables (`DOCS_OAUTH_*`) and run the
@@ -129,24 +131,23 @@ sorafs_cli manifest build \
 Tune pin-policy flags to your release window (for example, `--pin-storage-class
 hot` for canaries). The JSON variant is optional but convenient for code review.
 
-## Step 4 — Sign with Sigstore
+## Step 4 — Authenticate the aggregate release manifest
 
 ```bash
-sorafs_cli manifest sign \
-  --manifest "$OUT"/portal.manifest.to \
-  --chunk-plan "$OUT"/portal.plan.json \
-  --bundle-out "$OUT"/portal.manifest.bundle.json \
-  --signature-out "$OUT"/portal.manifest.sig \
-  --identity-token-provider github-actions \
-  --identity-token-audience sorafs-devportal
+scripts/release_sorafs_cli.sh \
+  --manifest "$OUT"/release_manifest.json \
+  --external-signer /run/sorafs-release/ed25519-sign \
+  --signing-public-key /run/sorafs-release/release.ed25519.pub \
+  --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-The bundle records the manifest digest, chunk digests, and a BLAKE3 hash of the
-OIDC token without persisting the JWT. Keep both the bundle and detached
-signature; production promotions can reuse the same artefacts instead of resigning.
-Local runs can replace the provider flags with `--identity-token-env` (or set
-`SIGSTORE_ID_TOKEN` in the environment) when an external OIDC helper issues the
-token.
+Run this only after the complete portal/OpenAPI/SBOM candidate inventory has
+been folded into canonical `release_manifest.json`. The protected signer writes
+exactly 64 raw Ed25519 signature bytes; the wrapper verifies them with the
+governed 32-byte public key and the SHA256-pinned native validator. OIDC/cosign
+can attest provenance separately, but does not replace this release signature.
 
 ## Step 5 — Submit to the pin registry
 
@@ -208,12 +209,10 @@ sorafs_cli proof verify \
   --manifest "$OUT"/portal.manifest.to \
   --car "$OUT"/portal.car \
   --summary-out "$OUT"/portal.proof.json
-
-sorafs_cli manifest verify-signature \
-  --manifest "$OUT"/portal.manifest.to \
-  --bundle "$OUT"/portal.manifest.bundle.json \
-  --chunk-plan "$OUT"/portal.plan.json
 ```
+
+For a production promotion, also require the successful
+`release_manifest.verify.json` receipt from Step 4.
 
 - Check `torii_sorafs_gateway_refusals_total` and
   `torii_sorafs_replication_sla_total{outcome="missed"}` for anomalies.
@@ -295,8 +294,8 @@ submission (alias binding), the helper emits
 
 - alias binding metadata (namespace/name/proof, manifest digest, Torii URL,
   submitted epoch, authority);
-- release context (tag, alias label, manifest/CAR paths, chunk plan, Sigstore
-  bundle);
+- release context (tag, alias label, manifest/CAR paths, chunk plan, aggregate
+  release-manifest verification receipt);
 - verification pointers (probe command, alias + Torii endpoint); and
 - optional change-control fields (ticket id, cutover window, ops contact,
   production hostname/zone);
@@ -556,8 +555,8 @@ npm run monitor:publishing -- \
   status; `--evidence-dir` emits `summary.json`, `portal.json`, `tryit.json`,
   `binding.json`, and `checksums.sha256` so governance reviewers can diff the
   results without re-running the monitors. Archive this directory under
-  `artifacts/sorafs/<tag>/monitoring/` alongside the Sigstore bundle and DNS
-  cutover descriptor.
+  `artifacts/sorafs/<tag>/monitoring/` alongside the release-manifest
+  verification receipt and DNS cutover descriptor.
 - Include the monitor output, Grafana export (`dashboards/grafana/docs_portal.json`),
   and Alertmanager drill ID in the release ticket so the DOCS-3c SLO can be
   audited later. The dedicated publishing monitor playbook lives at
@@ -576,8 +575,7 @@ health checks that SRE/Docs rely on between releases.
 `docs/portal/scripts/sorafs-pin-release.sh` encapsulates Steps 2–6. It:
 
 1. archives `build/` into a deterministic tarball,
-2. runs `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
-   and `proof verify`,
+2. runs `car pack`, `manifest build`, and `proof verify`,
 3. optionally executes `manifest submit` (including alias binding) when Torii
    credentials are present, and
 4. writes `artifacts/sorafs/portal.pin.report.json`, the optional
@@ -643,12 +641,12 @@ through the same deterministic pipeline. The existing helpers cover all three:
      --summary-out "$OUT"/portal.sbom.car.json
    ```
 
-   Follow the same `manifest build` / `manifest sign` steps as the main site,
-   tuning aliases per asset (for example, `docs-openapi.sora` for the spec and
-   `docs-sbom.sora` for the signed SBOM bundle). Maintaining distinct aliases
+   Follow the same `manifest build` steps as the main site, tuning aliases per
+   asset (for example, `docs-openapi.sora` for the spec and `docs-sbom.sora` for
+   the SBOM payload). Maintaining distinct aliases
    keeps SoraDNS proofs, GARs, and rollback tickets scoped to the exact payload.
 
-4. **Submit and bind.** Reuse the existing authority + Sigstore bundle, but
+4. **Submit and bind.** Reuse the existing submission authority, but
    record the alias tuple in the release checklist so auditors can track which
    Sora name maps to which manifest digest.
 
@@ -662,20 +660,17 @@ release ticket contains the full artefact set without rerunning the packer.
 
 - runs the required portal prep (`npm ci`, OpenAPI/norito sync, widget tests);
 - emits the portal, OpenAPI, and SBOM CARs + manifest pairs via `sorafs_cli`;
-- optionally runs `sorafs_cli proof verify` (`--proof`) and Sigstore signing
-  (`--sign`, `--sigstore-provider`, `--sigstore-audience`);
+- optionally runs `sorafs_cli proof verify` (`--proof`); it never receives
+  release signing keys or produces release signatures;
 - drops every artefact under `artifacts/devportal/sorafs/<timestamp>/` and
   writes `package_summary.json` so CI/release tooling can ingest the bundle; and
 - refreshes `artifacts/devportal/sorafs/latest` to point at the most recent run.
 
-Example (full pipeline with Sigstore + PoR):
+Example (content packaging + PoR):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
-  --proof \
-  --sign \
-  --sigstore-provider=github-actions \
-  --sigstore-audience=sorafs-devportal
+  --proof
 ```
 
 Flags worth knowing:
@@ -691,9 +686,8 @@ Flags worth knowing:
   file payloads still require chunk-plan support in the CLI, so leave this flag
   unset if you hit `plan chunk count` errors and verify manually once the
   upstream gate lands.
-- `--sign` – invoke `sorafs_cli manifest sign`. Provide a token with
-  `SIGSTORE_ID_TOKEN` (or `--sigstore-token-env`) or let the CLI fetch it using
-  `--sigstore-provider/--sigstore-audience`.
+- Release signing is intentionally absent. Feed the finished artifact inventory
+  into the aggregate release pipeline and use Step 4 on a protected runner.
 
 When shipping production artefacts use `docs/portal/scripts/sorafs-pin-release.sh`.
 It now packages the portal, OpenAPI, and SBOM payloads, signs each manifest, and
@@ -705,8 +699,8 @@ assign alias tuples per artefact, override the SBOM source via
 and point at a non-default `syft` binary with `--syft-bin`.
 
 The script surfaces every command it runs; copy the log into the release ticket
-alongside `package_summary.json` so reviewers can diff CAR digests, plan
-metadata, and Sigstore bundle hashes without spelunking ad‑hoc shell output.
+alongside `package_summary.json` so reviewers can diff CAR digests and plan
+metadata without spelunking ad‑hoc shell output.
 
 ## Step 9 — Gateway + SoraDNS verification
 
@@ -777,8 +771,9 @@ gateways staple fresh proofs:
 - **Probe archives.** Keep `artifacts/sorafs_gateway_probe/<stamp>/` in git-annex
   or your evidence bucket. Include the probe summary, headers, and PagerDuty
   payload captured by the telemetry script.
-- **Release bundle.** Store the portal/SBOM/OpenAPI CAR summaries, manifest
-  bundles, Sigstore signatures, `portal.pin.report.json`, Try-It probe logs, and
+- **Release bundle.** Store the portal/SBOM/OpenAPI CAR summaries, content
+  manifests, aggregate release manifest, raw Ed25519 signature/public key,
+  native verification receipt, `portal.pin.report.json`, Try-It probe logs, and
   link-check reports under a single timestamped folder (for example,
   `artifacts/sorafs/devportal/20260212T1103Z/`).
 - **Drill log.** When probes are part of a drill, let
@@ -847,7 +842,7 @@ alongside the DNS/gateway proofs above. After pinning the manifest:
 
 5. **Wire into CI.** The portal pin workflow keeps a `sorafs_fetch` step behind
    the `perform_fetch_probe` input; enable it for staging/production runs so the
-   fetch evidence is produced alongside the manifest bundle without manual
+   fetch evidence is produced alongside the content-manifest evidence without manual
    intervention. Local drills can reuse the same script by exporting the
    gateway tokens and setting `PIN_FETCH_PROVIDERS` to the comma-separated
    provider list.
@@ -855,17 +850,19 @@ alongside the DNS/gateway proofs above. After pinning the manifest:
 ## Promotion, observability, and rollback
 
 1. **Promotion:** keep separate staging and production aliases. Promote by
-   re-running `manifest submit` with the same manifest/bundle, swapping
+   re-running `manifest submit` with the same authenticated content manifest, swapping
    `--alias-namespace/--alias-name` to point at the production alias. This
-   avoids rebuilding or resigning once QA approves the staging pin.
+   avoids rebuilding content once QA approves the staging pin; the promotion
+   still records the active aggregate release-authentication context.
 2. **Monitoring:** import the pin-registry dashboard
    (`docs/source/grafana_sorafs_pin_registry.json`) plus the portal-specific
    probes (see `docs/portal/docs/devportal/observability.md`). Alert on checksum
    drift, failed probes, or proof retry spikes.
 3. **Rollback:** to revert, resubmit the previous manifest (or retire the
    current alias) using `sorafs_cli manifest submit --alias ... --retire`.
-   Always keep the last known-good bundle and CAR summary so rollback proofs can
-   be recreated if the CI logs rotate.
+   Always keep the last known-good content manifest and CAR summary, plus its
+   aggregate release manifest, raw Ed25519 signature/public key, reviewed
+   fingerprint, verifier digest, and verification receipt.
 
 ## CI workflow template
 
@@ -873,21 +870,29 @@ At minimum, your pipeline should:
 
 1. Build + lint (`npm ci`, `npm run build`, checksum generation).
 2. Package (`car pack`) and compute manifests.
-3. Sign using the job-scoped OIDC token (`manifest sign`).
-4. Upload artefacts (CAR, manifest, bundle, plan, summaries) for auditing.
+3. Generate the aggregate release manifest and authenticate it through the
+   protected Ed25519/HSM release job.
+4. Upload artefacts (CAR, content manifest, release manifest, raw signature/key,
+   plan, summaries, verification receipt) for auditing.
 5. Submit to the pin registry:
    - Pull requests → `docs-preview.sora`.
    - Tags / protected branches → production alias promotion.
 6. Run probes + proof verification gates before exiting.
 
-`.github/workflows/docs-portal-sorafs-pin.yml` wires all of these steps together
-for manual releases. The workflow:
+A deployment workflow must keep content preparation and release authentication
+as separate jobs:
 
-- builds/tests the portal,
-- packages the build via `scripts/sorafs-pin-release.sh`,
-- signs/verifies the manifest bundle using GitHub OIDC,
-- uploads the CAR/manifest/bundle/plan/proof summaries as artifacts, and
-- (optionally) submits the manifest + alias binding when secrets are present.
+- build/test the portal;
+- package the build via `scripts/sorafs-pin-release.sh`;
+- upload the CAR, content manifest, plan, proof, and submission summaries;
+- fold that fixed inventory into the canonical aggregate release manifest;
+- authenticate the aggregate through `scripts/release_sorafs_cli.sh` with the
+  governed external Ed25519/HSM signer and pinned native verifier; and
+- optionally submit the content manifest and alias binding when the deployment
+  credentials are present.
+
+OIDC/cosign may be added as a separate provenance attestation. It is not a
+release-authenticity input.
 
 Configure the following repository secrets/variables before triggering the job:
 
@@ -917,12 +922,13 @@ for day-to-day releases.
 - [ ] `npm run build`, `npm run test:*`, and `npm run check:links` are green.
 - [ ] `build/checksums.sha256` and `build/release.json` captured in artefacts.
 - [ ] CAR, plan, manifest, and summary generated under `artifacts/`.
-- [ ] Sigstore bundle + detached signature stored with logs.
+- [ ] Aggregate release manifest + raw Ed25519 signature/public key + pinned
+      native verification receipt stored with logs.
 - [ ] `portal.manifest.submit.summary.json` and `portal.manifest.submit.response.json`
       captured when submissions occur.
 - [ ] `portal.pin.report.json` (and optional `portal.pin.proposal.json`)
       archived alongside CAR/manifest artefacts.
-- [ ] `proof verify` and `manifest verify-signature` logs archived.
+- [ ] `proof verify` and aggregate release-manifest verification logs archived.
 - [ ] Grafana dashboards updated + Try-It probes successful.
 - [ ] Rollback notes (previous manifest ID + alias digest) attached to the
       release ticket.

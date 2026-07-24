@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS 清单 CLI 端到端示例
 
 此示例演示如何使用以下命令将文档版本发布到 SoraFS
-`sorafs_manifest_stub` CLI 与确定性分块装置一起
+`sorafs_manifest_builder` CLI 与确定性分块装置一起
 SoraFS 架构 RFC 中进行了描述。该流程涵盖了明显的生成，
 期望检查、获取计划验证和检索证明演练
 团队可以在 CI 中嵌入相同的步骤。
@@ -30,7 +30,7 @@ SoraFS 架构 RFC 中进行了描述。该流程涵盖了明显的生成，
 ## 步骤 1 — 生成清单、CAR、签名和获取计划
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 通过 CLI 提交清单：
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

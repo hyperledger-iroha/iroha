@@ -274,6 +274,11 @@ mod model {
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
     pub enum SorafsRepairLedgerEventKind {
         /// A source-identity-bound repair report was admitted.
         TaskSubmitted,
@@ -304,6 +309,10 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     #[getset(get = "pub")]
     pub struct SorafsRepairLedgerEvent {
         /// Transition category.
@@ -311,6 +320,7 @@ mod model {
         /// Canonical ticket identifier.
         pub ticket_id: String,
         /// Immutable task identity.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub task_id: [u8; 32],
         /// Affected provider.
         pub provider_id: crate::sorafs::capacity::ProviderId,
@@ -397,6 +407,11 @@ mod model {
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
     pub enum SorafsOrderbookLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -427,17 +442,37 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     #[getset(get = "pub")]
     pub struct SorafsOrderbookLedgerEvent {
         /// Transition category.
         pub kind: SorafsOrderbookLedgerEventKind,
         /// Affected order, when the transition is order-specific.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
         pub order_id: Option<[u8; 32]>,
         /// Affected trade, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
         pub trade_id: Option<[u8; 32]>,
         /// Affected settlement channel, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
         pub channel_id: Option<[u8; 32]>,
         /// Affected settlement receipt, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
         pub receipt_id: Option<[u8; 32]>,
         /// Affected provider, when known.
         pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
@@ -509,6 +544,26 @@ mod model {
         pub authority: crate::account::AccountId,
         /// Committing block timestamp.
         pub occurred_at_unix_ms: u64,
+    }
+}
+
+impl SorafsModerationLedgerEvent {
+    /// Construct a typed finalized moderation-ledger event.
+    #[must_use]
+    pub fn new(
+        kind: SorafsModerationLedgerEventKind,
+        case_id: Option<String>,
+        round_id: Option<String>,
+        authority: crate::account::AccountId,
+        occurred_at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            kind,
+            case_id,
+            round_id,
+            authority,
+            occurred_at_unix_ms,
+        }
     }
 }
 

@@ -903,6 +903,31 @@ fn resolve_routing_plan_against_nexus_at_height(
     Ok(plan)
 }
 
+/// Resolve queue ownership against both the committed catalog and the next
+/// proposal height.
+///
+/// The first check prevents a merely future-created lane from becoming
+/// visible before its lifecycle carrier is committed. The second closes an
+/// autoscale drain exactly after `close_global_height`: transactions accepted
+/// while that height is the committed tip can only execute in the following
+/// proposal and therefore must not acquire the closing route.
+fn resolve_routing_plan_for_queue_admission(
+    plan: RoutingPlan,
+    nexus: &Nexus,
+    committed_height: u64,
+) -> Result<RoutingPlan, RoutingResolveError> {
+    let plan = resolve_routing_plan_against_nexus_at_height(plan, nexus, committed_height)?;
+    let Some(next_proposal_height) = committed_height.checked_add(1) else {
+        let route = plan.coordinator_route();
+        return Err(RoutingResolveError::InactiveLane {
+            lane_id: route.lane_id,
+            dataspace_id: route.dataspace_id,
+        });
+    };
+    ensure_routing_plan_active_at_height(&plan, nexus, next_proposal_height)?;
+    Ok(plan)
+}
+
 fn state_height_for_routing(state: &State) -> u64 {
     u64::try_from(state.committed_height()).unwrap_or(u64::MAX)
 }
@@ -2475,6 +2500,12 @@ impl Queue {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         scope.validate()?;
+        // Lifecycle publication and queue ownership use one lock order:
+        // lifecycle first, then queue. Retain the fence through the durable
+        // reservation append and FIFO removal so either the reservation is
+        // visible to drain validation or this operation observes the closed
+        // incarnation and fails before taking ownership.
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         self.validate_reservation_scope_against_state(state, scope)?;
         // Routing reconfiguration may reject stale pending entries and therefore acquires the
         // queue lock internally. Complete it before taking exclusive selection ownership.
@@ -2484,9 +2515,8 @@ impl Queue {
         if self.lane_reservation_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
-        // Revalidate after acquiring queue ownership. Lifecycle publication is independent of the
-        // queue lock, so this second check closes the pre-lock race; proposal admission still binds
-        // and revalidates the exact incarnation later.
+        // Revalidate after acquiring queue ownership as a defense against any
+        // non-lifecycle state drift. The lifecycle fence above remains held.
         self.validate_reservation_scope_against_state(state, scope)?;
         let routing_nexus = state.nexus_snapshot();
         let routing_height = scope.proposal_height;
@@ -3182,6 +3212,60 @@ impl Queue {
             .collect();
         keys.sort_by_key(LaneQueueReservationKeyV1::digest);
         keys
+    }
+
+    /// Return whether durable replay state proves that an exact committed group
+    /// no longer has queue ownership or an unfinished crash barrier.
+    ///
+    /// This observer is intentionally useful only together with an independently
+    /// validated canonical application receipt. Absence from the reservation
+    /// journal alone does not prove application, but after application it proves
+    /// the local Commit/Forget boundary is complete. The reservation store lock
+    /// serializes this snapshot with every ownership and barrier transition.
+    #[must_use]
+    pub fn lane_reservation_group_is_finalized_for_diagnostics(
+        &self,
+        keys: &[LaneQueueReservationKeyV1],
+    ) -> bool {
+        if keys.is_empty()
+            || keys.len() > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS
+            || self.lane_reservation_durability_faulted()
+        {
+            return false;
+        }
+        let mut transaction_hashes = HashSet::with_capacity(keys.len());
+        if keys.iter().any(|key| {
+            key.validate().is_err() || !transaction_hashes.insert(key.signed_transaction_hash)
+        }) {
+            return false;
+        }
+
+        let store = self.lane_reservations.lock();
+        if store.journal.is_none() {
+            return false;
+        }
+        let owns_transaction = |hash: SignedTxHash| {
+            store.live_by_hash.contains_key(&hash)
+                || store
+                    .commit_barriers
+                    .iter()
+                    .any(|barrier| barrier.signed_transaction_hash == hash)
+                || store.release_barriers.iter().any(|barrier| {
+                    barrier
+                        .ordered_keys
+                        .iter()
+                        .any(|key| key.signed_transaction_hash == hash)
+                })
+                || store.completed_releases.iter().any(|completion| {
+                    completion
+                        .ordered_records
+                        .iter()
+                        .any(|record| record.key.signed_transaction_hash == hash)
+                })
+        };
+        transaction_hashes
+            .into_iter()
+            .all(|hash| !owns_transaction(hash))
     }
 
     /// Return whether a lane incarnation still owns or may receive queued work.
@@ -5179,7 +5263,7 @@ impl Queue {
         state_view: &StateView<'_>,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let nexus = state_view.nexus();
-        resolve_routing_plan_against_nexus_at_height(
+        resolve_routing_plan_for_queue_admission(
             plan,
             nexus,
             state_view_height_for_routing(state_view),
@@ -5194,14 +5278,12 @@ impl Queue {
         plan: RoutingPlan,
     ) -> Result<RoutingPlan, RoutingResolveError> {
         let block_height = state_height_for_routing(state);
-        let plan = resolve_routing_plan_against_nexus_at_height(plan, nexus, block_height)?;
+        let plan = resolve_routing_plan_for_queue_admission(plan, nexus, block_height)?;
         let current_plan = self
             .router
             .read()
             .try_route_plan_with_state(tx, state)
-            .and_then(|plan| {
-                resolve_routing_plan_against_nexus_at_height(plan, nexus, block_height)
-            })?;
+            .and_then(|plan| resolve_routing_plan_for_queue_admission(plan, nexus, block_height))?;
         if current_plan == plan {
             Ok(plan)
         } else {
@@ -5228,9 +5310,10 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
+        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
     }
 
     fn record_refreshed_routing_plan(&self, hash: SignedTxHash, plan: RoutingPlan) {
@@ -5266,12 +5349,13 @@ impl Queue {
         tx: &CheckedTransaction<'static>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self
             .router
             .read()
             .try_route_plan_with_state(tx.as_accepted(), state)?;
-        let plan = resolve_routing_plan_against_nexus_at_height(
+        let plan = resolve_routing_plan_for_queue_admission(
             plan,
             &nexus,
             state_height_for_routing(state),
@@ -5373,9 +5457,10 @@ impl Queue {
         tx: &AcceptedTransaction<'_>,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self.router.read().try_route_plan_with_state(tx, state)?;
-        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
+        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
     }
 
     /// Resolve the coordinator lane and dataspace for an exact unsigned payload.
@@ -5399,12 +5484,13 @@ impl Queue {
         payload: &TransactionPayload,
         state: &State,
     ) -> Result<RoutingPlan, RoutingResolveError> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
         let plan = self
             .router
             .read()
             .try_route_plan_with_state(payload, state)?;
-        resolve_routing_plan_against_nexus_at_height(plan, &nexus, state_height_for_routing(state))
+        resolve_routing_plan_for_queue_admission(plan, &nexus, state_height_for_routing(state))
     }
 
     /// Returns whether the queue currently tracks the transaction hash.
@@ -5550,6 +5636,7 @@ impl Queue {
         routing_plan: Option<RoutingPlan>,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
         let routing_plan = match routing_plan {
             Some(plan) => {
@@ -5560,7 +5647,7 @@ impl Queue {
                 .read()
                 .try_route_plan_with_state(&tx, state)
                 .and_then(|plan| {
-                    resolve_routing_plan_against_nexus_at_height(
+                    resolve_routing_plan_for_queue_admission(
                         plan,
                         &nexus,
                         state_height_for_routing(state),
@@ -6455,6 +6542,7 @@ impl Queue {
         if txs.is_empty() {
             return Ok(0);
         }
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
 
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
@@ -6583,6 +6671,7 @@ impl Queue {
         routing_plan: RoutingPlan,
         state: &State,
     ) -> Result<(), Failure> {
+        let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let hash = tx.hash();
         if state.has_committed_transaction(hash) {
             return Err(Failure {
@@ -9313,7 +9402,7 @@ impl Queue {
             let routing_plan = match router
                 .try_route_plan_with_view(tx.as_accepted(), state_view)
                 .and_then(|plan| {
-                    resolve_routing_plan_against_nexus_at_height(plan, &routing_nexus, block_height)
+                    resolve_routing_plan_for_queue_admission(plan, &routing_nexus, block_height)
                 }) {
                 Ok(plan) => plan,
                 Err(err) => {
@@ -9415,7 +9504,7 @@ impl Queue {
             }
             let routing_plan = match router.try_route_plan_without_state(tx.as_accepted()) {
                 Ok(Some(plan)) => {
-                    match resolve_routing_plan_against_nexus_at_height(
+                    match resolve_routing_plan_for_queue_admission(
                         plan,
                         &routing_nexus,
                         block_height,
@@ -9438,7 +9527,7 @@ impl Queue {
                     match router
                         .try_route_plan_with_view(tx.as_accepted(), state_view)
                         .and_then(|plan| {
-                            resolve_routing_plan_against_nexus_at_height(
+                            resolve_routing_plan_for_queue_admission(
                                 plan,
                                 &routing_nexus,
                                 block_height,
@@ -9944,6 +10033,67 @@ pub mod tests {
         }
         seed_committed_height_for_queue_test(&state, committed_height);
         state
+    }
+
+    fn install_autoscale_drain_close_for_queue_test(
+        state: &State,
+        lane_id: LaneId,
+        close_global_height: u64,
+    ) {
+        use iroha_data_model::merge::{LaneDrainFrontierV1, LaneDrainIntentV1, LaneDrainStateV1};
+
+        let lane_incarnation = Hash::new(b"queue-drain-close-incarnation");
+        let mut nexus = state.nexus_snapshot();
+        let mut lanes = nexus.lane_catalog.lanes().to_vec();
+        let lane = lanes
+            .iter_mut()
+            .find(|lane| lane.id == lane_id)
+            .expect("queue drain test lane");
+        let validator_set = crate::state::autoscale_lane_pinned_committee_with_pops(lane)
+            .expect("queue drain test committee")
+            .into_iter()
+            .map(|(peer, _)| peer)
+            .collect::<Vec<_>>();
+        let validator_count =
+            u32::try_from(validator_set.len()).expect("queue drain validator count fits u32");
+        let min_quorum = u32::try_from(crate::sumeragi::network_topology::commit_quorum_from_len(
+            validator_set.len(),
+        ))
+        .expect("queue drain quorum fits u32");
+        let drain_state = LaneDrainStateV1 {
+            version: 1,
+            intent: LaneDrainIntentV1 {
+                version: 1,
+                chain_id_digest: Hash::new(b"queue-drain-close-chain"),
+                lane_id,
+                dataspace_id: lane.dataspace_id,
+                lane_incarnation,
+                close_global_height,
+                initial_frontier: LaneDrainFrontierV1::ordinary(
+                    lane_id,
+                    lane.dataspace_id,
+                    lane_incarnation,
+                    0,
+                    None,
+                ),
+                validator_set_hash_version:
+                    iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+                validator_set_hash: HashOf::new(&validator_set),
+                validator_set,
+                validator_count,
+                min_quorum,
+            },
+            commitment: None,
+        };
+        lane.metadata.insert(
+            AUTOSCALE_META_DRAIN_STATE.to_owned(),
+            hex::encode(norito::to_bytes(&drain_state).expect("canonical queue drain state")),
+        );
+        nexus.lane_catalog = LaneCatalog::new(nexus.lane_catalog.lane_count(), lanes)
+            .expect("queue drain test catalog");
+        nexus.lane_config =
+            iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
+        *state.nexus.write() = nexus;
     }
 
     struct FutureCreatedNoStateRouter;
@@ -15910,6 +16060,81 @@ pub mod tests {
     }
 
     #[test]
+    fn state_backed_queue_rejects_new_ownership_at_committed_drain_close() {
+        let close_height = 5;
+        let lane_id = LaneId::new(1);
+        let state = state_with_future_created_autoscale_lane(1, close_height);
+        install_autoscale_drain_close_for_queue_test(&state, lane_id, close_height);
+        let nexus = state.nexus_snapshot();
+        let plan = RoutingPlan::single(RoutingDecision::new(lane_id, DataSpaceId::UNIVERSAL));
+
+        assert_eq!(
+            resolve_routing_plan_against_nexus_at_height(plan.clone(), &nexus, close_height)
+                .expect("the closing lane remains valid for its exact close-height proposal"),
+            plan
+        );
+        assert!(matches!(
+            resolve_routing_plan_for_queue_admission(plan, &nexus, close_height),
+            Err(RoutingResolveError::InactiveLane {
+                lane_id: rejected_lane,
+                dataspace_id: DataSpaceId::UNIVERSAL,
+            }) if rejected_lane == lane_id
+        ));
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = queue_with_state_free_future_created_router(&state, &time_source);
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let failure = queue
+            .push_with_lane_with_state(tx, &state)
+            .expect_err("post-close ingress must not acquire ordinary queue ownership");
+        assert!(matches!(failure.err, Error::UnresolvedRoute { .. }));
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(routing_ledger::get_plan(&hash), None);
+    }
+
+    #[test]
+    fn state_backed_queue_rechecks_late_drain_publication_under_lifecycle_fence() {
+        let close_height = 5;
+        let lane_id = LaneId::new(1);
+        let state = Arc::new(state_with_future_created_autoscale_lane(1, close_height));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(queue_with_state_free_future_created_router(
+            state.as_ref(),
+            &time_source,
+        ));
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+
+        let lifecycle_guard = state.lock_lane_lifecycle_work_admission();
+        let (started_sender, started_receiver) = mpsc::sync_channel(0);
+        let worker_state = Arc::clone(&state);
+        let worker_queue = Arc::clone(&queue);
+        let worker = thread::spawn(move || {
+            started_sender
+                .send(())
+                .expect("announce queue admission attempt");
+            worker_queue.push_with_lane_with_state(tx, worker_state.as_ref())
+        });
+        started_receiver
+            .recv()
+            .expect("queue admission worker started");
+
+        install_autoscale_drain_close_for_queue_test(state.as_ref(), lane_id, close_height);
+        drop(lifecycle_guard);
+
+        let failure = worker
+            .join()
+            .expect("queue admission worker")
+            .expect_err("late committed drain must win before queue ownership publication");
+        assert!(matches!(failure.err, Error::UnresolvedRoute { .. }));
+        assert!(!queue.txs.contains_key(&hash));
+        assert!(queue.routing_plans.get(&hash).is_none());
+        assert_eq!(routing_ledger::get_plan(&hash), None);
+    }
+
+    #[test]
     fn state_backed_queue_routes_reject_inactive_catalog_lane_when_nexus_forcibly_disabled() {
         let mut state = state_with_future_created_autoscale_lane(7, 6);
         // Simulate stale or corrupted persisted state. `State::set_nexus` rejects this
@@ -20226,6 +20451,62 @@ pub mod tests {
         );
         assert!(queue.lane_reservation_journal_installed());
         path
+    }
+
+    #[test]
+    fn lane_reservation_group_diagnostics_follow_durable_commit_forget_boundary() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect("enqueue diagnostic reservation");
+        let scope = lane_reservation_scope(&state, b"diagnostic-owner", b"diagnostic-proposal");
+
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[]),
+            "an empty identity group cannot prove queue finalization"
+        );
+        install_test_reservation_journal(&queue, &dir);
+        let key = *queue
+            .reserve_transactions_for_lane(&state, scope, nonzero!(1_usize))
+            .expect("reserve diagnostic transaction")[0]
+            .key();
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+            "live ownership must block the terminal diagnostic stage"
+        );
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key, key]),
+            "duplicate identities cannot prove group finalization"
+        );
+
+        assert_eq!(
+            queue
+                .commit_lane_reservation(&key)
+                .expect("commit diagnostic reservation"),
+            LaneQueueReservationOutcome::Finalized
+        );
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+            "the durable commit barrier must remain visible before queue-plan startup resolves"
+        );
+
+        queue
+            .finalize_plan_journal_startup_disabled()
+            .expect("durably forget exact commit barrier");
+        assert!(
+            queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+            "journal replay state with no exact owner or barrier proves Commit/Forget completion"
+        );
+
+        let mut malformed = key;
+        malformed.version = 0;
+        assert!(
+            !queue.lane_reservation_group_is_finalized_for_diagnostics(&[malformed]),
+            "malformed identities must fail closed"
+        );
     }
 
     fn lane_reservation_release_barrier(

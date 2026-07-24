@@ -38,7 +38,7 @@ translator: machine-google-reviewed
 
 ## 3. Ներկայացրե՛ք վեճը
 
-1. Ստեղծեք սպեցիֆիկ JSON `sorafs_manifest_stub capacity dispute`-ի համար.
+1. Ստեղծեք սպեցիֆիկ JSON `sorafs_manifest_builder capacity dispute`-ի համար.
 
    ```json
    {
@@ -61,7 +61,7 @@ translator: machine-google-reviewed
 2. Գործարկեք CLI-ը.
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ translator: machine-google-reviewed
 
 1. **Grace պատուհան.** տեղեկացնել մատակարարին մոտալուտ չեղարկման մասին; թույլատրել ամրացված տվյալների տարհանումը, երբ քաղաքականությունը թույլ է տալիս:
 2. **Ստեղծեք `ProviderAdmissionRevocationV1`:**
-   - Օգտագործեք `sorafs_manifest_stub provider-admission revoke` հաստատված պատճառով:
+   - Օգտագործեք `sorafs_manifest_builder provider-admission revoke` հաստատված պատճառով:
    - Ստուգեք ստորագրությունները և չեղյալ համարելը:
 3. **Հրապարակել չեղյալ հայտարարումը.**
    - Ներկայացրե՛ք չեղյալ համարելու հայցը Torii հասցեին:
@@ -93,7 +93,7 @@ translator: machine-google-reviewed
 
 ## 6. Տեղեկատվական նյութեր
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (վեճերի բաժին)
 - `docs/source/sorafs/provider_admission_policy.md` (չեղարկման աշխատանքային հոսք)
 - Դիտորդական վահանակ՝ `SoraFS / Capacity Providers`

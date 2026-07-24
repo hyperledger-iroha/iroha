@@ -10,6 +10,7 @@ use crate::sorafs::{
     orderbook::OrderbookAdmissionPolicyV1,
     pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
     pop_registry::PopIssuerPolicyV1,
+    proof_ledger::ProofOutcomeSignerPolicyV1,
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
     reserve::{
         ReserveAuthorityPolicyV1, ReserveLifecycleStage, ReserveMovementKindV1,
@@ -714,6 +715,64 @@ isi! {
 
 impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
 
+/// Existing canonical proof material accepted by the chain-authoritative outcome journal.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "proof_kind", content = "value", rename_all = "snake_case")
+)]
+pub enum SorafsProofOutcomeSubmissionV1 {
+    /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
+    Pdp {
+        /// Terminal archive produced by the authenticated PDP provider protocol.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        archive_payload: Vec<u8>,
+    },
+    /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
+    Potr {
+        /// Final receipt produced by the authenticated PoTR tracker.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+        receipt_payload: Vec<u8>,
+        /// Council-verified admission envelope captured during receipt validation.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        admission_envelope_digest: [u8; 32],
+    },
+}
+
+isi! {
+    /// Activate or rotate provider-scoped governed keys for PDP and PoTR outcome validation.
+    pub struct SetSorafsProofOutcomeSignerPolicy {
+        /// Monotonic provider-scoped signer policy.
+        pub policy: ProofOutcomeSignerPolicyV1,
+    }
+}
+
+impl crate::seal::Instruction for SetSorafsProofOutcomeSignerPolicy {}
+
+isi! {
+    /// Commit one validated PDP or PoTR terminal outcome.
+    pub struct SubmitSorafsProofOutcome {
+        /// Existing canonical proof/archive material; no competing receipt schema is accepted.
+        pub submission: SorafsProofOutcomeSubmissionV1,
+    }
+}
+
+impl crate::seal::Instruction for SubmitSorafsProofOutcome {}
+
 isi! {
     /// Activate the next authoritative `SoraFS` moderation-ledger policy revision.
     pub struct SetSorafsModerationPolicy {
@@ -1326,6 +1385,22 @@ impl SubmitSorafsRepairAppeal {
     }
 }
 
+impl SetSorafsProofOutcomeSignerPolicy {
+    /// Construct a governed proof-signer policy activation.
+    #[must_use]
+    pub fn new(policy: ProofOutcomeSignerPolicyV1) -> Self {
+        Self { policy }
+    }
+}
+
+impl SubmitSorafsProofOutcome {
+    /// Construct a canonical proof-outcome submission.
+    #[must_use]
+    pub fn new(submission: SorafsProofOutcomeSubmissionV1) -> Self {
+        Self { submission }
+    }
+}
+
 impl SetSorafsModerationPolicy {
     /// Construct a moderation policy activation instruction.
     #[must_use]
@@ -1715,6 +1790,14 @@ impl_sorafs_decode_from_slice!(SubmitSorafsRepairAppeal {
     evidence_digest: [u8; 32],
     reason: String,
     idempotency_key: String,
+});
+
+impl_sorafs_decode_from_slice!(SetSorafsProofOutcomeSignerPolicy {
+    policy: ProofOutcomeSignerPolicyV1,
+});
+
+impl_sorafs_decode_from_slice!(SubmitSorafsProofOutcome {
+    submission: SorafsProofOutcomeSubmissionV1,
 });
 
 impl_sorafs_decode_from_slice!(SetSorafsModerationPolicy {

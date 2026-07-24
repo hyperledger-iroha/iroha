@@ -11,11 +11,13 @@ the scaling thresholds are evaluated.
 from __future__ import annotations
 
 import argparse
+import errno
 import hashlib
 import json
 import math
 import os
 import re
+import secrets
 import stat
 import statistics
 import sys
@@ -763,8 +765,52 @@ def _validate_raw_run(
     )
 
 
-def validate_evidence(manifest_path: Path) -> dict[str, Any]:
-    """Validate *manifest_path* and return deterministic, recomputed metrics."""
+def validate_evidence(
+    manifest_path: Path,
+    *,
+    expected_source_revision: str | None = None,
+    expected_workspace_source_sha256: str | None = None,
+    expected_validator_sha256: str | None = None,
+    expected_trial_harness_sha256: str | None = None,
+    expected_configuration_sha256: str | None = None,
+    expected_irohad_sha256: str | None = None,
+    expected_iroha_cli_sha256: str | None = None,
+    expected_repository_root: Path | None = None,
+) -> dict[str, Any]:
+    """Validate *manifest_path* and return deterministic, recomputed metrics.
+
+    The optional expected values bind an otherwise self-consistent benchmark
+    bundle to the exact release candidate, operator-approved harness/config,
+    measured binaries, and retained tooling which consume it. They are used by
+    the source-sealed release corridor before any long-running network gate
+    starts.
+    """
+
+    for value, label in (
+        (expected_workspace_source_sha256, "expected workspace source"),
+        (expected_validator_sha256, "expected validator"),
+        (expected_trial_harness_sha256, "expected trial harness"),
+        (expected_configuration_sha256, "expected configuration"),
+        (expected_irohad_sha256, "expected irohad"),
+        (expected_iroha_cli_sha256, "expected iroha CLI"),
+    ):
+        if value is not None:
+            _require_digest(value, label)
+    retained_root: Path | None = None
+    if expected_repository_root is not None:
+        if (
+            not expected_repository_root.is_absolute()
+            or Path(os.path.abspath(expected_repository_root))
+            != expected_repository_root
+            or expected_repository_root.is_symlink()
+            or not expected_repository_root.is_dir()
+            or expected_repository_root.resolve() != expected_repository_root
+        ):
+            _fail(
+                "expected repository root must be one absolute canonical "
+                "non-symlink directory"
+            )
+        retained_root = expected_repository_root
 
     if manifest_path.is_symlink() or not manifest_path.is_file():
         _fail(f"evidence manifest must be a regular non-symlink file: {manifest_path}")
@@ -795,6 +841,40 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
         referenced_paths=referenced_paths,
     )
     identity = validate_identity(load_json(identity_path, "pinned identity"), "pinned identity")
+    if (
+        expected_source_revision is not None
+        and identity["software"]["source_revision"] != expected_source_revision
+    ):
+        _fail(
+            "pinned identity software.source_revision does not match the "
+            "expected release source"
+        )
+    if (
+        expected_workspace_source_sha256 is not None
+        and identity["software"]["workspace_source_sha256"]
+        != expected_workspace_source_sha256
+    ):
+        _fail(
+            "pinned identity software.workspace_source_sha256 does not match "
+            "the expected sealed workspace"
+        )
+    if (
+        expected_irohad_sha256 is not None
+        and identity["software"]["irohad_sha256"] != expected_irohad_sha256
+    ):
+        _fail(
+            "pinned identity software.irohad_sha256 does not match the "
+            "expected measured binary"
+        )
+    if (
+        expected_iroha_cli_sha256 is not None
+        and identity["software"]["iroha_cli_sha256"]
+        != expected_iroha_cli_sha256
+    ):
+        _fail(
+            "pinned identity software.iroha_cli_sha256 does not match the "
+            "expected measured binary"
+        )
     config_path = _require_ref(
         manifest["configuration"],
         root,
@@ -803,6 +883,14 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
     )
     if sha256_file(config_path) != identity["software"]["nexus_config_sha256"]:
         _fail("configuration artifact does not match identity.software.nexus_config_sha256")
+    if (
+        expected_configuration_sha256 is not None
+        and sha256_file(config_path) != expected_configuration_sha256
+    ):
+        _fail(
+            "evidence manifest.configuration does not match the expected "
+            "release configuration"
+        )
 
     workload = _require_object(manifest["workload"], "evidence manifest.workload")
     _require_exact_fields(workload, _WORKLOAD_FIELDS, "evidence manifest.workload")
@@ -882,18 +970,34 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
             f"expected {MAX_P95_LATENCY_RATIO}"
         )
 
-    _require_ref(
+    trial_harness_path = _require_ref(
         manifest["trial_harness"],
         root,
         "evidence manifest.trial_harness",
         referenced_paths=referenced_paths,
     )
-    _require_ref(
+    if (
+        expected_trial_harness_sha256 is not None
+        and sha256_file(trial_harness_path) != expected_trial_harness_sha256
+    ):
+        _fail(
+            "evidence manifest.trial_harness does not match the expected "
+            "operator-approved harness"
+        )
+    validator_path = _require_ref(
         manifest["validator"],
         root,
         "evidence manifest.validator",
         referenced_paths=referenced_paths,
     )
+    if (
+        expected_validator_sha256 is not None
+        and sha256_file(validator_path) != expected_validator_sha256
+    ):
+        _fail(
+            "evidence manifest.validator does not match the expected retained "
+            "validator"
+        )
     tooling = _require_list(manifest["tooling"], "evidence manifest.tooling")
     if len(tooling) != len(REQUIRED_TOOLING):
         _fail("evidence manifest.tooling must contain the three required tooling artifacts")
@@ -904,12 +1008,24 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
         _require_exact_fields(entry, _TOOL_FIELDS, label)
         if entry["role"] != role or entry["source_path"] != source_path:
             _fail(f"{label} does not identify required tool {role}:{source_path}")
-        _require_ref(
+        artifact_path = _require_ref(
             entry["artifact"],
             root,
             f"{label}.artifact",
             referenced_paths=referenced_paths,
         )
+        if retained_root is not None:
+            retained_path = retained_root.joinpath(*PurePosixPath(source_path).parts)
+            if (
+                retained_path.is_symlink()
+                or not retained_path.is_file()
+                or retained_path.resolve() != retained_path
+                or sha256_file(artifact_path) != sha256_file(retained_path)
+            ):
+                _fail(
+                    f"{label}.artifact does not match retained repository tool "
+                    f"{source_path}"
+                )
 
     runs = _require_list(manifest["runs"], "evidence manifest.runs")
     expected_run_count = EXPECTED_PAIR_COUNT * 2
@@ -1112,10 +1228,142 @@ def validate_evidence(manifest_path: Path) -> dict[str, Any]:
 
 
 def _write_report(path: Path, report: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.tmp-{os.getpid()}")
-    temporary.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+    """Durably publish deterministic report bytes without replacing a path."""
+
+    final_name = path.name
+    if not final_name or final_name in {".", ".."} or "\x00" in final_name:
+        raise OSError(errno.EINVAL, "invalid validation report name", str(path))
+    data = (json.dumps(report, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    if hasattr(os, "O_NOFOLLOW"):
+        directory_flags |= os.O_NOFOLLOW
+    directory_fd = os.open(path.parent, directory_flags)
+    temporary_name = f".gscale-report-{secrets.token_hex(16)}"
+    temporary_fd: int | None = None
+    owned_inode: tuple[int, int] | None = None
+    published = False
+
+    def unlink_owned(name: str) -> bool:
+        if owned_inode is None:
+            return False
+        try:
+            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or (metadata.st_dev, metadata.st_ino) != owned_inode
+        ):
+            return False
+        os.unlink(name, dir_fd=directory_fd)
+        return True
+
+    try:
+        try:
+            os.stat(final_name, dir_fd=directory_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise FileExistsError(
+                errno.EEXIST,
+                "validation report destination already exists",
+                str(path),
+            )
+
+        temporary_flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        if hasattr(os, "O_NOFOLLOW"):
+            temporary_flags |= os.O_NOFOLLOW
+        temporary_fd = os.open(
+            temporary_name,
+            temporary_flags,
+            0o600,
+            dir_fd=directory_fd,
+        )
+        opened = os.fstat(temporary_fd)
+        if stat.S_ISREG(opened.st_mode):
+            owned_inode = (opened.st_dev, opened.st_ino)
+        if owned_inode is None or opened.st_nlink != 1:
+            raise OSError(errno.EIO, "validation report stage is not private")
+        os.fchmod(temporary_fd, 0o600)
+
+        remaining = memoryview(data)
+        while remaining:
+            written = os.write(temporary_fd, remaining)
+            if written <= 0:
+                raise OSError(errno.EIO, "short write while publishing validation report")
+            remaining = remaining[written:]
+        os.fsync(temporary_fd)
+        completed = os.fstat(temporary_fd)
+        if (
+            not stat.S_ISREG(completed.st_mode)
+            or (completed.st_dev, completed.st_ino) != owned_inode
+            or completed.st_nlink != 1
+            or completed.st_size != len(data)
+            or stat.S_IMODE(completed.st_mode) != 0o600
+        ):
+            raise OSError(
+                errno.EIO,
+                "validation report stage changed while it was written",
+            )
+        os.close(temporary_fd)
+        temporary_fd = None
+
+        os.link(
+            temporary_name,
+            final_name,
+            src_dir_fd=directory_fd,
+            dst_dir_fd=directory_fd,
+            follow_symlinks=False,
+        )
+        published = True
+        os.fsync(directory_fd)
+        if not unlink_owned(temporary_name):
+            raise OSError(errno.EIO, "validation report stage changed before cleanup")
+        os.fsync(directory_fd)
+
+        final = os.stat(final_name, dir_fd=directory_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISREG(final.st_mode)
+            or (final.st_dev, final.st_ino) != owned_inode
+            or final.st_nlink != 1
+            or final.st_size != len(data)
+            or stat.S_IMODE(final.st_mode) != 0o600
+        ):
+            raise OSError(
+                errno.EIO,
+                "validation report changed during atomic publication",
+            )
+    except BaseException:
+        if temporary_fd is not None:
+            try:
+                os.close(temporary_fd)
+            except OSError:
+                pass
+        cleaned = False
+        for name in (temporary_name, final_name if published else ""):
+            if not name:
+                continue
+            try:
+                cleaned = unlink_owned(name) or cleaned
+            except OSError:
+                pass
+        if cleaned:
+            try:
+                os.fsync(directory_fd)
+            except OSError:
+                pass
+        raise
+    finally:
+        os.close(directory_fd)
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -1126,15 +1374,75 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=Path,
         help="Write a machine-readable pass/fail validation report.",
     )
+    parser.add_argument(
+        "--expected-source-revision",
+        help="Require the pinned identity to name this exact release revision.",
+    )
+    parser.add_argument(
+        "--expected-workspace-source-sha256",
+        help="Require the pinned identity to name this exact sealed workspace digest.",
+    )
+    parser.add_argument(
+        "--expected-validator-sha256",
+        help="Require the archived validator to match this exact retained digest.",
+    )
+    parser.add_argument(
+        "--expected-trial-harness-sha256",
+        help="Require the archived trial harness to match this approved digest.",
+    )
+    parser.add_argument(
+        "--expected-configuration-sha256",
+        help="Require the archived Nexus configuration to match this approved digest.",
+    )
+    parser.add_argument(
+        "--expected-irohad-sha256",
+        help="Require the pinned identity to name this measured irohad digest.",
+    )
+    parser.add_argument(
+        "--expected-iroha-cli-sha256",
+        help="Require the pinned identity to name this measured iroha CLI digest.",
+    )
+    parser.add_argument(
+        "--expected-repository-root",
+        type=Path,
+        help="Require archived workload tools to match this retained source root.",
+    )
     parser.add_argument("--quiet", action="store_true", help="Suppress the human summary.")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if (
+        args.expected_source_revision is not None
+        and _REVISION_RE.fullmatch(args.expected_source_revision) is None
+    ):
+        parser.error("--expected-source-revision must be lowercase 40- or 64-hex")
+    for name in (
+        "expected_workspace_source_sha256",
+        "expected_validator_sha256",
+        "expected_trial_harness_sha256",
+        "expected_configuration_sha256",
+        "expected_irohad_sha256",
+        "expected_iroha_cli_sha256",
+    ):
+        value = getattr(args, name)
+        if value is not None and _DIGEST_RE.fullmatch(value) is None:
+            parser.error(f"--{name.replace('_', '-')} must be lowercase SHA-256")
+    return args
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     manifest_path = args.manifest
     try:
-        metrics = validate_evidence(manifest_path)
+        metrics = validate_evidence(
+            manifest_path,
+            expected_source_revision=args.expected_source_revision,
+            expected_workspace_source_sha256=args.expected_workspace_source_sha256,
+            expected_validator_sha256=args.expected_validator_sha256,
+            expected_trial_harness_sha256=args.expected_trial_harness_sha256,
+            expected_configuration_sha256=args.expected_configuration_sha256,
+            expected_irohad_sha256=args.expected_irohad_sha256,
+            expected_iroha_cli_sha256=args.expected_iroha_cli_sha256,
+            expected_repository_root=args.expected_repository_root,
+        )
     except (EvidenceError, OSError) as error:
         report = {
             "schema": REPORT_SCHEMA,

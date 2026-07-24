@@ -19,7 +19,7 @@ Sidebar_label: دليل محاكاة السعة
 احترام هذه الصفحة `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة أفلام Sphinx القديمة بالكامل.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c الواسعة النطاق. عندما يكون من التفاوض الحصص، وتجاوز الفشل، وslashing من الطرف إلى الطرف باستخدام التركيبات الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال الحمولات المستخدمة `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتعبئة وتغليف ضخات البيان/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c الواسعة النطاق. عندما يكون من التفاوض الحصص، وتجاوز الفشل، وslashing من الطرف إلى الطرف باستخدام التركيبات الحتمية في `docs/examples/sorafs_capacity_simulation/`. لا تزال الحمولات المستخدمة `sorafs_manifest_builder capacity`؛ استخدم `iroha app sorafs toolkit pack` لتعبئة وتغليف ضخات البيان/CAR.
 
 ## 1. إنشاء قطع أثرية خاصة بالـ CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-تقوم `run_cli.sh` بلف `sorafs_manifest_stub capacity` لإخراج Norito حمولات وblobs من base64 وأجسام طلبات Torii وملخصات JSON لـ:
+تقوم `run_cli.sh` بلف `sorafs_manifest_builder capacity` لإخراج Norito حمولات وblobs من base64 وأجسام طلبات Torii وملخصات JSON لـ:
 
 - ثلاث حالات للتحكم في المشاركين في سيناريو التفاوض.
 - أمر نسخة يوزّع المانيفست المجهز عبر منظمي الملابس.

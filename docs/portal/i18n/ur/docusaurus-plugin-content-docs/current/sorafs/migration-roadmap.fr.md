@@ -44,14 +44,14 @@ translation_last_reviewed: 2026-02-07
 | ------- | ------- | ------------- | --------- | -------- |
 | حقیقت کی تکرار | M0 | `fixtures/sorafs_chunker` کے ساتھ مقامی حصہ ڈائجسٹوں کا موازنہ کرنے والے ہفتہ وار خشک رنز۔ `docs/source/sorafs/reports/` کے تحت ایک رپورٹ شائع کریں۔ | اسٹوریج فراہم کرنے والے | `determinism-<date>.md` پاس/فیل میٹرکس کے ساتھ۔ |
 | دستخطوں کی ضرورت ہے | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` اگر دستخط یا ظاہر ہوتا ہے تو ناکام ہوجاتا ہے۔ دیو اوور رائڈس کے لئے PR سے منسلک گورننس چھوٹ کی ضرورت ہوتی ہے۔ | ٹولنگ ڈبلیو جی | لاگ CI ، چھوٹ کے ٹکٹ سے لنک کریں (اگر قابل اطلاق ہو)۔ |
-| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_stub` کو کالوں کو منجمد کرنے کی واضح توقعات کے ساتھ کال کریں: | CI دستاویزات | توقع کے جھنڈوں کا حوالہ دیتے ہوئے تازہ ترین اسکرپٹس (نیچے کمانڈ بلاک دیکھیں)۔ |
+| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_builder` کو کالوں کو منجمد کرنے کی واضح توقعات کے ساتھ کال کریں: | CI دستاویزات | توقع کے جھنڈوں کا حوالہ دیتے ہوئے تازہ ترین اسکرپٹس (نیچے کمانڈ بلاک دیکھیں)۔ |
 | پننگ رجسٹری فرسٹ | ایم 2 | `sorafs pin propose` اور `sorafs pin approve` لپیٹے ہوئے مینی فیسٹ گذارشات ؛ پہلے سے طے شدہ CLI `--require-registry` استعمال کرتا ہے۔ | اوپس گورننس | سی ایل آئی رجسٹری آڈٹ لاگ ، ناکام تجاویز کا ٹیلی میٹری۔ |
 | برابری کا مشاہدہ | M3 | ڈیش بورڈز Prometheus/Grafana انتباہ جب رجسٹری کے منشور سے انوینٹریوں کو ہٹاتے ہیں۔ آن لائن کال سے منسلک انتباہات۔ | مشاہدہ | ڈیش بورڈ لنک ، الرٹ رول آئی ڈی ، گیم ڈے کے نتائج۔ |
 
 #### کیننیکل پبلک کمانڈ
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

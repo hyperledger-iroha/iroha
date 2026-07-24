@@ -14,7 +14,7 @@ description: 再現可能なフィクスチャ、Prometheus エクスポート�
 このページは `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` を反映しています。レガシーの Sphinx ドキュメント一式が完全に移行されるまで、両方のコピーを同期してください。
 :::
 
-このランブックは、SF-2c 容量マーケットプレイスのシミュレーションキットを実行し、得られたメトリクスを可視化する方法を説明します。`docs/examples/sorafs_capacity_simulation/` の決定的なフィクスチャを用いて、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証します。容量ペイロードは引き続き `sorafs_manifest_stub capacity` を使用します。manifest/CAR のパッケージングには `iroha app sorafs toolkit pack` を使ってください。
+このランブックは、SF-2c 容量マーケットプレイスのシミュレーションキットを実行し、得られたメトリクスを可視化する方法を説明します。`docs/examples/sorafs_capacity_simulation/` の決定的なフィクスチャを用いて、クォータ交渉、フェイルオーバー処理、スラッシング是正をエンドツーエンドで検証します。容量ペイロードは引き続き `sorafs_manifest_builder capacity` を使用します。manifest/CAR のパッケージングには `iroha app sorafs toolkit pack` を使ってください。
 
 ## 1. CLI アーティファクトを生成
 
@@ -23,7 +23,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` は `sorafs_manifest_stub capacity` をラップし、Norito ペイロード、base64 ブロブ、Torii リクエストボディ、JSON サマリーを生成します:
+`run_cli.sh` は `sorafs_manifest_builder capacity` をラップし、Norito ペイロード、base64 ブロブ、Torii リクエストボディ、JSON サマリーを生成します:
 
 - クォータ交渉シナリオに参加する 3 つのプロバイダ宣言。
 - 準備済みマニフェストをプロバイダ間に割り当てるレプリケーション注文。

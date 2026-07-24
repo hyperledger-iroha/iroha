@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` چلائیں اور دیکھیں کہ اعلان کردہ صلاحیتیں replicação تقاضوں سے میل کھاتی ہیں۔
    - Medidores `torii_sorafs_capacity_*` چیک کریں تاکہ provisionado GiB اور PoR sucesso کی تصدیق ہو۔
 3. **Replicação کی reatribuir**
-   - جب folga do backlog (`stat="avg"`) 5 épocas سے نیچے جائے تو `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے pedidos جاری کریں (manifesto/embalagem CAR `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
+   - جب folga do backlog (`stat="avg"`) 5 épocas سے نیچے جائے تو `sorafs_manifest_builder capacity replication-order` کے ذریعے نئے pedidos جاری کریں (manifesto/embalagem CAR `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - اگر aliases کے پاس فعال ligações de manifesto نہ ہوں تو governança کو مطلع کریں (`torii_sorafs_registry_aliases_total` میں غیر متوقع کمی)۔
 4. **نتیجہ دستاویزی بنائیں**
    - Log de operações SoraFS میں carimbos de data e hora e resumos de manifesto کے ساتھ notas de incidente درج کریں۔

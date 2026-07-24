@@ -147,12 +147,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Le manifest stub reflète les mêmes données, ce qui est pratique pour scripter la sélection de
+Le manifest builder reflète les mêmes données, ce qui est pratique pour scripter la sélection de
 `--chunker-profile-id` dans les pipelines. Les deux CLIs de chunk store acceptent aussi la forme de handle canonique
 (`--profile=sorafs.sf1@1.0.0`) afin que les scripts de build évitent de coder en dur des IDs numériques :
 
 ```
-$ Cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     「プロファイルID」: 1、
@@ -218,4 +218,4 @@ CARv1+SHA-2 のエクスポートを許可しない保守者:
   レ・テスト・フルニス経由。
 * `chunker_registry::lookup_by_profile` 説明のパラメータを確認します
   特派員 à `ChunkProfile::DEFAULT` 突然の分岐を経験しました。
-* `iroha app sorafs toolkit pack` および `sorafs_manifest_stub` による製品マニフェストには、レジストリのメタドンが含まれます。
+* `iroha app sorafs toolkit pack` および `sorafs_manifest_builder` による製品マニフェストには、レジストリのメタドンが含まれます。

@@ -54,7 +54,7 @@ SDK). یہ alias اور manejar invariantes aplicar کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Accesorios, propuesta, informe de determinismo, actualizaciones de registro پر مشتمل PR enviar کریں۔
@@ -87,12 +87,12 @@ SDK). یہ alias اور manejar invariantes aplicar کرتی ہے جنہیں
    - Eliminación یا revisiones کے لیے votación del consejo اور اکثریتی aprobación درکار ہے۔
    - TWG کو documento de pasos de mitigación de riesgos کرنے اور actualización del registro de incidentes کرنے ہوں گے۔
 
-## Expectativas de herramientas- `sorafs_manifest_chunk_store` y `sorafs_manifest_stub` exponen کرتے ہیں:
+## Expectativas de herramientas- `sorafs_manifest_chunk_store` y `sorafs_manifest_builder` exponen کرتے ہیں:
   - Inspección de registro کے لیے `--list-profiles`.
   - Promoción de perfil کرتے وقت bloque de metadatos canónicos بنانے کے لیے `--promote-profile=<handle>`.
   - Informes کو stdout پر stream کرنے کے لیے `--json-out=-`, تاکہ registros de revisión reproducibles ممکن ہوں۔
 - `ensure_charter_compliance()` binarios relevantes کے inicio پر چلایا جاتا ہے
-  (`manifest_chunk_store`, `provider_advert_stub`). Las pruebas de CI fallan ہونا چاہیے اگر
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Las pruebas de CI fallan ہونا چاہیے اگر
   نئی carta de entradas کی خلاف ورزی کریں۔
 
 ## Mantenimiento de registros

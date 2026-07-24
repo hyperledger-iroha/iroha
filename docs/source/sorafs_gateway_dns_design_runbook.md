@@ -139,7 +139,7 @@ CI=1 ci/check_sorafs_gateway_conformance.sh \
 
 ```bash
 ./scripts/sorafs_gateway_self_cert.sh \
-  --config docs/examples/sorafs_gateway_self_cert.conf \
+  --config /run/sorafs-release/gateway-self-cert.conf \
   --out artifacts/sorafs_gateway_attest/20250302
 ```
 

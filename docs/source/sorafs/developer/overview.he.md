@@ -30,7 +30,7 @@ Optional helpers:
 
 - `cargo run -p sorafs_car --bin sorafs_fetch -- --help` — deterministic
   orchestrator simulator for multi-provider fetches.
-- `cargo run -p sorafs_car --bin sorafs_manifest_stub -- --help` — manifest
+- `cargo run -p sorafs_car --bin sorafs_manifest_builder -- --help` — manifest
   fixture generator used in examples and tests.
 
 ## 2. Compile Kotodama and pack a CAR archive

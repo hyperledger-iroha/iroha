@@ -12,12 +12,12 @@ activation contract in [Nexus cross-lane execution](nexus_cross_lane.md), and
 the persistence contract in [Merge ledger](merge_ledger.md). It does not replace
 those documents.
 
-The ledger deliberately distinguishes an implemented primitive from a
-release-evidenced end-to-end path. In particular, deterministic queue
-reservations, historical execution-batch validation, participant receipt
-sidecars, and catalog geometry are useful foundations, but they do not prove
-that autonomous production, evidence-aware drain, or safe retirement is
-enabled.
+The ledger deliberately distinguishes a reachable production implementation
+from a release-evidenced end-to-end path. The current source contains
+autonomous production, Native application evidence, evidence-aware drain, and
+artifact-aware retirement; source presence and focused fixtures do not prove
+the required real-network corridors, fault soak, scaling target, SDK parity, or
+clean full-workspace release gate.
 
 ## Status rules
 
@@ -85,19 +85,18 @@ invariants together.
 
 ### ML-NAT-01 — shared participant-application predicate
 
-**Implementation:** Open; work is in progress.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** The same-route decision is currently duplicated across
-`ValidBlock::validate_native_amx_participant_groups` in
-`crates/iroha_core/src/block.rs`,
-`Kura::native_amx_participant_application_receipts_for_block` in
-`crates/iroha_core/src/kura.rs`, and
-`State::native_amx_participant_frontier_marker_payloads` in
-`crates/iroha_core/src/state.rs`. Their coordinator-leg tests are not
-structurally identical, so there is no single predicate shared by validation,
-Kura, State, recovery, diagnostics, drain, and retirement.
+**Production map.**
+`native_amx_participant_application_role` and
+`native_amx_receipt_requires_separate_participant_application_for` in
+`crates/iroha_core/src/native_amx.rs` are the shared typed classifiers.
+Validation, Kura persistence/recovery, State diagnostics and drain derivation,
+and retirement consume that classification. Exact same-route coordinator
+identity yields no separate receipt, marker, diagnostic row, frontier, or
+retirement blocker; same-route identity drift fails closed.
 
 **Closure condition.** Add one typed predicate whose inputs include coordinator
 route/incarnation/proposal identity and participant route/incarnation/proposal
@@ -121,16 +120,20 @@ TLC and Apalache must expose an extra marker/receipt or a missing drain blocker.
 
 ### ML-NAT-02 — durable signing claim and restart equivocation safety
 
-**Implementation:** Open; the journal hardening is in progress.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `NativeAmxSigningGuard`,
 `NativeAmxSigningGuard::load_validated_journal`, and
 `NativeAmxSigningGuard::record_locked` in
-`crates/iroha_core/src/native_amx.rs` own the durable decision. Grouped signing
-slot claims are separately keyed by `NativeAmxSigningSlotV3`. The source claim
-must not regress to the former `source_id -> plan_digest` projection.
+`crates/iroha_core/src/native_amx.rs` own the version-4 durable decision.
+`NativeAmxSourceSessionClaimV4` binds source ID, typed entrypoint hash, plan,
+round/context, authority height, coordinator route/incarnation/height/view and
+proposal, while `NativeAmxSourceParticipantClaimV4` binds every participant
+route/incarnation. Grouped signing slot claims remain separately keyed by
+`NativeAmxSigningSlotV3`; unsupported or malformed journal layouts fail
+closed.
 
 **Closure condition.** A versioned durable source claim must bind the source
 ID, typed transaction-entrypoint hash, plan digest, round context, authority
@@ -156,17 +159,18 @@ weakening must produce a restart equivocation trace.
 
 ### ML-NAT-03 — active incarnation, predecessor, and contiguous admission
 
-**Implementation:** Open as a complete cross-boundary check; local height and
-context guards are implemented.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Native AMX body and QC checks live in
-`crates/iroha_core/src/native_amx.rs`; block admission joins Native receipts to
-the routing plan in `ValidBlock::validate_execution_context_bundle` and
+**Production map.** Native AMX signing/body/QC checks in
+`crates/iroha_core/src/native_amx.rs` bind the active authority context.
+`ValidBlock::validate_execution_context_with_state` and
 `ValidBlock::validate_native_amx_participant_groups` in
-`crates/iroha_core/src/block.rs`. Active lane lifecycle and predecessor
-frontiers are read through `State` in `crates/iroha_core/src/state.rs`.
+`crates/iroha_core/src/block.rs` resolve exact proposal-height incarnations and
+canonical predecessor application receipts through State/Kura before
+admission. Height jumps, stale incarnations, and predecessor identity drift
+fail closed.
 
 **Closure condition.** Immediately before Prepare signing, Commit signing, and
 block admission, resolve the exact active incarnation and require the exact
@@ -190,10 +194,8 @@ height jump or ABA trace.
 
 ### ML-NAT-04 — grouped application is atomic, exact, and bounded
 
-**Implementation:** Implemented for the production grouped validator and
-receipt derivation; closure remains open until all consumers use
-`ML-NAT-01` and cross-SDK parity is proven.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Bounds originate in
@@ -201,10 +203,11 @@ receipt derivation; closure remains open until all consumers use
 `MAX_NATIVE_AMX_PLAN_LEGS`, and `MAX_NATIVE_AMX_VALIDATORS` in
 `crates/iroha_core/src/native_amx.rs`.
 `ValidBlock::validate_native_amx_participant_groups` validates block-wide
-grouping. `Kura::native_amx_participant_application_receipts_for_block` joins
-ordered source/entrypoint/result membership to the participant proposal and
-settlement. `State::native_amx_participant_frontier_marker_payloads` publishes
-the replicated frontier.
+grouping.
+`Kura::native_amx_participant_application_evidence_for_block_under_publication_guard`
+joins ordered source/entrypoint/result membership to the participant proposal
+and settlement. `State::native_amx_participant_frontier_marker_payloads`
+publishes the replicated frontier.
 
 **Closure condition.** Require 1–4,096 ordered, unique sources; exact
 transaction count and timestamp; the current source exactly once; zero
@@ -228,17 +231,17 @@ or duplicate application.
 
 ### ML-NAT-05 — canonical application manifest, root, and proofs
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** `ExecutionCommitment` in
-`crates/iroha_data_model/src/block/consensus_v2.rs` currently commits parent
-state, post state, ordinary writes, optional top-up anchors, and the executed
-block wire hash; it has no Native application-manifest root.
-`NativeAmxParticipantApplicationReceiptArtifact` in
-`crates/iroha_core/src/kura.rs` is a post-commit sidecar and is not itself
-authenticated by a dedicated field in the global execution commitment.
+**Production map.** `NativeAmxApplicationManifestMemberV1`,
+`NativeAmxApplicationManifestLeafV1`, and `ExecutionCommitment` in
+`crates/iroha_data_model/src/block/consensus_v2.rs` define the versioned
+canonical manifest, empty root, leaf validation, root, and leaf count. Kura
+persists the leaf/proof artifact and exact participant receipt, binding route,
+incarnation, predecessor, descriptor, proposal, settlement, ordered
+source/result membership, global application identity, and executed wire.
 
 **Closure condition.** Define a versioned canonical Native application
 manifest. Its Merkle leaves and proofs bind route, incarnation, predecessor,
@@ -265,20 +268,21 @@ ambiguous frontier.
 
 ### ML-NAT-06 — publication order, pruning safety, and startup repair
 
-**Implementation:** Open as an end-to-end durability protocol; receipt
-revalidation is implemented while the canonical body is retained.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** `Kura::persist_native_amx_participant_application_receipts`
-and
-`Kura::native_amx_participant_application_receipt_matches_available_evidence`
-in `crates/iroha_core/src/kura.rs` validate receipts against commit manifest,
-WSV checkpoint, V2 finality, and the retained block body.
+**Production map.** `Kura::persist_native_amx_participant_application_evidence`
+and `Kura::repair_native_amx_participant_application_evidence` in
+`crates/iroha_core/src/kura.rs` run under the publication guard and validate
+the canonical block, checkpoint, V2 finality, manifest root/proof, executed
+wire, exact receipt group, and active incarnation.
 `StateBlock::stage_native_amx_participant_frontiers` in
-`crates/iroha_core/src/state.rs` publishes WSV markers. The post-apply sequence
-in `crates/iroha_core/src/sumeragi/v2_apply.rs` does not yet implement the
-required manifest/sidecar/index/frontier repair protocol.
+`crates/iroha_core/src/state.rs` publishes WSV markers only after durable
+evidence, while `crates/iroha_core/src/sumeragi/v2_apply.rs` invokes
+persistence and idempotent startup/replay repair in durability order. Pruned
+bodies remain verifiable through QC-authenticated manifest evidence; weaker
+hash-only evidence remains fail-closed.
 
 **Closure condition.** Persist finality plus manifest first, then exact Native
 sidecars and the latest index, and only then publish replicated WSV frontiers.
@@ -306,18 +310,19 @@ unverifiable frontier or lost durable application.
 
 ### ML-NAT-07 — bounded latest index and lane-artifact policy
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.**
-`Kura::latest_native_amx_participant_application_receipt_matching` in
-`crates/iroha_core/src/kura.rs` searches historical receipts rather than using
-an authoritative route/incarnation latest index. Retirement validation is
-split between the comprehensive test-only
-`Kura::ensure_lane_retirement_admissible_locked` and the production
+**Production map.** Kura persists a route/incarnation-bound Native receipt
+latest index, uses it for bounded exact lookup, and explicitly reconstructs it
+through
+`Kura::rebuild_native_amx_participant_receipt_latest_indexes_on_startup`.
 `Kura::ensure_first_release_lane_retirement_admissible_locked` in
-`crates/iroha_core/src/kura/lane_geometry.rs`.
+`crates/iroha_core/src/kura/lane_geometry.rs` recognizes, accounts, validates,
+archives, and purges Native manifests, receipts, their append indexes, and the
+latest index while rejecting malformed, oversized, temporary, unexpected, or
+symlinked artifacts.
 
 **Closure condition.** Persist and rebuild a bounded latest index keyed by
 `(lane, dataspace, incarnation)`. Validate every index entry against its exact
@@ -346,9 +351,8 @@ retirement; the model must expose stale authorization or unsafe destruction.
 
 ### ML-AUT-01 — durable FIFO queue reservation
 
-**Implementation:** Implemented as a queue primitive; no production lane leader
-calls it.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `LaneQueueReservationKeyV1`,
@@ -358,8 +362,10 @@ calls it.
 `Queue::reconcile_orphaned_lane_reservations`, and
 `Queue::prune_lane_reservations` live in
 `crates/iroha_core/src/queue.rs`. `crates/irohad/src/main.rs` installs the
-journal. The reserve and prune paths do not yet have the required production
-leader/lifecycle callers.
+journal. The deterministic production producer in
+`V2LaneWorkAdapter::schedule_autonomous_lane_production` performs bounded FIFO
+selection and calls `Queue::reserve_transactions_for_lane_bounded` before
+payload publication; losing and retired work use the exact release path.
 
 **Closure condition.** The deterministic lane leader selects a non-empty FIFO
 batch and fsyncs one exact `LaneQueueReservationKeyV1` record before ownership
@@ -383,17 +389,18 @@ ownership.
 
 ### ML-AUT-02 — immutable reservation identity through lane consensus
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Autonomous wire variants exist in
-`crates/iroha_core/src/sumeragi/message.rs`, including executable payload,
-handoff, and NewView messages. The live
-`V2LaneWorkAdapter::accept_lane_message_owned` path in
-`crates/iroha_core/src/sumeragi/v2_lane_work.rs` rejects those variants.
-Autonomous payload persistence and availability/NewView helpers in
-`crates/iroha_core/src/kura.rs` are test-only.
+**Production map.** Versioned executable payload, reservation, handoff, vote,
+QC, and NewView messages are defined in
+`crates/iroha_core/src/sumeragi/message.rs` and
+`crates/iroha_core/src/lane_consensus.rs`.
+`V2LaneWorkAdapter::accept_lane_message_owned` admits and independently
+validates the live autonomous variants. Kura payload, availability, NewView,
+certified-bundle, merge, and application artifacts retain the exact
+reservation keys through the carrier.
 
 **Closure condition.** Carry the byte-identical reservation identity through
 the executable payload, routing plans, Native receipts, lane proposal,
@@ -419,20 +426,20 @@ unreleasable ownership.
 
 ### ML-AUT-03 — live availability, lane QC, and certified-bundle durability
 
-**Implementation:** Open; production follower decoding exists, while producer
-and ingress paths are disabled/test-only.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Production validates and decodes an already embedded
-autonomous bundle through `Kura::validate_autonomous_lane_merge_bundle` and
-`Kura::decode_autonomous_lane_merge_bundle`. Producer helpers including
+**Production map.** Production persists and revalidates autonomous work through
 `Kura::persist_lane_executable_payload`,
 `Kura::persist_lane_payload_availability_certificate`,
 `Kura::persist_lane_new_view_certificate`,
-`Kura::autonomous_lane_merge_bundle`, and autonomous recovery/candidate helpers
-are test-only. Live ingress reaches
-`V2LaneWorkAdapter::accept_lane_message_owned` but is rejected.
+`Kura::autonomous_lane_merge_bundle`,
+`Kura::validate_autonomous_lane_merge_bundle`, and
+`Kura::decode_autonomous_lane_merge_bundle`.
+`V2LaneWorkAdapter` drives bounded authenticated ingress, availability,
+Prepare/Commit, timeout, NewView, durability, and fanout; only an exact durable
+certified bundle becomes merge-eligible.
 
 **Closure condition.** Enable bounded authenticated payload, handoff,
 availability, Prepare, Commit, timeout, and NewView handling. Persist the exact
@@ -457,20 +464,22 @@ expose an unrecoverable or uncertified merge source.
 
 ### ML-AUT-04 — canonical merge candidate, QC, and bounded sidecar recovery
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `State::build_merge_execution_batch`,
 `State::build_merge_execution_batch_for_consensus`, and
 `State::build_merge_execution_batch_from_source_prefix` in
-`crates/iroha_core/src/state.rs` are test-only. Production
+`crates/iroha_core/src/state.rs` build the canonical contiguous execution
+prefix against the exact current base state. Production
 `V2LaneWorkAdapter::refresh_merge_candidates` in
-`crates/iroha_core/src/sumeragi/v2_lane_work.rs` explicitly filters
-`execution_batch.is_none()` for installed and relay candidates. The adjacent
-in-scope `TODO` says autonomous synthesis must remain disabled until reservation
-identity is coordinated. `V2LaneWorkAdapter::accept_certified_merge_sidecar_request`
-also rejects execution-batch sidecars.
+`crates/iroha_core/src/sumeragi/v2_lane_work.rs` synthesizes and signs
+execution-bearing candidates without the former `execution_batch.is_none()`
+production exclusion.
+`V2LaneWorkAdapter::accept_certified_merge_sidecar_request` serves exact
+authenticated entry bytes only from designated holders and the bounded
+sidecar client validates completed entries before installation.
 
 **Closure condition.** Remove the `execution_batch.is_none()` exclusion only
 after `ML-AUT-01` through `ML-AUT-03` close. The global leader selects a
@@ -495,9 +504,8 @@ origin; each mutation must admit divergence or equivocation.
 
 ### ML-AUT-05 — canonical re-execution, atomic application, and reservation retirement
 
-**Implementation:** Implemented for historical embedded batches and
-post-commit queue finalization; autonomous production integration is open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `MergeExecutionBatch` and
@@ -538,17 +546,19 @@ expose loss, duplication, or stale retention.
 
 ### ML-AUT-06 — restart ownership reconciliation
 
-**Implementation:** Open for autonomous production.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Startup calls
 `reconcile_lane_reservation_ownership` from
 `crates/iroha_core/src/sumeragi/v2_apply.rs` through
 `crates/iroha_core/src/sumeragi/v2_runner.rs`.
-`Kura::autonomous_lane_payload_matches_reservation` has a test implementation;
-the non-test path intentionally returns false because production does not
-originate autonomous payloads.
+`Kura::autonomous_lane_payload_matches_reservation` performs the production
+current-incarnation, exact-reservation, payload/certification/application
+evidence check. Reconciliation retains one authenticated owner, releases
+orphans in original enqueue order, resumes terminal Commit/ForgetCommit, and
+prunes only forgotten reservations.
 
 **Closure condition.** Replace the production false stub with exact,
 bounded, authenticated ownership reconciliation. Retain only reservations
@@ -574,9 +584,8 @@ duplication, or ABA retention.
 
 ### ML-LIFE-01 — deterministic create and activate
 
-**Implementation:** Implemented as a catalog/geometry foundation.
-**Closure:** Open until useful autonomous work and the full lifecycle corridor
-are evidenced.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Configuration-driven sampling, cooldown, managed-lane
@@ -607,17 +616,19 @@ partial activation.
 
 ### ML-LIFE-02 — one evidence-aware drain frontier and complete blockers
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `State::pending_autoscale_lane_drain_body` and
 `StateBlock::select_autoscale_scale_in_action` in
-`crates/iroha_core/src/state.rs` derive and recheck a replicated merge
-frontier, but do not own one shared evidence-aware blocker predicate spanning
-Queue, Kura, Native evidence, delayed work, pending merge entries, and
-reservations. Existing tests explicitly permit some local relay, lane-block,
-and marker evidence to be ignored.
+`crates/iroha_core/src/state.rs` derive and recheck the same
+`evidence_aware_lane_drain_frontier_from_world`.
+`State::lane_has_drain_blocking_evidence` covers ordinary queued work,
+live reservations, certified/unmerged and delayed lane work, pending merge
+entries, and unapplied/unverifiable Native controls. Kura revalidates the exact
+manifest, receipt, latest index, finality, checkpoint, and application
+identity before a Native-derived frontier can be used.
 
 **Closure condition.** Use one drain predicate and one frontier for intent,
 vote/certificate validation, global commitment, archive, and removal. Ordinary
@@ -643,17 +654,17 @@ produce lost work or unsafe retirement.
 
 ### ML-LIFE-03 — live drain vote and certificate collection
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `SumeragiHandle::try_incoming_lane_drain_vote` in
-`crates/iroha_core/src/sumeragi/mod.rs` intentionally returns false because the
-collector is retired. `State::merge_drain_candidate_for_next_carrier` in
-`crates/iroha_core/src/state.rs` is test-only. The localnet test
-`nexus_autoscale_two_phase_drain_closes_certifies_then_retires_after_restart`
-describes the desired flow but cannot by itself prove a reachable live
-collector.
+`crates/iroha_core/src/sumeragi/mod.rs` admits authenticated votes into the
+bounded live relay. `V2LaneWorkAdapter` installs the queue and durable signing
+guard, validates/aggregates the pinned committee, relays votes, and calls
+`State::merge_drain_candidate_for_next_carrier` for the global carrier.
+`StateBlock::select_autoscale_scale_in_action` requires a later block and
+rechecks the committed frontier and every live blocker before retirement.
 
 **Closure condition.** Authenticate, bound, validate, journal, aggregate, and
 relay drain votes from the pinned historical committee. A signer cannot vote
@@ -677,17 +688,18 @@ expected counterexample.
 
 ### ML-LIFE-04 — atomic archive, destruction, and same-ID recreation
 
-**Implementation:** Open as a complete artifact-aware lifecycle; geometry
-journaling and incarnation allocation are implemented foundations.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Geometry transitions, recovery archives, and archive GC
 live in `crates/iroha_core/src/kura/lane_geometry.rs`. Production retirement
-uses `Kura::ensure_first_release_lane_retirement_admissible_locked`, while the
-richer autonomous scanner is test-only and first-release policy rejects some
-autonomous files instead of recognizing, accounting, archiving, and purging
-them.
+uses `Kura::ensure_first_release_lane_retirement_admissible_locked`, whose
+bounded scanner recognizes and authenticates autonomous payload, availability,
+NewView, certificate, merge/application receipt, Native manifest/receipt/index,
+and release evidence. Geometry journaling archives the exact incarnation
+before removal, resumes interrupted archive/GC idempotently, and same-ID
+provisioning allocates a fresh incarnation.
 
 **Closure condition.** Archive every recognized lane evidence class atomically
 before removing active storage. Bind every archive and purge operation to the
@@ -713,18 +725,20 @@ archive; the model must expose ABA acceptance, loss, or sibling corruption.
 
 ### ML-LIFE-05 — bounded stage diagnostics and the twelve-peer stall
 
-**Implementation:** Open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** The existing twelve-peer corridor is
-`cross_dataspace_atomic_swap_is_all_or_nothing` in
-`integration_tests/tests/nexus/cross_dataspace_localnet.rs`. Its three
-four-validator groups exercise DvP routing, but current evidence records a
-payload-recovery-to-canonical-application stall. Existing diagnostics do not
-provide one bounded stage trace that identifies ownership, availability, lane
-QC, bundle durability, merge eligibility, fetch, carrier, Kura, WSV, receipt,
-and queue-finalization progress for the same source.
+**Production map.** `SumeragiAutonomousLaneExecution`,
+`SumeragiAutonomousLaneExecutionStage`, and the bounded stuck-reason enum in
+`crates/iroha_data_model/src/block/consensus.rs` identify reservation,
+payload, availability, lane certification, bundle, merge, carrier,
+Kura/WSV receipt, queue-finalization, and conflict stages. State derives the
+ordered bounded vector from replicated State plus Kura evidence and Torii
+publishes it only on diagnostics. Live production candidate synthesis and
+canonical carrier application now connect the former recovery-to-application
+gap. The twelve-peer rerun required to prove that correction empirically
+remains `G-12P`.
 
 **Closure condition.** Add bounded, deterministic, operator-safe counters or
 records for every stage without storing unbounded transaction material.
@@ -750,9 +764,8 @@ false progress or consensus dependence.
 
 ### ML-API-01 — authoritative status and Native application diagnostics
 
-**Implementation:** Implemented for Rust endpoint separation; the Native
-application vector is open.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** `/v1/sumeragi/status` returns
@@ -760,8 +773,11 @@ application vector is open.
 `crates/iroha_data_model/src/block/consensus_v2.rs`.
 `/v1/sumeragi/diagnostics` returns `SumeragiDiagnosticsStatus` from
 `crates/iroha_data_model/src/block/consensus.rs`, assembled in
-`crates/iroha_torii/src/routing.rs`. The diagnostics model has no
-`native_amx_participant_applications` field.
+`crates/iroha_torii/src/routing.rs`. Its bounded, ordered
+`native_amx_participant_applications` vector is derived by
+`State::native_amx_participant_applications_diagnostics` from State plus Kura
+evidence, filters exact active route/incarnations, and reports conflicting
+same-height identity as `conflict`.
 
 **Closure condition.** Keep authoritative reducer facts exclusively on
 `/v1/sumeragi/status`. Add a bounded, deterministically ordered
@@ -789,10 +805,8 @@ nondeterminism or false authority.
 
 ### ML-API-02 — separate client methods and mirrored models
 
-**Implementation:** Open across all supported SDKs. Rust and Swift have
-separate endpoint foundations; Python work is in progress; JavaScript, Kotlin,
-and mirrored Java remain incomplete.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Rust client methods live in
@@ -800,11 +814,13 @@ and mirrored Java remain incomplete.
 in `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift`. Python surfaces live in
 `python/iroha_torii_client/client.py` and
 `python/iroha_python/src/iroha_python/client.py`. JavaScript methods live in
-`javascript/iroha_js/src/toriiClient.js` and
-`javascript/iroha_js/src/toriiBrowserClient.js`. Kotlin's default JVM model is
-`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiV2Wire.kt`;
-the mirrored Java compatibility model is
-`java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiV2Wire.java`.
+`javascript/iroha_js/src/toriiClient.js` and its generated distribution.
+Kotlin diagnostics models live in
+`kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/consensus/SumeragiDiagnosticsModels.kt`;
+the mirrored Java compatibility models live in
+`java/iroha_android/src/main/java/org/hyperledger/iroha/android/consensus/SumeragiDiagnosticsModels.java`.
+Each client keeps status and diagnostics on distinct methods, parsers, and
+return models.
 
 **Closure condition.** Give status and diagnostics separate parsers, return
 types, and methods in every client. Extend Rust and Swift with the Native
@@ -828,8 +844,8 @@ API contract test must accept a swapped payload and therefore fail.
 
 ### ML-API-03 — identical Native V2 validation across SDKs
 
-**Implementation:** Open as a parity guarantee.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
 **Production map.** Rust Native AMX wire types and validators are in
@@ -859,15 +875,22 @@ must detect an accept/reject mismatch.
 
 ### ML-API-04 — Rust-owned grouped fixtures and explicit builders
 
-**Implementation:** Open.
+**Implementation:** Implemented.
 **Closure:** Open.
 **Evidence:** Open.
 
-**Production map.** Existing cross-SDK fixture infrastructure includes
-`crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` and
-`crates/iroha_data_model/tests/sumeragi_v2_cross_sdk_fixtures.rs`; it does not
-yet provide the required Rust-owned grouped Native application golden fixture
-and complete negative-control corpus.
+**Production map.**
+`crates/iroha_data_model/src/bin/sumeragi_v2_wire_fixtures.rs` and its
+`native_amx_grouped` module generate
+`fixtures/sumeragi_v2/native_amx_v2_grouped.json`, including grouped golden
+data, application evidence, and 34 negative controls.
+`NativeAmxAttestationBodyV2::computed_grouped_participant_settlement` is the
+explicit production builder; single-source construction is labelled as a test
+fixture.
+`ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
+OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
+consumers. Closure remains open until refreshed OpenAPI snapshots and every
+language consumer replay the same generated corpus in the release gate.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -889,14 +912,17 @@ uses a singleton helper for a grouped case; parity CI must fail.
 
 ### ML-WIRE-01 — explicit versioning and no implicit legacy decode
 
-**Implementation:** Open for the new claim, manifest, proof, index,
-reservation-carrying payload, diagnostics, and merge layouts.
-**Closure:** Open.
+**Implementation:** Implemented.
+**Closure:** Implemented.
 **Evidence:** Open.
 
-**Production map.** Existing persisted and wire structures use Norito version
-fields in their owning modules. New layouts required by `ML-NAT-*`,
-`ML-AUT-*`, and `ML-API-*` do not yet exist as one coordinated revision.
+**Production map.** The signing guard V4, Native manifest V1, Native receipt
+and latest-index layouts, queue reservation journal/key, executable payload
+V2/envelope, lane QCs/NewView, merge entries, application receipts, and
+diagnostics models all carry explicit versions or exact typed Norito layouts
+in their owning modules. Unknown and retired layouts fail closed; the source
+tree contains no implicit legacy consensus decoder or production
+feature/environment compatibility switch for autonomous execution.
 
 **Closure condition.** Version every new persistence and wire layout. Reject
 unknown and legacy versions unless an explicitly authenticated migration
@@ -938,6 +964,11 @@ reservation duplication, base-state mismatch, bounded fetches, and every
 persistence crash boundary. Tests that exercise only `#[cfg(test)]` producer
 helpers do not close a live-path obligation.
 
+The release runner now inventories 58 exact, non-ignored multilane focus tests
+across `iroha_core`, `iroha_data_model`, and the integration support library.
+That source inventory is not a passing test transcript; the full focused rerun
+and archived receipt remain required.
+
 ### G-FORMAL — source-bound models and expected mutations
 
 **Evidence:** Open.
@@ -950,6 +981,17 @@ model assumptions and invariants to the current production symbols named by
 the corresponding row, reject a source hash mismatch, and archive model,
 configuration, tool-version, result, and source hashes. Existing generic
 Sumeragi models are not substitutes for these multilane models.
+
+A 2026-07-24 source-bound checkpoint for source manifest
+`18dde0eab85c1617e3f585f403c9a409690360aba9e38d22c8506514034c4b7d`
+passed direct pinned TLC positives (autoscale `14/14`; Native `1,121`
+generated/`304` distinct; autonomous `294` generated/`169` distinct), all
+`27/27` named mutation witnesses, all three Apalache v0.52.2 typecheck/positive
+bounds, and `8/8` runner negative controls. The evidence TSV SHA-256 is
+`47fb9fef5690a5424196b0a6a7bbc3105ca84ce24f79eeadd9014893fa702050`.
+This is supporting bounded evidence, not gate closure: the umbrella formal
+preflight could not run because the pinned TLAPM standard library was absent,
+and no clean aggregate release receipt was archived.
 
 ### G-4P — four-peer DA/RBC lifecycle suites
 
@@ -965,6 +1007,9 @@ canonical carrier. Required anchors include
 and the strict autoscale cycle tests in
 `integration_tests/tests/nexus/autoscale_localnet.rs`, after their production
 prerequisites are reachable. A skipped test or test-only producer is a failure.
+The mandatory four-peer lifecycle and rotating-validator Native tests are now
+non-ignored and source-bound into the release runner, but no fresh completion
+artifact is recorded here.
 
 ### G-12P — twelve-peer multilane corridor
 
@@ -976,8 +1021,9 @@ same-ID recreation. Require 10/10 fresh deterministic seeds and a two-hour
 fault soak, full peer convergence, durable participant receipts, and zero lost,
 rejected-after-acceptance, or duplicate transactions. The existing
 `cross_dataspace_atomic_swap_is_all_or_nothing` corridor is a starting point:
-its retry-tolerant success policy and current
-payload-recovery-to-canonical-application stall do not satisfy this gate.
+the former payload-recovery-to-canonical-application stall has a source-side
+implementation correction and bounded diagnostics, but only the strict
+10/10-seed corridor plus two-hour fault soak can establish this gate.
 
 ### G-SCALE — one-lane versus four-lane scaling proof
 
@@ -999,6 +1045,11 @@ Run Rust/OpenAPI, both Python surfaces, source and distribution JavaScript,
 Swift, Kotlin core-jvm, and mirrored Java suites against the same Rust-owned
 grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
+
+The Rust generator, 34-control grouped corpus, six-surface parity harness, and
+fixture/suite source-hash binding are present. Refreshed OpenAPI snapshots and
+one archived release replay of every required surface are not yet recorded, so
+neither `ML-API-04` closure nor this gate advances.
 
 ### G-FINAL — clean release validation
 
@@ -1024,18 +1075,22 @@ multilane audit. A newly discovered TODO touching lane routing, autoscale,
 merge, reservation ownership, Native AMX, drain, retirement, or multilane
 diagnostics must be added here or mapped to a ledger row before release.
 
-### In scope
+### Resolved in source; release evidence remains open
 
-- `V2LaneWorkAdapter::refresh_merge_candidates` in
-  `crates/iroha_core/src/sumeragi/v2_lane_work.rs`: the TODO to re-enable
-  autonomous execution candidate synthesis maps to `ML-AUT-01` through
-  `ML-AUT-06`. It may be removed only after those production paths are
-  reachable and gates `G-UNIT`, `G-FORMAL`, and `G-4P` are evidenced.
-- The first-release autonomous and drain limitations documented in
-  [Nexus cross-lane execution](nexus_cross_lane.md), the corresponding
-  outstanding paragraphs in `roadmap.md`, and the twelve-peer blocker reports
-  in `status.md` map to `ML-AUT-*`, `ML-LIFE-*`, `G-4P`, and `G-12P`. Historical
-  prose is not evidence of closure.
+- The former `V2LaneWorkAdapter::refresh_merge_candidates` TODO and
+  `execution_batch.is_none()` production exclusion are absent.
+  `schedule_autonomous_lane_production`, exact reservation propagation,
+  certified-bundle durability, execution-bearing merge-candidate synthesis,
+  canonical re-execution/application, and restart ownership reconciliation now
+  provide the reachable production path mapped to `ML-AUT-01` through
+  `ML-AUT-06`.
+- The former first-release autonomous and drain limitations are retired in the
+  canonical English architecture/operator documents. Historical entries in
+  `status.md` and `roadmap.md` remain historical and are not evidence.
+- A fresh source scan found no remaining in-scope TODO in lane routing,
+  autoscale, merge, reservation ownership, Native AMX, drain, retirement, or
+  multilane diagnostics. Any newly introduced marker must be classified here
+  before release.
 
 ### Explicitly out of scope
 
@@ -1078,19 +1133,17 @@ formal invariant and mutation, and referenced release gates agree on the same
 versioned behavior. If code changes invalidate an artifact hash or production
 symbol binding, its evidence returns to **Open**.
 
-Milestone ordering is part of closure: the Native evidence rows `ML-NAT-*`
-must close before the `execution_batch.is_none()` production exclusion is
-removed, and automatic destruction may be enabled only after autonomous
-ownership (`ML-AUT-*`) and evidence-aware drain (`ML-LIFE-02` through
-`ML-LIFE-04`) close. A feature or environment switch cannot reorder these
-boundaries.
+Milestone ordering remains part of closure. The source implementation now
+places Native evidence hardening before execution-bearing autonomous candidate
+synthesis and places exact ownership plus evidence-aware drain before automatic
+destruction. No feature or environment switch bypasses those boundaries.
 
 The release is multilane-complete only when:
 
 - every `ML-*` row has **Closure: Implemented**;
 - every referenced `G-*` gate has **Evidence: Evidenced**;
-- the in-scope TODO has been removed because its production exclusion is gone,
-  not because the TODO text was deleted;
+- the former in-scope TODO remains resolved by a reachable production path,
+  not merely by deleting its text;
 - no newly discovered in-scope TODO lacks a ledger disposition; and
 - `roadmap.md`, `status.md`, architecture, and operator documentation are
   updated from the same fresh archived evidence.

@@ -907,6 +907,21 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to activate or rotate governed PDP/PoTR validation keys.
+        #[derive(Copy)]
+        pub struct CanManageSorafsProofOutcomePolicy;
+    }
+
+    permission! {
+        /// Permission to record unsigned scheduler-only proof outcomes for a provider.
+        #[derive(Copy)]
+        pub struct CanRecordSorafsProofOutcome {
+            /// Provider identifier governed by this permission.
+            pub provider_id: ProviderId,
+        }
+    }
+
+    permission! {
         /// Permission to register or update a `SoraFS` provider owner binding.
         #[derive(Copy)]
         pub struct CanRegisterSorafsProviderOwner;

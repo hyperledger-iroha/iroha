@@ -181,6 +181,195 @@ private func applyFixtureMutation(_ mutation: [String: Any], to root: Any) throw
     }
 }
 
+private func fixtureScalarEqual(_ lhs: Any?, _ rhs: Any?) -> Bool {
+    if lhs == nil || lhs is NSNull {
+        return rhs == nil || rhs is NSNull
+    }
+    if rhs == nil || rhs is NSNull {
+        return false
+    }
+    if let left = lhs as? String, let right = rhs as? String {
+        return left == right
+    }
+    if let left = lhs as? NSNumber, let right = rhs as? NSNumber {
+        return left == right
+    }
+    return false
+}
+
+private func fixtureUInt(_ object: [String: Any], _ field: String) throws -> UInt64 {
+    guard let number = object[field] as? NSNumber else {
+        throw NativeAmxGroupedFixtureError.malformed("\(field) must be an integer")
+    }
+    return number.uint64Value
+}
+
+private func validateApplicationEvidenceFixture(_ document: [String: Any]) throws {
+    func require(
+        _ condition: @autoclosure () throws -> Bool,
+        _ message: String
+    ) throws {
+        guard try condition() else {
+            throw NativeAmxGroupedFixtureError.malformed(message)
+        }
+    }
+
+    let golden = try fixtureValue(at: ["golden"][...], in: document) as? [String: Any]
+    let group = try XCTUnwrap(golden?["receipt_group"] as? [String: Any])
+    let evidence = try XCTUnwrap(golden?["application_evidence"] as? [String: Any])
+    let execution = try XCTUnwrap(evidence["execution_commitment"] as? [String: Any])
+    let artifacts = try XCTUnwrap(evidence["manifest_artifacts"] as? [[String: Any]])
+    try require(
+        try fixtureUInt(execution, "native_amx_application_manifest_version") == 1,
+        "manifest version"
+    )
+    try require(
+        try fixtureUInt(execution, "native_amx_application_manifest_count")
+            == UInt64(artifacts.count) && artifacts.count == 1,
+        "manifest count"
+    )
+    let artifact = artifacts[0]
+    let leaf = try XCTUnwrap(artifact["leaf"] as? [String: Any])
+    let proof = try XCTUnwrap(artifact["proof"] as? [String: Any])
+    try require(
+        try fixtureUInt(artifact, "version") == 1
+            && fixtureUInt(leaf, "version") == 1,
+        "artifact version"
+    )
+    try require(
+        try fixtureUInt(artifact, "leaf_index") == 0
+            && fixtureUInt(proof, "leaf_index") == 0,
+        "proof position"
+    )
+    try require(
+        (proof["audit_path"] as? [Any])?.isEmpty == true,
+        "singleton proof path"
+    )
+    try require(
+        try fixtureUInt(artifact, "manifest_leaf_count") == 1
+            && fixtureScalarEqual(
+                artifact["manifest_root"],
+                execution["native_amx_application_manifest_root"]
+            )
+            && fixtureScalarEqual(artifact["manifest_root"], artifact["leaf_hash"]),
+        "manifest root"
+    )
+    try require(
+        fixtureScalarEqual(
+            leaf["executed_block_wire_hash"],
+            execution["executed_block_wire_hash"]
+        ),
+        "executed wire"
+    )
+    try require(
+        try fixtureUInt(leaf, "predecessor_height") + 1
+            == fixtureUInt(leaf, "participant_height"),
+        "participant predecessor"
+    )
+    let activeRows = try XCTUnwrap(evidence["active_lane_incarnations"] as? [[String: Any]])
+    try require(activeRows.count == 1, "active incarnation count")
+    let active = activeRows[0]
+    for field in ["lane_id", "dataspace_id", "lane_incarnation"] {
+        try require(
+            fixtureScalarEqual(active[field], leaf[field]),
+            "active incarnation \(field)"
+        )
+    }
+    try require(
+        !fixtureScalarEqual(leaf["lane_id"], group["lane_id"])
+            || !fixtureScalarEqual(leaf["dataspace_id"], group["dataspace_id"]),
+        "same-route coordinator must not have separate evidence"
+    )
+
+    let members = try XCTUnwrap(leaf["members"] as? [[String: Any]])
+    let receipts = try XCTUnwrap(group["native_amx_receipts"] as? [[String: Any]])
+    try require(
+        !members.isEmpty && members.count <= 4_096 && members.count == receipts.count,
+        "manifest members"
+    )
+    try require(
+        zip(members, receipts).allSatisfy { pair in
+            fixtureScalarEqual(pair.0["source_id"], pair.1["source_id"])
+        },
+        "manifest source membership"
+    )
+    let carrierEntrypoints = Set(
+        try XCTUnwrap(evidence["carrier_entrypoint_hashes"] as? [String])
+    )
+    for (member, receipt) in zip(members, receipts) {
+        let legs = try XCTUnwrap(receipt["legs"] as? [[String: Any]])
+        let matching = legs.filter {
+            fixtureScalarEqual($0["lane_id"], leaf["lane_id"])
+                && fixtureScalarEqual($0["dataspace_id"], leaf["dataspace_id"])
+        }
+        try require(matching.count == 1, "manifest route")
+        let leg = matching[0]
+        let proposal = try XCTUnwrap(leg["participant_proposal"] as? [String: Any])
+        let descriptor = try XCTUnwrap(proposal["descriptor"] as? [String: Any])
+        let identityFields = [
+            ("lane_incarnation", "lane_incarnation"),
+            ("lane_block_height", "participant_height"),
+            ("lane_block_view", "participant_view"),
+            ("previous_lane_block_height", "predecessor_height"),
+            ("previous_lane_block_descriptor_hash", "predecessor_descriptor_hash"),
+            ("descriptor_hash", "descriptor_hash"),
+        ]
+        for (descriptorField, leafField) in identityFields {
+            try require(
+                fixtureScalarEqual(descriptor[descriptorField], leaf[leafField]),
+                "manifest participant \(leafField)"
+            )
+        }
+        try require(
+            fixtureScalarEqual(proposal["proposal_hash"], leaf["proposal_hash"])
+                && fixtureScalarEqual(
+                    leg["participant_settlement_hash"],
+                    leaf["settlement_hash"]
+                ),
+            "manifest proposal or settlement"
+        )
+        let prepare = try XCTUnwrap(leg["prepare_qc"] as? [String: Any])
+        let body = try XCTUnwrap(prepare["body"] as? [String: Any])
+        try require(
+            fixtureScalarEqual(body["source_id"], member["source_id"])
+                && fixtureScalarEqual(
+                    body["tx_entrypoint_hash"],
+                    member["entrypoint_hash"]
+                ),
+            "manifest member identity"
+        )
+        let accepted = try XCTUnwrap(
+            descriptor["accepted_transaction_hashes"] as? [String]
+        )
+        try require(
+            accepted.allSatisfy { carrierEntrypoints.contains($0) },
+            "mixed-role carrier anchor"
+        )
+    }
+
+    let diagnostics = try XCTUnwrap(golden?["expected_diagnostics"] as? [String: Any])
+    let rows = try XCTUnwrap(
+        diagnostics["native_amx_participant_applications"] as? [[String: Any]]
+    )
+    try require(rows.count == 1, "diagnostic application count")
+    let row = rows[0]
+    for field in [
+        "lane_id", "dataspace_id", "lane_incarnation", "participant_height",
+        "participant_view", "predecessor_height", "predecessor_descriptor_hash",
+        "descriptor_hash", "proposal_hash", "settlement_hash",
+        "application_block_height", "application_block_hash",
+    ] {
+        try require(
+            fixtureScalarEqual(row[field], leaf[field]),
+            "diagnostic application \(field)"
+        )
+    }
+    try require(
+        try fixtureUInt(row, "source_count") == UInt64(members.count),
+        "diagnostic source count"
+    )
+}
+
 final class NativeAmxV2GroupedFixtureTests: XCTestCase {
     func testRustOwnedGroupedNativeAmxV2GoldenFixture() throws {
         let document = try loadNativeAmxGroupedFixture()
@@ -222,6 +411,7 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
             diagnostics.nativeAmxParticipantApplications.first?.sourceCount,
             2
         )
+        try validateApplicationEvidenceFixture(document)
     }
 
     func testRustOwnedGroupedNativeAmxV2NegativeCorpus() throws {
@@ -236,20 +426,27 @@ final class NativeAmxV2GroupedFixtureTests: XCTestCase {
                     mutated = try applyFixtureMutation(mutation, to: mutated)
                 }
                 let root = try XCTUnwrap(mutated as? [String: Any])
-                let golden = try XCTUnwrap(root["golden"] as? [String: Any])
-                var diagnostics = try XCTUnwrap(
-                    golden["expected_diagnostics"] as? [String: Any]
-                )
-                diagnostics["lane_settlement_commitments"] = try [
-                    XCTUnwrap(golden["receipt_group"]),
-                ]
-                let data = try JSONSerialization.data(withJSONObject: diagnostics)
-                XCTAssertThrowsError(
-                    try JSONDecoder().decode(
-                        ToriiSumeragiDiagnosticsSnapshot.self,
-                        from: data
+                if control["validator"] as? String == "application_evidence" {
+                    XCTAssertThrowsError(
+                        try validateApplicationEvidenceFixture(root)
                     )
-                )
+                } else {
+                    XCTAssertEqual(control["validator"] as? String, "receipt_group")
+                    let golden = try XCTUnwrap(root["golden"] as? [String: Any])
+                    var diagnostics = try XCTUnwrap(
+                        golden["expected_diagnostics"] as? [String: Any]
+                    )
+                    diagnostics["lane_settlement_commitments"] = try [
+                        XCTUnwrap(golden["receipt_group"]),
+                    ]
+                    let data = try JSONSerialization.data(withJSONObject: diagnostics)
+                    XCTAssertThrowsError(
+                        try JSONDecoder().decode(
+                            ToriiSumeragiDiagnosticsSnapshot.self,
+                            from: data
+                        )
+                    )
+                }
             }
         }
     }

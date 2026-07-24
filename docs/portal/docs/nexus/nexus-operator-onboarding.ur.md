@@ -2,97 +2,157 @@
 lang: ur
 direction: rtl
 source: docs/portal/docs/nexus/nexus-operator-onboarding.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: c21b5a607b18e4cf97f1be2247fc5fc92e5f23a846999720e50a1b06af5b4a9f
 source_last_modified: "2025-12-21T01:14:24.621301+00:00"
 translation_last_reviewed: 2025-12-30
----
-
----
 id: nexus-operator-onboarding
-title: Sora Nexus data-space آپریٹر آن بورڈنگ
-description: `docs/source/sora_nexus_operator_onboarding.md` کا آئینہ، جو Nexus آپریٹرز کے لئے end-to-end ریلیز چیک لسٹ کو ٹریک کرتا ہے۔
+title: Sora Nexus data-space operator onboarding
+description: Mirror of `docs/source/sora_nexus_operator_onboarding.md`, tracking the end-to-end release checklist for Nexus operators.
 ---
 
-:::note کینونیکل ماخذ
-یہ صفحہ `docs/source/sora_nexus_operator_onboarding.md` کی عکاسی کرتا ہے۔ لوکلائزڈ ایڈیشنز پورٹل تک پہنچنے تک دونوں نقول ہم آہنگ رکھیں۔
+:::note Canonical Source
+This page mirrors `docs/source/sora_nexus_operator_onboarding.md`. Keep both copies aligned until the localized editions arrive in the portal.
 :::
 
 # Sora Nexus Data-Space Operator Onboarding
 
-یہ گائیڈ end-to-end فلو کو محفوظ کرتی ہے جس پر Sora Nexus data-space آپریٹرز کو ریلیز کے اعلان کے بعد عمل کرنا ہوتا ہے۔ یہ dual-track runbook (`docs/source/release_dual_track_runbook.md`) اور artefact selection note (`docs/source/release_artifact_selection.md`) کی تکمیل کرتی ہے، اور بتاتی ہے کہ نوڈ کو آن لائن لانے سے پہلے ڈاؤن لوڈ شدہ bundles/images، manifests اور configuration templates کو عالمی lane expectations کے ساتھ کیسے ہم آہنگ کرنا ہے۔
+This guide captures the end-to-end flow Sora Nexus data-space operators must follow once a release is announced. It complements the dual-track runbook (`docs/source/release_dual_track_runbook.md`) and the artefact selection note (`docs/source/release_artifact_selection.md`) by describing how to align downloaded bundles/images, manifests, and configuration templates with the global lane expectations before bringing a node online.
 
-## سامعین اور پیشگی شرائط
-- آپ کو Nexus Program نے منظور کیا ہے اور آپ کو data-space assignment مل چکی ہے (lane index، data-space ID/alias، اور routing policy requirements).
-- آپ Release Engineering کی شائع کردہ signed release artefacts تک رسائی رکھتے ہیں (tarballs، images، manifests، signatures، public keys).
-- آپ نے اپنے validator/observer رول کے لئے پروڈکشن key material تیار یا حاصل کیا ہے (Ed25519 node identity؛ validators کے لئے BLS consensus key + PoP؛ اور کوئی بھی confidential feature toggles).
-- آپ ان موجودہ Sora Nexus peers تک رسائی کر سکتے ہیں جو آپ کے نوڈ کا bootstrap کریں گے۔
+## Audience & prerequisites
+- You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
+- You can access the signed release artefacts published by Release Engineering
+  (tarballs, images, manifests, raw 64-byte Ed25519 signatures, generated
+  Ed25519 SPKI PEM public keys for individual artifacts, the signed aggregate
+  `release_manifest.json`, its raw 32-byte public key, and provenance bundles).
+- You obtained the reviewed SHA-256 fingerprint of the exact raw 32-byte
+  release-signing public key through an authenticated channel independent of
+  the downloaded manifest.
+- You obtained the packaged `sorafs-validate` candidate by direct path and its
+  independently reviewed exact executable SHA-256.
+- You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
+- You can reach the existing Sora Nexus peers that will bootstrap your node.
 
-## مرحلہ 1 - ریلیز پروفائل کی تصدیق
-1. وہ network alias یا chain ID شناخت کریں جو آپ کو دیا گیا ہے۔
-2. اس ریپوزٹری کے checkout پر `scripts/select_release_profile.py --network <alias>` (یا `--chain-id <id>`) چلائیں۔ helper `release/network_profiles.toml` دیکھ کر deploy ہونے والا پروفائل پرنٹ کرتا ہے۔ Sora Nexus کے لئے جواب `iroha3` ہونا چاہئے۔ کسی بھی دوسرے ویلیو پر رک جائیں اور Release Engineering سے رابطہ کریں۔
-3. ریلیز اعلان میں دیا گیا version tag نوٹ کریں (مثلاً `iroha3-v3.2.0`); اسی سے آپ artefacts اور manifests حاصل کریں گے۔
+## Step 1 — Confirm the release profile
+1. Identify the network alias or chain ID you were given.
+2. Run `scripts/select_release_profile.py --network <alias>` (or `--chain-id <id>`) on a checkout of this repository. The helper consults `release/network_profiles.toml` and prints the profile to deploy. For Sora Nexus the response must be `iroha3`. For any other value, stop and contact Release Engineering.
+3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
 
-## مرحلہ 2 - artefacts حاصل کریں اور ویریفائی کریں
-1. `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) اور اس کے companion files ڈاؤن لوڈ کریں (`.sha256`, اختیاری `.sig/.pub`, `<profile>-<version>-manifest.json`, اور `<profile>-<version>-image.json` اگر آپ containers ڈپلائے کر رہے ہیں)۔
-2. ان پیک کرنے سے پہلے integrity چیک کریں:
+## Step 2 — Retrieve and validate artefacts
+1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its
+   companion `.sha256`, `.sig`, `.pub`, and
+   `<profile>-<version>-manifest.json` files. A promoted artifact must include
+   all four companions. Download `<profile>-<version>-image.json` as well when
+   deploying a container. Also download `release_manifest.json`,
+   `release_manifest.json.sig`, and `release_manifest.json.pub`.
+2. Verify the final aggregate inventory before trusting any path or hash it
+   contains:
    ```bash
-   sha256sum -c iroha3-<version>-linux.tar.zst.sha256
-   openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
-       -signature iroha3-<version>-linux.tar.zst.sig \
-       iroha3-<version>-linux.tar.zst
+   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+   RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
+   TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
+
+   python3 scripts/release_manifest_signing.py verify \
+     --manifest release_manifest.json \
+     --signature release_manifest.json.sig \
+     --public-key release_manifest.json.pub \
+     --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
+     --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
+     --trusted-release-manifest-verifier-sha256 \
+       "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
    ```
-   اگر آپ hardware-backed KMS استعمال کرتے ہیں تو `openssl` کو ادارہ منظور شدہ verifier سے بدل دیں۔
-3. tarball کے اندر `PROFILE.toml` اور JSON manifests دیکھ کر تصدیق کریں:
+   The aggregate `.pub` is exactly 32 raw Ed25519 bytes; it is not PEM.
+   The wrapper pins the verifier digest and identity, invokes
+   `sorafs-validate release-manifest`, then rechecks the manifest, key,
+   signature, and verifier. Production publication-plan generation and
+   validation re-run this check, require the independently reviewed signing and
+   verifier pins, and bind themselves to the exact aggregate-manifest SHA-256.
+   An inventory or plan marked `development-unsigned` is not promotable.
+3. Validate the checksum, per-artifact manifest
+   algorithm/format/fingerprint binding, exact
+   public key, and detached Ed25519 signature before unpacking:
+   ```bash
+   ARTIFACT=iroha3-<version>-linux.tar.zst
+   MANIFEST=iroha3-<version>-manifest.json
+   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+
+   sha256sum -c "$ARTIFACT.sha256"
+   test "$(jq -r '.artifacts[0].signature_algorithm' "$MANIFEST")" = ed25519
+   test "$(jq -r '.artifacts[0].public_key_format' "$MANIFEST")" = pem-spki-ed25519
+   test "$(jq -r '.artifacts[0].signer_fingerprint_sha256' "$MANIFEST")" \
+     = "$TRUSTED_SIGNING_FINGERPRINT"
+   ACTUAL_SIGNING_FINGERPRINT="$(
+     openssl pkey -pubin -in "$ARTIFACT.pub" -outform DER |
+       python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); p=bytes.fromhex("302a300506032b6570032100"); assert len(d)==44 and d.startswith(p); print(hashlib.sha256(d[len(p):]).hexdigest())'
+   )"
+   test "$ACTUAL_SIGNING_FINGERPRINT" = "$TRUSTED_SIGNING_FINGERPRINT"
+   openssl pkeyutl -verify -pubin -rawin \
+     -inkey "$ARTIFACT.pub" -in "$ARTIFACT" -sigfile "$ARTIFACT.sig"
+   ```
+   The fingerprint from the downloaded manifest is not a trust anchor; it must
+   equal the independently reviewed runtime fingerprint. A signature made by a
+   substituted `.pub` file is rejected by the raw-key fingerprint check.
+4. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
    - `profile = "iroha3"`
-   - `version`, `commit`, اور `built_at` فیلڈز ریلیز اعلان سے ملتے ہیں۔
-   - OS/architecture آپ کے deployment target سے match کرتی ہے۔
-4. اگر آپ container image استعمال کرتے ہیں تو `<profile>-<version>-<os>-image.tar` کے لئے hash/signature دوبارہ verify کریں اور `<profile>-<version>-image.json` میں درج image ID کنفرم کریں۔
+   - The `version`, `commit`, and `built_at` fields match the release announcement.
+   - The OS/architecture match your deployment target.
+5. If you use the container image, repeat the checksum, manifest binding,
+   raw-key fingerprint, and `openssl pkeyutl` verification for
+   `<profile>-<version>-<os>-image.tar`, then confirm the image ID recorded in
+   `<profile>-<version>-image.json`.
 
-## مرحلہ 3 - templates سے configuration تیار کریں
-1. bundle extract کریں اور `config/` کو اس جگہ کاپی کریں جہاں نوڈ اپنی configuration پڑھے گا۔
-2. `config/` کے تحت فائلوں کو templates سمجھیں:
-   - `public_key`/`private_key` کو اپنے پروڈکشن Ed25519 keys سے بدلیں۔ اگر نوڈ keys HSM سے لے گا تو private keys کو disk سے ہٹا دیں؛ config کو HSM connector کی طرف پوائنٹ کریں۔
-   - `trusted_peers`, `network.address` اور `torii.address` کو آپ کے قابل رسائی interfaces اور مقررہ bootstrap peers کے مطابق ایڈجسٹ کریں۔
-   - `client.toml` کو operator-facing Torii endpoint (TLS configuration سمیت، اگر لاگو ہو) اور آپ کی provisioning کردہ credentials کے ساتھ اپ ڈیٹ کریں۔
-3. bundle میں فراہم کردہ chain ID برقرار رکھیں، الا یہ کہ Governance واضح طور پر ہدایت دے - global lane ایک واحد canonical chain identifier چاہتا ہے۔
-4. نوڈ کو Sora پروفائل فلیگ کے ساتھ اسٹارٹ کرنے کا ارادہ رکھیں: `irohad --sora --config <path>`. اگر فلیگ نہ ہو تو configuration loader SoraFS یا multi-lane سیٹنگز کو reject کر دے گا۔
+## Step 3 — Stage configuration from templates
+1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
+2. Treat the files under `config/` as templates:
+   - Replace `public_key`/`private_key` with your production Ed25519 keys. Remove private keys from disk if the node will source them from an HSM; update the config to point at the HSM connector instead.
+   - Adjust `trusted_peers`, `network.address`, and `torii.address` so they reflect your reachable interfaces and the bootstrap peers you were assigned.
+   - Update `client.toml` with the operator-facing Torii endpoint (including TLS configuration if applicable) and the credentials you provision for operational tooling.
+3. Keep the chain ID provided in the bundle unless Governance explicitly instructs otherwise—the global lane expects a single canonical chain identifier.
+4. Plan to start the node with the Sora profile flag: `irohad --sora --config <path>`. The configuration loader will reject SoraFS or multi-lane settings when the flag is absent.
 
-## مرحلہ 4 - data-space metadata اور routing ہم آہنگ کریں
-1. `config/config.toml` ایڈٹ کریں تاکہ `[nexus]` سیکشن Nexus Council کے فراہم کردہ data-space catalog سے match کرے:
-   - `lane_count` موجودہ epoch میں فعال lanes کی مجموعی تعداد کے برابر ہونا چاہئے۔
-   - `[[nexus.lane_catalog]]` اور `[[nexus.dataspace_catalog]]` کی ہر انٹری میں منفرد `index`/`id` اور متفقہ aliases ہونے چاہئیں۔ موجودہ global entries نہ ہٹائیں؛ اگر council نے اضافی data-spaces دیئے ہیں تو اپنے delegated aliases شامل کریں۔
-   - ہر dataspace انٹری میں `fault_tolerance (f)` شامل ہونا یقینی بنائیں؛ lane-relay committees کا سائز `3f+1` ہوتا ہے۔
-2. `[[nexus.routing_policy.rules]]` کو اپنی دی گئی پالیسی کے مطابق اپ ڈیٹ کریں۔ default template governance instructions کو lane `1` اور contract deployments کو lane `2` پر route کرتا ہے؛ قواعد شامل یا تبدیل کریں تاکہ آپ کے data-space کی ٹریفک درست lane اور alias پر جائے۔ قواعد کی ترتیب بدلنے سے پہلے Release Engineering کے ساتھ ہم آہنگی کریں۔
-3. `[nexus.da]`, `[nexus.da.audit]`, اور `[nexus.da.recovery]` thresholds ریویو کریں۔ آپریٹرز سے توقع ہے کہ وہ council-approved ویلیوز رکھیں؛ صرف اسی وقت بدلیں جب نئی پالیسی منظور ہو۔
-4. حتمی configuration کو اپنے operations tracker میں ریکارڈ کریں۔ dual-track release runbook onboarding ticket کے ساتھ موثر `config.toml` (secrets redacted) منسلک کرنے کا تقاضا کرتا ہے۔
+## Step 4 — Align data-space metadata and routing
+1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
+   - `lane_count` must equal the total lanes enabled in the current epoch.
+   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
+   - Ensure each dataspace entry includes `fault_tolerance (f)`; lane-relay committees are sized at `3f+1`.
+2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
+3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
+4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
 
-## مرحلہ 5 - پری فلائٹ ویلیڈیشن
-1. نیٹ ورک میں شامل ہونے سے پہلے built-in configuration validator چلائیں:
+## Step 5 — Pre-flight validation
+1. Run the built-in configuration validator before joining the network:
    ```bash
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
-   یہ resolved configuration پرنٹ کرتا ہے اور اگر catalog/routing entries میں تضاد ہو یا genesis اور config نہ ملیں تو جلدی fail ہو جاتا ہے۔
-2. اگر آپ containers deploy کرتے ہیں تو `docker load -i <profile>-<version>-<os>-image.tar` کے بعد وہی کمانڈ image کے اندر چلائیں ( `--sora` شامل کرنا نہ بھولیں)۔
-3. logs میں placeholder lane/data-space identifiers کے warnings دیکھیں۔ اگر ملیں تو مرحلہ 4 پر واپس جائیں - پروڈکشن deployments کو templates کے placeholder IDs پر انحصار نہیں کرنا چاہئے۔
-4. اپنا local smoke procedure چلائیں (مثلاً `iroha_cli` سے `FindNetworkStatus` query بھیجیں، تصدیق کریں کہ telemetry endpoints `nexus_lane_state_total` expose کرتے ہیں، اور streaming keys کی rotation/import کی تصدیق کریں)۔
+   This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
+2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
+3. Check logs and `--trace-config` output for lane/data-space validation warnings. If any appear, revisit Step 4 so the effective catalog, aliases, and routing rules match the council-approved topology.
+4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
 
-## مرحلہ 6 - Cutover اور hand-off
-1. تصدیق شدہ `manifest.json` اور signature artefacts کو release ticket میں محفوظ کریں تاکہ auditors آپ کی checks دوبارہ کر سکیں۔
-2. Nexus Operations کو اطلاع دیں کہ نوڈ متعارف کرنے کے لئے تیار ہے؛ شامل کریں:
+## Step 6 — Cutover and hand-off
+1. Store the verified per-artifact manifests and signatures plus
+   `release_manifest.json`, `release_manifest.json.sig`, and
+   `release_manifest.json.pub` in the release ticket so auditors can reproduce
+   your checks.
+2. Notify Nexus Operations that the node is ready to be introduced; include:
    - Node identity (peer ID, hostnames, Torii endpoint).
-   - مؤثر lane/data-space catalog اور routing policy ویلیوز۔
-   - Verified binaries/images کے hashes۔
-3. حتمی peer admission (gossip seeds اور lane assignment) کو `@nexus-core` کے ساتھ کوآرڈینیٹ کریں۔ منظوری ملنے سے پہلے نیٹ ورک join نہ کریں؛ Sora Nexus deterministic lane occupancy نافذ کرتا ہے اور updated admissions manifest چاہتا ہے۔
-4. نوڈ live ہونے کے بعد اپنے runbooks میں کی گئی overrides اپ ڈیٹ کریں اور release tag نوٹ کریں تاکہ اگلی iteration اسی baseline سے شروع ہو۔
+   - Effective lane/data-space catalogue and routing policy values.
+   - Hashes of the binaries/images you verified.
+3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
+4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+5. Attach the external PKCS#11/HSM signing-ceremony record, OIDC/cosign
+   provenance verification, vulnerability-scan result, registry/publication
+   receipt, and rollback/yank rehearsal. These hosted records remain open until
+   Release Engineering supplies them; local verification cannot synthesize
+   them.
 
-## ریفرنس چیک لسٹ
-- [ ] Release profile `iroha3` کے طور پر validate ہو چکا ہے۔
-- [ ] Bundle/image کے hashes اور signatures verify ہو چکے ہیں۔
-- [ ] Keys، peer addresses اور Torii endpoints پروڈکشن ویلیوز پر اپ ڈیٹ ہیں۔
-- [ ] Nexus lane/dataspace catalog اور routing policy council assignment سے match کرتی ہے۔
-- [ ] Configuration validator (`irohad --sora --config ... --trace-config`) بغیر warnings کے پاس کرتا ہے۔
-- [ ] Manifests/signatures onboarding ticket میں آرکائیو اور Ops کو اطلاع دے دی گئی ہے۔
+## Reference checklist
+- [ ] Release profile validated as `iroha3`.
+- [ ] Aggregate inventory plus bundle/image hashes and signatures verified.
+- [ ] Keys, peer addresses, and Torii endpoints updated to production values.
+- [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
+- [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.
+- [ ] Manifests/signatures archived in the onboarding ticket and Ops notified.
 
-Nexus migration phases اور telemetry expectations کے وسیع تر سیاق کے لئے [Nexus transition notes](./nexus-transition-notes) دیکھیں۔
+For broader context on Nexus migration phases and telemetry expectations, review [Nexus transition notes](./nexus-transition-notes).

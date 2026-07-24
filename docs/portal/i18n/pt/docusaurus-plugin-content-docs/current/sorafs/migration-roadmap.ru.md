@@ -43,14 +43,14 @@ neste cartão de crédito, o livro razão, governança e engenharia de liberaç�
 |-----|------|----------|----------|-------|
 | Repetições eléctricas | M0 | Еженедельные simulações, сравнивающие локальные chunk digests с `fixtures/sorafs_chunker`. Publicado em `docs/source/sorafs/reports/`. | Provedores de armazenamento | `determinism-<date>.md` é uma matriz aprovada/reprovada. |
 | Принудить подписи | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` é usado para derivar ou manifestar. Dev substitui a renúncia de governança em PR. | GT Ferramentaria | Лог CI, ссылка на waiver ticket (если применимо). |
-| Sinalizadores de expectativa | M1 | Пайплайны вызывают `sorafs_manifest_stub` com expectativas de saída para фиксации: | Documentos CI | Os scripts criados são selecionados para sinalizadores de expectativa (como o bloco de comandos não). |
+| Sinalizadores de expectativa | M1 | Пайплайны вызывают `sorafs_manifest_builder` com expectativas de saída para фиксации: | Documentos CI | Os scripts criados são selecionados para sinalizadores de expectativa (como o bloco de comandos não). |
 | Fixação primeiro do registro | M2 | `sorafs pin propose` e `sorafs pin approve` оборачивают отправку manifesto; CLI para usar o `--require-registry`. | Operações de Governança | Log de auditoria da CLI do Registro, não há necessidade de conexão. |
 | Paridade de observabilidade | M3 | Painéis Prometheus/Grafana предупреждают о расхождении inventário de blocos e manifestos de registro; alert'ы подключены к operações de plantão. | Observabilidade | Acesso ao painel, IDs de alertas, resultados do GameDay. |
 
 #### Каноническая команда публикации
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

@@ -41,7 +41,7 @@ SoraFS བཟོ་བཀོད་ཨར་ཨེཕ་སི་ནང་བཀ�
 ## འཛུལ་ཞུགས་ཀྱི་ལས་རིམ།
 
 1. **གྲོས་འཆར་གསར་བསྐྲུན་**།
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` ཁ་སྐོང་བརྐྱབ།
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` ཁ་སྐོང་བརྐྱབ།
      ཐོན་སྐྱེད་ `ProviderAdmissionProposalV1` + བདེན་དཔང་བང་ཚད།
    - བདེན་དཔྱད་: དགོས་མཁོའི་ས་སྒོ་ > ༠, ཀེ་ནོ་ནིག་ཅཱར་ཀར་འཛིན་སྐྱོང་ I18NI000000038X ནང་ ངེས་གཏན་བཟོ།
 2. **གཞུང་སྐྱོང་རྒྱབ་སྐྱོར་**

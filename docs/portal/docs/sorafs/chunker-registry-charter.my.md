@@ -61,7 +61,7 @@ SDKs)။ ၎င်းသည် alias ကို တွန်းအားပေး
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - ပြိုင်ပွဲများ၊ အဆိုပြုချက်၊ အဆုံးအဖြတ်အစီရင်ခံစာနှင့် မှတ်ပုံတင်ခြင်းပါ၀င်သော PR ကို တင်သွင်းပါ။
@@ -100,14 +100,14 @@ SDKs)။ ၎င်းသည် alias ကို တွန်းအားပေး
 
 ## Tooling မျှော်မှန်းချက်များ
 
-- `sorafs_manifest_chunk_store` နှင့် `sorafs_manifest_stub` ဖော်ထုတ်ရန်-
+- `sorafs_manifest_chunk_store` နှင့် `sorafs_manifest_builder` ဖော်ထုတ်ရန်-
   - မှတ်ပုံတင်ခြင်းစစ်ဆေးခြင်းအတွက် `--list-profiles`။
   - အသုံးပြုထားသော canonical metadata block ကိုထုတ်လုပ်ရန် `--promote-profile=<handle>`
     ပရိုဖိုင်ကို ကြော်ငြာတဲ့အခါ။
   - `--json-out=-` သည် stdout သို့ အစီရင်ခံစာများကို တိုက်ရိုက်ထုတ်လွှင့်ရန်၊ ပြန်လည်ထုတ်လုပ်နိုင်သော ပြန်လည်သုံးသပ်မှုကို ဖွင့်ပေးသည်
     သစ်လုံးများ
 - `ensure_charter_compliance()` ကို သက်ဆိုင်ရာ binaries များတွင် စတင်ချိန်တွင် ခေါ်ဆိုပါသည်။
-  (`manifest_chunk_store`၊ `provider_advert_stub`)။ CI စစ်ဆေးမှု အသစ်များ ပျက်ကွက်ပါက ဖြေဆိုရပါမည်။
+  (`manifest_chunk_store`၊ `sorafs_provider_advert`)။ CI စစ်ဆေးမှု အသစ်များ ပျက်ကွက်ပါက ဖြေဆိုရပါမည်။
   စာတမ်းများသည် ပဋိညာဉ်ကို ဖောက်ဖျက်ပါသည်။
 
 ## မှတ်တမ်းထားရှိခြင်း။

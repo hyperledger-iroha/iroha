@@ -60,9 +60,9 @@ use super::{
         prepare_v2_lane_payload_plan, proposal_lookahead_enabled, v2_known_lane_tip_for_route,
     },
     message::{
-        BlockMessage, LANE_HISTORICAL_RECOVERY_VERSION_V1, LaneHistoricalRecoveryKindV1,
+        BlockMessage, LANE_HISTORICAL_RECOVERY_VERSION_V2, LaneHistoricalRecoveryKindV1,
         LaneHistoricalRecoveryPayloadV1, LaneHistoricalRecoveryRequestV1,
-        LaneHistoricalRecoveryResponseV1,
+        LaneHistoricalRecoveryResponseV1, NativeAmxParticipantRecoveryMarkerV1,
     },
     output_guard::ConsensusOutputGuard,
     v2_candidate::{
@@ -105,7 +105,7 @@ use crate::{
         validate_native_amx_qc,
     },
     queue::{
-        LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
+        LaneQueueReservationKeyV1, LaneQueueReservationOutcome, LaneQueueReservationRoutingMode,
         LaneQueueReservationSelectionLimits, LaneReservedTransaction, Queue, RoutingDecision,
         RoutingPlan,
     },
@@ -177,6 +177,187 @@ fn preferred_merge_candidates<T: Clone>(
     installed
 }
 
+fn lane_proposal_carries_incarnation(
+    proposal: &LaneBlockProposalV1,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> bool {
+    let descriptor = &proposal.descriptor;
+    descriptor.lane_id == lane_id
+        && descriptor.dataspace_id == dataspace_id
+        && descriptor.lane_incarnation == lane_incarnation
+}
+
+fn native_amx_receipt_carries_separate_participant_incarnation(
+    receipt: &NativeAmxReceipt,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> bool {
+    crate::native_amx::native_amx_receipt_requires_separate_participant_application_for(
+        receipt,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+    )
+    .unwrap_or(true)
+}
+
+fn lane_executable_payload_carries_lane(
+    payload: &LaneExecutablePayloadV1,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> bool {
+    if lane_proposal_carries_incarnation(
+        &payload.origin_proposal,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+    ) {
+        return true;
+    }
+    let entry_count = payload.entrypoints.len();
+    if payload.entrypoint_hashes.len() != entry_count
+        || payload.reservation_keys.len() != entry_count
+        || payload.routing_plans.len() != entry_count
+        || payload.native_amx_receipts.len() != entry_count
+    {
+        return true;
+    }
+    let descriptor = &payload.origin_proposal.descriptor;
+    payload
+        .entrypoints
+        .iter()
+        .zip(&payload.entrypoint_hashes)
+        .zip(&payload.reservation_keys)
+        .zip(&payload.routing_plans)
+        .zip(&payload.native_amx_receipts)
+        .any(
+            |((((entrypoint, entrypoint_hash), reservation), routing_plan), receipt)| {
+                let computed_entrypoint_hash = entrypoint.hash();
+                if Hash::from(computed_entrypoint_hash) != *entrypoint_hash
+                    || reservation.validate().is_err()
+                    || reservation.entrypoint_hash != computed_entrypoint_hash
+                    || reservation.routing_plan_digest != routing_plan.digest()
+                    || reservation.coordinator_leg != routing_plan.coordinator_leg()
+                    || reservation.lane_id != descriptor.lane_id
+                    || reservation.dataspace_id != descriptor.dataspace_id
+                    || reservation.lane_incarnation != descriptor.lane_incarnation
+                    || reservation.proposal_height != descriptor.proposal_height
+                    || reservation.lane_block_height != descriptor.lane_block_height
+                    || reservation.lane_block_view != descriptor.lane_block_view
+                    || !crate::native_amx::receipt_shape_matches_coordinator_payload(
+                        receipt.as_ref(),
+                        routing_plan,
+                        reservation.signed_transaction_hash.as_ref(),
+                        *entrypoint_hash,
+                        payload.chain_id_hash,
+                        &payload.origin_proposal,
+                    )
+                {
+                    return true;
+                }
+                receipt.as_ref().is_some_and(|receipt| {
+                    native_amx_receipt_carries_separate_participant_incarnation(
+                        receipt,
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                    )
+                })
+            },
+        )
+}
+
+fn merge_lane_execution_carries_lane(
+    execution: &iroha_data_model::merge::MergeLaneExecution,
+    lane_id: LaneId,
+    dataspace_id: DataSpaceId,
+    lane_incarnation: Hash,
+) -> bool {
+    if lane_proposal_carries_incarnation(
+        &execution.proposal,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+    ) || lane_proposal_carries_incarnation(
+        &execution.origin_proposal,
+        lane_id,
+        dataspace_id,
+        lane_incarnation,
+    ) {
+        return true;
+    }
+    let certified = &execution.proposal.descriptor;
+    let origin = &execution.origin_proposal.descriptor;
+    let entry_count = execution.entrypoints.len();
+    if certified.lane_id != origin.lane_id
+        || certified.dataspace_id != origin.dataspace_id
+        || certified.lane_incarnation != origin.lane_incarnation
+        || execution.entrypoint_hashes.len() != entry_count
+        || execution.reservation_keys.len() != entry_count
+        || execution.routing_plans.len() != entry_count
+        || execution.native_amx_receipts.len() != entry_count
+        || execution.result_hashes.len() != entry_count
+        || execution.results.len() != entry_count
+    {
+        return true;
+    }
+    execution
+        .entrypoints
+        .iter()
+        .zip(&execution.entrypoint_hashes)
+        .zip(&execution.reservation_keys)
+        .zip(&execution.routing_plans)
+        .zip(&execution.native_amx_receipts)
+        .any(
+            |((((entrypoint, entrypoint_hash), encoded_reservation), encoded_plan), receipt)| {
+                let Ok(reservation) =
+                    norito::decode_from_bytes::<LaneQueueReservationKeyV1>(encoded_reservation)
+                else {
+                    return true;
+                };
+                let Ok(routing_plan) = norito::decode_from_bytes::<RoutingPlan>(encoded_plan)
+                else {
+                    return true;
+                };
+                let computed_entrypoint_hash = entrypoint.hash();
+                if Hash::from(computed_entrypoint_hash) != *entrypoint_hash
+                    || reservation.validate().is_err()
+                    || reservation.entrypoint_hash != computed_entrypoint_hash
+                    || reservation.routing_plan_digest != routing_plan.digest()
+                    || reservation.coordinator_leg != routing_plan.coordinator_leg()
+                    || reservation.lane_id != origin.lane_id
+                    || reservation.dataspace_id != origin.dataspace_id
+                    || reservation.lane_incarnation != origin.lane_incarnation
+                    || reservation.proposal_height != origin.proposal_height
+                    || reservation.lane_block_height != origin.lane_block_height
+                    || reservation.lane_block_view != origin.lane_block_view
+                    || !crate::native_amx::receipt_shape_matches_coordinator_payload(
+                        receipt.as_ref(),
+                        &routing_plan,
+                        reservation.signed_transaction_hash.as_ref(),
+                        *entrypoint_hash,
+                        execution.autonomous_chain_id_hash,
+                        &execution.origin_proposal,
+                    )
+                {
+                    return true;
+                }
+                receipt.as_ref().is_some_and(|receipt| {
+                    native_amx_receipt_carries_separate_participant_incarnation(
+                        receipt,
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                    )
+                })
+            },
+        )
+}
+
 fn merge_execution_batch_carries_lane(
     batch: &iroha_data_model::merge::MergeExecutionBatch,
     lane_id: LaneId,
@@ -184,32 +365,7 @@ fn merge_execution_batch_carries_lane(
     lane_incarnation: Hash,
 ) -> bool {
     batch.lanes.iter().any(|execution| {
-        let descriptor = &execution.proposal.descriptor;
-        (descriptor.lane_id == lane_id
-            && descriptor.dataspace_id == dataspace_id
-            && descriptor.lane_incarnation == lane_incarnation)
-            || execution.routing_plans.iter().any(|encoded| {
-                norito::decode_from_bytes::<RoutingPlan>(encoded).map_or(true, |plan| {
-                    plan.legs().into_iter().any(|leg| {
-                        leg.route.lane_id == lane_id && leg.route.dataspace_id == dataspace_id
-                    })
-                })
-            })
-            || execution
-                .native_amx_receipts
-                .iter()
-                .flatten()
-                .any(|receipt| {
-                    (receipt.lane_id == lane_id
-                        && receipt.dataspace_id == dataspace_id
-                        && receipt.lane_incarnation == lane_incarnation)
-                        || receipt.legs.iter().any(|leg| {
-                            let participant = &leg.participant_proposal.descriptor;
-                            leg.lane_id == lane_id
-                                && leg.dataspace_id == dataspace_id
-                                && participant.lane_incarnation == lane_incarnation
-                        })
-                })
+        merge_lane_execution_carries_lane(execution, lane_id, dataspace_id, lane_incarnation)
     })
 }
 
@@ -915,9 +1071,7 @@ fn lane_fanout_height(message: &BlockMessage) -> Option<u64> {
         BlockMessage::LaneBlockCertificate(certificate) => {
             Some(certificate.proposal.descriptor.proposal_height)
         }
-        BlockMessage::LaneHistoricalRecoveryRequest(request) => {
-            Some(request.certificate.proposal.descriptor.proposal_height)
-        }
+        BlockMessage::LaneHistoricalRecoveryRequest(request) => Some(request.source_height()),
         BlockMessage::LaneHistoricalRecoveryResponse(_) => None,
         _ => None,
     }
@@ -1045,6 +1199,122 @@ impl HistoricalRecoveryIdentity {
             proposal_block_hash: hint.proposal_block_hash,
         })
     }
+}
+
+impl From<crate::state::AppliedNativeAmxParticipantFrontierMarker>
+    for NativeAmxParticipantRecoveryMarkerV1
+{
+    fn from(marker: crate::state::AppliedNativeAmxParticipantFrontierMarker) -> Self {
+        Self {
+            frontier_version: marker.version,
+            lane_id: marker.lane_id,
+            dataspace_id: marker.dataspace_id,
+            lane_incarnation: marker.lane_incarnation,
+            participant_height: marker.lane_block_height,
+            participant_view: marker.participant_view,
+            predecessor_height: marker.previous_lane_block_height,
+            predecessor_descriptor_hash: marker.previous_lane_block_descriptor_hash,
+            descriptor_hash: marker.lane_block_descriptor_hash,
+            proposal_hash: marker.participant_proposal_hash,
+            settlement_hash: marker.participant_settlement_hash,
+            application_block_height: marker.application_block_height,
+            application_block_hash: marker.application_block_hash,
+            source_count: marker.source_count,
+        }
+    }
+}
+
+fn native_participant_recovery_marker_is_well_formed(
+    marker: &NativeAmxParticipantRecoveryMarkerV1,
+) -> bool {
+    marker.frontier_version == 2
+        && marker.participant_height > 0
+        && marker
+            .predecessor_height
+            .checked_add(1)
+            .is_some_and(|height| height == marker.participant_height)
+        && (marker.predecessor_height == 0) == marker.predecessor_descriptor_hash.is_none()
+        && marker.application_block_height > 0
+        && marker.source_count > 0
+        && usize::try_from(marker.source_count).is_ok_and(|source_count| {
+            source_count <= crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES
+        })
+        && !marker
+            .lane_incarnation
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        && !marker
+            .descriptor_hash
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        && !marker.proposal_hash.as_ref().iter().all(|byte| *byte == 0)
+        && !Hash::from(marker.settlement_hash)
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+        && !Hash::from(marker.application_block_hash)
+            .as_ref()
+            .iter()
+            .all(|byte| *byte == 0)
+}
+
+fn native_participant_manifest_contains_exact_recovery_marker(
+    manifest: &crate::sumeragi::exec::NativeAmxApplicationManifestV1,
+    marker: &NativeAmxParticipantRecoveryMarkerV1,
+) -> bool {
+    manifest.entries().iter().any(|entry| {
+        let leaf = &entry.leaf;
+        leaf.lane_id == marker.lane_id
+            && leaf.dataspace_id == marker.dataspace_id
+            && leaf.lane_incarnation == marker.lane_incarnation
+            && leaf.participant_height == marker.participant_height
+            && leaf.participant_view == marker.participant_view
+            && leaf.predecessor_height == marker.predecessor_height
+            && leaf.predecessor_descriptor_hash == marker.predecessor_descriptor_hash
+            && leaf.descriptor_hash == marker.descriptor_hash
+            && leaf.proposal_hash == marker.proposal_hash
+            && leaf.settlement_hash == marker.settlement_hash
+            && leaf.application_block_height == marker.application_block_height
+            && leaf.application_block_hash == marker.application_block_hash
+            && u64::try_from(leaf.members.len()).ok() == Some(marker.source_count)
+    })
+}
+
+fn native_participant_recovery_block_matches_finality(
+    block: &SignedBlock,
+    finality: &wire::finality::V2FinalityArtifact,
+    execution_commitment: &wire::ExecutionCommitment,
+    marker: &NativeAmxParticipantRecoveryMarkerV1,
+) -> bool {
+    if !native_participant_recovery_marker_is_well_formed(marker)
+        || execution_commitment.validate().is_err()
+        || finality.verify().is_err()
+        || finality.validate_for_header(&block.header()).is_err()
+        || finality.height != marker.application_block_height
+        || finality.block_hash != marker.application_block_hash
+        || block.header().height().get() != marker.application_block_height
+        || block.hash() != marker.application_block_hash
+        || finality.commit_qc.execution_commitment != *execution_commitment
+    {
+        return false;
+    }
+    let Ok(executed_block_wire_hash) = block.executed_block_wire_hash() else {
+        return false;
+    };
+    let Ok(manifest) =
+        crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(block)
+    else {
+        return false;
+    };
+    execution_commitment.native_amx_application_manifest_version
+        == wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION
+        && execution_commitment.executed_block_wire_hash == executed_block_wire_hash
+        && execution_commitment.executed_block_wire_hash == manifest.executed_block_wire_hash()
+        && execution_commitment.native_amx_application_manifest_root == manifest.root()
+        && execution_commitment.native_amx_application_manifest_count == manifest.count()
+        && native_participant_manifest_contains_exact_recovery_marker(&manifest, marker)
 }
 
 /// Durable boundary at which an earlier-height recovery attempt is waiting.
@@ -1411,8 +1681,12 @@ pub(crate) struct V2LaneWorkAdapter {
         BTreeMap<HistoricalRecoveryIdentity, OutstandingHistoricalRecoveryRequest>,
     historical_recovery_request_owners:
         BTreeMap<HashOf<LaneHistoricalRecoveryRequestV1>, HistoricalRecoveryIdentity>,
+    native_participant_recovery_requests:
+        BTreeMap<NativeAmxParticipantRecoveryMarkerV1, OutstandingHistoricalRecoveryRequest>,
+    native_participant_recovery_request_owners:
+        BTreeMap<HashOf<LaneHistoricalRecoveryRequestV1>, NativeAmxParticipantRecoveryMarkerV1>,
     committed_lane_output_cursor: usize,
-    admitted_relays: BTreeSet<(LaneId, DataSpaceId, u64, Hash)>,
+    admitted_relays: BTreeSet<(LaneId, DataSpaceId, Hash, u64, Hash)>,
     merge_entries: BTreeMap<MergeKey, PendingMerge>,
     merge_claims: BTreeMap<(u64, u64, wire::ValidatorIndex), Hash>,
     merge_signing_guard: MergeSigningGuard,
@@ -1641,6 +1915,8 @@ impl V2LaneWorkAdapter {
             ),
             historical_recovery_requests: BTreeMap::new(),
             historical_recovery_request_owners: BTreeMap::new(),
+            native_participant_recovery_requests: BTreeMap::new(),
+            native_participant_recovery_request_owners: BTreeMap::new(),
             committed_lane_output_cursor: 0,
             admitted_relays: BTreeSet::new(),
             merge_entries: BTreeMap::new(),
@@ -2292,7 +2568,7 @@ impl V2LaneWorkAdapter {
         Ok(header)
     }
 
-    fn repair_globally_applied_lane_receipts(&self) -> Result<usize, V2LaneWorkError> {
+    fn repair_globally_applied_lane_receipts(&mut self) -> Result<usize, V2LaneWorkError> {
         let pending = self
             .state
             .unapplied_lane_block_artifact_heights_snapshot_cached();
@@ -2383,11 +2659,8 @@ impl V2LaneWorkAdapter {
                 ));
             };
             let Some(block) = self.kura.get_block(height) else {
-                return Err(V2LaneWorkError::Persistence(format!(
-                    "Native AMX participant frontier at lane {} is missing its canonical carrier body at height {}",
-                    marker.lane_id.as_u32(),
-                    marker.application_block_height,
-                )));
+                self.schedule_native_participant_recovery_request(*marker)?;
+                continue;
             };
             if block.hash() != marker.application_block_hash {
                 return Err(V2LaneWorkError::Persistence(format!(
@@ -2415,6 +2688,13 @@ impl V2LaneWorkAdapter {
             .iter()
             .find(|marker| unresolved_native.contains(marker))
         {
+            let recovery_marker = NativeAmxParticipantRecoveryMarkerV1::from(*marker);
+            if self
+                .native_participant_recovery_requests
+                .contains_key(&recovery_marker)
+            {
+                return Ok(repaired);
+            }
             return Err(V2LaneWorkError::Persistence(format!(
                 "Native AMX participant frontier at lane {} remains without exact durable evidence after repair",
                 marker.lane_id.as_u32(),
@@ -2696,12 +2976,19 @@ impl V2LaneWorkAdapter {
                 certificate.proposal.descriptor.proposal_height < self.context.height
                     || self.proposal_is_bound_to_decided_carrier(&certificate.proposal)
             }
-            BlockMessage::LaneHistoricalRecoveryRequest(request) => {
-                request.certificate.proposal.descriptor.proposal_height < self.context.height
+            BlockMessage::LaneHistoricalRecoveryRequest(request) => match &request.kind {
+                LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { .. } => {
+                    request.source_height() <= self.context.height
+                }
+                _ => request.source_height() < self.context.height,
+            },
+            BlockMessage::LaneHistoricalRecoveryResponse(response) => {
+                self.historical_recovery_request_owners
+                    .contains_key(&response.request_hash)
+                    || self
+                        .native_participant_recovery_request_owners
+                        .contains_key(&response.request_hash)
             }
-            BlockMessage::LaneHistoricalRecoveryResponse(response) => self
-                .historical_recovery_request_owners
-                .contains_key(&response.request_hash),
             BlockMessage::LaneExecutablePayload(payload) => {
                 self.proposal_is_bound_to_decided_carrier(&payload.origin_proposal)
             }
@@ -3747,6 +4034,162 @@ impl V2LaneWorkAdapter {
         }
     }
 
+    fn retire_native_participant_recovery_request(
+        &mut self,
+        marker: NativeAmxParticipantRecoveryMarkerV1,
+    ) {
+        if let Some(retired) = self.native_participant_recovery_requests.remove(&marker) {
+            self.native_participant_recovery_request_owners
+                .remove(&retired.request_hash);
+        }
+    }
+
+    fn native_participant_recovery_marker_is_pending(
+        &self,
+        marker: NativeAmxParticipantRecoveryMarkerV1,
+    ) -> Result<bool, V2LaneWorkError> {
+        self.state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+            .map(|markers| {
+                markers
+                    .into_iter()
+                    .map(NativeAmxParticipantRecoveryMarkerV1::from)
+                    .any(|candidate| candidate == marker)
+            })
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))
+    }
+
+    fn schedule_native_participant_recovery_request(
+        &mut self,
+        marker: crate::state::AppliedNativeAmxParticipantFrontierMarker,
+    ) -> Result<(), V2LaneWorkError> {
+        let marker = NativeAmxParticipantRecoveryMarkerV1::from(marker);
+        if !native_participant_recovery_marker_is_well_formed(&marker)
+            || !self.lane_route_active(
+                marker.lane_id,
+                marker.dataspace_id,
+                marker.lane_incarnation,
+                marker.application_block_height,
+            )
+            || self
+                .state
+                .committed_block_hash_at_height(marker.application_block_height)
+                != Some(marker.application_block_hash)
+        {
+            return Err(V2LaneWorkError::Persistence(
+                "refusing Native participant carrier recovery for a malformed, stale, or non-canonical frontier"
+                    .to_owned(),
+            ));
+        }
+        let finality = self
+            .kura
+            .v2_finality_artifact(marker.application_block_height)
+            .map_err(|error| V2LaneWorkError::Persistence(error.to_string()))?
+            .ok_or_else(|| {
+                V2LaneWorkError::Persistence(
+                    "Native participant carrier recovery lacks durable V2 finality".to_owned(),
+                )
+            })?;
+        finality.verify().map_err(|error| {
+            V2LaneWorkError::Persistence(format!(
+                "Native participant carrier recovery finality is invalid: {error}"
+            ))
+        })?;
+        let execution_commitment = finality.commit_qc.execution_commitment;
+        if finality.height != marker.application_block_height
+            || finality.block_hash != marker.application_block_hash
+            || execution_commitment.validate().is_err()
+            || execution_commitment.native_amx_application_manifest_count == 0
+        {
+            return Err(V2LaneWorkError::Persistence(
+                "Native participant carrier recovery finality conflicts with the exact frontier"
+                    .to_owned(),
+            ));
+        }
+        let request = LaneHistoricalRecoveryRequestV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+            requester: self.local_peer.clone(),
+            certificate: None,
+            signer_pops: BTreeMap::new(),
+            kind: LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+                marker: Box::new(marker),
+                finality_artifact_hash: HashOf::new(&finality),
+                execution_commitment: Box::new(execution_commitment),
+            },
+        };
+        if !self.historical_recovery_request_fits_frame(&request) {
+            return Err(V2LaneWorkError::Persistence(
+                "Native participant carrier recovery request exceeds the authenticated frame bound"
+                    .to_owned(),
+            ));
+        }
+        let request_hash = HashOf::new(&request);
+        if let Some(existing) = self.native_participant_recovery_requests.get(&marker) {
+            if existing.request != request || existing.request_hash != request_hash {
+                self.retire_native_participant_recovery_request(marker);
+            }
+        }
+        if !self
+            .native_participant_recovery_requests
+            .contains_key(&marker)
+        {
+            if self
+                .historical_recovery_requests
+                .len()
+                .saturating_add(self.native_participant_recovery_requests.len())
+                >= self.limits.session_capacity.get()
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "historical recovery request capacity exhausted".to_owned(),
+                ));
+            }
+            if self
+                .historical_recovery_request_owners
+                .contains_key(&request_hash)
+                || self
+                    .native_participant_recovery_request_owners
+                    .contains_key(&request_hash)
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "Native participant recovery request hash aliases another owner".to_owned(),
+                ));
+            }
+            self.native_participant_recovery_request_owners
+                .insert(request_hash, marker);
+            self.native_participant_recovery_requests.insert(
+                marker,
+                OutstandingHistoricalRecoveryRequest {
+                    request_hash,
+                    request: request.clone(),
+                },
+            );
+        }
+
+        let message = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request));
+        let local_peer = self.local_peer.clone();
+        let mut seen = BTreeSet::new();
+        for peer in finality
+            .commit_qc
+            .signers
+            .iter()
+            .filter_map(|index| {
+                usize::try_from(*index)
+                    .ok()
+                    .and_then(|index| finality.height_context.roster.get(index))
+                    .map(|entry| entry.validator.clone())
+            })
+            .filter(|peer| peer != &local_peer && seen.insert(peer.clone()))
+        {
+            if !self.push_effect(V2LaneWorkEffect::PostLaneBlock {
+                peer,
+                message: message.clone(),
+            }) {
+                break;
+            }
+        }
+        Ok(())
+    }
+
     fn historical_recovery_request_fits_frame(
         &self,
         request: &LaneHistoricalRecoveryRequestV1,
@@ -3766,10 +4209,10 @@ impl V2LaneWorkAdapter {
         session: &CommittedLaneBlockSession,
     ) -> Result<BTreeMap<PublicKey, Vec<u8>>, String> {
         let descriptor = &session.proposal.descriptor;
-        if let Some(durable) = self.kura.read_certified_lane_block_artifact(
-            descriptor.lane_id,
-            descriptor.lane_block_height,
-        ) {
+        if let Some(durable) = self
+            .kura
+            .read_certified_lane_block_artifact(descriptor.lane_id, descriptor.lane_block_height)
+        {
             if durable.proposal != session.proposal
                 || durable.prepare_qc != session.prepare_qc
                 || durable.commit_qc != session.commit_qc
@@ -3789,18 +4232,19 @@ impl V2LaneWorkAdapter {
             .map_err(|error| error.to_string())?;
         if let Some(outstanding) = self.historical_recovery_requests.get(&identity) {
             let request = &outstanding.request;
-            if request.certificate.proposal != session.proposal
-                || request.certificate.prepare_qc != session.prepare_qc
-                || request.certificate.commit_qc != session.commit_qc
+            let Some(certificate) = request.certificate.as_ref() else {
+                return Err("historical lane recovery request lost its lane certificate".to_owned());
+            };
+            if certificate.proposal != session.proposal
+                || certificate.prepare_qc != session.prepare_qc
+                || certificate.commit_qc != session.commit_qc
             {
                 return Err(
                     "historical recovery request conflicts with its retained session".to_owned(),
                 );
             }
-            let candidate = CertifiedLaneBlockArtifact::new(
-                session.clone(),
-                request.signer_pops.clone(),
-            );
+            let candidate =
+                CertifiedLaneBlockArtifact::new(session.clone(), request.signer_pops.clone());
             Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
                 format!("historical recovery request signer PoPs are invalid: {error}")
             })?;
@@ -3813,10 +4257,9 @@ impl V2LaneWorkAdapter {
         let signer_pops = if let Some(availability) =
             session.prepare_qc.payload_availability_qc.as_ref()
         {
-            crate::lane_consensus::validate_lane_payload_availability_qc(availability)
-                .map_err(|error| {
-                    format!("historical autonomous READY signer PoPs are invalid: {error}")
-                })?;
+            crate::lane_consensus::validate_lane_payload_availability_qc(availability).map_err(
+                |error| format!("historical autonomous READY signer PoPs are invalid: {error}"),
+            )?;
             if availability.validator_set != session.prepare_qc.validator_set
                 || availability.validator_set != session.commit_qc.validator_set
                 || availability.validator_set_pops.len() != availability.validator_set.len()
@@ -3849,8 +4292,7 @@ impl V2LaneWorkAdapter {
             // the request or certified Kura artifact.
             self.pops_for_lane_session(session)
         };
-        let candidate =
-            CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
+        let candidate = CertifiedLaneBlockArtifact::new(session.clone(), signer_pops.clone());
         Kura::validate_certified_lane_block_artifact(&candidate).map_err(|error| {
             format!("historical lane session lacks exact validated signer PoPs: {error}")
         })?;
@@ -3863,6 +4305,32 @@ impl V2LaneWorkAdapter {
         session: &CommittedLaneBlockSession,
         retry: HistoricalRecoveryRetry,
     ) -> Result<(), V2LaneWorkError> {
+        let descriptor = &session.proposal.descriptor;
+        if retry != HistoricalRecoveryRetry::LocalState
+            && (!self.lane_route_active(
+                descriptor.lane_id,
+                descriptor.dataspace_id,
+                descriptor.lane_incarnation,
+                descriptor.proposal_height,
+            ) || !self
+                .state
+                .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                    &session.proposal,
+                ))
+        {
+            return Err(V2LaneWorkError::Persistence(
+                "refusing historical recovery request for a stale route, incarnation, or predecessor"
+                    .to_owned(),
+            ));
+        }
+        if retry == HistoricalRecoveryRetry::AuthenticatedLanePayload
+            && !self.session_has_canonical_anchor(session)
+        {
+            return Err(V2LaneWorkError::Persistence(
+                "refusing historical payload request without its exact committed global anchor"
+                    .to_owned(),
+            ));
+        }
         let (kind, peers) = match retry {
             HistoricalRecoveryRetry::LocalState => {
                 self.retire_historical_recovery_request(identity);
@@ -3950,13 +4418,13 @@ impl V2LaneWorkAdapter {
             .map_err(V2LaneWorkError::Persistence)?;
 
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             requester: self.local_peer.clone(),
-            certificate: LaneBlockCertificateV1 {
+            certificate: Some(LaneBlockCertificateV1 {
                 proposal: session.proposal.clone(),
                 prepare_qc: session.prepare_qc.clone(),
                 commit_qc: session.commit_qc.clone(),
-            },
+            }),
             signer_pops,
             kind,
         };
@@ -3974,9 +4442,23 @@ impl V2LaneWorkAdapter {
             }
         }
         if !self.historical_recovery_requests.contains_key(&identity) {
-            if self.historical_recovery_requests.len() >= self.limits.session_capacity.get() {
+            if self
+                .historical_recovery_requests
+                .len()
+                .saturating_add(self.native_participant_recovery_requests.len())
+                >= self.limits.session_capacity.get()
+            {
                 return Err(V2LaneWorkError::Persistence(
                     "historical recovery request capacity exhausted".to_owned(),
+                ));
+            }
+            if self
+                .native_participant_recovery_request_owners
+                .contains_key(&request_hash)
+            {
+                return Err(V2LaneWorkError::Persistence(
+                    "historical recovery request hash aliases a Native participant owner"
+                        .to_owned(),
                 ));
             }
             if self
@@ -4013,10 +4495,11 @@ impl V2LaneWorkAdapter {
         Ok(())
     }
 
-    /// Return whether an earlier-height certified session still owns local
-    /// persistence or application work.
+    /// Return whether an earlier-height lane session or Native participant
+    /// frontier still owns local persistence/application recovery.
     pub(crate) fn has_pending_historical_recovery(&self) -> bool {
         !self.historical_recovery_sessions.is_empty()
+            || !self.native_participant_recovery_requests.is_empty()
     }
 
     /// Return the bounded deterministic stage/stuck-reason snapshot.
@@ -4419,11 +4902,7 @@ impl V2LaneWorkAdapter {
                 expected_epoch,
             )
             .and_then(|payload| {
-                payload.attach_global_hint_exact(
-                    hint,
-                    self.native_chain_id_hash(),
-                    expected_epoch,
-                )
+                payload.attach_global_hint_exact(hint, self.native_chain_id_hash(), expected_epoch)
             }) else {
                 return false;
             };
@@ -5454,10 +5933,18 @@ impl V2LaneWorkAdapter {
         request: &LaneHistoricalRecoveryRequestV1,
         sender: &PeerId,
     ) -> Result<CommittedLaneBlockSession, String> {
-        if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
+        let certificate = request
+            .certificate
+            .as_ref()
+            .ok_or_else(|| "historical lane recovery request has no lane certificate".to_owned())?;
+        if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V2
             || &request.requester != sender
-            || request.certificate.proposal.descriptor.proposal_height >= self.context.height
+            || certificate.proposal.descriptor.proposal_height >= self.context.height
             || !self.historical_recovery_request_fits_frame(request)
+            || matches!(
+                &request.kind,
+                LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { .. }
+            )
         {
             return Err(
                 "historical recovery request has an invalid version, sender, height, or size"
@@ -5469,7 +5956,7 @@ impl V2LaneWorkAdapter {
             .roster
             .iter()
             .any(|entry| &entry.validator == sender)
-            || request.certificate.commit_qc.validator_set.contains(sender);
+            || certificate.commit_qc.validator_set.contains(sender);
         if !requester_is_authorized {
             return Err(
                 "historical recovery requester is outside the active and certified committees"
@@ -5477,9 +5964,9 @@ impl V2LaneWorkAdapter {
             );
         }
         let session = CommittedLaneBlockSession {
-            proposal: request.certificate.proposal.clone(),
-            prepare_qc: request.certificate.prepare_qc.clone(),
-            commit_qc: request.certificate.commit_qc.clone(),
+            proposal: certificate.proposal.clone(),
+            prepare_qc: certificate.prepare_qc.clone(),
+            commit_qc: certificate.commit_qc.clone(),
         };
         let candidate =
             CertifiedLaneBlockArtifact::new(session.clone(), request.signer_pops.clone());
@@ -5511,8 +5998,7 @@ impl V2LaneWorkAdapter {
             None => {}
             Some(_) => {
                 return Err(
-                    "historical recovery source lacks the exact committed global anchor"
-                        .to_owned(),
+                    "historical recovery source lacks the exact committed global anchor".to_owned(),
                 );
             }
         }
@@ -5575,8 +6061,91 @@ impl V2LaneWorkAdapter {
                     );
                 }
             }
+            LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { .. } => {
+                return Err(
+                    "Native participant carrier recovery cannot carry a lane certificate"
+                        .to_owned(),
+                );
+            }
         }
         Ok(session)
+    }
+
+    fn validate_native_participant_recovery_request(
+        &self,
+        request: &LaneHistoricalRecoveryRequestV1,
+        sender: &PeerId,
+    ) -> Result<
+        (
+            NativeAmxParticipantRecoveryMarkerV1,
+            wire::finality::V2FinalityArtifact,
+            wire::ExecutionCommitment,
+        ),
+        String,
+    > {
+        let LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+            marker,
+            finality_artifact_hash,
+            execution_commitment,
+        } = &request.kind
+        else {
+            return Err("request is not a Native participant carrier recovery".to_owned());
+        };
+        if request.version != LANE_HISTORICAL_RECOVERY_VERSION_V2
+            || &request.requester != sender
+            || request.certificate.is_some()
+            || !request.signer_pops.is_empty()
+            || marker.application_block_height > self.context.height
+            || !native_participant_recovery_marker_is_well_formed(marker)
+            || !self.historical_recovery_request_fits_frame(request)
+            || !self.lane_route_active(
+                marker.lane_id,
+                marker.dataspace_id,
+                marker.lane_incarnation,
+                marker.application_block_height,
+            )
+            || self
+                .state
+                .committed_block_hash_at_height(marker.application_block_height)
+                != Some(marker.application_block_hash)
+        {
+            return Err(
+                "Native participant carrier recovery request has invalid shape, size, route, incarnation, or canonical identity"
+                    .to_owned(),
+            );
+        }
+        let finality = self
+            .kura
+            .v2_finality_artifact(marker.application_block_height)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| {
+                "Native participant carrier recovery source lacks durable V2 finality".to_owned()
+            })?;
+        finality.verify().map_err(|error| error.to_string())?;
+        let requester_is_authorized = self
+            .context
+            .roster
+            .iter()
+            .any(|entry| &entry.validator == sender)
+            || finality
+                .height_context
+                .roster
+                .iter()
+                .any(|entry| &entry.validator == sender);
+        if !requester_is_authorized
+            || HashOf::new(&finality) != *finality_artifact_hash
+            || finality.height != marker.application_block_height
+            || finality.block_hash != marker.application_block_hash
+            || finality.commit_qc.execution_commitment != **execution_commitment
+            || execution_commitment.validate().is_err()
+            || execution_commitment.native_amx_application_manifest_count == 0
+        {
+            return Err(
+                "Native participant carrier recovery request differs from durable finality authority"
+                    .to_owned(),
+            );
+        }
+        Ok((**marker, finality, **execution_commitment))
     }
 
     fn serve_historical_recovery_request(
@@ -5587,6 +6156,61 @@ impl V2LaneWorkAdapter {
         let Some(sender) = sender else {
             return V2LaneIngressOutcome::Rejected;
         };
+        if matches!(
+            &request.kind,
+            LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { .. }
+        ) {
+            let (marker, finality, execution_commitment) =
+                match self.validate_native_participant_recovery_request(&request, sender) {
+                    Ok(validated) => validated,
+                    Err(error) => {
+                        iroha_logger::debug!(
+                            %error,
+                            "rejected Native participant carrier recovery request"
+                        );
+                        return V2LaneIngressOutcome::Rejected;
+                    }
+                };
+            if !Self::peer_is_global_finality_signer(&finality, &self.local_peer) {
+                return V2LaneIngressOutcome::Rejected;
+            }
+            let Some(height) = usize::try_from(marker.application_block_height)
+                .ok()
+                .and_then(NonZeroUsize::new)
+            else {
+                return V2LaneIngressOutcome::Rejected;
+            };
+            let Some(block) = self.kura.get_block(height) else {
+                return V2LaneIngressOutcome::Rejected;
+            };
+            if !native_participant_recovery_block_matches_finality(
+                &block,
+                &finality,
+                &execution_commitment,
+                &marker,
+            ) {
+                return V2LaneIngressOutcome::Rejected;
+            }
+            let response = LaneHistoricalRecoveryResponseV1 {
+                version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+                request_hash: HashOf::new(&request),
+                payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                    block: block.as_ref().clone(),
+                    finality_artifact: finality,
+                },
+            };
+            if !self.historical_recovery_response_fits_frame(&response) {
+                return V2LaneIngressOutcome::Rejected;
+            }
+            return if self.push_effect(V2LaneWorkEffect::PostLaneBlock {
+                peer: sender.clone(),
+                message: BlockMessage::LaneHistoricalRecoveryResponse(Box::new(response)),
+            }) {
+                V2LaneIngressOutcome::Inserted
+            } else {
+                V2LaneIngressOutcome::Duplicate
+            };
+        }
         let session = match self.validate_historical_recovery_request(&request, sender) {
             Ok(session) => session,
             Err(error) => {
@@ -5675,9 +6299,12 @@ impl V2LaneWorkAdapter {
                     commit_qc: certified.commit_qc,
                 }
             }
+            LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock { .. } => {
+                return V2LaneIngressOutcome::Rejected;
+            }
         };
         let response = LaneHistoricalRecoveryResponseV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             request_hash,
             payload: response_payload,
         };
@@ -5702,10 +6329,17 @@ impl V2LaneWorkAdapter {
         let Some(sender) = sender else {
             return V2LaneIngressOutcome::Rejected;
         };
-        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V1
+        if response.version != LANE_HISTORICAL_RECOVERY_VERSION_V2
             || !self.historical_recovery_response_fits_frame(&response)
         {
             return V2LaneIngressOutcome::Rejected;
+        }
+        if let Some(marker) = self
+            .native_participant_recovery_request_owners
+            .get(&response.request_hash)
+            .copied()
+        {
+            return self.accept_native_participant_recovery_response(response, sender, marker);
         }
         let Some(identity) = self
             .historical_recovery_request_owners
@@ -5723,20 +6357,35 @@ impl V2LaneWorkAdapter {
             return V2LaneIngressOutcome::Rejected;
         }
         let request = outstanding.request.clone();
+        let Some(certificate) = request.certificate.as_ref() else {
+            return V2LaneIngressOutcome::Rejected;
+        };
         let request_session = CommittedLaneBlockSession {
-            proposal: request.certificate.proposal.clone(),
-            prepare_qc: request.certificate.prepare_qc.clone(),
-            commit_qc: request.certificate.commit_qc.clone(),
+            proposal: certificate.proposal.clone(),
+            prepare_qc: certificate.prepare_qc.clone(),
+            commit_qc: certificate.commit_qc.clone(),
         };
         if HistoricalRecoveryIdentity::from_proposal(&request_session.proposal).ok()
             != Some(identity)
-            || Kura::validate_certified_lane_block_artifact(
-                &CertifiedLaneBlockArtifact::new(
-                    request_session,
-                    request.signer_pops.clone(),
-                ),
-            )
+            || Kura::validate_certified_lane_block_artifact(&CertifiedLaneBlockArtifact::new(
+                request_session,
+                request.signer_pops.clone(),
+            ))
             .is_err()
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let request_descriptor = &certificate.proposal.descriptor;
+        if !self.lane_route_active(
+            request_descriptor.lane_id,
+            request_descriptor.dataspace_id,
+            request_descriptor.lane_incarnation,
+            request_descriptor.proposal_height,
+        ) || !self
+            .state
+            .certified_lane_block_predecessor_is_applied_or_snapshot_anchored_cached(
+                &certificate.proposal,
+            )
         {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -5759,8 +6408,7 @@ impl V2LaneWorkAdapter {
             (
                 LaneHistoricalRecoveryKindV1::AutonomousPayload { .. },
                 LaneHistoricalRecoveryPayloadV1::AutonomousPayload { .. },
-            ) if request
-                .certificate
+            ) if certificate
                 .prepare_qc
                 .payload_availability_qc
                 .as_ref()
@@ -5777,7 +6425,7 @@ impl V2LaneWorkAdapter {
                     finality_artifact,
                 },
             ) => {
-                let Some(hint) = request.certificate.proposal.payload_block_hint else {
+                let Some(hint) = certificate.proposal.payload_block_hint else {
                     return V2LaneIngressOutcome::Rejected;
                 };
                 let local_finality = match self.kura.v2_finality_artifact(hint.proposal_height) {
@@ -5793,6 +6441,7 @@ impl V2LaneWorkAdapter {
                     || finality_artifact.height != hint.proposal_height
                     || finality_artifact.block_hash != hint.proposal_block_hash
                     || block.header().view_change_index() != hint.proposal_view
+                    || !self.historical_block_anchors_proposal(&block, &certificate.proposal)
                     || !Self::peer_is_global_finality_signer(&finality_artifact, sender)
                     || self
                         .state
@@ -5817,7 +6466,7 @@ impl V2LaneWorkAdapter {
                     commit_qc,
                 },
             ) => {
-                let proposal = &request.certificate.proposal;
+                let proposal = &certificate.proposal;
                 let descriptor = &proposal.descriptor;
                 let signer_pops = request.signer_pops.clone();
                 let Some(availability) = prepare_qc.payload_availability_qc.as_ref() else {
@@ -5827,8 +6476,8 @@ impl V2LaneWorkAdapter {
                     let world = self.state.world_view();
                     crate::sumeragi::epoch_for_height_from_world(&world, descriptor.proposal_height)
                 };
-                if prepare_qc != request.certificate.prepare_qc
-                    || commit_qc != request.certificate.commit_qc
+                if prepare_qc != certificate.prepare_qc
+                    || commit_qc != certificate.commit_qc
                     || HashOf::new(&prepare_qc) != *prepare_qc_hash
                     || HashOf::new(&commit_qc) != *commit_qc_hash
                     || payload.origin_proposal != *proposal
@@ -5916,6 +6565,117 @@ impl V2LaneWorkAdapter {
         }
         self.retire_historical_recovery_request(identity);
         V2LaneIngressOutcome::Inserted
+    }
+
+    fn accept_native_participant_recovery_response(
+        &mut self,
+        response: LaneHistoricalRecoveryResponseV1,
+        sender: &PeerId,
+        marker: NativeAmxParticipantRecoveryMarkerV1,
+    ) -> V2LaneIngressOutcome {
+        let Some(outstanding) = self
+            .native_participant_recovery_requests
+            .get(&marker)
+            .cloned()
+        else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        if outstanding.request_hash != response.request_hash
+            || HashOf::new(&outstanding.request) != response.request_hash
+            || outstanding.request.certificate.is_some()
+            || !outstanding.request.signer_pops.is_empty()
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+            marker: requested_marker,
+            finality_artifact_hash,
+            execution_commitment,
+        } = outstanding.request.kind
+        else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        let requested_marker = *requested_marker;
+        if requested_marker != marker
+            || !native_participant_recovery_marker_is_well_formed(&marker)
+            || !self.lane_route_active(
+                marker.lane_id,
+                marker.dataspace_id,
+                marker.lane_incarnation,
+                marker.application_block_height,
+            )
+            || self
+                .state
+                .committed_block_hash_at_height(marker.application_block_height)
+                != Some(marker.application_block_hash)
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let pending = match self.native_participant_recovery_marker_is_pending(marker) {
+            Ok(pending) => pending,
+            Err(_) => return V2LaneIngressOutcome::Rejected,
+        };
+        if !pending {
+            self.retire_native_participant_recovery_request(marker);
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+            block,
+            finality_artifact,
+        } = response.payload
+        else {
+            return V2LaneIngressOutcome::Rejected;
+        };
+        let local_finality = match self
+            .kura
+            .v2_finality_artifact(marker.application_block_height)
+        {
+            Ok(Some(finality)) => finality,
+            _ => return V2LaneIngressOutcome::Rejected,
+        };
+        if HashOf::new(&finality_artifact) != finality_artifact_hash
+            || finality_artifact != local_finality
+            || !Self::peer_is_global_finality_signer(&finality_artifact, sender)
+            || !native_participant_recovery_block_matches_finality(
+                &block,
+                &finality_artifact,
+                &execution_commitment,
+                &marker,
+            )
+        {
+            return V2LaneIngressOutcome::Rejected;
+        }
+        let result = self
+            .kura
+            .cache_block_body(&block)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                self.kura
+                    .repair_native_amx_participant_application_evidence(&block)
+                    .map_err(|error| error.to_string())
+                    .map(|_| ())
+            });
+        if let Err(error) = result {
+            iroha_logger::error!(
+                %error,
+                lane = marker.lane_id.as_u32(),
+                participant_height = marker.participant_height,
+                application_block_height = marker.application_block_height,
+                "authenticated Native participant carrier import failed; requiring restart"
+            );
+            self.output_guard.close_admission_for_restart();
+            return V2LaneIngressOutcome::Rejected;
+        }
+        match self.native_participant_recovery_marker_is_pending(marker) {
+            Ok(false) => {
+                self.retire_native_participant_recovery_request(marker);
+                V2LaneIngressOutcome::Inserted
+            }
+            Ok(true) | Err(_) => {
+                self.output_guard.close_admission_for_restart();
+                V2LaneIngressOutcome::Rejected
+            }
+        }
     }
 
     /// Register a deterministic validation blocked only on one exact certified
@@ -7117,6 +7877,7 @@ impl V2LaneWorkAdapter {
         let key = (
             envelope.lane_id,
             envelope.dataspace_id,
+            envelope.lane_incarnation,
             envelope.block_height,
             Hash::from(envelope.settlement_hash),
         );
@@ -8215,9 +8976,8 @@ impl V2LaneWorkAdapter {
             .ok()
             .and_then(|index| self.context.roster.get(index))
             .map(|entry| &entry.validator);
-        if !self.native_body_matches_context(&body, active_view)
+        if !self.native_request_matches_context(&request, active_view)
             || expected_leader != Some(&sender)
-            || request.validate_plan_binding().is_err()
         {
             return V2LaneIngressOutcome::Rejected;
         }
@@ -8254,7 +9014,7 @@ impl V2LaneWorkAdapter {
             }
             NativeAmxPhase::Prepare => {}
         }
-        let Some(vote) = self.sign_native_vote_once(body, active_view) else {
+        let Some(vote) = self.sign_native_request_once(&request, active_view) else {
             return V2LaneIngressOutcome::Rejected;
         };
         if !self.push_effect(V2LaneWorkEffect::PostNativeAmx {
@@ -8366,6 +9126,16 @@ impl V2LaneWorkAdapter {
                 == Some(body.participant_lane_incarnation)
     }
 
+    fn native_request_matches_context(
+        &self,
+        request: &NativeAmxAttestationRequestV2,
+        active_view: wire::View,
+    ) -> bool {
+        request.validate_plan_binding().is_ok()
+            && self.native_body_matches_context(&request.body, active_view)
+            && self.native_coordinator_predecessor_is_current(request)
+    }
+
     fn native_chain_id_hash(&self) -> Hash {
         let chain_id = self.context.chain_id.clone().into_inner();
         Hash::new(chain_id.as_bytes())
@@ -8377,6 +9147,7 @@ impl V2LaneWorkAdapter {
             .latest_lane_block_artifact_matching(body.coordinator_lane_id, |artifact| {
                 let ownership = &artifact.ownership;
                 ownership.dataspace_id == body.coordinator_dataspace_id
+                    && ownership.lane_incarnation == body.coordinator_lane_incarnation
                     && self.lane_route_active(
                         ownership.lane_id,
                         ownership.dataspace_id,
@@ -8388,6 +9159,46 @@ impl V2LaneWorkAdapter {
                 artifact.ownership.lane_block_height.saturating_add(1)
             });
         body.planned_coordinator_block_height == expected
+    }
+
+    fn native_coordinator_predecessor_is_current(
+        &self,
+        request: &NativeAmxAttestationRequestV2,
+    ) -> bool {
+        let body = &request.body;
+        let descriptor = &request.coordinator_proposal.descriptor;
+        let latest =
+            self.kura
+                .latest_lane_block_artifact_matching(body.coordinator_lane_id, |artifact| {
+                    let ownership = &artifact.ownership;
+                    ownership.dataspace_id == body.coordinator_dataspace_id
+                        && ownership.lane_incarnation == body.coordinator_lane_incarnation
+                        && self.lane_route_active(
+                            ownership.lane_id,
+                            ownership.dataspace_id,
+                            ownership.lane_incarnation,
+                            ownership.proposal_height,
+                        )
+                });
+        match latest {
+            None => {
+                descriptor.previous_lane_block_height == 0
+                    && descriptor.previous_lane_block_descriptor_hash.is_none()
+                    && descriptor.lane_block_height == 1
+                    && body.planned_coordinator_block_height == 1
+            }
+            Some(artifact) => {
+                let ownership = &artifact.ownership;
+                let Some(predecessor_hash) = ownership.lane_block_descriptor_hash else {
+                    return false;
+                };
+                descriptor.previous_lane_block_height == ownership.lane_block_height
+                    && descriptor.previous_lane_block_descriptor_hash == Some(predecessor_hash)
+                    && ownership.lane_block_height.checked_add(1)
+                        == Some(descriptor.lane_block_height)
+                    && body.planned_coordinator_block_height == descriptor.lane_block_height
+            }
+        }
     }
 
     fn native_participant_predecessor_is_current(&self, body: &NativeAmxAttestationBodyV2) -> bool {
@@ -8518,14 +9329,38 @@ impl V2LaneWorkAdapter {
         Some((validators, min_signers, pops, aligned_pops))
     }
 
+    fn sign_native_request_once(
+        &mut self,
+        request: &NativeAmxAttestationRequestV2,
+        active_view: wire::View,
+    ) -> Option<NativeAmxVoteV2> {
+        self.sign_native_vote_once_with_context(request.body, |adapter| {
+            adapter.native_request_matches_context(request, active_view)
+        })
+    }
+
+    #[cfg(test)]
     fn sign_native_vote_once(
         &mut self,
         body: NativeAmxAttestationBodyV2,
         active_view: wire::View,
     ) -> Option<NativeAmxVoteV2> {
+        self.sign_native_vote_once_with_context(body, |adapter| {
+            adapter.native_body_matches_context(&body, active_view)
+        })
+    }
+
+    fn sign_native_vote_once_with_context<F>(
+        &mut self,
+        body: NativeAmxAttestationBodyV2,
+        context_is_current: F,
+    ) -> Option<NativeAmxVoteV2>
+    where
+        F: Fn(&Self) -> bool,
+    {
         if !self.voting_enabled
             || self.local_peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal)
-            || !self.native_body_matches_context(&body, active_view)
+            || !context_is_current(self)
         {
             return None;
         }
@@ -8554,7 +9389,7 @@ impl V2LaneWorkAdapter {
         }
         let output_guard = Arc::clone(&self.output_guard);
         let operation = output_guard.begin_fail_stop_operation()?;
-        if !self.native_body_matches_context(&body, active_view) {
+        if !context_is_current(self) {
             operation.complete();
             return None;
         }
@@ -8582,7 +9417,7 @@ impl V2LaneWorkAdapter {
             operation.complete();
             return None;
         }
-        if !self.native_body_matches_context(&body, active_view) {
+        if !context_is_current(self) {
             operation.complete();
             return None;
         }
@@ -9064,7 +9899,7 @@ impl V2LaneWorkAdapter {
                     .sorted_votes_for_body(NativeAmxSessionKey::from_body(&body), &body)
                     .iter()
                     .all(|vote| vote.signer != self.local_peer)
-                    && let Some(vote) = self.sign_native_vote_once(body, active_view)
+                    && let Some(vote) = self.sign_native_request_once(request, active_view)
                 {
                     let _ = self.native_sessions.insert_vote(vote);
                 }
@@ -9093,7 +9928,7 @@ impl V2LaneWorkAdapter {
                     .sorted_votes_for_body(NativeAmxSessionKey::from_body(&body), &body)
                     .iter()
                     .all(|vote| vote.signer != self.local_peer)
-                    && let Some(vote) = self.sign_native_vote_once(body, active_view)
+                    && let Some(vote) = self.sign_native_request_once(request, active_view)
                 {
                     let _ = self.native_sessions.insert_vote(vote);
                 }
@@ -9205,29 +10040,27 @@ impl V2LaneWorkAdapter {
             || self
                 .admitted_relays
                 .iter()
-                .any(|(lane_id, dataspace_id, _, _)| {
-                    *lane_id == intent.lane_id && *dataspace_id == intent.dataspace_id
+                .any(|(lane_id, dataspace_id, incarnation, _, _)| {
+                    route_matches(*lane_id, *dataspace_id, *incarnation)
                 })
             || self
                 .pending_autonomous_anchor_payloads
                 .values()
                 .any(|payload| {
-                    proposal_matches(&payload.origin_proposal)
-                        || payload.routing_plans.iter().any(|plan| {
-                            plan.legs().into_iter().any(|leg| {
-                                leg.route.lane_id == intent.lane_id
-                                    && leg.route.dataspace_id == intent.dataspace_id
-                            })
-                        })
+                    lane_executable_payload_carries_lane(
+                        payload,
+                        intent.lane_id,
+                        intent.dataspace_id,
+                        intent.lane_incarnation,
+                    )
                 })
             || self.autonomous_payloads.values().any(|payload| {
-                proposal_matches(&payload.origin_proposal)
-                    || payload.routing_plans.iter().any(|plan| {
-                        plan.legs().into_iter().any(|leg| {
-                            leg.route.lane_id == intent.lane_id
-                                && leg.route.dataspace_id == intent.dataspace_id
-                        })
-                    })
+                lane_executable_payload_carries_lane(
+                    payload,
+                    intent.lane_id,
+                    intent.dataspace_id,
+                    intent.lane_incarnation,
+                )
             })
             || self.native_sessions.has_pending_votes_for_lane(
                 intent.lane_id,
@@ -11253,8 +12086,23 @@ pub(super) mod tests {
         persist_parent_chain: bool,
         limits: V2LaneWorkLimits,
     ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
+        fixture_at_height_inner_with_limits_and_kura(
+            mode,
+            height,
+            persist_parent_chain,
+            limits,
+            Kura::blank_kura_for_testing(),
+        )
+    }
+
+    fn fixture_at_height_inner_with_limits_and_kura(
+        mode: wire::ConsensusMode,
+        height: u64,
+        persist_parent_chain: bool,
+        limits: V2LaneWorkLimits,
+        kura: Arc<Kura>,
+    ) -> (V2LaneWorkAdapter, Vec<KeyPair>) {
         let chain_id: ChainId = "v2-lane-work-test".into();
-        let kura = Kura::blank_kura_for_testing();
         let mut keys = (1_u8..=4)
             .map(|seed| {
                 KeyPair::try_from_seed(vec![seed; 32], Algorithm::BlsNormal)
@@ -11472,6 +12320,23 @@ pub(super) mod tests {
                 torii_url: None,
             })
             .collect::<Vec<_>>();
+        let default_status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "default".to_owned(),
+            dataspace: DataSpaceId::UNIVERSAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("default-lane-governance".to_owned()),
+            manifest_path: Some(std::path::PathBuf::from(
+                "/tmp/v2-default-lane-manifest.json",
+            )),
+            governance_rules: Some(GovernanceRules {
+                validators: validators.clone(),
+                validator_bindings: validator_bindings.clone(),
+                ..GovernanceRules::default()
+            }),
+            privacy_commitments: Vec::new(),
+        };
         let status = LaneManifestStatus {
             lane: lane_id,
             alias: "independent-lane".to_owned(),
@@ -11492,7 +12357,7 @@ pub(super) mod tests {
         adapter
             .state
             .install_lane_manifests(&Arc::new(LaneManifestRegistry::from_statuses(
-                BTreeMap::from([(lane_id, status)]),
+                BTreeMap::from([(LaneId::SINGLE, default_status), (lane_id, status)]),
             )));
         adapter.context.nexus_amx_context_hash =
             super::super::v2_recovery::committed_nexus_amx_context_hash(adapter.state.as_ref());
@@ -11633,6 +12498,32 @@ pub(super) mod tests {
             !adapter.lane_drain_has_local_blockers(&body),
             "an empty stable queue plus empty lane caches is drainable"
         );
+
+        adapter.admitted_relays.insert((
+            body.intent.lane_id,
+            body.intent.dataspace_id,
+            Hash::new(b"retired adapter-drain relay incarnation"),
+            1,
+            Hash::new(b"retired adapter-drain relay settlement"),
+        ));
+        assert!(
+            !adapter.lane_drain_has_local_blockers(&body),
+            "incarnation-A relay cache evidence must not ABA-block incarnation B"
+        );
+        adapter.admitted_relays.insert((
+            body.intent.lane_id,
+            body.intent.dataspace_id,
+            body.intent.lane_incarnation,
+            1,
+            Hash::new(b"active adapter-drain relay settlement"),
+        ));
+        assert!(
+            adapter.lane_drain_has_local_blockers(&body),
+            "an admitted relay for the exact incarnation remains a drain blocker"
+        );
+        adapter.admitted_relays.clear();
+        assert!(!adapter.lane_drain_has_local_blockers(&body));
+
         adapter
             .install_lane_drain_queue(Arc::clone(&queue))
             .expect("reinstalling the identical queue is idempotent");
@@ -14600,13 +15491,11 @@ pub(super) mod tests {
         keys: &[KeyPair],
         block: &SignedBlock,
     ) -> wire::finality::V2FinalityArtifact {
-        let (round, subject) = global_lock_for_block(adapter, block);
-        let mut commit_qc = wire::QuorumCertificate {
-            round,
-            proposal_round: round,
-            phase: wire::GlobalPhase::Commit,
-            subject,
-            execution_commitment: wire::ExecutionCommitment::without_topups(
+        verified_finality_artifact_for_block_with_execution_commitment(
+            adapter,
+            keys,
+            block,
+            wire::ExecutionCommitment::without_topups(
                 Hash::new(b"historical request parent state"),
                 Hash::new(b"historical request post state"),
                 Hash::new(b"historical request writes"),
@@ -14614,6 +15503,22 @@ pub(super) mod tests {
                     .executed_block_wire_hash()
                     .expect("encode historical finality block"),
             ),
+        )
+    }
+
+    fn verified_finality_artifact_for_block_with_execution_commitment(
+        adapter: &V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        block: &SignedBlock,
+        execution_commitment: wire::ExecutionCommitment,
+    ) -> wire::finality::V2FinalityArtifact {
+        let (round, subject) = global_lock_for_block(adapter, block);
+        let mut commit_qc = wire::QuorumCertificate {
+            round,
+            proposal_round: round,
+            phase: wire::GlobalPhase::Commit,
+            subject,
+            execution_commitment,
             signers: vec![0, 1, 2],
             aggregate_signature: vec![1],
         };
@@ -14779,6 +15684,50 @@ pub(super) mod tests {
                 )
             })
             .collect()
+    }
+
+    fn native_participant_recovery_marker_for_block(
+        adapter: &V2LaneWorkAdapter,
+        block: &SignedBlock,
+    ) -> NativeAmxParticipantRecoveryMarkerV1 {
+        let application_block_height = block.header().height().get();
+        NativeAmxParticipantRecoveryMarkerV1 {
+            frontier_version: 2,
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+            lane_incarnation: adapter
+                .state
+                .lane_incarnation_at_height(LaneId::SINGLE, application_block_height)
+                .unwrap_or_else(|| Hash::new(b"Native recovery test incarnation")),
+            participant_height: 1,
+            participant_view: 0,
+            predecessor_height: 0,
+            predecessor_descriptor_hash: None,
+            descriptor_hash: Hash::new(b"Native recovery test descriptor"),
+            proposal_hash: Hash::new(b"Native recovery test proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"Native recovery test settlement",
+            )),
+            application_block_height,
+            application_block_hash: block.hash(),
+            source_count: 1,
+        }
+    }
+
+    fn resign_historical_request_certificate(
+        request: &mut LaneHistoricalRecoveryRequestV1,
+        keys: &[KeyPair],
+    ) {
+        let certificate = request
+            .certificate
+            .as_mut()
+            .expect("historical lane request certificate");
+        let proposal = &mut certificate.proposal;
+        proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+        proposal.proposal_hash = proposal.computed_proposal_hash();
+        certificate.prepare_qc = lane_qc_for_phase(proposal, keys, CertPhase::Prepare);
+        certificate.commit_qc = lane_qc_for_phase(proposal, keys, CertPhase::Commit);
+        request.signer_pops = lane_signer_pops(keys);
     }
 
     fn test_block(
@@ -14967,7 +15916,9 @@ pub(super) mod tests {
             coordinator_lane_block_view: 0,
             coordinator_proposal_hash: Hash::new(b"native-amx-test-coordinator-proposal"),
         };
-        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body.participant_settlement_commitment = body
+            .computed_grouped_participant_settlement_commitment(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         body
     }
 
@@ -15013,18 +15964,183 @@ pub(super) mod tests {
         .expect("fixture native AMX proposal");
         body.coordinator_proposal_hash = proposal.proposal_hash;
         body.participant_proposal_hash = proposal.proposal_hash;
-        let participant_settlement = body.computed_participant_settlement();
+        let participant_settlement = body
+            .computed_grouped_participant_settlement(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         body.participant_settlement_commitment = Hash::from(
             iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
                 .expect("fixture native AMX settlement hash"),
         );
+        let mut participant_proposal = proposal.clone();
+        participant_proposal.payload_block_hint = None;
         NativeAmxAttestationRequestV2 {
             body,
             plan_legs: plan.legs(),
-            coordinator_proposal: proposal.clone(),
-            participant_proposal: proposal,
+            coordinator_proposal: proposal,
+            participant_proposal,
             participant_settlement,
         }
+    }
+
+    fn native_request_with_entrypoint(
+        mut request: NativeAmxAttestationRequestV2,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+    ) -> NativeAmxAttestationRequestV2 {
+        request.body.tx_entrypoint_hash = entrypoint_hash;
+        for proposal in [
+            &mut request.coordinator_proposal,
+            &mut request.participant_proposal,
+        ] {
+            proposal.descriptor.accepted_transaction_hashes = vec![Hash::from(entrypoint_hash)];
+            proposal.descriptor.descriptor_hash = proposal.descriptor.computed_descriptor_hash();
+            proposal.proposal_hash = proposal.computed_proposal_hash();
+        }
+        request.body.coordinator_proposal_hash = request.coordinator_proposal.proposal_hash;
+        request.body.participant_proposal_hash = request.participant_proposal.proposal_hash;
+        request
+    }
+
+    fn native_request_with_distinct_participant(
+        adapter: &V2LaneWorkAdapter,
+        keys: &[KeyPair],
+        participant_lane_id: LaneId,
+        participant_dataspace_id: DataSpaceId,
+        coordinator_lane_block_height: u64,
+        coordinator_predecessor_hash: Option<Hash>,
+    ) -> NativeAmxAttestationRequestV2 {
+        let mut body = native_body(adapter);
+        body.planned_coordinator_block_height = coordinator_lane_block_height;
+        body.participant_lane_id = participant_lane_id;
+        body.participant_dataspace_id = participant_dataspace_id;
+        body.participant_lane_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(participant_lane_id, body.authority_context_height)
+            .expect("fixture participant lane incarnation");
+        let (participant_validators, participant_min_signers) = adapter
+            .native_committee_shape_for_route(
+                participant_lane_id,
+                participant_dataspace_id,
+                body.authority_context_height,
+            )
+            .expect("fixture participant committee");
+        body.participant_validator_set_hash = HashOf::new(&participant_validators);
+        body.participant_validator_count =
+            u32::try_from(participant_validators.len()).expect("fixture validator count");
+        body.participant_min_quorum =
+            u32::try_from(participant_min_signers).expect("fixture participant quorum");
+
+        let coordinator =
+            RoutingDecision::new(body.coordinator_lane_id, body.coordinator_dataspace_id);
+        let participant =
+            RoutingDecision::new(body.participant_lane_id, body.participant_dataspace_id);
+        let plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
+        );
+        body.plan_digest = plan.digest();
+
+        let mut ordered_keys = keys.to_vec();
+        ordered_keys.sort_by(|left, right| left.public_key().cmp(right.public_key()));
+        let coordinator_base = proposal_for_route(
+            adapter,
+            &ordered_keys,
+            body.coordinator_lane_id,
+            body.coordinator_dataspace_id,
+            body.coordinator_lane_incarnation,
+            body.authority_context_height,
+            coordinator_lane_block_height,
+        );
+        let mut coordinator_ownership = ownership_from_proposal(&coordinator_base);
+        coordinator_ownership.previous_lane_block_height =
+            coordinator_lane_block_height.saturating_sub(1);
+        coordinator_ownership.previous_lane_block_descriptor_hash = coordinator_predecessor_hash;
+        coordinator_ownership.accepted_transaction_hashes =
+            vec![Hash::from(body.tx_entrypoint_hash)];
+        let coordinator_replay = coordinator_ownership
+            .compute_replay_hashes()
+            .expect("fixture coordinator ownership replay material");
+        coordinator_ownership.subject_hash = coordinator_replay.subject_hash;
+        coordinator_ownership.payload_ownership_hash = coordinator_replay.payload_ownership_hash;
+        coordinator_ownership.rbc_instance_hash = coordinator_replay.rbc_instance_hash;
+        coordinator_ownership.lane_block_descriptor_hash =
+            Some(coordinator_replay.lane_block_descriptor_hash);
+        let coordinator_proposal = proposal_from_ownership(
+            &coordinator_ownership,
+            HashOf::from_untyped_unchecked(Hash::new(b"native-amx-coordinator-successor-hint")),
+        )
+        .expect("fixture coordinator successor proposal");
+        body.coordinator_proposal_hash = coordinator_proposal.proposal_hash;
+
+        let mut participant_proposal = proposal_for_route(
+            adapter,
+            &ordered_keys,
+            participant_lane_id,
+            participant_dataspace_id,
+            body.participant_lane_incarnation,
+            body.authority_context_height,
+            1,
+        );
+        participant_proposal.payload_block_hint = None;
+        let participant_descriptor = &participant_proposal.descriptor;
+        body.participant_previous_block_height = participant_descriptor.previous_lane_block_height;
+        body.participant_previous_block_descriptor_hash =
+            participant_descriptor.previous_lane_block_descriptor_hash;
+        body.participant_lane_block_height = participant_descriptor.lane_block_height;
+        body.participant_lane_block_view = participant_descriptor.lane_block_view;
+        body.participant_proposal_hash = participant_proposal.proposal_hash;
+        let participant_settlement = body
+            .computed_grouped_participant_settlement(&[body.source_id])
+            .expect("single-source distinct-participant settlement is valid");
+        body.participant_settlement_commitment = Hash::from(
+            iroha_data_model::nexus::compute_settlement_hash(&participant_settlement)
+                .expect("fixture distinct-participant settlement hash"),
+        );
+
+        NativeAmxAttestationRequestV2 {
+            body,
+            plan_legs: plan.legs(),
+            coordinator_proposal,
+            participant_proposal,
+            participant_settlement,
+        }
+    }
+
+    fn native_qc_for_body(
+        body: NativeAmxAttestationBodyV2,
+        keys: &[KeyPair],
+    ) -> iroha_data_model::block::consensus::NativeAmxAttestationQcV2 {
+        let validators = keys
+            .iter()
+            .map(|key| PeerId::new(key.public_key().clone()))
+            .collect::<Vec<_>>();
+        let validator_pops = keys
+            .iter()
+            .map(|key| {
+                iroha_crypto::bls_normal_pop_prove(key.private_key())
+                    .expect("derive Native recovery fixture validator PoP")
+            })
+            .collect::<Vec<_>>();
+        let votes = keys
+            .iter()
+            .map(|key| {
+                let signature = Signature::try_new(key.private_key(), &body.signature_preimage())
+                    .expect("sign Native recovery fixture attestation");
+                NativeAmxVoteV2 {
+                    body,
+                    signer: PeerId::new(key.public_key().clone()),
+                    bls_signature: signature.payload().to_vec(),
+                }
+            })
+            .collect::<Vec<_>>();
+        aggregate_votes_to_qc(
+            body,
+            validators,
+            validator_pops,
+            &votes,
+            usize::try_from(body.participant_min_quorum)
+                .expect("Native recovery fixture quorum fits usize"),
+        )
+        .expect("aggregate Native recovery fixture QC")
     }
 
     fn coordinator_proposal(adapter: &V2LaneWorkAdapter, keys: &[KeyPair]) -> LaneBlockProposalV1 {
@@ -15205,6 +16321,114 @@ pub(super) mod tests {
                 .expect("validator has durable Native AMX guard")
                 .record_count_for_test(),
             0
+        );
+    }
+
+    #[test]
+    fn native_amx_request_rejects_same_next_height_wrong_coordinator_predecessor_hash() {
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let participant_lane_id = LaneId::new(1);
+        let participant_dataspace_id = DataSpaceId::new(7);
+        let _participant_validators = enable_multilane_nexus(
+            &mut adapter,
+            &keys,
+            participant_lane_id,
+            participant_dataspace_id,
+        );
+        let coordinator_lane_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(LaneId::SINGLE, adapter.context.height)
+            .expect("fixture coordinator lane incarnation");
+        let predecessor = proposal_for_route(
+            &adapter,
+            &keys,
+            LaneId::SINGLE,
+            DataSpaceId::UNIVERSAL,
+            coordinator_lane_incarnation,
+            adapter.context.height,
+            1,
+        );
+        let predecessor = store_canonical_anchor(&adapter, &predecessor, &keys[0]);
+        let exact_predecessor_hash = predecessor.descriptor.descriptor_hash;
+
+        let exact = native_request_with_distinct_participant(
+            &adapter,
+            &keys,
+            participant_lane_id,
+            participant_dataspace_id,
+            2,
+            Some(exact_predecessor_hash),
+        );
+        assert_eq!(exact.validate_plan_binding(), Ok(()));
+        assert!(adapter.native_body_matches_context(&exact.body, 0));
+        assert!(adapter.native_request_matches_context(&exact, 0));
+
+        let forged = native_request_with_distinct_participant(
+            &adapter,
+            &keys,
+            participant_lane_id,
+            participant_dataspace_id,
+            2,
+            Some(Hash::new(b"wrong-coordinator-predecessor-at-height-one")),
+        );
+        assert_eq!(forged.validate_plan_binding(), Ok(()));
+        assert_eq!(
+            forged.body.planned_coordinator_block_height,
+            exact.body.planned_coordinator_block_height,
+            "the adversarial request must preserve the exact next height"
+        );
+        assert_eq!(
+            forged
+                .coordinator_proposal
+                .descriptor
+                .previous_lane_block_height,
+            predecessor.descriptor.lane_block_height,
+            "the adversarial request must preserve the exact predecessor height"
+        );
+        assert!(
+            adapter.native_body_matches_context(&forged.body, 0),
+            "the body-only height guard cannot distinguish the forged predecessor hash"
+        );
+        assert!(!adapter.native_request_matches_context(&forged, 0));
+        assert!(
+            adapter.sign_native_request_once(&forged, 0).is_none(),
+            "the production signing boundary must retain and reject the forged proposal"
+        );
+
+        let leader = usize::try_from(adapter.context.leader(forged.body.round.view))
+            .ok()
+            .and_then(|index| adapter.context.roster.get(index))
+            .expect("fixture view has a leader")
+            .validator
+            .clone();
+        let relay = adapter
+            .context
+            .roster
+            .iter()
+            .map(|entry| entry.validator.clone())
+            .find(|peer| peer != &leader)
+            .expect("fixture has a distinct authenticated relay");
+        let mut routes = NetworkReplyRouteTestFixture::new(relay);
+        let route = routes.mint(leader.clone());
+        assert_eq!(
+            adapter.accept_native_amx(
+                leader,
+                Some(route),
+                NativeAmxMessage::PrepareRequest(forged),
+                0,
+            ),
+            V2LaneIngressOutcome::Rejected,
+            "request admission must use the exact production signing predicate"
+        );
+        assert!(adapter.local_native_claims.is_empty());
+        assert_eq!(
+            adapter
+                .native_signing_guard
+                .as_ref()
+                .expect("validator has durable Native AMX guard")
+                .record_count_for_test(),
+            0,
+            "a forged predecessor must be rejected before durable authority is recorded"
         );
     }
 
@@ -15394,11 +16618,13 @@ pub(super) mod tests {
 
     #[test]
     fn native_amx_signing_guard_reopens_same_height_without_losing_claims() {
-        let (mut adapter, _) = fixture(wire::ConsensusMode::Permissioned);
-        let body = native_body(&adapter);
+        let (mut adapter, keys) = fixture(wire::ConsensusMode::Permissioned);
+        let request = native_request(&adapter, &keys);
+        assert_eq!(request.validate_plan_binding(), Ok(()));
+        assert!(adapter.native_request_matches_context(&request, 0));
         let first = adapter
-            .sign_native_vote_once(body, 0)
-            .expect("first body is durably signable");
+            .sign_native_request_once(&request, 0)
+            .expect("first full request is durably signable");
 
         let context = adapter.context.clone();
         let local_peer = adapter.local_peer.clone();
@@ -15423,15 +16649,24 @@ pub(super) mod tests {
         .expect("reopen adapter against the exact durable height context");
         assert_eq!(
             reopened
-                .sign_native_vote_once(body, 0)
-                .expect("exact durable replay remains signable"),
+                .sign_native_request_once(&request, 0)
+                .expect("exact full-request durable replay remains signable"),
             first
         );
         reopened.local_native_claims.clear();
-        let mut conflicting = body;
-        conflicting.tx_entrypoint_hash =
-            HashOf::from_untyped_unchecked(Hash::new(b"restart-conflicting-entrypoint"));
-        assert!(reopened.sign_native_vote_once(conflicting, 0).is_none());
+        let conflicting = native_request_with_entrypoint(
+            request,
+            HashOf::from_untyped_unchecked(Hash::new(b"restart-conflicting-entrypoint")),
+        );
+        assert_eq!(conflicting.validate_plan_binding(), Ok(()));
+        assert!(
+            reopened.native_request_matches_context(&conflicting, 0),
+            "the conflicting request must reach the reopened durable claim guard"
+        );
+        assert!(
+            reopened.sign_native_request_once(&conflicting, 0).is_none(),
+            "the reopened production signer must reject a conflicting durable claim"
+        );
         assert_eq!(
             reopened
                 .native_signing_guard
@@ -17132,7 +18367,7 @@ pub(super) mod tests {
             .store_block(block.clone())
             .expect("persist historical request carrier");
         let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
-        adapter
+        let _finality_receipt = adapter
             .kura
             .store_v2_finality_artifact(&finality)
             .expect("persist historical request finality");
@@ -17162,9 +18397,9 @@ pub(super) mod tests {
         )
         .expect("open historical request source at successor height");
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             requester: local_peer,
-            certificate,
+            certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
             kind: LaneHistoricalRecoveryKindV1::CanonicalBlock {
                 finality_artifact_hash: HashOf::new(&finality),
@@ -17174,8 +18409,623 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn native_participant_recovery_marker_rejects_malformed_height_source_and_aba_shapes() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, _) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let marker = native_participant_recovery_marker_for_block(&adapter, &block);
+        assert!(native_participant_recovery_marker_is_well_formed(&marker));
+
+        let mut height_jump = marker;
+        height_jump.participant_height = 2;
+        assert!(!native_participant_recovery_marker_is_well_formed(
+            &height_jump
+        ));
+
+        let mut empty_group = marker;
+        empty_group.source_count = 0;
+        assert!(!native_participant_recovery_marker_is_well_formed(
+            &empty_group
+        ));
+
+        let mut oversized_group = marker;
+        oversized_group.source_count =
+            u64::try_from(crate::native_amx::MAX_NATIVE_AMX_PARTICIPANT_CONTROL_SOURCES)
+                .expect("Native source bound fits u64")
+                .saturating_add(1);
+        assert!(!native_participant_recovery_marker_is_well_formed(
+            &oversized_group
+        ));
+
+        let mut stale_incarnation = marker;
+        stale_incarnation.lane_incarnation =
+            Hash::new(b"retired Native participant lane incarnation");
+        assert!(
+            native_participant_recovery_marker_is_well_formed(&stale_incarnation),
+            "shape validation cannot decide whether a non-zero incarnation is currently active"
+        );
+        assert!(
+            !adapter.lane_route_active(
+                stale_incarnation.lane_id,
+                stale_incarnation.dataspace_id,
+                stale_incarnation.lane_incarnation,
+                stale_incarnation.application_block_height,
+            ),
+            "the production route/incarnation guard must reject stale ABA recovery evidence"
+        );
+    }
+
+    #[test]
+    fn native_participant_recovery_authority_rejects_missing_leaf_execution_and_finality_drift() {
+        let (adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, _) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let marker = native_participant_recovery_marker_for_block(&adapter, &block);
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+        let execution = finality.commit_qc.execution_commitment;
+        assert!(
+            !native_participant_recovery_block_matches_finality(
+                &block, &finality, &execution, &marker,
+            ),
+            "a finality-authenticated body without the exact Native manifest leaf must fail closed"
+        );
+
+        let mut wrong_hash = marker;
+        wrong_hash.application_block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong Native carrier hash"));
+        assert!(!native_participant_recovery_block_matches_finality(
+            &block,
+            &finality,
+            &execution,
+            &wrong_hash,
+        ));
+
+        let mut wrong_execution = execution;
+        wrong_execution.executed_block_wire_hash =
+            Hash::new(b"wrong Native recovery executed block wire");
+        assert!(!native_participant_recovery_block_matches_finality(
+            &block,
+            &finality,
+            &wrong_execution,
+            &marker,
+        ));
+    }
+
+    #[test]
+    fn native_participant_recovery_wire_request_is_certificate_free_and_frame_bounded() {
+        let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 1);
+        let (block, _) = globally_anchored_lane_block_fixture(&adapter, &keys);
+        let finality = verified_finality_artifact_for_block(&adapter, &keys, &block);
+        let marker = native_participant_recovery_marker_for_block(&adapter, &block);
+        let request = LaneHistoricalRecoveryRequestV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+            requester: adapter.local_peer.clone(),
+            certificate: None,
+            signer_pops: BTreeMap::new(),
+            kind: LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+                marker: Box::new(marker),
+                finality_artifact_hash: HashOf::new(&finality),
+                execution_commitment: Box::new(finality.commit_qc.execution_commitment),
+            },
+        };
+        assert_eq!(request.source_height(), marker.application_block_height);
+        let exact_len = BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone()))
+            .encode()
+            .len();
+        adapter.limits.merge_share_frame_capacity =
+            NonZeroUsize::new(exact_len).expect("non-zero exact Native recovery request");
+        assert!(adapter.historical_recovery_request_fits_frame(&request));
+
+        let mut oversized = request;
+        oversized
+            .signer_pops
+            .insert(keys[0].public_key().clone(), vec![0; MERGE_QC_PROOF_BYTES]);
+        assert!(!adapter.historical_recovery_request_fits_frame(&oversized));
+        assert!(
+            adapter
+                .validate_native_participant_recovery_request(&oversized, &oversized.requester)
+                .is_err(),
+            "Native recovery rejects both an oversized frame and forbidden lane proof material"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn native_participant_pruned_carrier_response_repairs_exact_evidence_and_retires_request() {
+        let fixture_capacity = NonZeroUsize::new(8).expect("non-zero fixture capacity");
+        let limits = V2LaneWorkLimits::new(
+            fixture_capacity,
+            fixture_capacity,
+            fixture_capacity,
+            fixture_capacity,
+            fixture_capacity,
+            fixture_capacity,
+            fixture_capacity,
+            iroha_config::parameters::defaults::network::MAX_FRAME_BYTES_CONSENSUS,
+        );
+        let kura = Kura::blank_kura_for_testing_with_blocks_in_memory(
+            NonZeroUsize::new(1).expect("retain one carrier body"),
+        );
+        let (mut adapter, keys) = fixture_at_height_inner_with_limits_and_kura(
+            wire::ConsensusMode::Permissioned,
+            4,
+            true,
+            limits,
+            kura,
+        );
+        let participant_lane = LaneId::new(1);
+        let participant_dataspace = DataSpaceId::new(7);
+        enable_multilane_nexus(&mut adapter, &keys, participant_lane, participant_dataspace);
+        let nexus = adapter.state.nexus_snapshot();
+        let participant_entry = nexus
+            .lane_config
+            .entry(participant_lane)
+            .expect("fixture participant lane storage entry")
+            .clone();
+        adapter
+            .kura
+            .reconcile_lane_segments_for_testing(&[&participant_entry], &[], &[])
+            .expect("provision participant lane storage");
+        let participant_incarnation = adapter
+            .state
+            .lane_incarnation_at_height(participant_lane, adapter.context.height)
+            .expect("fixture participant incarnation");
+        adapter
+            .kura
+            .install_lane_incarnation_marker_for_test(
+                &participant_entry,
+                participant_incarnation,
+                0,
+            )
+            .expect("install participant lane incarnation marker");
+
+        let transaction_key =
+            KeyPair::try_from_seed(vec![0xD7; 32], Algorithm::Ed25519).expect("transaction key");
+        let transaction = TransactionBuilder::new(
+            adapter.context.chain_id.clone(),
+            AccountId::new(transaction_key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .sign(transaction_key.private_key());
+        let entrypoint_hash = transaction.hash_as_entrypoint();
+        let transaction_hash = transaction.hash();
+        let mut source_id = [0_u8; Hash::LENGTH];
+        source_id.copy_from_slice(transaction_hash.as_ref());
+
+        let mut request = native_request_with_entrypoint(
+            native_request_with_distinct_participant(
+                &adapter,
+                &keys,
+                participant_lane,
+                participant_dataspace,
+                1,
+                None,
+            ),
+            entrypoint_hash,
+        );
+        request.body.source_id = source_id;
+        request.participant_settlement = request
+            .body
+            .computed_grouped_participant_settlement(&[source_id])
+            .expect("derive exact single-source participant settlement");
+        let participant_settlement_hash =
+            iroha_data_model::nexus::compute_settlement_hash(&request.participant_settlement)
+                .expect("hash exact participant settlement");
+        request.body.participant_settlement_commitment = Hash::from(participant_settlement_hash);
+        request
+            .validate_plan_binding()
+            .expect("exact Native recovery request binding");
+
+        let prepare_qc = native_qc_for_body(request.body, &keys);
+        let mut commit_body = request.body;
+        commit_body.phase = NativeAmxPhase::Commit;
+        let commit_qc = native_qc_for_body(commit_body, &keys);
+        let leg = NativeAmxLegRecordV2 {
+            lane_id: participant_lane,
+            dataspace_id: participant_dataspace,
+            participant_proposal: request.participant_proposal.clone(),
+            participant_settlement: request.participant_settlement.clone(),
+            participant_settlement_hash,
+            prepare_qc,
+            commit_qc,
+        };
+        let coordinator = RoutingDecision::new(
+            request.body.coordinator_lane_id,
+            request.body.coordinator_dataspace_id,
+        );
+        let participant = RoutingDecision::new(participant_lane, participant_dataspace);
+        let routing_plan = RoutingPlan::native_amx(
+            coordinator,
+            vec![RouteLeg::new(participant, RouteLegRole::Participant)],
+        );
+        assert_eq!(routing_plan.digest(), request.body.plan_digest);
+        let receipt = adapter
+            .assemble_native_receipt(
+                source_id,
+                coordinator,
+                request.body.plan_digest,
+                &request.coordinator_proposal,
+                vec![leg],
+            )
+            .expect("assemble exact Native recovery receipt");
+        assert!(
+            crate::native_amx::receipt_shape_matches_coordinator_payload(
+                Some(&receipt),
+                &routing_plan,
+                &source_id,
+                Hash::from(entrypoint_hash),
+                adapter.native_chain_id_hash(),
+                &request.coordinator_proposal,
+            ),
+            "fixture receipt must pass the production coordinator-payload shape check"
+        );
+
+        let parent_hash = adapter
+            .kura
+            .get_block(NonZeroUsize::new(3).expect("non-zero parent height"))
+            .expect("durable carrier parent")
+            .hash();
+        let header = BlockHeader::new(
+            NonZeroU64::new(adapter.context.height).expect("non-zero carrier height"),
+            Some(parent_hash),
+            None,
+            None,
+            adapter.context.height,
+            0,
+        );
+        let leader_index =
+            usize::try_from(adapter.context.leader(0)).expect("fixture leader index fits usize");
+        let initial_signature =
+            SignatureOf::try_from_hash(keys[leader_index].private_key(), header.hash())
+                .expect("sign initial Native recovery carrier");
+        let mut carrier = SignedBlock::presigned(
+            BlockSignature::new(
+                u64::try_from(leader_index).expect("fixture leader index fits u64"),
+                initial_signature,
+            ),
+            header,
+            vec![transaction],
+        );
+        carrier.set_execution_context(Some(BlockExecutionContextBundle::new(vec![
+            ExternalExecutionContext::with_routing_plan(
+                entrypoint_hash,
+                coordinator.lane_id,
+                coordinator.dataspace_id,
+                routing_plan.digest(),
+                crate::queue::execution_context_legs_for_routing_plan(&routing_plan),
+            )
+            .with_native_amx_receipt(receipt),
+        ])));
+        carrier
+            .set_transaction_results(
+                Vec::new(),
+                &[entrypoint_hash],
+                vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+            )
+            .expect("attach exact Native recovery carrier result");
+        let final_signature =
+            SignatureOf::try_from_hash(keys[leader_index].private_key(), carrier.header().hash())
+                .expect("sign finalized Native recovery carrier");
+        carrier
+            .replace_signatures(
+                [BlockSignature::new(
+                    u64::try_from(leader_index).expect("fixture leader index fits u64"),
+                    final_signature,
+                )]
+                .into_iter()
+                .collect(),
+            )
+            .expect("replace Native recovery carrier signature");
+
+        let native_manifest =
+            crate::sumeragi::exec::NativeAmxApplicationManifestV1::from_result_bearing_block(
+                &carrier,
+            )
+            .expect("derive exact Native application manifest");
+        assert_eq!(native_manifest.count(), 1);
+        let execution_commitment =
+            wire::ExecutionCommitment::new_with_native_amx_application_manifest(
+                Hash::new(b"Native recovery carrier parent state"),
+                Hash::new(b"Native recovery carrier post state"),
+                Hash::new(b"Native recovery carrier ordinary writes"),
+                None,
+                0,
+                wire::NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                native_manifest.root(),
+                native_manifest.count(),
+                native_manifest.executed_block_wire_hash(),
+            )
+            .expect("construct exact Native recovery execution commitment");
+        let finality = verified_finality_artifact_for_block_with_execution_commitment(
+            &adapter,
+            &keys,
+            &carrier,
+            execution_commitment,
+        );
+        assert!(native_participant_recovery_block_matches_finality(
+            &carrier,
+            &finality,
+            &execution_commitment,
+            &NativeAmxParticipantRecoveryMarkerV1 {
+                frontier_version: 2,
+                lane_id: participant_lane,
+                dataspace_id: participant_dataspace,
+                lane_incarnation: participant_incarnation,
+                participant_height: request.body.participant_lane_block_height,
+                participant_view: request.body.participant_lane_block_view,
+                predecessor_height: request.body.participant_previous_block_height,
+                predecessor_descriptor_hash: request
+                    .body
+                    .participant_previous_block_descriptor_hash,
+                descriptor_hash: request.participant_proposal.descriptor.descriptor_hash,
+                proposal_hash: request.participant_proposal.proposal_hash,
+                settlement_hash: participant_settlement_hash,
+                application_block_height: carrier.header().height().get(),
+                application_block_hash: carrier.hash(),
+                source_count: 1,
+            },
+        ));
+
+        adapter
+            .kura
+            .store_block(carrier.clone())
+            .expect("persist Native recovery carrier");
+        let finality_receipt = adapter
+            .kura
+            .store_v2_finality_artifact(&finality)
+            .expect("persist exact Native recovery finality");
+        assert_eq!(finality_receipt.height(), carrier.header().height().get());
+        assert_eq!(finality_receipt.block_hash(), carrier.hash());
+        let committed = ValidBlock::committed_from_replay_signed_block(carrier.clone());
+        commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        let checkpoint = crate::snapshot::canonical_state_snapshot_hash(adapter.state.as_ref());
+        adapter
+            .kura
+            .store_wsv_checkpoint(carrier.header().height().get(), carrier.hash(), checkpoint)
+            .expect("persist Native recovery WSV checkpoint");
+        adapter
+            .kura
+            .store_commit_manifest(
+                crate::kura::CommitManifest::new(
+                    carrier.header().height().get(),
+                    carrier.hash(),
+                    None,
+                    None,
+                    checkpoint,
+                    None,
+                )
+                .with_authenticated_v2_commit_authority(&finality),
+            )
+            .expect("persist authenticated Native recovery commit manifest");
+
+        let pending = adapter
+            .state
+            .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+            .expect("inspect pending Native frontier");
+        assert_eq!(pending.len(), 1);
+        let marker = NativeAmxParticipantRecoveryMarkerV1::from(pending[0]);
+        assert!(native_participant_recovery_block_matches_finality(
+            &carrier,
+            &finality,
+            &execution_commitment,
+            &marker,
+        ));
+
+        let mut tail_parent = carrier.hash();
+        for height in 5..=6 {
+            let tail = test_block(height, Some(tail_parent), None, &keys[leader_index]);
+            tail_parent = tail.hash();
+            adapter
+                .kura
+                .store_block(tail.clone())
+                .expect("persist eviction tail block");
+            let committed = ValidBlock::committed_from_replay_signed_block(tail);
+            commit_test_block_to_state(adapter.state.as_ref(), &committed, &adapter.context);
+        }
+        let (carrier_height, carrier_payload_len) = adapter
+            .kura
+            .durable_block_payload_len_by_hash(carrier.hash())
+            .expect("inspect durable carrier payload");
+        for seed in 0xE0_u8
+            ..0xE0_u8.saturating_add(
+                u8::try_from(
+                    iroha_config::parameters::defaults::kura::EVICTION_REQUIRED_REPLICAS.get(),
+                )
+                .expect("replica quorum fits u8"),
+            )
+        {
+            let replica_key = KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
+                .expect("derive distinct recovery replica");
+            adapter.kura.record_block_replica_advert(
+                PeerId::new(replica_key.public_key().clone()),
+                carrier_height,
+                carrier.hash(),
+                carrier_payload_len,
+            );
+        }
+        assert_eq!(
+            adapter
+                .kura
+                .evict_block_bodies(carrier_payload_len)
+                .expect("evict exact Native recovery carrier"),
+            carrier_payload_len,
+        );
+        adapter
+            .kura
+            .remove_evicted_block_sidecar_for_testing(
+                NonZeroUsize::new(
+                    usize::try_from(carrier_height).expect("carrier height fits usize"),
+                )
+                .expect("non-zero carrier height"),
+            )
+            .expect("remove local Native recovery carrier sidecar");
+        assert!(
+            adapter
+                .kura
+                .get_block(
+                    NonZeroUsize::new(
+                        usize::try_from(carrier_height).expect("carrier height fits usize"),
+                    )
+                    .expect("non-zero carrier height"),
+                )
+                .is_none(),
+            "carrier body must be absent before authenticated recovery"
+        );
+
+        assert!(adapter.drain_effects(usize::MAX).is_empty());
+        assert_eq!(
+            adapter
+                .repair_globally_applied_lane_receipts()
+                .expect("schedule exact Native carrier recovery"),
+            0,
+        );
+        let (target, recovery_request) = adapter
+            .drain_effects(usize::MAX)
+            .into_iter()
+            .find_map(|effect| match effect {
+                V2LaneWorkEffect::PostLaneBlock {
+                    peer,
+                    message: BlockMessage::LaneHistoricalRecoveryRequest(request),
+                } => Some((peer, *request)),
+                _ => None,
+            })
+            .expect("scheduled authenticated Native carrier request");
+        assert!(V2LaneWorkAdapter::peer_is_global_finality_signer(
+            &finality, &target,
+        ));
+        assert_eq!(recovery_request.requester, adapter.local_peer);
+        assert!(recovery_request.certificate.is_none());
+        assert!(recovery_request.signer_pops.is_empty());
+        let LaneHistoricalRecoveryKindV1::NativeAmxParticipantCanonicalBlock {
+            marker: requested_marker,
+            finality_artifact_hash,
+            execution_commitment: requested_execution,
+        } = &recovery_request.kind
+        else {
+            panic!("scheduled request must carry Native participant authority");
+        };
+        assert_eq!(**requested_marker, marker);
+        assert_eq!(*finality_artifact_hash, HashOf::new(&finality));
+        assert_eq!(**requested_execution, execution_commitment);
+        let request_hash = HashOf::new(&recovery_request);
+        let response = LaneHistoricalRecoveryResponseV1 {
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
+            request_hash,
+            payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                block: carrier.clone(),
+                finality_artifact: finality.clone(),
+            },
+        };
+
+        let outsider_key = KeyPair::try_from_seed(vec![0xFA; 32], Algorithm::BlsNormal)
+            .expect("derive recovery response outsider");
+        let outsider = PeerId::new(outsider_key.public_key().clone());
+        assert_eq!(
+            adapter.accept_historical_recovery_response(response.clone(), Some(&outsider)),
+            V2LaneIngressOutcome::Rejected,
+            "a non-QC signer must not hydrate the carrier"
+        );
+        assert!(
+            adapter
+                .native_participant_recovery_requests
+                .contains_key(&marker)
+        );
+
+        let mut identity_mismatch = response.clone();
+        let LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+            finality_artifact, ..
+        } = &mut identity_mismatch.payload
+        else {
+            unreachable!("Native recovery response is canonical");
+        };
+        finality_artifact.block_hash =
+            HashOf::from_untyped_unchecked(Hash::new(b"wrong Native recovery carrier identity"));
+        assert_eq!(
+            adapter.accept_historical_recovery_response(identity_mismatch, Some(&target)),
+            V2LaneIngressOutcome::Rejected,
+            "a QC signer cannot substitute another finality identity"
+        );
+        assert!(
+            adapter
+                .native_participant_recovery_requests
+                .contains_key(&marker)
+        );
+
+        assert_eq!(
+            adapter.accept_historical_recovery_response(response.clone(), Some(&target)),
+            V2LaneIngressOutcome::Inserted,
+            "the exact QC-authenticated body must hydrate and repair evidence"
+        );
+        assert_eq!(
+            adapter.kura.block_body_status_by_hash(carrier.hash()),
+            Some(crate::kura::BlockBodyStatus::LocalSidecar),
+            "accepted recovery must repopulate the authenticated local body sidecar"
+        );
+        assert_eq!(
+            adapter
+                .kura
+                .get_block(
+                    NonZeroUsize::new(
+                        usize::try_from(carrier_height).expect("carrier height fits usize"),
+                    )
+                    .expect("non-zero carrier height"),
+                )
+                .as_deref(),
+            Some(&carrier),
+            "the accepted body must enter Kura's authenticated local cache"
+        );
+        assert!(
+            adapter
+                .state
+                .native_amx_participant_frontiers_pending_durable_evidence_snapshot_cached()
+                .expect("revalidate repaired Native frontier")
+                .is_empty(),
+            "manifest, receipt, latest index, and result evidence must clear the pending frontier"
+        );
+        let durable_receipt = adapter
+            .kura
+            .read_native_amx_participant_application_receipt(
+                participant_lane,
+                participant_dataspace,
+                participant_incarnation,
+                marker.participant_height,
+            )
+            .expect("read repaired Native receipt");
+        assert_eq!(durable_receipt.application_block_hash, carrier.hash());
+        assert_eq!(
+            durable_receipt.executed_block_wire_hash,
+            native_manifest.executed_block_wire_hash()
+        );
+        let carrier_result = carrier
+            .results()
+            .next()
+            .expect("Native carrier has one committed result")
+            .clone();
+        assert_eq!(durable_receipt.source_ids, vec![source_id]);
+        assert_eq!(durable_receipt.entrypoint_hashes, vec![entrypoint_hash]);
+        assert_eq!(durable_receipt.result_hashes, vec![carrier_result.hash()]);
+        assert_eq!(durable_receipt.results, vec![carrier_result]);
+        assert!(adapter.native_participant_recovery_requests.is_empty());
+        assert!(
+            adapter
+                .native_participant_recovery_request_owners
+                .is_empty()
+        );
+
+        assert_eq!(
+            adapter.accept_historical_recovery_response(response, Some(&target)),
+            V2LaneIngressOutcome::Rejected,
+            "an exact replay after request retirement must not resurrect ownership"
+        );
+        assert!(adapter.native_participant_recovery_requests.is_empty());
+        assert!(
+            adapter
+                .native_participant_recovery_request_owners
+                .is_empty()
+        );
+    }
+
+    #[test]
     fn historical_recovery_request_rejects_missing_extra_and_tampered_signer_pops() {
-        let (adapter, _keys, request) = self_contained_historical_recovery_request_fixture();
+        let (mut adapter, _keys, request) = self_contained_historical_recovery_request_fixture();
         assert!(
             adapter
                 .validate_historical_recovery_request(&request, &request.requester)
@@ -17213,7 +19063,7 @@ pub(super) mod tests {
             "an extra historical signer PoP must fail closed"
         );
 
-        let mut tampered = request;
+        let mut tampered = request.clone();
         tampered
             .signer_pops
             .get_mut(&missing_key)
@@ -17224,15 +19074,40 @@ pub(super) mod tests {
                 .is_err(),
             "a tampered historical signer PoP must fail closed"
         );
+
+        let valid_request_len =
+            BlockMessage::LaneHistoricalRecoveryRequest(Box::new(request.clone()))
+                .encode()
+                .len();
+        adapter.limits.merge_share_frame_capacity =
+            NonZeroUsize::new(valid_request_len).expect("non-zero exact request frame");
+        assert!(adapter.historical_recovery_request_fits_frame(&request));
+        let mut oversized = request;
+        oversized
+            .signer_pops
+            .get_mut(&missing_key)
+            .expect("fixture signer PoP")
+            .push(0);
+        assert!(!adapter.historical_recovery_request_fits_frame(&oversized));
+        assert!(
+            adapter
+                .validate_historical_recovery_request(&oversized, &oversized.requester)
+                .is_err(),
+            "an oversized historical signer-PoP map must fail before proof validation"
+        );
     }
 
     #[test]
     fn historical_recovery_request_survives_current_state_key_pruning() {
         let (adapter, keys, request) = self_contained_historical_recovery_request_fixture();
+        let certificate = request
+            .certificate
+            .as_ref()
+            .expect("historical lane request certificate");
         let session = CommittedLaneBlockSession {
-            proposal: request.certificate.proposal.clone(),
-            prepare_qc: request.certificate.prepare_qc.clone(),
-            commit_qc: request.certificate.commit_qc.clone(),
+            proposal: certificate.proposal.clone(),
+            prepare_qc: certificate.prepare_qc.clone(),
+            commit_qc: certificate.commit_qc.clone(),
         };
         adapter
             .kura
@@ -17267,6 +19142,83 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn historical_recovery_request_rejects_stale_incarnation_and_unanchored_view() {
+        let (adapter, keys, request) = self_contained_historical_recovery_request_fixture();
+
+        let mut stale_incarnation = request.clone();
+        stale_incarnation
+            .certificate
+            .as_mut()
+            .expect("historical lane request certificate")
+            .proposal
+            .descriptor
+            .lane_incarnation = Hash::new(b"stale historical request incarnation");
+        resign_historical_request_certificate(&mut stale_incarnation, &keys);
+        let stale_certificate = stale_incarnation
+            .certificate
+            .as_ref()
+            .expect("historical lane request certificate");
+        let stale_session = CommittedLaneBlockSession {
+            proposal: stale_certificate.proposal.clone(),
+            prepare_qc: stale_certificate.prepare_qc.clone(),
+            commit_qc: stale_certificate.commit_qc.clone(),
+        };
+        Kura::validate_certified_lane_block_artifact(&CertifiedLaneBlockArtifact::new(
+            stale_session,
+            stale_incarnation.signer_pops.clone(),
+        ))
+        .expect("stale-incarnation fixture remains cryptographically certified");
+        assert!(
+            adapter
+                .validate_historical_recovery_request(
+                    &stale_incarnation,
+                    &stale_incarnation.requester,
+                )
+                .is_err(),
+            "a cryptographically valid stale incarnation must fail route admission"
+        );
+
+        let mut unanchored_view = request;
+        unanchored_view
+            .certificate
+            .as_mut()
+            .expect("historical lane request certificate")
+            .proposal
+            .descriptor
+            .lane_block_view = 1;
+        unanchored_view
+            .certificate
+            .as_mut()
+            .expect("historical lane request certificate")
+            .proposal
+            .payload_block_hint
+            .as_mut()
+            .expect("historical proposal hint")
+            .proposal_view = 1;
+        resign_historical_request_certificate(&mut unanchored_view, &keys);
+        let unanchored_certificate = unanchored_view
+            .certificate
+            .as_ref()
+            .expect("historical lane request certificate");
+        let unanchored_session = CommittedLaneBlockSession {
+            proposal: unanchored_certificate.proposal.clone(),
+            prepare_qc: unanchored_certificate.prepare_qc.clone(),
+            commit_qc: unanchored_certificate.commit_qc.clone(),
+        };
+        Kura::validate_certified_lane_block_artifact(&CertifiedLaneBlockArtifact::new(
+            unanchored_session,
+            unanchored_view.signer_pops.clone(),
+        ))
+        .expect("unanchored-view fixture remains cryptographically certified");
+        assert!(
+            adapter
+                .validate_historical_recovery_request(&unanchored_view, &unanchored_view.requester,)
+                .is_err(),
+            "a certified proposal absent from the exact global carrier must fail closed"
+        );
+    }
+
+    #[test]
     fn historical_recovery_request_rejects_legacy_sender_drift_and_noncommittee() {
         let (mut adapter, keys) = fixture_at_height(wire::ConsensusMode::Permissioned, 2);
         let lane_incarnation = adapter
@@ -17290,9 +19242,9 @@ pub(super) mod tests {
         };
         let authorized = PeerId::new(keys[0].public_key().clone());
         let mut request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1.saturating_sub(1),
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2.saturating_sub(1),
             requester: authorized.clone(),
-            certificate,
+            certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
             kind: LaneHistoricalRecoveryKindV1::CanonicalBlock {
                 finality_artifact_hash: HashOf::from_untyped_unchecked(Hash::new(
@@ -17306,7 +19258,7 @@ pub(super) mod tests {
             "legacy recovery layouts must fail closed"
         );
 
-        request.version = LANE_HISTORICAL_RECOVERY_VERSION_V1;
+        request.version = LANE_HISTORICAL_RECOVERY_VERSION_V2;
         let other_committee_member = PeerId::new(keys[1].public_key().clone());
         assert_eq!(
             adapter
@@ -17358,16 +19310,22 @@ pub(super) mod tests {
             commit_qc: lane_qc_for_phase(&proposal, &keys, CertPhase::Commit),
         };
         let request = LaneHistoricalRecoveryRequestV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             requester: adapter.local_peer.clone(),
-            certificate,
+            certificate: Some(certificate),
             signer_pops: lane_signer_pops(&keys),
             kind: LaneHistoricalRecoveryKindV1::CanonicalBlock {
                 finality_artifact_hash: HashOf::new(&finality_artifact),
             },
         };
-        let identity = HistoricalRecoveryIdentity::from_proposal(&request.certificate.proposal)
-            .expect("historical request identity");
+        let identity = HistoricalRecoveryIdentity::from_proposal(
+            &request
+                .certificate
+                .as_ref()
+                .expect("historical lane certificate")
+                .proposal,
+        )
+        .expect("historical request identity");
         let request_hash = HashOf::new(&request);
         adapter
             .historical_recovery_request_owners
@@ -17380,7 +19338,7 @@ pub(super) mod tests {
             },
         );
         let response = LaneHistoricalRecoveryResponseV1 {
-            version: LANE_HISTORICAL_RECOVERY_VERSION_V1,
+            version: LANE_HISTORICAL_RECOVERY_VERSION_V2,
             request_hash,
             payload: LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
                 block: block.as_ref().clone(),
@@ -18390,6 +20348,9 @@ pub(super) mod tests {
         ));
         let manifests = adapter.state.lane_manifests.read().clone();
         queue.install_lane_manifests(&manifests);
+        // Retain the explicit test router across the same generation check
+        // performed before production reservation selection.
+        queue.install_test_router_metadata_for_nexus(&adapter.state.nexus_snapshot());
         queue
             .install_lane_reservation_journal(journal_path, 1024 * 1024)
             .expect("install autonomous queue reservation journal");
@@ -18402,6 +20363,8 @@ pub(super) mod tests {
     fn enqueue_autonomous_test_transactions(
         adapter: &V2LaneWorkAdapter,
         queue: &Queue,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
         count: usize,
     ) -> Vec<TransactionEntrypoint> {
         (0..count)
@@ -18421,6 +20384,14 @@ pub(super) mod tests {
                     std::borrow::Cow::Owned(transaction),
                 );
                 let entrypoint = accepted.entrypoint().clone();
+                assert_eq!(
+                    queue
+                        .route_plan_for_gossip_with_state(&accepted, adapter.state.as_ref())
+                        .expect("autonomous fixture route remains resolvable")
+                        .coordinator_route(),
+                    RoutingDecision::new(lane_id, dataspace_id),
+                    "the exact committed Nexus generation must retain the autonomous test router"
+                );
                 queue
                     .push_with_lane_with_state(accepted, adapter.state.as_ref())
                     .expect("enqueue autonomous lane transaction");
@@ -18486,7 +20457,8 @@ pub(super) mod tests {
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        let expected_entrypoints = enqueue_autonomous_test_transactions(&adapter, &queue, 4);
+        let expected_entrypoints =
+            enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 4);
         let journal_len_before = std::fs::metadata(&journal_path)
             .expect("stat empty reservation journal")
             .len();
@@ -18508,6 +20480,32 @@ pub(super) mod tests {
             .expect("local producer publishes one pending autonomous payload")
             .clone();
         assert_eq!(payload.origin_proposal.payload_block_hint, None);
+        assert!(lane_executable_payload_carries_lane(
+            &payload,
+            lane_id,
+            dataspace_id,
+            payload.origin_proposal.descriptor.lane_incarnation,
+        ));
+        assert!(
+            !lane_executable_payload_carries_lane(
+                &payload,
+                lane_id,
+                dataspace_id,
+                Hash::new(b"recreated autonomous lane incarnation"),
+            ),
+            "incarnation-A payload ownership must not ABA-block incarnation B"
+        );
+        let mut misaligned_payload = payload.clone();
+        misaligned_payload.native_amx_receipts.clear();
+        assert!(
+            lane_executable_payload_carries_lane(
+                &misaligned_payload,
+                lane_id,
+                dataspace_id,
+                Hash::new(b"recreated autonomous lane incarnation"),
+            ),
+            "malformed routing/receipt alignment must fail closed"
+        );
         assert_eq!(
             payload.entrypoints,
             expected_entrypoints[..expected_count],
@@ -18571,7 +20569,7 @@ pub(super) mod tests {
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, 1);
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
 
         adapter
             .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
@@ -18605,7 +20603,7 @@ pub(super) mod tests {
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        enqueue_autonomous_test_transactions(&adapter, &queue, 1);
+        enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 1);
         adapter
             .schedule_autonomous_lane_production(0, autonomous_test_candidate_limits(2, 2))
             .expect("produce durable autonomous payload");
@@ -18663,7 +20661,8 @@ pub(super) mod tests {
         let journal_path = journal_dir.path().join("lane-reservations.norito");
         let queue =
             install_autonomous_test_queue(&mut adapter, lane_id, dataspace_id, &journal_path);
-        let expected_entrypoints = enqueue_autonomous_test_transactions(&adapter, &queue, 3);
+        let expected_entrypoints =
+            enqueue_autonomous_test_transactions(&adapter, &queue, lane_id, dataspace_id, 3);
         assert_eq!(
             autonomous_route_quota_for_test(&adapter, lane_id, dataspace_id, 2),
             1

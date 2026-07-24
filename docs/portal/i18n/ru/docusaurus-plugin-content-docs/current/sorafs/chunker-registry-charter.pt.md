@@ -65,7 +65,7 @@ SDK). Она вводит неизменяемые псевдонимы и об�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envie um PR contendo приспособления, предложения, отношения детерминизма и
@@ -101,14 +101,14 @@ SDK). Она вводит неизменяемые псевдонимы и об�
 
 ## Ожидания от инструментов
 
-- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub` объяснение:
+- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder` объяснение:
   - `--list-profiles` для проверки регистрации.
   - `--promote-profile=<handle>` для включения или блокировки используемых канонических метаданных
     ао промоутер гм перфил.
   - `--json-out=-` для передачи данных на стандартный вывод, привычные журналы проверки
     репродуктивный.
 - `ensure_charter_compliance()` и вызов для инициализации соответствующих двоичных файлов
-  (`manifest_chunk_store`, `provider_advert_stub`). Os testes de CI devem falhar se
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Os testes de CI devem falhar se
   novas entradas violarem a carta.
 
 ## Регистр

@@ -67,7 +67,9 @@ certificate round.
   `SumeragiV2LivenessProofs.tla`,
   `SumeragiV2CertifiedRequestHashAuthorityProofs.tla`,
   `SumeragiV2DurableDecisionRecoveryProofs.tla`, and
-  `SumeragiV2AsyncLivenessProofs.tla`, with
+  the bounded `SumeragiV2Async*Proofs.tla` shard chain behind the
+  declaration-free `SumeragiV2AsyncLivenessProofs.tla` compatibility façade,
+  with
   `SumeragiV2AsyncHistoricalRecoveryLivenessProofs.tla` as its child,
   model the production scheduler and transport abstractions, own the typed
   fair-action-to-`AsyncNext` refinement proof, and state the conditional
@@ -266,9 +268,16 @@ certificate round.
   publication/pruning order, same-route control-only treatment, unchanged
   reservation identity, single ownership, a control-only autonomous anchor,
   durable full-candidate authorization, ordered two-phase release, ABA-safe
-  recreation, and at-most-once canonical application. Thirteen `_bug.cfg`
-  controls deliberately weaken one boundary each and must produce the named
-  invariant counterexample.
+  recreation, and at-most-once canonical application. The closure-ledger
+  predicates additionally cover atomic route publication, quorum-bound drain
+  certificates, exact-incarnation retirement, V4 Native source claims,
+  contiguous active routes, exact grouped application, authenticated
+  manifests, startup repair/latest-index exactness, durable reservation
+  ownership, route/incarnation-first merge prefixes, canonical re-execution,
+  restart ownership partitioning, and observer-only monotonic stage evidence
+  derived from durable State/Kura artifacts. Twenty-seven `_bug.cfg` controls
+  deliberately weaken one boundary each and must produce the named invariant
+  counterexample.
   `multilane_source_bindings.json` binds each kernel to current Rust items and
   semantic tokens; `check_sumeragi_v2_multilane_models.py` validates that
   structure before the default TLC matrix. The Native binding includes the
@@ -276,7 +285,11 @@ certificate round.
   atomic latest-index write/readback, bounded latest lookup, and the
   Kura-before-WSV application boundary. The autonomous binding includes
   exclusion-aware FIFO reservation, the durable Queue/Kura release barrier,
-  and exact full-candidate signing authorization.
+  route/incarnation-first canonical source ordering, startup ownership
+  reconciliation, and exact full-candidate signing authorization.
+  It also binds the bounded autonomous stage projection, its durable-stage
+  reducer, and the data-model stage geometry/order validation; diagnostics
+  cannot advance beyond revalidated evidence or authorize consensus state.
 
   `run_sumeragi_v2_multilane_apalache.sh` is the second bounded positive
   checker. It accepts no length argument or environment length override,
@@ -294,7 +307,7 @@ certificate round.
   drift, source-binding bypass, a reduced autoscale bound, mutation
   substitution, a weakened success marker, and a length override. The default
   `run_sumeragi_v2_tlc.sh` release matrix invokes this Apalache gate after the
-  thirteen exact TLC mutation witnesses. Apalache does not run those mutations:
+  twenty-seven exact TLC mutation witnesses. Apalache does not run those mutations:
   their named-counterexample contract is owned by the deterministic TLC
   runner, while the Apalache leg accepts positive `NoError` only.
 
@@ -798,7 +811,31 @@ change bounded-search semantics.
 The strict TLAPS runner checks every deductive module,
 then generates evidence bound to the exact ordered module list, every proof
 log, the pinned tool identity, and a SHA-256 manifest of every TLA+ source.
-The checked-in ledger cannot contain stale tool-run counts.
+The former 57,058-line async proof root is a mechanically sealed chain of 21
+physical modules. Twenty proof-bearing shards run separately; the one debt
+shard contains exactly `TimeoutViewProgressObligation`,
+`LockedBodyReproposalProgressObligation`, and
+`RotatingLeaderProgressObligation`. The façade preserves existing qualified
+references without declaring anything. The checker rejects missing, reordered,
+duplicate, oversized, forward-referencing, or unexpectedly proofless shards;
+each shard is capped at 256 KiB, 5,500 lines, and 150 local theorems, and each
+theorem at 600 lines and 256 structured steps. Evidence resolves every
+façade-facing ledger symbol to its unique provider shard and provider log.
+
+The checked-in ledger cannot contain stale tool-run counts. Before each backend
+run, TLAPM performs a strict no-backend summary preflight. Each proof-bearing
+shard then runs in a fresh process with one worker, disabled fingerprints, and
+its own disposable cache. The complete wave executes inside an owned process
+group under a 2 GiB bounded polling ceiling with a target 250 ms cadence. Each `ps` or macOS
+`footprint` probe is limited to 200 ms; an inspection timeout fails closed and
+terminates the exact owned process group. This portable userspace guard is not
+an operating-system hard allocation limit. A separate lifeline session cleans
+the body after supervisor death, while inherited lock descriptors keep the
+per-user heavy-job lock shared with Kagemusha V4 candidate generation until
+cleanup finishes. Release receipts bind the resulting JSONL samples and
+canonical resource summary. The inherited one-shot launch capability prevents
+stale environment markers from skipping the wrapper; it is not a security
+boundary against a malicious same-UID process.
 
 The structural checker rejects top-level TLA+ assumptions/axioms, unledgered
 omitted proofs, Verus assume/admit/trusted-body escapes, non-theorem ledger
@@ -884,8 +921,9 @@ geometry, compact offline QCs, and parent height-context identity to the
 authenticated origin.
 
 The final successor/recovery closure adds six exact regressions without adding
-a module. Three source-sealed format, build, and legacy-codec guard legs bring
-the current inventory to 515 tests across 38 modules and 64 legs.
+a module. Six source-sealed command legs and the G-SCALE runner/validator
+preflight bring the current inventory to 515 tests across 38 modules and 65
+legs.
 The canonical module/test TSV inventory SHA-256 is
 `b45ba53a16889f89b7ef9301bcba4143ae35cb2b6c7ec304f80b5b43622c53f7`.
 The six boundaries preserve the predecessor CommitQC through wire-to-core
@@ -924,14 +962,14 @@ through an authenticated non-validator hop, and retains the capacity-negative
 boundary. It
 also retains one four-validator exact PrepareQC count-and-power quorum
 regression. The five integration names execute under one module-filtered leg;
-the complete pre-network corridor now spans 64 legs, including separate exact
+the complete pre-network corridor now spans 65 legs, including separate exact
 data-model status and atomic lane-certificate decode contracts, the two
 `iroha_config` geometry modules, three P2P geometry modules, the daemon genesis
 module, and source-sealed command-success legs. Its finality, offline compact-QC,
 and height-context proposal-origin modules each use a dedicated
 `iroha_data_model` leg. The inventory executes the `iroha_p2p` library with its
 empty default feature set. It does not claim the feature-gated QUIC first-packet
-geometry tests as part of those thirty-eight modules or sixty-four legs. The
+geometry tests as part of those thirty-eight modules or sixty-five legs. The
 inventory includes five native-AMX lane-work
 capacity regressions, adapter/runner/watchdog successor-activation boundaries,
 exact recovery-derived successor identity, authenticated exact historical
@@ -1007,7 +1045,7 @@ manifest. Manifest modes cover enumerated file/symlink entries; a separate seal
 walk checks directories and rejects source symlink escapes, writable-output
 targets, and hard-linked regular files. Child builds and evidence bind the
 sealed manifest actually compiled. The canonical aggregate receipt additionally
-binds original HEAD/tree/`Cargo.lock`, all 64 pre-network legs and the exact
+binds original HEAD/tree/`Cargo.lock`, all 65 pre-network legs and the exact
 515-test inventory, the pinned harness lock and resolved toolchain, the formal
 ledger/evidence/log, all matrix logs, chaos log, and exact-identity soak
 evidence. Its no-clobber, file/directory-`fsync` publication has no mutable

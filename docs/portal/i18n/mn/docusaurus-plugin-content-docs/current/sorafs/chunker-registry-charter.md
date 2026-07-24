@@ -59,7 +59,7 @@ SDK). Энэ нь өөр нэр болон шалгасан хувьсагчды
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Бэхэлгээ, санал, детерминизмын тайлан, бүртгэлийг агуулсан PR илгээнэ үү
@@ -98,14 +98,14 @@ SDK). Энэ нь өөр нэр болон шалгасан хувьсагчды
 
 ## Багажны хүлээлт
 
-- `sorafs_manifest_chunk_store` ба `sorafs_manifest_stub` дараахыг илтгэнэ.
+- `sorafs_manifest_chunk_store` ба `sorafs_manifest_builder` дараахыг илтгэнэ.
   - Бүртгэлийн шалгалтын `--list-profiles`.
   - Ашигласан каноник мета өгөгдлийн блок үүсгэхийн тулд `--promote-profile=<handle>`
     профайлыг сурталчлах үед.
   - `--json-out=-` нь тайланг stdout руу дамжуулж, дахин давтагдах боломжтой
     бүртгэлүүд.
 - `ensure_charter_compliance()` нь холбогдох хоёртын файлуудыг эхлүүлэх үед дуудагддаг
-  (`manifest_chunk_store`, `provider_advert_stub`). Хэрэв шинэ бол CI тест амжилтгүй болох ёстой
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Хэрэв шинэ бол CI тест амжилтгүй болох ёстой
   бичлэгүүд дүрмийг зөрчсөн.
 
 ## Албан хэрэг хөтлөлт

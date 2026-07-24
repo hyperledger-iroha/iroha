@@ -62,7 +62,7 @@ lane keeps the aggregate gate blocked.
 ### Canonical publishing example
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/manifest.to \
   --manifest-signatures-out artifacts/docs/book/manifest_signatures.json \
   --car-out artifacts/docs/book/content.car \

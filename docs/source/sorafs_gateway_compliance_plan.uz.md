@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_gateway_compliance_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7756874e86e6abf301e92d26cd7c7afc2e5cbd1b97cd706ec2af01cc68c2e936
+source_hash: 1811895bbcc4cec793e40f14af07983fd49435e1f26d0d3da44105a0a2cb83ea
 source_last_modified: "2026-07-06T19:08:48.772896+00:00"
 translation_last_reviewed: 2026-07-23
 source_mtime: 2026-07-06T19:08:48.772896+00:00
@@ -25,13 +25,22 @@ also defines an address-pinned runtime feed-transport boundary with HTTPS
 allowlists, public-address validation, DNS revalidation, SPKI pins, redirect,
 size, time, and decompression limits.
 
-The repository does not yet wire that controller through `iroha_config`, Torii
-runtime dependencies, authenticated control routes, a real feed transport, or
-the live gateway policy. The startup bootstrap catalog remains active until
-that cutover is completed. There is also no deployed public receipt explorer.
-Accordingly the lane remains open: source-complete controller primitives and
-synthetic tests are not deployment evidence and cannot mark gateway compliance
-ready.
+`iroha_config` now carries the non-secret controller policy, feed allowlists and
+pins, resource bounds, checkpoint path, and governed signer identities. Torii
+accepts runtime-injected ACME and authenticated feed transports, transfers them
+through `ToriiRuntimeDeps`, constructs the durable controller from the exact
+resolved configuration, and fails closed when an enabled runtime dependency is
+absent or mismatched. This controller/runtime integration ships locally.
+
+Real authenticated feed and ACME adapters, authenticated
+stage/acknowledge/promote/rollback/status routes, live gateway-policy cutover,
+finalized accepted-appeal and legal/safety-hold producers, and deployment across
+two independently administered regional gateways remain open. The startup
+bootstrap catalog remains active until the live-policy cutover is completed.
+The local SFM-4c transparency ledger builder and readback surface are shipped,
+but deployed publication, public-explorer, and two-gateway evidence remain
+open. Accordingly the lane remains open: local source and synthetic-test
+coverage are not deployment evidence and cannot mark gateway compliance ready.
 
 ## Shipped Foundations
 
@@ -54,6 +63,14 @@ ready.
   opens, regular-file checks, fsync, and atomic rename. Catalog signing keys,
   feed credentials, bearer tokens, and DNS-provider credentials are not owned by
   the controller.
+- `iroha_config` defines the complete non-secret compliance policy and validates
+  canonical signer, revocation, feed, host, SPKI-pin, resource, freshness, and
+  history bounds before producing the runtime configuration.
+- `ToriiRuntimeDeps` accepts runtime-owned ACME and authenticated feed-transport
+  implementations. Torii maps every resolved field into the ACME/controller
+  runtime, constructs the durable controller, rejects dependencies injected
+  while their feature is disabled, and refuses startup when an enabled
+  dependency is missing.
 - `GatewayPolicy` evaluates manifest-envelope requirements, provider admission,
   denylist hits, rate limits, GAR CDN policy, TTL overrides, purge tags,
   moderation slugs, rate ceilings, geofences, and legal holds.
@@ -281,10 +298,11 @@ reviewed deployment evidence across every gateway-compliance rollout kind so
 count equality, `iroha_config` binding, payload-free inclusion flags,
 observability metric inventory binding, and checker prevalidation stay
 consistent with the promotion gate. The payload-free full-surface canary builder
-does not replace the missing deployed controller daemon, toggle service, live
-honey-audit target, appeal feed, transparency publication hook, or governance
-approval packet; it only standardizes reviewed promotion evidence once those
-boundaries produce deployment facts.
+does not replace real authenticated feed and ACME adapters, authenticated
+controller control routes, finalized appeal/hold producers, a live honey-audit
+target, transparency publication hooks, governance approval packets, or
+two-gateway deployment; it only standardizes reviewed promotion evidence once
+those boundaries produce deployment facts.
 Gateway compliance payload-safety artifacts must explicitly set
 `raw_feeds_included`, `feed_payloads_included`, `raw_toggle_payloads_included`,
 `raw_catalog_included`, `raw_probe_responses_included`,
@@ -309,20 +327,22 @@ parsing response strings.
 
 ## Remaining Production Gates
 
-- Resolve `V1-BLOCK-GATEWAY-CONTROLLER-RUNTIME-01`: add the controller policy,
-  feed allowlists/pins, bounds, checkpoint path, and required gateway identities
-  to `iroha_config`; inject the authenticated feed transport at runtime; expose
-  authenticated stage/acknowledge/promote/rollback/status APIs; and make live
-  gateway policy consume the serving controller snapshot.
+- Resolve `V1-BLOCK-GATEWAY-CONTROLLER-RUNTIME-01`: supply independently audited
+  real authenticated feed-transport and ACME adapters, expose authenticated
+  stage/acknowledge/promote/rollback/status APIs, and make live gateway policy
+  consume the serving controller snapshot. Configuration, runtime dependency
+  transfer, fail-closed startup checks, and durable controller construction
+  already ship locally and must not be reopened as missing work.
 - Remove the startup-only unsigned local catalog/bootstrap path after the
   controller cutover so it cannot compete with the signed durable catalog.
 - Connect finalized accepted-appeal outcomes and legal/safety-hold producers to
   signed catalog construction and cache invalidation. The core models and
   enforces these records, but no finalized-chain producer currently submits
   them.
-- Supply independently audited runtime adapters for the required external feeds
-  and threshold signing. The controller deliberately holds no signing key or
-  feed credential and cannot invent those production dependencies.
+- Supply independently audited threshold-signing integration for the required
+  external feeds. The controller deliberately holds no signing key, feed
+  credential, ACME account credential, or DNS-provider credential and cannot
+  invent those production dependencies.
 - Wire deployed GAR receipts, proof-token indexes, and moderation events through
   the shipped local SFM-4c transparency source-entry and publication paths, then
   capture deployed publication evidence.

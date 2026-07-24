@@ -88,6 +88,10 @@ SUMMARY_FIELDS = (
     "localnet",
     "command",
 )
+SCALING_CONFIGURATION_DATA = b"[nexus]\nenabled = true\n"
+SCALING_TRIAL_HARNESS_DATA = b"#!/usr/bin/env bash\nexit 0\n"
+SCALING_IROHAD_SHA256 = "c" * 64
+SCALING_IROHA_CLI_SHA256 = "d" * 64
 
 
 def sha256(path: Path) -> str:
@@ -169,6 +173,14 @@ def fixture_writer(tmp_path: Path) -> Path:
         ROOT_DIR / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py",
         nexus / "validate_multilane_scaling_evidence.py",
     )
+    for relative in (
+        Path("scripts/deploy_localnet.sh"),
+        Path("scripts/tx_load.py"),
+        Path("scripts/nexus_lane_load_test.py"),
+    ):
+        destination = project / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
     fixture_cargo = project / ".cargo"
     fixture_cargo.mkdir()
     shutil.copy2(ROOT_DIR / ".cargo" / "config.toml", fixture_cargo / "config.toml")
@@ -230,6 +242,11 @@ def make_bootstrap_evidence(
     signature_allowed_signers: Path,
     signature_revocation: Path,
     show_output: bytes,
+    scaling_evidence_manifest: Path,
+    scaling_trial_harness_sha256: str,
+    scaling_configuration_sha256: str,
+    scaling_irohad_sha256: str,
+    scaling_iroha_cli_sha256: str,
 ) -> dict[str, Path | str]:
     candidate_root = tmp_path / "bootstrap-candidate"
     (candidate_root / "scripts").mkdir(parents=True)
@@ -252,7 +269,7 @@ def make_bootstrap_evidence(
     trust_dir.mkdir(mode=0o700)
     frozen_bootstrap = ROOT_DIR / "scripts" / "bootstrap_sumeragi_v2_release.py"
     assert sha256(frozen_bootstrap) == (
-        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+        "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
     )
     synthetic_sources: dict[str, Path] = {}
     for label, data, mode in (
@@ -610,6 +627,17 @@ def make_bootstrap_evidence(
         "GIT_CONFIG_KEY_1": "core.fsmonitor",
         "GIT_CONFIG_VALUE_1": "false",
         "GIT_TERMINAL_PROMPT": "0",
+        "IROHA_RELEASE_SCALING_EVIDENCE_MANIFEST": str(
+            scaling_evidence_manifest
+        ),
+        "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256": (
+            scaling_trial_harness_sha256
+        ),
+        "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256": (
+            scaling_configuration_sha256
+        ),
+        "IROHA_RELEASE_SCALING_IROHAD_SHA256": scaling_irohad_sha256,
+        "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256": scaling_iroha_cli_sha256,
         **policy_environment,
         **alias_environment,
     }
@@ -701,7 +729,7 @@ def make_bootstrap_evidence(
 
 def make_scaling_evidence(
     tmp_path: Path, *, head: str, sealed_manifest: str
-) -> dict[str, Path]:
+) -> dict[str, Path | str]:
     root = tmp_path / "scaling"
     inputs = root / "inputs"
     tooling_dir = root / "tooling"
@@ -721,7 +749,7 @@ def make_scaling_evidence(
         }
 
     config = inputs / "nexus_config.toml"
-    config.write_text("[nexus]\nenabled = true\n", encoding="utf-8")
+    config.write_bytes(SCALING_CONFIGURATION_DATA)
     identity = {
         "schema": "iroha.sumeragi_v2.multilane_scaling.identity.v1",
         "hardware": {
@@ -741,14 +769,14 @@ def make_scaling_evidence(
             "source_revision": head,
             "workspace_source_sha256": sealed_manifest,
             "nexus_config_sha256": sha256(config),
-            "irohad_sha256": "c" * 64,
-            "iroha_cli_sha256": "d" * 64,
+            "irohad_sha256": SCALING_IROHAD_SHA256,
+            "iroha_cli_sha256": SCALING_IROHA_CLI_SHA256,
         },
     }
     identity_path = inputs / "identity.json"
     write_json(identity_path, identity)
     harness = inputs / "trial_harness.sh"
-    harness.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    harness.write_bytes(SCALING_TRIAL_HARNESS_DATA)
 
     validator_source = (
         ROOT_DIR / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py"
@@ -960,6 +988,10 @@ def make_scaling_evidence(
         "scaling_identity": identity_path,
         "scaling_validator": validator,
         "scaling_trial_log": root / runs[0]["command_log"]["path"],
+        "expected_scaling_trial_harness_sha256": sha256(harness),
+        "expected_scaling_configuration_sha256": sha256(config),
+        "expected_scaling_irohad_sha256": SCALING_IROHAD_SHA256,
+        "expected_scaling_iroha_cli_sha256": SCALING_IROHA_CLI_SHA256,
     }
 
 
@@ -1353,6 +1385,17 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         signature_allowed_signers=signature_allowed_signers,
         signature_revocation=signature_revocation,
         show_output=show_output,
+        scaling_evidence_manifest=(
+            tmp_path / "scaling" / "scaling_evidence.json"
+        ).resolve(),
+        scaling_trial_harness_sha256=hashlib.sha256(
+            SCALING_TRIAL_HARNESS_DATA
+        ).hexdigest(),
+        scaling_configuration_sha256=hashlib.sha256(
+            SCALING_CONFIGURATION_DATA
+        ).hexdigest(),
+        scaling_irohad_sha256=SCALING_IROHAD_SHA256,
+        scaling_iroha_cli_sha256=SCALING_IROHA_CLI_SHA256,
     )
     bootstrap_evidence_dir = bootstrap["bootstrap_evidence_dir"]
     assert isinstance(bootstrap_evidence_dir, Path)
@@ -1404,6 +1447,26 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
     taira_contract_tests = writer_symbols["_TAIRA_CONTRACT_TESTS"]
     cross_sdk_tests = writer_symbols["_CROSS_SDK_TESTS"]
     js_status_tests = writer_symbols["_JS_STATUS_TESTS"]
+    native_amx_grouped_fixture = writer_symbols["_NATIVE_AMX_GROUPED_FIXTURE"]
+    native_amx_grouped_negative_control_count = writer_symbols[
+        "_NATIVE_AMX_GROUPED_NEGATIVE_CONTROL_COUNT"
+    ]
+    native_amx_grouped_suite_source_paths = writer_symbols[
+        "_NATIVE_AMX_GROUPED_SUITE_SOURCE_PATHS"
+    ]
+    native_amx_grouped_suite_source_manifest = writer_symbols[
+        "_native_amx_grouped_suite_source_manifest"
+    ](ROOT_DIR)
+    native_amx_grouped_fixture_sha256 = sha256(
+        ROOT_DIR / native_amx_grouped_fixture
+    )
+    for relative_path in (
+        native_amx_grouped_fixture,
+        *native_amx_grouped_suite_source_paths,
+    ):
+        retained_source = release_root / relative_path
+        retained_source.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT_DIR / relative_path, retained_source)
     corridor_dir = tmp_path / "corridor"
     corridor_logs_dir = corridor_dir / "logs"
     corridor_logs_dir.mkdir(parents=True)
@@ -1469,6 +1532,15 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             log_lines = ["." * required_count, f"{required_count} passed in 0.01s"]
         elif kind == "command":
             log_lines = [f"{leg_id} completed successfully"]
+        elif kind == "native-amx-sdk":
+            surface = leg_id.removeprefix("native-amx-grouped-")
+            log_lines = [
+                "native-amx-v2-grouped-parity "
+                f"surface={surface} tests={required_count} "
+                f"fixture_sha256={native_amx_grouped_fixture_sha256} "
+                "suite_source_manifest_sha256="
+                f"{native_amx_grouped_suite_source_manifest}"
+            ]
         else:
             log_lines = [
                 *(
@@ -1510,6 +1582,7 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "rustc",
         "python3",
         "node",
+        "swift",
         "bash",
         "git",
         "tlapm",
@@ -1547,14 +1620,26 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "python3_sha256": sha256(tool_paths["python3"]),
             "node_path": str(tool_paths["node"].resolve()),
             "node_sha256": sha256(tool_paths["node"]),
+            "swift_path": str(tool_paths["swift"].resolve()),
+            "swift_sha256": sha256(tool_paths["swift"]),
+            "swift_version": "Apple Swift version 6.2.3",
             "bash_path": str(tool_paths["bash"].resolve()),
             "bash_sha256": sha256(tool_paths["bash"]),
             "git_path": str(tool_paths["git"].resolve()),
             "git_sha256": sha256(tool_paths["git"]),
             "cargo_home_path": str(isolated_cargo_home.resolve()),
             "repo_cargo_config_sha256": sha256(ROOT_DIR / ".cargo" / "config.toml"),
+            "native_amx_grouped_fixture_sha256": (
+                native_amx_grouped_fixture_sha256
+            ),
+            "native_amx_grouped_suite_source_manifest_sha256": (
+                native_amx_grouped_suite_source_manifest
+            ),
+            "native_amx_grouped_negative_control_count": str(
+                native_amx_grouped_negative_control_count
+            ),
             "tlc_profile": "ci",
-            "tlaps_threads": "4",
+            "tlaps_threads": "1",
         },
     )
 
@@ -1636,8 +1721,50 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         formal_toolchain_fields[f"{name}_path"] = str(path.resolve())
         formal_toolchain_fields[f"{name}_sha256"] = sha256(path)
     formal_toolchain_fields["tlc_profile"] = "ci"
-    formal_toolchain_fields["tlaps_threads"] = "4"
+    formal_toolchain_fields["tlaps_threads"] = "1"
     write_tsv(formal_toolchain, formal_toolchain_fields)
+    formal_tlaps_resource_summary = formal_dir / "tlaps_resource_summary.json"
+    resource_summary = {
+        "child_exit_code": 0,
+        "ended_utc": "2026-07-22T00:00:01.000Z",
+        "event": "summary",
+        "exit_reason": "completed",
+        "exit_status": 0,
+        "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+        "peak_memory_bytes": 4096,
+        "peak_physical_footprint_bytes": 4096,
+        "peak_rss_bytes": 4096,
+        "sample_count": 1,
+        "sample_interval_seconds": 0.25,
+        "schema_version": 1,
+        "started_utc": "2026-07-22T00:00:00.000Z",
+        "supervisor_pid": 1234,
+    }
+    formal_tlaps_resource_summary.write_bytes(canonical_json(resource_summary))
+    formal_tlaps_resource_jsonl = formal_dir / "tlaps_resource.jsonl"
+    formal_tlaps_resource_jsonl.write_bytes(
+        canonical_json(
+            {
+                "event": "start",
+                "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+                "sample_interval_seconds": 0.25,
+                "schema_version": 1,
+            }
+        )
+        + canonical_json(
+            {
+                "accounting_method": "physical_footprint",
+                "event": "sample",
+                "memory_bytes": 4096,
+                "memory_limit_bytes": 2 * 1024 * 1024 * 1024,
+                "physical_footprint_bytes": 4096,
+                "process_count": 1,
+                "rss_bytes": 4096,
+                "schema_version": 1,
+            }
+        )
+        + canonical_json(resource_summary)
+    )
     formal_completion = formal_dir / "COMPLETED.tsv"
     write_tsv(
         formal_completion,
@@ -1658,6 +1785,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
             "cross_tool_evidence_sha256": sha256(formal_cross_tool_evidence),
             "harness_cargo_lock_sha256": sha256(formal_harness_lock),
             "formal_toolchain_sha256": sha256(formal_toolchain),
+            "tlaps_resource_jsonl_sha256": sha256(formal_tlaps_resource_jsonl),
+            "tlaps_resource_summary_sha256": sha256(formal_tlaps_resource_summary),
         },
     )
 
@@ -1903,6 +2032,8 @@ def make_evidence(tmp_path: Path) -> dict[str, Path | str | list[Path]]:
         "formal_cross_tool_evidence": formal_cross_tool_evidence,
         "formal_harness_lock": formal_harness_lock,
         "formal_toolchain": formal_toolchain,
+        "formal_tlaps_resource_jsonl": formal_tlaps_resource_jsonl,
+        "formal_tlaps_resource_summary": formal_tlaps_resource_summary,
         "formal_verus_tool": tool_paths["verus"],
         "corridor_cargo_tool": tool_paths["cargo"],
         "corridor_cargo_home": isolated_cargo_home,
@@ -1953,6 +2084,9 @@ def run_writer(
         Path("scripts/formal/check_sumeragi_v2_proof_ledger.py"),
         Path("scripts/formal/sumeragi_v2_verus_evidence.py"),
         Path("scripts/nexus/validate_multilane_scaling_evidence.py"),
+        Path("scripts/deploy_localnet.sh"),
+        Path("scripts/tx_load.py"),
+        Path("scripts/nexus_lane_load_test.py"),
         Path("scripts/check_taira_v2_soak_evidence.py"),
         Path(".cargo/config.toml"),
     ):
@@ -2027,6 +2161,14 @@ def run_writer(
             str(evidence["g12_soak_completion"]),
             "--scaling-evidence-manifest",
             str(evidence["scaling_manifest"]),
+            "--expected-scaling-trial-harness-sha256",
+            str(evidence["expected_scaling_trial_harness_sha256"]),
+            "--expected-scaling-configuration-sha256",
+            str(evidence["expected_scaling_configuration_sha256"]),
+            "--expected-scaling-irohad-sha256",
+            str(evidence["expected_scaling_irohad_sha256"]),
+            "--expected-scaling-iroha-cli-sha256",
+            str(evidence["expected_scaling_iroha_cli_sha256"]),
             "--repository-root",
             str(repository_root),
             "--output",
@@ -2168,6 +2310,7 @@ def regenerate_scaling_report(
     report = evidence["scaling_report"]
     assert isinstance(manifest, Path)
     assert isinstance(report, Path)
+    report.unlink(missing_ok=True)
     result = subprocess.run(
         [
             sys.executable,
@@ -2194,6 +2337,8 @@ def rebind_scaling_identity(
     evidence: dict[str, Path | str | list[Path]],
     field: str,
     value: str,
+    *,
+    regenerate_report: bool = True,
 ) -> None:
     root = evidence["scaling_root"]
     manifest_path = evidence["scaling_manifest"]
@@ -2214,7 +2359,8 @@ def rebind_scaling_identity(
         write_pretty_json(raw_path, raw)
         entry["raw_samples"]["sha256"] = sha256(raw_path)
     write_pretty_json(manifest_path, manifest)
-    regenerate_scaling_report(evidence)
+    if regenerate_report:
+        regenerate_scaling_report(evidence)
 
 
 def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
@@ -2260,7 +2406,7 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "expected_bootstrap_completion_sha256"
     ]
     assert bootstrap_authentication["frozen_bootstrap_sha256"] == (
-        "4c7c161667924706d79346a447a7ddd3e19be1e1868a30f24526ad475a4e7525"
+        "8cfc4849cccede44b70644cc536e8a7298eb70495b193adba24f05a28201a3fd"
     )
     assert bootstrap_authentication["candidate_commit_oid"] == evidence["head"]
     assert receipt["evidence"]["bootstrap"]["completion"]["path"] == str(
@@ -2307,6 +2453,8 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         "formal_cross_tool_evidence": "formal_cross_tool_evidence",
         "formal_harness_lock": "formal_harness_lock",
         "formal_toolchain": "formal_toolchain",
+        "formal_tlaps_resource_jsonl": "formal_tlaps_resource_jsonl",
+        "formal_tlaps_resource_summary": "formal_tlaps_resource_summary",
         "seed_matrix_completion": "seed_completion",
         "seed_matrix_summary": "seed_summary",
         "seed_matrix_localnet_manifest_index": "seed_localnet_manifest_index",
@@ -2346,6 +2494,12 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
         if artifact["path"].endswith("-preflight-proof-fidelity.log")
     ]
     assert len(proof_fidelity_logs) == 1
+    scaling_preflight_logs = [
+        artifact
+        for artifact in receipt["evidence"]["corridor_logs"]
+        if artifact["path"].endswith("-preflight-multilane-scaling.log")
+    ]
+    assert len(scaling_preflight_logs) == 1
 
     scaling_root = evidence["scaling_root"]
     assert isinstance(scaling_root, Path)
@@ -2371,6 +2525,39 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
             "owner_uid": os.geteuid(),
             "nlink": 1,
         }
+    release_root = evidence["release_root"]
+    assert isinstance(release_root, Path)
+    expected_retained_tooling = []
+    for role, source_path in (
+        ("localnet", "scripts/deploy_localnet.sh"),
+        ("load_generator", "scripts/tx_load.py"),
+        ("nexus_load_bundle", "scripts/nexus_lane_load_test.py"),
+    ):
+        retained_path = release_root / source_path
+        expected_retained_tooling.append(
+            {
+                "role": role,
+                "source_path": source_path,
+                "path": str(retained_path),
+                "sha256": sha256(retained_path),
+                "size_bytes": retained_path.stat().st_size,
+                "mode": f"{retained_path.stat().st_mode & 0o7777:04o}",
+                "owner_uid": os.geteuid(),
+                "nlink": 1,
+            }
+        )
+    assert receipt["evidence"]["multilane_scaling_trust_anchors"] == {
+        "trial_harness_sha256": evidence[
+            "expected_scaling_trial_harness_sha256"
+        ],
+        "configuration_sha256": evidence[
+            "expected_scaling_configuration_sha256"
+        ],
+        "irohad_sha256": evidence["expected_scaling_irohad_sha256"],
+        "iroha_cli_sha256": evidence["expected_scaling_iroha_cli_sha256"],
+        "repository_root": str(evidence["release_root"]),
+        "retained_tooling": expected_retained_tooling,
+    }
 
     g12 = receipt["evidence"]["g12_cross_dataspace"]
     g12_seed_logs = evidence["g12_seed_logs"]
@@ -2394,6 +2581,336 @@ def test_receipt_hashes_every_formal_matrix_chaos_and_soak_artifact(
     assert [record["path"] for record in g12["seed_run_logs"]] == [
         str(path.resolve()) for path in g12_seed_logs
     ]
+
+
+@pytest.mark.parametrize("report_state", ["missing", "failed", "tampered"])
+def test_receipt_requires_exact_existing_scaling_pass_report(
+    tmp_path: Path, report_state: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    report = evidence["scaling_report"]
+    assert isinstance(report, Path)
+    if report_state == "missing":
+        report.unlink()
+        expected = "lacks canonical validation_report.json"
+    else:
+        value = json.loads(report.read_text(encoding="utf-8"))
+        if report_state == "failed":
+            value["result"] = "fail"
+            value["errors"] = ["fabricated failure"]
+            value["metrics"] = None
+            expected = "not an exact pass"
+        else:
+            value["metrics"]["four_to_one_median_throughput_ratio"] = 9.0
+            expected = "does not match retained revalidation"
+        write_pretty_json(report, value)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "expected"),
+    (
+        ("source_revision", "f" * 40, "source_revision is not the sealed"),
+        (
+            "workspace_source_sha256",
+            "e" * 64,
+            "workspace_source_sha256 is not the sealed",
+        ),
+    ),
+)
+def test_receipt_rejects_valid_scaling_bundle_with_wrong_release_binding(
+    tmp_path: Path, field: str, value: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    rebind_scaling_identity(evidence, field, value)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("anchor", "expected"),
+    (
+        ("trial_harness", "trial harness is not the authenticated digest"),
+        ("configuration", "configuration is not the authenticated digest"),
+        ("irohad", "irohad_sha256 is not the authenticated digest"),
+        ("iroha_cli", "iroha_cli_sha256 is not the authenticated digest"),
+    ),
+)
+def test_receipt_rejects_self_consistent_scaling_bundle_outside_trust_anchors(
+    tmp_path: Path, anchor: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    root = evidence["scaling_root"]
+    manifest_path = evidence["scaling_manifest"]
+    assert isinstance(root, Path)
+    assert isinstance(manifest_path, Path)
+    if anchor in {"irohad", "iroha_cli"}:
+        rebind_scaling_identity(
+            evidence,
+            f"{anchor}_sha256",
+            "e" * 64,
+        )
+    else:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifact_path = root / manifest[anchor]["path"]
+        artifact_path.write_bytes(f"substituted {anchor}\n".encode("utf-8"))
+        if anchor == "configuration":
+            rebind_scaling_identity(
+                evidence,
+                "nexus_config_sha256",
+                sha256(artifact_path),
+                regenerate_report=False,
+            )
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest[anchor]["sha256"] = sha256(artifact_path)
+        write_pretty_json(manifest_path, manifest)
+        regenerate_scaling_report(evidence)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected"),
+    (
+        ("symlink", "contains a symlink"),
+        ("hardlink", "hard-link alias"),
+        ("unexpected", "failed retained-validator revalidation"),
+        ("oversize", "file exceeds its size limit"),
+        ("count", "file-count limit"),
+    ),
+)
+def test_receipt_rejects_unsafe_or_unbounded_scaling_bundle_inventory(
+    tmp_path: Path, mutation: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    root = evidence["scaling_root"]
+    trial_log = evidence["scaling_trial_log"]
+    assert isinstance(root, Path)
+    assert isinstance(trial_log, Path)
+    if mutation == "symlink":
+        try:
+            (root / "late-link").symlink_to(trial_log)
+        except (NotImplementedError, OSError) as error:
+            pytest.skip(f"symlinks unavailable: {error}")
+    elif mutation == "hardlink":
+        try:
+            os.link(trial_log, root / "late-hardlink")
+        except OSError as error:
+            pytest.skip(f"hard links unavailable: {error}")
+    elif mutation == "unexpected":
+        (root / "unexpected.txt").write_text("unexpected\n", encoding="utf-8")
+    elif mutation == "oversize":
+        with trial_log.open("r+b") as destination:
+            destination.truncate(256 * 1024 * 1024 + 1)
+    else:
+        for index in range(257):
+            (root / f"extra-{index:03d}").write_bytes(b"")
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+def test_receipt_rejects_scaling_artifact_mutated_by_revalidator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    module = load_writer_module()
+    manifest = make_scaling_evidence(
+        tmp_path,
+        head="1" * 40,
+        sealed_manifest="2" * 64,
+    )
+    manifest_path = manifest["scaling_manifest"]
+    trial_log = manifest["scaling_trial_log"]
+    assert isinstance(manifest_path, Path)
+    assert isinstance(trial_log, Path)
+    repo_root = tmp_path / "retained-root"
+    retained = (
+        repo_root / "scripts" / "nexus" / "validate_multilane_scaling_evidence.py"
+    )
+    retained.parent.mkdir(parents=True)
+    shutil.copy2(
+        ROOT_DIR / "scripts" / "nexus" / retained.name,
+        retained,
+    )
+    for relative in (
+        Path("scripts/deploy_localnet.sh"),
+        Path("scripts/tx_load.py"),
+        Path("scripts/nexus_lane_load_test.py"),
+    ):
+        destination = repo_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT_DIR / relative, destination)
+    real_run = module.subprocess.run
+
+    def mutate_after_validation(*args: object, **kwargs: object) -> object:
+        result = real_run(*args, **kwargs)
+        trial_log.write_text("mutated after validation\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(module.subprocess, "run", mutate_after_validation)
+    with pytest.raises(
+        module.ReceiptError, match="changed during retained revalidation"
+    ):
+        module._validate_scaling_evidence(
+            manifest_path=manifest_path,
+            sealed={
+                "head_commit": "1" * 40,
+                "workspace_source_manifest_sha256": "2" * 64,
+            },
+            repo_root=repo_root,
+            checker_environment=module._closed_replay_environment(repo_root),
+            expected_trial_harness_sha256=manifest[
+                "expected_scaling_trial_harness_sha256"
+            ],
+            expected_configuration_sha256=manifest[
+                "expected_scaling_configuration_sha256"
+            ],
+            expected_irohad_sha256=manifest[
+                "expected_scaling_irohad_sha256"
+            ],
+            expected_iroha_cli_sha256=manifest[
+                "expected_scaling_iroha_cli_sha256"
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "expected"),
+    (
+        ("g12_seed_completion", "G-12P seed completion is unavailable"),
+        (
+            "g12_soak_completion",
+            "G-12P fault-soak completion is unavailable",
+        ),
+    ),
+)
+def test_receipt_requires_both_g12_completions(
+    tmp_path: Path, fixture_name: str, expected: str
+) -> None:
+    evidence = make_evidence(tmp_path)
+    path = evidence[fixture_name]
+    assert isinstance(path, Path)
+    path.unlink()
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "mutation", "expected"),
+    (
+        (
+            "g12_seed_completion",
+            "completion",
+            "seed completion is not exact passing",
+        ),
+        ("g12_seed_summary", "append", "seed summary digest mismatch"),
+        ("g12_seed_log", "append", "seed log 3 digest mismatch"),
+        (
+            "g12_soak_completion",
+            "completion",
+            "fault-soak completion is not exact passing",
+        ),
+        ("g12_soak_log", "append", "fault-soak log digest mismatch"),
+    ),
+)
+def test_receipt_rejects_tampered_g12_accounting_summary_or_log(
+    tmp_path: Path,
+    fixture_name: str,
+    mutation: str,
+    expected: str,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    path = evidence[fixture_name]
+    assert isinstance(path, Path)
+    if mutation == "append":
+        path.write_text(
+            path.read_text(encoding="utf-8") + "tampered\n",
+            encoding="utf-8",
+        )
+    else:
+        fields = dict(
+            line.split("\t", 1)
+            for line in path.read_text(encoding="utf-8").splitlines()
+        )
+        if fixture_name == "g12_seed_completion":
+            fields["passed_runs"] = "9"
+        else:
+            fields["duration_seconds"] = "7199"
+        write_tsv(path, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert expected in result.stderr
+
+
+def test_receipt_rejects_g12_completion_bound_to_wrong_release_source(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    completion = evidence["g12_seed_completion"]
+    assert isinstance(completion, Path)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["source_manifest_sha256"] = "0" * 64
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "seed completion is not exact passing release-bound" in result.stderr
+
+
+def test_receipt_rejects_rehashed_noncanonical_apalache_evidence(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    apalache = evidence["formal_multilane_apalache_evidence"]
+    completion = evidence["formal_completion"]
+    assert isinstance(apalache, Path)
+    assert isinstance(completion, Path)
+    apalache.write_text(
+        apalache.read_text(encoding="utf-8").replace(
+            "result_count\t3", "result_count\t2", 1
+        ),
+        encoding="utf-8",
+    )
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["multilane_apalache_evidence_sha256"] = sha256(apalache)
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "Apalache evidence header is not the exact pinned profile" in result.stderr
 
 
 def test_receipt_links_required_cross_tool_evidence(tmp_path: Path) -> None:
@@ -2439,6 +2956,31 @@ def test_receipt_rejects_stale_cross_tool_evidence(tmp_path: Path) -> None:
 
     assert result.returncode == 1
     assert "formal cross-tool evidence digest mismatch" in result.stderr
+
+
+def test_receipt_rejects_resource_summary_above_the_formal_memory_ceiling(
+    tmp_path: Path,
+) -> None:
+    evidence = make_evidence(tmp_path)
+    summary = evidence["formal_tlaps_resource_summary"]
+    completion = evidence["formal_completion"]
+    assert isinstance(summary, Path)
+    assert isinstance(completion, Path)
+    document = json.loads(summary.read_text(encoding="utf-8"))
+    document["peak_memory_bytes"] = document["memory_limit_bytes"] + 1
+    rewrite_json(summary, document)
+    fields = dict(
+        line.split("\t", 1)
+        for line in completion.read_text(encoding="utf-8").splitlines()
+    )
+    fields["tlaps_resource_summary_sha256"] = sha256(summary)
+    write_tsv(completion, fields)
+    writer = fixture_writer(tmp_path)
+
+    result = run_writer(evidence, terminal_output_path(evidence), writer)
+
+    assert result.returncode == 1
+    assert "not a successful bounded release run" in result.stderr
 
 
 def test_receipt_rejects_substituted_cross_tool_evidence(
@@ -3140,6 +3682,8 @@ def test_receipt_rejects_cross_source_completion(
             "formal multilane Apalache evidence digest mismatch",
         ),
         ("formal_toolchain", "formal toolchain digest mismatch"),
+        ("formal_tlaps_resource_jsonl", "TLAPS resource samples digest mismatch"),
+        ("formal_tlaps_resource_summary", "TLAPS resource summary digest mismatch"),
         ("formal_verus_tool", "formal verus tool digest mismatch"),
         ("corridor_summary", "corridor summary digest mismatch"),
         ("corridor_required", "corridor production inventory digest mismatch"),
@@ -3895,6 +4439,38 @@ def test_receipt_rejects_bootstrap_cli_path_aliases(
                 "IROHA_RELEASE_BOOTSTRAP_IDENTITY",
             ),
             "/tmp/aliased-candidate-identity.json",
+        ),
+        (
+            (
+                "runner",
+                "environment_without_self_digest",
+                "IROHA_RELEASE_SCALING_TRIAL_HARNESS_SHA256",
+            ),
+            "e" * 64,
+        ),
+        (
+            (
+                "runner",
+                "environment_without_self_digest",
+                "IROHA_RELEASE_SCALING_CONFIGURATION_SHA256",
+            ),
+            "e" * 64,
+        ),
+        (
+            (
+                "runner",
+                "environment_without_self_digest",
+                "IROHA_RELEASE_SCALING_IROHAD_SHA256",
+            ),
+            "e" * 64,
+        ),
+        (
+            (
+                "runner",
+                "environment_without_self_digest",
+                "IROHA_RELEASE_SCALING_IROHA_CLI_SHA256",
+            ),
+            "e" * 64,
         ),
         (("runner", "argv", "0"), "/bin/bash"),
         (("runner", "closed_path_resolution", "git"), "/usr/bin/git"),

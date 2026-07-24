@@ -8,7 +8,9 @@ use crate::halo2_proofs::{
     circuit::{Region, Value},
     plonk::{Advice, Column},
 };
-use crate::utils::halo2::{constrain_virtual_equals_external, raw_assign_advice};
+use crate::utils::halo2::{
+    constrain_virtual_equals_external, raw_assign_advice, raw_assign_advice_discarding_value,
+};
 use crate::{AssignedValue, ContextTag};
 
 use super::copy_constraints::SharedCopyConstraintManager;
@@ -141,10 +143,21 @@ impl<F: Field + Ord, const ADVICE_COLS: usize> VirtualRegionManager<F>
                 lookup_offset += 1;
             }
             for (advice, &column) in advices.iter().zip(config[lookup_col].iter()) {
-                let bcell =
-                    raw_assign_advice(region, column, lookup_offset, Value::known(advice.value));
                 if let Some(copy_manager) = copy_manager.as_mut() {
+                    let bcell = raw_assign_advice(
+                        region,
+                        column,
+                        lookup_offset,
+                        Value::known(advice.value),
+                    );
                     constrain_virtual_equals_external(region, *advice, bcell.cell(), copy_manager);
+                } else {
+                    raw_assign_advice_discarding_value(
+                        region,
+                        column,
+                        lookup_offset,
+                        Value::known(advice.value),
+                    );
                 }
             }
 

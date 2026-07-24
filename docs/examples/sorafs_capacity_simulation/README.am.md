@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-የ`run_cli.sh` ስክሪፕት `sorafs_manifest_stub capacity` እንዲገነባ ጠይቋል፡-
+የ`run_cli.sh` ስክሪፕት `sorafs_manifest_builder capacity` እንዲገነባ ጠይቋል፡-
 
 - ቆራጥ አቅራቢዎች ለኮታ ድርድር ማቀፊያ ስብስብ።
 - ከድርድር ሁኔታው ​​ጋር የሚዛመድ የማባዛት ትእዛዝ።

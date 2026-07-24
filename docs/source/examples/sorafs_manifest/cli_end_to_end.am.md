@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS አንጸባራቂ CLI ከመጨረሻ እስከ መጨረሻ ምሳሌ
 
 ይህ ምሳሌ የሰነድ ግንባታን ወደ SoraFS በማተም ያልፋል
-`sorafs_manifest_stub` CLI ከወሳኝ መቆራረጥ ዕቃዎች ጋር
+`sorafs_manifest_builder` CLI ከወሳኝ መቆራረጥ ዕቃዎች ጋር
 በ SoraFS Architecture RFC ውስጥ ተገልጿል. ፍሰቱ አንጸባራቂ ትውልድን ይሸፍናል,
 የሚጠበቁ ፍተሻዎች፣ የማምጣት-ዕቅድ ማረጋገጫ፣ እና የማገገም ማረጋገጫ ልምምዶች እንዲሁ
 ቡድኖች በ CI ውስጥ ተመሳሳይ ደረጃዎችን መክተት ይችላሉ.
@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 ## ደረጃ 1 — አንጸባራቂ፣ CAR፣ ፊርማዎችን እና እቅድ ማውጣት
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 አንጸባራቂውን በCLI በኩል ያስገቡ፡-
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

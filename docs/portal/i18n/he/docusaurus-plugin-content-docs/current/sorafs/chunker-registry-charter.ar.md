@@ -57,7 +57,7 @@ description: ميثاق الحوكمة لتقديم ملفات chunker واعت�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قدّم PR يحتوي على fixtures والمقترح وتقرير الحتمية وتحديثات السجل.
@@ -90,12 +90,12 @@ description: ميثاق الحوكمة لتقديم ملفات chunker واعت�
    - تتطلب الإزالة أو الإصلاحات العاجلة تصويتاً بالأغلبية من المجلس.
    - يجب على TWG توثيق خطوات الحد من المخاطر وتحديث سجل الحوادث.
 
-## כלי עבודה- `sorafs_manifest_chunk_store` ו-`sorafs_manifest_stub` יופיר:
+## כלי עבודה- `sorafs_manifest_chunk_store` ו-`sorafs_manifest_builder` יופיר:
   - `--list-profiles` لفحص السجل.
   - `--promote-profile=<handle>` لتوليد كتلة البيانات المعتمدة المستخدمة عند ترقية ملف.
   - `--json-out=-` لبث التقارير إلى stdout، مما يتيح سجلات مراجعة قابلة لإعادة الإنتاج.
 - يتم استدعاء `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`, `provider_advert_stub`). يجب أن تفشل اختبارات CI إذا كانت
+  (`manifest_chunk_store`, `sorafs_provider_advert`). يجب أن تفشل اختبارات CI إذا كانت
   الإدخالات الجديدة تنتهك الميثاق.
 
 ## حفظ السجلات

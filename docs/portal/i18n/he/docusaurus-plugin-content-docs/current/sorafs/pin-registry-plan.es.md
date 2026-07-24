@@ -80,7 +80,7 @@ para que el contrato, las fachadas Torii y la CLI compartan invariantes identica
 |----------------|-------|----------------|
 | Servicio Torii | Exponer `/v1/sorafs/pin` (שלח), `/v1/sorafs/pin/{cid}` (חיפוש), `/v1/sorafs/aliases` (רשימה/כריכה), `/v1/sorafs/replication` (הזמנות/קבלות). Proeer paginacion + פילטרדו. | Networking TL / Core Infra |
 | Atestacion | כלול altura/hash del registry in respuestas; agregar estructura de atestacion Norito consumida por los SDKs. | אינפרא ליבה |
-| CLI | Extender `sorafs_manifest_stub` או un nuevo CLI `sorafs_pin` עם `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | Extender `sorafs_manifest_builder` או un nuevo CLI `sorafs_pin` עם `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | כריכות כלליות של לקוחות (Rust/Go/TS) desde el esquema Norito; מבחני שילוב. | צוותי SDK |
 
 פעולות:

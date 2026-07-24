@@ -37,14 +37,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |------|---------|-------|----------|-----|
 | חזרות fixtures | M0 | dry-runs שבועיים המשווים digests מקומיים של chunk מול `fixtures/sorafs_chunker`. לפרסם דוח ב-`docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` עם מטריצת pass/fail. |
 | אכיפת חתימות | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` נכשלות אם signatures או manifests נסחפים. overrides לפיתוח דורשים waiver ממשלתי מצורף ל-PR. | Tooling WG | לוג CI, קישור לכרטיס waiver (אם יש). |
-| Expectation flags | M1 | פייפליינים קוראים ל-`sorafs_manifest_stub` עם expectations מפורשים כדי לקבע outputs: | Docs CI | סקריפטים מעודכנים שמפנים ל-expectation flags (ראו בלוק פקודה למטה). |
+| Expectation flags | M1 | פייפליינים קוראים ל-`sorafs_manifest_builder` עם expectations מפורשים כדי לקבע outputs: | Docs CI | סקריפטים מעודכנים שמפנים ל-expectation flags (ראו בלוק פקודה למטה). |
 | Registry-first pinning | M2 | `sorafs pin propose` ו-`sorafs pin approve` עוטפים את שליחת ה-manifest; ה-CLI ברירת מחדל משתמש ב-`--require-registry`. | Governance Ops | לוג ביקורת CLI של registry, טלמטריית הצעות שנכשלו. |
 | Observability parity | M3 | Dashboards של Prometheus/Grafana מתריעים כאשר מלאי chunks שונה ממסמכי registry; התראות מחוברות ל-ops on-call. | Observability | קישור לדשבורד, IDs של חוקי התראה, תוצאות GameDay. |
 
 #### פקודת פרסום קנונית
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

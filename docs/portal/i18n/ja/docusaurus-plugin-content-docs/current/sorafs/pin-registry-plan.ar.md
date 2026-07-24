@@ -81,7 +81,7 @@ API を Torii にピン留めしてください。
 |--------|--------|------|
 | Torii | 「`/v1/sorafs/pin` (送信)」「`/v1/sorafs/pin/{cid}` (検索)」「`/v1/sorafs/aliases` (リスト/バインド)」「`/v1/sorafs/replication` (注文/領収書)」。翻訳: 翻訳: + 翻訳: |ネットワーキング TL / コア インフラ |
 |認証済み | تضمين ارتفاع/هاش レジストリ في الاستجابات؛ Norito の SDK です。 |コアインフラ |
-| CLI | `sorafs_manifest_stub` と CLI の `sorafs_pin` は、`pin submit`、`alias bind`、`order issue`、`registry export` です。 |ツーリングWG |
+| CLI | `sorafs_manifest_builder` と CLI の `sorafs_pin` は、`pin submit`、`alias bind`、`order issue`、`registry export` です。 |ツーリングWG |
 | SDK |バインディング (Rust/Go/TS) Norito؛ありがとうございます。 | SDK チーム |意味:
 - キャッシュ/ETag を取得します。
 - レート制限 / 認証 Torii。
