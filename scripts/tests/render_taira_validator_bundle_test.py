@@ -153,6 +153,17 @@ def _contract_deployment_gate_projection(payload: dict) -> dict:
             .get("name")
             == "CanRegisterAccount"
         ],
+        "deployer_gas_mints": [
+            instruction["Mint"]["Asset"]
+            for instruction in instructions
+            if instruction.get("Mint", {}).get("Asset", {}).get("destination")
+            == f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"
+        ],
+        "fee_sponsor_funding": [
+            instruction["FundFeeSponsorProgram"]
+            for instruction in instructions
+            if "FundFeeSponsorProgram" in instruction
+        ],
     }
 
 
@@ -185,6 +196,24 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
             {
                 "destination": TAIRA_GENESIS_DEPLOYER_ID,
                 "object": {"name": "CanRegisterAccount"},
+            }
+        ],
+        "deployer_gas_mints": [
+            {
+                "destination": (
+                    f"{TAIRA_GAS_ASSET_ID}#{TAIRA_GENESIS_DEPLOYER_ID}"
+                ),
+                "object": "100000001",
+            }
+        ],
+        "fee_sponsor_funding": [
+            {
+                "program_id": {
+                    "sponsor": TAIRA_GENESIS_DEPLOYER_ID,
+                    "name": "cbsi_web",
+                },
+                "asset_definition_id": TAIRA_GAS_ASSET_ID,
+                "amount": "100000000",
             }
         ],
     }
