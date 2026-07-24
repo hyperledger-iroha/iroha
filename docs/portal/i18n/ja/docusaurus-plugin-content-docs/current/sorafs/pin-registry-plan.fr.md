@@ -80,7 +80,7 @@ API à Torii、補助ゲートウェイおよび補助オーケストレータ�
 |----------|------|----------|
 |サービス Torii | Exposer `/v1/sorafs/pin` (送信)、`/v1/sorafs/pin/{cid}` (検索)、`/v1/sorafs/aliases` (リスト/バインド)、`/v1/sorafs/replication` (注文/受領)。 Fournir ページネーション + フィルター。 |ネットワーキング TL / コア インフラ |
 |証明書 |対応するレジストリのオート/ハッシュを含めます。 SDK の構造証明書 Norito コンソメ。 |コアインフラ |
-| CLI | Étendre `sorafs_manifest_stub` ou une nouvelle CLI `sorafs_pin` avec `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
+| CLI | Étendre `sorafs_manifest_builder` ou une nouvelle CLI `sorafs_pin` avec `pin submit`、`alias bind`、`order issue`、`registry export`。 |ツーリングWG |
 | SDK |バインディング クライアント (Rust/Go/TS) の一般的なスキーマ Norito ;統合のテストを行います。 | SDK チーム |
 
 操作:

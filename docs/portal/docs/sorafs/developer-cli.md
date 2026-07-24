@@ -51,21 +51,25 @@ sorafs_cli manifest build \
 - The JSON output mirrors the Norito payload for straightforward diffs during
   reviews.
 
-## Sign manifests without long-lived keys
+## Authenticate release artifacts
 
 ```bash
-sorafs_cli manifest sign \
-  --manifest artifacts/video.manifest.to \
-  --bundle-out artifacts/video.manifest.bundle.json \
-  --signature-out artifacts/video.manifest.sig \
-  --identity-token-env SIGSTORE_ID_TOKEN
+scripts/release_sorafs_cli.sh \
+  --manifest artifacts/release/release_manifest.json \
+  --external-signer /run/sorafs-release/ed25519-sign \
+  --signing-public-key /run/sorafs-release/release.ed25519.pub \
+  --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
-  `--identity-token-provider=github-actions`.
+- Release authenticity applies to the canonical aggregate release manifest, not
+  an individual content `.to` manifest.
+- The signer adapter may use PKCS#11/HSM keys; private signing material remains
+  runtime-only.
+- The raw 32-byte public key, reviewed fingerprint, native verifier path, and
+  reviewed verifier SHA256 are all mandatory. Cosign/OIDC remains a separate
+  provenance layer.
 
 ## Submit manifests to Torii
 
@@ -104,14 +108,16 @@ sorafs_cli proof verify \
 ## Stream proof telemetry
 
 ```bash
+export PROVIDER_ID_HEX="1111111111111111111111111111111111111111111111111111111111111111"
+
 sorafs_cli proof stream \
-  --manifest artifacts/video.manifest.to \
-  --gateway-url https://gateway.example/v1/sorafs/proof/stream \
-  --provider-id provider::alpha \
-  --samples 32 \
-  --stream-token "$(cat stream.token)" \
-  --summary-out artifacts/video.proof_stream.json \
-  --governance-evidence-dir artifacts/video.proof_stream_evidence
+  --manifest=artifacts/video.manifest.to \
+  --gateway-url=https://gateway.example/v1/sorafs/proof/stream \
+  --provider-id-hex="${PROVIDER_ID_HEX}" \
+  --samples=32 \
+  --stream-token="$(cat stream.token)" \
+  --summary-out=artifacts/video.proof_stream.json \
+  --governance-evidence-dir=artifacts/video.proof_stream_evidence
 ```
 
 - Emits NDJSON items for each streamed proof (disable replay with

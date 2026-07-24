@@ -47,7 +47,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## תהליך הקבלה
 
 1. **יצירת הצעה**
-   - CLI: להוסיף `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - CLI: להוסיף `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      שמייצר `ProviderAdmissionProposalV1` + חבילת attestation.
    - ולידציה: לוודא שדות חובה, stake > 0, ומזהה chunker קנוני ב-`profile_id`.
 2. **אישור ממשל**
@@ -66,13 +66,13 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | תחום | משימה | Owner(s) | סטטוס |
 |------|-------|----------|-------|
 | סכמות | להגדיר `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) תחת `crates/sorafs_manifest/src/provider_admission.rs`. יושם ב-`sorafs_manifest::provider_admission` עם helpers לולידציה.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ הושלם |
-| כלי CLI | להרחיב את `sorafs_manifest_stub` עם תתי-פקודות: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+| כלי CLI | להרחיב את `sorafs_manifest_builder` עם תתי-פקודות: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
 
 זרימת ה-CLI מקבלת כעת bundles של תעודות ביניים (`--endpoint-attestation-intermediate`), מפיקה bytes קנוניים להצעה/Envelope ומאמתת חתימות מועצה ב-`sign`/`verify`. מפעילים יכולים לספק גופי advert ישירות או להשתמש מחדש ב-adverts חתומים, וקבצי חתימה יכולים להינתן על ידי שילוב `--council-signature-public-key` עם `--council-signature-file` לטובת אוטומציה.
 
 ### רפרנס CLI
 
-הריצו כל פקודה דרך `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.
+הריצו כל פקודה דרך `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - דגלים נדרשים: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -103,7 +103,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
     `--council-signature` אחת, ו-`--revoked-at`/`--notes` אופציונליים. ה-CLI חותם ומאמת את digest הביטול, כותב את ה-payload של Norito דרך `--revocation-out` ומדפיס דוח JSON עם digest וספירת חתימות.
 | אימות | לממש מאמת משותף שמשמש את Torii, ה-gateways ו-`sorafs-node`. לספק בדיקות יחידה + אינטגרציית CLI.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ הושלם |
 | אינטגרציית Torii | לחבר את המאמת לתהליך ingestion של adverts ב-Torii, לדחות adverts לא תקינים ולהוציא טלמטריה. | Networking TL | ✅ הושלם | Torii טוען כעת envelopes של ממשל (`torii.sorafs.admission_envelopes_dir`), מאמת התאמות digest/חתימה בזמן ingestion ומציג טלמטריה של קבלה.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| חידוש | להוסיף סכמת חידוש/ביטול + helpers CLI, ולפרסם מדריך מחזור חיים ב-docs (ראו runbook להלן ואת פקודות CLI `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ הושלם |
+| חידוש | להוסיף סכמת חידוש/ביטול + helpers CLI, ולפרסם מדריך מחזור חיים ב-docs (ראו runbook להלן ואת פקודות CLI `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ הושלם |
 | טלמטריה | להגדיר dashboards/alertים של `provider_admission` (חידוש חסר, תוקף envelope). | Observability | 🟠 בתהליך | המונה `torii_sorafs_admission_total{result,reason}` קיים; dashboards/alertים בהמתנה.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### Runbook לחידוש וביטול
@@ -112,7 +112,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 1. בנו את זוג ההצעה/advert העוקב עם `provider-admission proposal` ו-`provider-admission sign`, תוך הגדלת `--retention-epoch` ועדכון stake/endpoints לפי הצורך.
 2. הריצו
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -122,7 +122,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
    ```
    הפקודה מאמתת שדות יכולת/פרופיל ללא שינוי דרך
    `AdmissionRecord::apply_renewal`, מפיקה `ProviderAdmissionRenewalV1` ומדפיסה digests עבור
-   יומן הממשל.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   יומן הממשל.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. החליפו את ה-envelope הקודם ב-`torii.sorafs.admission_envelopes_dir`, בצעו commit של חידוש Norito/JSON לריפו הממשל, והוסיפו hash חידוש + retention epoch ל-`docs/source/sorafs/migration_ledger.md`.
 4. הודיעו למפעילים שה-envelope החדש חי ומעקב אחר `torii_sorafs_admission_total{result="accepted",reason="stored"}` כדי לאשר ingestion.
 5. שִחזרו ותקבעו fixtures קנוניים דרך `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) מאמת שהפלטים של Norito נשארים יציבים.
@@ -130,7 +130,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 #### ביטול חירום
 1. זיהוי ה-envelope שנפרץ והנפקת ביטול:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -141,7 +141,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
      --json-out=governance/providers/<id>/revocation.json
    ```
    ה-CLI חותם על `ProviderAdmissionRevocationV1`, מאמת את סט החתימות דרך
-   `verify_revocation_signatures`, ומדווח על digest הביטול.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   `verify_revocation_signatures`, ומדווח על digest הביטול.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. הסירו את ה-envelope מ-`torii.sorafs.admission_envelopes_dir`, הפיצו את Norito/JSON הביטול ל-caches של הקבלה, ורשמו את hash הסיבה בפרוטוקולי הממשל.
 3. עקבו אחרי `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` כדי לוודא שה-caches מפילים את ה-advert שבוטל; שמרו את artefacts הביטול ברטרוספקטיבות תקרית.
 

@@ -58,7 +58,7 @@ Sidebar_label: Дополнительная информация
 - توفر helpers المشتركة (`CapacityMetadataEntry` و`PricingScheduleV1` ومدققات полоса/назначение/SLA) Используйте CI для последующих инструментов и создайте файл.【crates/sorafs_manifest/src/capacity.rs:230】
 - Снимок `PinProviderRegistry`, полученный при помощи `/v1/sorafs/capacity/state`, в режиме реального времени. Регистр комиссий Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Дэниел Уинстон Хэндс обрабатывает Энтони, Кэтрин Стэйд Лейн, Дэниэла Трэйна В 2007 году он был избран президентом США в 1999 году. CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Указано: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`. Технические характеристики указаны в разделе полезных данных Norito, в формате base64 blobs. وملخصات JSON حتى يتمكن المشغلون من تجهيز светильники لـ `/v1/sorafs/capacity/declare` и `/v1/sorafs/capacity/telemetry` وأوامر 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Справочные приспособления для `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Был установлен `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Указано: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}`. Технические характеристики указаны в разделе полезных данных Norito, в формате base64 blobs. وملخصات JSON حتى يتمكن المشغلون من تجهيز светильники لـ `/v1/sorafs/capacity/declare` и `/v1/sorafs/capacity/telemetry` وأوامر 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Справочные приспособления для `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) Был установлен `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم
 
@@ -145,14 +145,14 @@ Sidebar_label: Дополнительная информация
   Пакеты управления بجانب.
 
 ### Споры и сокращение доказательств
-- قدّم споры عبر `sorafs_manifest_stub capacity dispute` (اختبارات:
+- قدّم споры عبر `sorafs_manifest_builder capacity dispute` (اختبارات:
   `cargo test -p sorafs_car --test capacity_cli`) Для загрузки полезных данных.
 - شغّل `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` وحزم العقوبات
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) لإثبات أن споры и косые черты تُعاد حتميا.
 - اتبع `docs/source/sorafs/dispute_revocation_runbook.md` لالتقاط الأدلة والتصعيد؛ Он нанес удар в матче с Трэвисом.
 
 ### Регистрация поставщика и дымовые тесты на выходе
-- Отображение артефактов в режиме `sorafs_manifest_stub capacity ...` и вызове CLI. Зарегистрируйтесь (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Отображение артефактов в режиме `sorafs_manifest_builder capacity ...` и вызове CLI. Зарегистрируйтесь (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Установите Torii (`/v1/sorafs/capacity/declare`) для `/v1/sorafs/capacity/state` и установите Grafana. Это приложение создано для `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف артефакты الموقعة ومخرجات согласования داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 

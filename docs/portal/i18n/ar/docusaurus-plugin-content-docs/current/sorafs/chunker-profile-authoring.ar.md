@@ -91,9 +91,9 @@ CLIs الخاصة بـchunk-store والبيان مع `--json-out=-` لبث ال
   للـ المانيفست و فحوصات PoR مع المعلمات.
 - `sorafs_manifest_chunk_store --json-out=-` — تقرير استجابة لـchunk-store إلى stdout
   خطة المقارنة.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — بالتأكيد بيانات وخطط CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — بالتأكيد بيانات وخطط CAR
   تشمل المقبض والبدائل.
-- `sorafs_manifest_stub --plan=-` — إعادة `chunk_fetch_specs` رد السابق من
+- `sorafs_manifest_builder --plan=-` — إعادة `chunk_fetch_specs` رد السابق من
   تعويضات/ملخصات بعد التغيير.
 
 سجل مخرجات مميز (الملخصات، وضوح PoR، التجزئات للـ Manifest) في مقترح يمكنك اختياره
@@ -129,7 +129,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # توليد manifest + CAR والتقاط chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # إعادة التشغيل باستخدام خطة fetch المحفوظة (تمنع offsets القديمة)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

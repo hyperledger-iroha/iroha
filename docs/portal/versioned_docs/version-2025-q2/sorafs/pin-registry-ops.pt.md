@@ -116,7 +116,7 @@ groups:
    - Execute `iroha app sorafs providers list` e verifique se os recursos anunciados correspondem aos requisitos de replicação.
    - Verifique os medidores `torii_sorafs_capacity_*` para confirmar o sucesso do GiB e PoR provisionado.
 3. **Reatribuir replicação**
-   - Emitir novos pedidos via `sorafs_manifest_stub capacity replication-order` quando a folga do backlog (`stat="avg"`) cair abaixo de 5 épocas (embalagem de manifesto/CAR usa `iroha app sorafs toolkit pack`).
+   - Emitir novos pedidos via `sorafs_manifest_builder capacity replication-order` quando a folga do backlog (`stat="avg"`) cair abaixo de 5 épocas (embalagem de manifesto/CAR usa `iroha app sorafs toolkit pack`).
    - Notificar a governança se os aliases não tiverem ligações de manifesto ativas (`torii_sorafs_registry_aliases_total` cai inesperadamente).
 4. **Resultado do documento**
    - Registre notas de incidentes no log de operações SoraFS com carimbos de data/hora e resumos de manifestos afetados.

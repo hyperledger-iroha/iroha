@@ -65,11 +65,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Construa e assine um manifiesto
 
 Empacote o plano de trozos, os alias y assinaturas de gobernanza en un manifiesto
-usando `sorafs-manifest-stub`. El comando abaixo mostró una carga útil de archivo único; pasar
+usando `sorafs-manifest-builder`. El comando abaixo mostró una carga útil de archivo único; pasar
 um caminho de diretório para empacotar uma árvore (a CLI percorre em ordem lexicográfica).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

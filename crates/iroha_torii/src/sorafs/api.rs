@@ -46,7 +46,9 @@ use http::header::{
 };
 use hyper::body::Body as HyperBody;
 use iroha_core::{
-    smartcontracts::isi::sorafs::manifest_pin_policy_constraints_from_config,
+    smartcontracts::{
+        ValidSingularQuery, isi::sorafs::manifest_pin_policy_constraints_from_config,
+    },
     state::{StateReadOnly, WorldReadOnly},
 };
 use iroha_crypto::{
@@ -55,6 +57,8 @@ use iroha_crypto::{
         ModerationAction as ProofTokenModerationAction, ProofToken, ProofTokenDigestKey,
     },
 };
+#[cfg(test)]
+use iroha_data_model::events::data::sorafs::SorafsOrderbookLedgerEvent;
 #[cfg(test)]
 use iroha_data_model::sorafs::pin_registry::ManifestRootCid;
 use iroha_data_model::{
@@ -66,33 +70,69 @@ use iroha_data_model::{
     escrow::{
         AssetEscrowKind, AssetEscrowRecord, AssetEscrowResolution, AssetEscrowStatus, EscrowId,
     },
+    events::data::sorafs::SorafsOrderbookLedgerEventKind,
     isi::{
         Instruction, InstructionBox,
         escrow::{CancelAssetLock, DrawdownAssetLock, OpenAssetLock},
+        sorafs::{
+            ApplySorafsRepairTaskAction, CancelSorafsOrderbookOrder,
+            FinalizeSorafsModerationCase, RecordSorafsOrderbookSettlementReceipt,
+            SorafsRepairTaskActionV1, SubmitSorafsOrderbookOrder, SubmitSorafsProofOutcome,
+            SubmitSorafsRepairAppeal, SubmitSorafsRepairTask,
+        },
+    },
+    permission::Permission,
+    query::{
+        error::{FindError, QueryExecutionFail},
+        sorafs::prelude::{
+            FindSorafsOrderbookChannelById, FindSorafsOrderbookChannels, FindSorafsOrderbookEvents,
+            FindSorafsOrderbookOrders, FindSorafsOrderbookPolicy, FindSorafsOrderbookReceipts,
+            FindSorafsOrderbookStatus, FindSorafsOrderbookTrades, FindSorafsProofOutcome,
+            FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
+            FindSorafsRepairTasks,
+        },
     },
     role::RoleId,
     soracloud::SoraRouteVisibilityV1,
     sorafs::{
+        capacity::ProviderId,
         gar::GarEnforcementReceiptV1,
         moderation::{
-            AdversarialCorpusManifestV1, ModerationReproManifestV1,
-            SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1, SoraFsModerationBallotCommitV1,
-            SoraFsModerationBallotContextV1, SoraFsModerationBallotRevealV1,
-            SoraFsModerationVoteChoice,
+            AdversarialCorpusManifestV1, MODERATION_COMMITTEE_MAX_RESULTS_V1,
+            ModerationCommitteeAggregateV1, ModerationReproManifestV1,
+            ModerationSignedScreeningResultV1, SORAFS_MODERATION_BALLOT_CONTEXT_VERSION_V1,
+            SoraFsModerationBallotCommitV1, SoraFsModerationBallotContextV1,
+            SoraFsModerationBallotRevealV1, SoraFsModerationVoteChoice,
+        },
+        orderbook::{
+            ORDERBOOK_QUERY_MAX_ITEMS_V1, OrderbookFinalizedCursorV1,
+            OrderbookFinalizedEventCursorV1, OrderbookFinalizedEventPageV1,
+            OrderbookFinalizedEventV1, OrderbookLedgerStatusV1, OrderbookOrderPageV1,
+            OrderbookSettlementChannelPageV1, OrderbookSettlementReceiptPageV1,
+            OrderbookTradePageV1,
         },
         pin_registry::{ManifestDigest, PinManifestRecord, PinStatus},
+        proof_ledger::{
+            PdpOutcomeStatusV1, PotrOutcomeStatusV1, ProofOutcomeFinalizedCursorV1,
+            ProofOutcomeFinalizedRecordV1, ProofOutcomeKindV1, ProofOutcomeProjectionV1,
+        },
         reserve::{
             ReserveLedgerProjection, ReserveLifecycleProjection, ReserveLifecycleStage,
             ReserveQuote,
         },
+        moderation_ledger::{
+            REPAIR_QUERY_MAX_ITEMS_V1, RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
+            RepairFinalizedEventPageV1, RepairFinalizedStatusV1, RepairFinalizedTaskV1,
+            RepairLedgerTaskPageV1,
+        },
         transparency::{
-            MODERATION_PRIVACY_PARAMETERS_VERSION_V1, ModerationLedgerCyclePublicationV1,
-            ModerationLedgerEntryKindV1, ModerationLedgerMetadataV1, ModerationPrivacyModeV1,
-            ModerationPrivacyParametersV1, ProofTokenIssuanceV1,
+            ModerationLedgerCyclePublicationV1, ModerationLedgerEntryKindV1,
+            ModerationLedgerMetadataV1, ProofTokenIssuanceV1,
         },
     },
-    transaction::{SignedTransaction, TransactionBuilder},
+    transaction::{Executable, SignedTransaction, TransactionBuilder},
 };
+use iroha_executor_data_model::permission::sorafs::CanRecordSorafsProofOutcome;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::{debug, error, warn};
 use iroha_primitives::numeric::Quantity;
@@ -111,14 +151,14 @@ use sorafs_manifest::StreamTokenV1;
 use sorafs_manifest::{
     AdvertEndpoint, AdvertValidationError, CapabilityTlv, CapabilityType, EndpointKind,
     EndpointMetadata, EndpointMetadataKey, MAX_PROOF_STREAM_SAMPLE_COUNT, ManifestV1,
-    OrderBookEntryV1, OrderCancelReasonV1, OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1,
-    OrderSideV1, OrderTierV1, OrderbookSignatureV1, PathDiversityPolicy, ProofStreamKind,
-    ProofStreamRequestError, ProofStreamRequestV1, ProofStreamTier, ProviderAdvertBodyV1,
-    ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1, QosHints, RendezvousTopic,
-    ReputationDegradationFlagV1, ReputationMerkleProofV1, ReputationSnapshotEventV1,
-    ReputationSnapshotV1, SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1,
-    SettlementChannelStatusV1, SettlementChannelV1, SettlementReceiptV1,
-    SignedReputationSnapshotV1, SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
+    OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1, OrderbookSignatureV1,
+    PathDiversityPolicy, ProofStreamHttpRequestV1, ProofStreamKind, ProofStreamTier,
+    ProviderAdvertBodyV1, ProviderAdvertV1, ProviderCapabilityRangeV1, ProviderReputationV1,
+    QosHints, RendezvousTopic, ReputationDegradationFlagV1, ReputationMerkleProofV1,
+    ReputationSnapshotEventV1, ReputationSnapshotV1,
+    SORAFS_APPEAL_FINANCE_SETTLEMENT_RECEIPT_VERSION_V1, SettlementChannelStatusV1,
+    SettlementChannelV1, SettlementReceiptV1, SignedReputationSnapshotV1,
+    SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
     SoraFsAppealFinanceSettlementReceiptV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer,
     StreamBudgetV1, StreamTokenBodyV1, TradeEventV1, TransportHintV1, TransportProtocol,
     capacity::CapacityTelemetryV1,
@@ -127,14 +167,29 @@ use sorafs_manifest::{
     decode_manifest_v1_canonical, decode_order_cancel_v1, decode_order_request_v1,
     decode_settlement_receipt_v1, derive_orderbook_order_id_v1,
     hedging::signed::SignedHedgingError,
+    pdp::{
+        PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1, PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        PDP_PROOF_MAX_CANONICAL_BYTES_V1, PdpChallengeV1, PdpCommitmentV1,
+    },
     por::{AuditVerdictV1, PorChallengeV1, PorProofV1},
-    potr::{PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus},
+    potr::{
+        PotrReceiptV1, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus,
+        potr_request_scope_digest_v1,
+    },
     pricing::signed::GovernedPricingError,
-    repair::{RepairTaskEventV1, RepairTaskStatusV1},
-    validate_manifest,
+    validate_manifest, verify_order_cancel_signature_v1, verify_order_request_signature_v1,
+    verify_settlement_receipt_signature_v1,
+};
+#[cfg(test)]
+use sorafs_node::local_orderbook_provider_id_for_owner_account;
+use sorafs_node::moderation_orchestrator::{
+    ModerationNativeActionV1, ModerationOperationStatusV1, ModerationOrchestratorError,
+    ModerationSubmitOutcomeV1, moderation_request_binding_digest_v1,
 };
 use sorafs_node::{
-    EconomicsRuntimeError, ModerationAppealDeposit, ModerationBallotAnnouncement,
+    EconomicsRuntimeError, ModerationAppealDeposit, ModerationAuthenticatedScreeningAdmissionError,
+    ModerationAuthenticatedScreeningEvidenceV1, ModerationAuthenticatedScreeningOutcomeV1,
+    ModerationAuthenticatedScreeningRequestV1, ModerationBallotAnnouncement,
     ModerationBallotChallengeDecision, ModerationBallotChallengeInput,
     ModerationBallotChallengeKind, ModerationBallotChallengeRecord,
     ModerationBallotChallengeResolution, ModerationBallotCommitOutcome, ModerationBallotEvent,
@@ -150,24 +205,20 @@ use sorafs_node::{
     ModerationQuarantineObjectInput, ModerationQuarantineObjectPayload,
     ModerationQuarantineObjectRecord, ModerationQuarantineRecord, ModerationQuarantineReleaseInput,
     ModerationQuarantineReviewInput, ModerationQuarantineState, ModerationReproRegistryRecord,
-    ModerationScreeningError, ModerationScreeningInput, ModerationScreeningOutcome,
-    ModerationScreeningRecord, ModerationScreeningSnapshot, ModerationScreeningVerdict,
-    NodeStorageError, OrderbookCancelOutcome, OrderbookEvent, OrderbookEventKind,
-    OrderbookReceiptOutcome, OrderbookRuntimeError, OrderbookSnapshot, OrderbookSubmitOutcome,
-    PrivacyAggregateScheduleOutcome, PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric,
-    RepairEvent, ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord,
-    ReserveAppealRequest, ReserveAppealRuntimeError, ReserveAppealSnapshot, ReserveAppealStatus,
-    ReserveCreditLineSnapshot, ReserveLifecycleEvent, ReserveLifecyclePolicyOutcome,
-    ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot, ReserveLifecyclePolicyUpdate,
-    ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot, ReserveLifecycleUpdate,
-    ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate, ReserveMovementKind,
-    ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
+    ModerationScreeningAuthenticationError, ModerationScreeningError, ModerationScreeningRecord,
+    ModerationScreeningSnapshot, NodeStorageError, PrivacyAggregateScheduleOutcome,
+    PrivacyAggregateSourceEvent, PrivacyAggregateSourceMetric, ReserveAppealDecision,
+    ReserveAppealOutcome, ReserveAppealRecord, ReserveAppealRequest, ReserveAppealRuntimeError,
+    ReserveAppealSnapshot, ReserveAppealStatus, ReserveCreditLineSnapshot, ReserveLifecycleEvent,
+    ReserveLifecyclePolicyOutcome, ReserveLifecyclePolicyRecord, ReserveLifecyclePolicySnapshot,
+    ReserveLifecyclePolicyUpdate, ReserveLifecycleRuntimeError, ReserveLifecycleSnapshot,
+    ReserveLifecycleUpdate, ReserveMovementCustodyStatus, ReserveMovementCustodyUpdate,
+    ReserveMovementKind, ReserveMovementOutcome, ReserveMovementRecord, ReserveMovementRequest,
     ReserveMovementRuntimeError, ReserveProviderBalance, ReserveProviderCreditLineState,
     ReserveProviderLifecycleSummary, TransparencyLedgerSourceEntry,
     appeal_finance_report_source_entry, appeal_finance_settlement_receipt_source_entry,
     capacity::CapacityUsageSnapshot,
     gar_enforcement_receipt_source_entry, local_moderation_panel_roster_hash,
-    local_orderbook_provider_id_for_owner_account,
     metering::{FeeProjection, MeteringSnapshot},
     moderation_ballot_governance_event_source_entry,
     store::{
@@ -229,7 +280,7 @@ use crate::{
             normalize_host_header, path_components_for_request,
         },
     },
-    utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
+    utils::extractors::{ExtractAccept, JsonOnly, JsonOrNoritoVersioned, NoritoJson},
 };
 
 const HEADER_SORA_REQ_BLINDED_CID: &str = "sora-req-blinded-cid";
@@ -276,7 +327,6 @@ const TELEMETRY_ENDPOINT_PLAN: &str = "/v1/sorafs/storage/plan";
 const TELEMETRY_ENDPOINT_POR_SAMPLE: &str = "/v1/sorafs/storage/por-sample";
 const TELEMETRY_ENDPOINT_PROOF_STREAM: &str = "/v1/sorafs/proof/stream";
 const TELEMETRY_ENDPOINT_TRANSPARENCY_TOKEN_VERIFY: &str = "/v1/sorafs/transparency/tokens/verify";
-const TELEMETRY_ENDPOINT_ORDERBOOK: &str = "/v1/sorafs/orderbook";
 const ORDERBOOK_ROUTE_ORDERS: &str = "/v1/sorafs/orderbook/orders";
 const ORDERBOOK_ROUTE_CANCEL: &str = "/v1/sorafs/orderbook/cancel";
 const ORDERBOOK_ROUTE_RECEIPTS: &str = "/v1/sorafs/orderbook/receipts";
@@ -320,6 +370,8 @@ const MODERATION_ROUTE_MODEL_REGISTRY_REPRO: &str =
 const MODERATION_ROUTE_MODEL_REGISTRY_CORPORA: &str =
     "/v1/sorafs/moderation/model-registry/corpora";
 const MODERATION_ROUTE_SCREENING_RESULTS: &str = "/v1/sorafs/moderation/screening-results";
+const MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES: usize = 256 * 1024;
+const MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES: usize = 64 * 1024;
 const MODERATION_ROUTE_QUARANTINE: &str = "/v1/sorafs/moderation/quarantine";
 const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS: &str = "/v1/sorafs/moderation/viewer-audit-reports";
 const MODERATION_ROUTE_VIEWER_AUDIT_REPORTS_PUBLISH_DUE: &str =
@@ -587,7 +639,7 @@ fn iroha_network_time_now_ms() -> u64 {
 struct PotrProbeParams {
     deadline_ms: u32,
     tier: ProofStreamTier,
-    request_id: Option<[u8; 16]>,
+    request_id: [u8; 16],
     trace_id: Option<[u8; 16]>,
 }
 
@@ -670,6 +722,12 @@ fn parse_potr_request_header(headers: &HeaderMap) -> Result<Option<PotrProbePara
         json_error(
             StatusCode::BAD_REQUEST,
             "sora-potr-request header missing tier parameter",
+        )
+    })?;
+    let request_id = request_id.ok_or_else(|| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "sora-potr-request header missing request-id parameter",
         )
     })?;
 
@@ -808,7 +866,7 @@ fn finalize_potr_receipt(
         recorded_at_ms,
         range_start,
         range_end,
-        request_id: probe.params.request_id,
+        request_id: Some(probe.params.request_id),
         trace_id: probe.params.trace_id,
         note,
         gateway_signature: None,
@@ -822,28 +880,94 @@ fn finalize_potr_receipt(
         )
     })?;
 
-    let receipt_bytes = norito::to_bytes(&receipt).map_err(|err| {
-        debug!(?err, "failed to encode PoTR receipt");
+    let admission = state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(provider_id))
+        .ok_or_else(|| {
+            json_error(
+                StatusCode::FORBIDDEN,
+                "PoTR provider has no active council admission",
+            )
+        })?;
+    let provider_public_key = issuer.potr_provider_public_key_bytes().map_err(|err| {
+        error!(?err, "failed to load PoTR provider signing key");
+        json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PoTR provider signing is unavailable",
+        )
+    })?;
+    if admission.potr_mldsa_key() != Some(provider_public_key.as_slice()) {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "PoTR provider signing key is not council governed",
+        ));
+    }
+    let signing_payload = receipt.signing_payload_bytes().map_err(|err| {
+        debug!(?err, "failed to encode PoTR signing payload");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "failed to encode PoTR receipt",
         )
     })?;
-
-    let signature = issuer.sign_bytes(&receipt_bytes);
+    let signature = issuer.sign_bytes(&signing_payload);
     receipt.gateway_signature = Some(PotrSignatureV1 {
         algorithm: PotrSignatureAlgorithm::Ed25519,
         public_key: issuer.verifying_key_bytes().to_vec(),
         signature: signature.to_bytes().to_vec(),
     });
+    let provider_signature = issuer
+        .sign_potr_provider_bytes(&signing_payload)
+        .map_err(|err| {
+            error!(?err, "failed to sign PoTR receipt as provider");
+            json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "PoTR provider signing is unavailable",
+            )
+        })?;
+    receipt.provider_signature = Some(PotrSignatureV1 {
+        algorithm: PotrSignatureAlgorithm::MlDsa65,
+        public_key: provider_public_key,
+        signature: provider_signature,
+    });
 
-    receipt.validate().map_err(|err| {
-        error!(?err, "generated PoTR receipt failed validation");
+    receipt
+        .validate_with_governed_keys(&issuer.verifying_key_bytes(), admission.as_ref())
+        .map_err(|err| {
+            error!(?err, "generated PoTR receipt failed validation");
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "generated PoTR receipt failed validation",
+            )
+        })?;
+
+    let receipt_bytes = receipt.signed_receipt_bytes().map_err(|err| {
+        error!(?err, "failed to encode final signed PoTR receipt");
         json_error(
             StatusCode::INTERNAL_SERVER_ERROR,
-            "generated PoTR receipt failed validation",
+            "failed to encode final signed PoTR receipt",
         )
     })?;
+    match state.sorafs_node.record_potr_receipt(
+        receipt.clone(),
+        &issuer.verifying_key_bytes(),
+        admission.as_ref(),
+    ) {
+        Ok(_) => {}
+        Err(sorafs_node::PotrTrackerError::RepairHandoff(err)) => {
+            error!(
+                ?err,
+                "PoTR receipt is durable but its authoritative latency repair remains pending"
+            );
+        }
+        Err(err) => {
+            error!(?err, "failed to persist final signed PoTR receipt");
+            return Err(json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to persist final signed PoTR receipt",
+            ));
+        }
+    }
 
     let receipt_b64 = BASE64_STANDARD.encode(receipt_bytes);
     let status_label = match status {
@@ -855,24 +979,6 @@ fn finalize_potr_receipt(
     };
 
     Ok((receipt, receipt_b64, status_label))
-}
-
-fn potr_signature_to_json(signature: &PotrSignatureV1) -> Value {
-    let mut sig_map = Map::new();
-    let algorithm = match signature.algorithm {
-        PotrSignatureAlgorithm::Ed25519 => "ed25519",
-        PotrSignatureAlgorithm::Dilithium3 => "dilithium3",
-    };
-    sig_map.insert("algorithm".into(), Value::from(algorithm));
-    sig_map.insert(
-        "public_key_hex".into(),
-        Value::from(encode(&signature.public_key)),
-    );
-    sig_map.insert(
-        "signature_b64".into(),
-        Value::from(BASE64_STANDARD.encode(&signature.signature)),
-    );
-    Value::Object(sig_map)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1808,26 +1914,15 @@ pub struct ModerationModelRegistryManifestRequestDto {
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// JSON payload accepted by `/v1/sorafs/moderation/screening-results`.
 pub struct ModerationScreeningResultRequestDto {
-    /// Gateway or content subject identifier.
-    pub subject: String,
-    /// Hex-encoded BLAKE3 digest of the screened payload or stable content reference.
-    pub subject_digest_hex: String,
-    /// Hex-encoded governance-approved reproducibility manifest id.
-    pub manifest_id_hex: String,
-    /// Hex-encoded BLAKE3 digest of the deterministic runner binary.
-    pub runner_hash_hex: String,
-    /// Combined moderation score in basis points.
-    pub combined_score_bps: u16,
-    /// Verdict label: pass, warn, quarantine, escalate, or block.
-    pub verdict: String,
-    /// Optional Unix timestamp (seconds) when screening completed.
-    pub screened_at_unix: Option<u64>,
-    /// Optional evidence digest encoded as hexadecimal.
-    pub evidence_digest_hex: Option<String>,
-    /// Optional policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<String>,
-    /// Optional operator note.
-    pub notes: Option<String>,
+    /// Non-zero 32-byte idempotency key encoded as lowercase hexadecimal.
+    pub idempotency_key_hex: String,
+    /// Canonical evidence kind: `signed_result` or `committee_aggregate`.
+    pub evidence_kind: String,
+    /// Standard-base64 canonical Norito signed result or committee aggregate.
+    pub authority_b64: String,
+    /// Standard-base64 canonical Norito signed member results. This must be
+    /// empty for `signed_result` and complete for `committee_aggregate`.
+    pub committee_member_results_b64: Vec<String>,
 }
 
 #[cfg(feature = "app_api")]
@@ -1862,9 +1957,11 @@ pub struct ModerationQuarantineObjectStoreRequestDto {
     pub payload_b64: String,
     /// Optional Unix timestamp (seconds) when payload capture completed.
     pub captured_at_unix: Option<u64>,
-    /// Optional content type label for operator review.
+    /// Optional V1-allowlisted coarse media label. Parameters, filenames,
+    /// identities, and private data are forbidden.
     pub content_type: Option<String>,
-    /// Optional object-store note.
+    /// Reserved in V1 and required to be absent. Private notes must be carried
+    /// inside `payload_b64` so they are encrypted.
     pub notes: Option<String>,
 }
 
@@ -1982,6 +2079,7 @@ pub struct ModerationEvidenceViewerAuditReportPublishDueRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// One raw metric contribution in a SoraFS privacy aggregate source event.
 pub struct TransparencyPrivacyAggregateSourceMetricDto {
     /// Stable metric key.
@@ -1994,6 +2092,7 @@ pub struct TransparencyPrivacyAggregateSourceMetricDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/source-events`.
 pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
     /// Stable event id used for duplicate suppression.
@@ -2004,6 +2103,8 @@ pub struct TransparencyPrivacyAggregateSourceEventRequestDto {
     pub population_label: String,
     /// Optional 32-byte private selector digest encoded as hexadecimal.
     pub population_digest_hex: Option<String>,
+    /// Required 32-byte private subject digest used for per-subject clipping.
+    pub subject_digest_hex: String,
     /// Raw source metrics for this event, sorted by key.
     pub metrics: Vec<TransparencyPrivacyAggregateSourceMetricDto>,
     /// Optional 32-byte policy digest encoded as hexadecimal.
@@ -2046,66 +2147,100 @@ pub struct TransparencyPublicSourceEntryRequestDto {
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// JSON payload accepted by `/v1/sorafs/transparency/privacy-aggregates/publish-due`.
 pub struct TransparencyPrivacyAggregatePublishDueRequestDto {
     /// Unix timestamp in seconds used to evaluate the configured due window.
     pub now_unix: u64,
-    /// Prefix used when deriving public aggregate identifiers.
-    pub aggregate_id_prefix: String,
-    /// Privacy mode: `suppression`, `differential_privacy`, or `differential_privacy_with_suppression`.
-    pub privacy_mode: String,
-    /// Epsilon encoded as fixed-point micros.
-    pub epsilon_micros: Option<u64>,
-    /// Delta encoded in parts per billion.
-    pub delta_ppb: Option<u64>,
-    /// Optional noise scale encoded as fixed-point micros.
-    pub noise_scale_micros: Option<u64>,
-    /// Minimum source-event count required before a bucket can be published.
-    pub suppression_threshold: Option<u64>,
-    /// Optional runtime-only deterministic noise seed encoded as hexadecimal.
-    pub noise_seed_hex: Option<String>,
-    /// Optional aggregate policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<String>,
     /// Optional previous transparency block hash encoded as hexadecimal.
     pub previous_block_hash_hex: Option<String>,
-    /// Public metadata copied into every generated aggregate.
-    pub metadata: Option<Vec<TransparencyLedgerMetadataDto>>,
 }
 
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
 /// JSON payload accepted by the `/v1/sorafs/storage/por-sample` endpoint.
 pub struct StoragePorSampleRequestDto {
     /// Hex-encoded manifest identifier to sample against.
     pub manifest_id_hex: String,
+    /// Hex-encoded provider identifier expected to produce the proof.
+    pub provider_id_hex: String,
     /// Desired number of samples (capped by the API limit and leaf count).
     pub count: u64,
     /// Optional deterministic seed for repeatable sampling.
     pub seed: Option<u64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StoragePorProviderBindingError {
+    Unconfigured,
+    Mismatch,
+}
+
+fn validate_storage_por_provider_binding(
+    configured_provider: Option<[u8; 32]>,
+    requested_provider: [u8; 32],
+) -> Result<(), StoragePorProviderBindingError> {
+    match configured_provider {
+        None => Err(StoragePorProviderBindingError::Unconfigured),
+        Some(configured) if configured != requested_provider => {
+            Err(StoragePorProviderBindingError::Mismatch)
+        }
+        Some(_) => Ok(()),
+    }
+}
+
 #[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
-/// JSON payload accepted by the `/v1/sorafs/proof/stream` endpoint.
-pub struct ProofStreamRequestDto {
-    /// Hex-encoded manifest digest (32 bytes).
-    pub manifest_digest_hex: String,
-    /// Hex-encoded provider identifier (32 bytes).
+#[norito(deny_unknown_fields)]
+/// Authenticated request to enqueue one council-admitted PDP challenge.
+pub struct PdpChallengeEnqueueRequestDto {
+    /// Canonical Norito `PdpCommitmentV1`, base64 encoded.
+    pub commitment_b64: String,
+    /// Canonical Norito `PdpChallengeV1`, base64 encoded.
+    pub challenge_b64: String,
+    /// Governance scheduler epoch expected for the challenge.
+    pub expected_epoch_id: u64,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Authenticated request for the next pending PDP challenge.
+pub struct PdpNextChallengeRequestDto {
+    /// Council-governed provider identity encoded as 32-byte hex.
     pub provider_id_hex: String,
-    /// Proof kind requested (`por` or `potr`; `pdp` is reserved for future SF-13 work).
-    pub proof_kind: String,
-    /// Optional sample count (required for PoR; capped at 500).
-    pub sample_count: Option<u32>,
-    /// Optional deadline in milliseconds (required for PoTR).
-    pub deadline_ms: Option<u32>,
-    /// Optional deterministic seed for sampling.
-    pub sample_seed: Option<u64>,
-    /// Base64-encoded 16-byte nonce supplied by the client.
-    pub nonce_b64: String,
-    /// Optional hex-encoded orchestrator job identifier (16 bytes).
-    pub orchestrator_job_id_hex: Option<String>,
-    /// Optional tier hint (`hot`, `warm`, `archive`).
-    pub tier: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Authenticated, challenge-bound PDP proof submission.
+pub struct PdpProofSubmitRequestDto {
+    /// Governed challenge identity encoded as 32-byte hex.
+    pub challenge_id_hex: String,
+    /// Exact canonical Norito `PdpProofV1`, base64 encoded.
+    pub proof_b64: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Authenticated request for one PDP challenge status.
+pub struct PdpChallengeStatusRequestDto {
+    /// Governed challenge identity encoded as 32-byte hex.
+    pub challenge_id_hex: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Clone, Copy, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+#[norito(deny_unknown_fields)]
+/// Authenticated bounded PDP status export request.
+pub struct PdpStatusExportRequestDto {
+    /// Return only records after this durable sequence.
+    pub after_sequence: Option<u64>,
+    /// Page size, from 1 through the protocol maximum.
+    pub limit: Option<u32>,
 }
 
 #[cfg(feature = "app_api")]
@@ -2398,7 +2533,7 @@ pub struct ModerationBallotTallyRequestDto {
     pub case_id: String,
     /// Moderation ballot round identifier.
     pub round_id: String,
-    /// Ignored by public handlers; tally uses server-side Iroha network time.
+    /// Ignored by public handlers; finalization time is assigned by consensus.
     pub now_unix_ms: Option<u64>,
 }
 
@@ -2695,6 +2830,50 @@ struct OrderbookReadbackQuery {
     limit: Option<u32>,
 }
 
+#[derive(Debug, Default)]
+struct FinalizedOrderbookReadQuery {
+    limit: Option<u32>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    after_id_hex: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct FinalizedOrderbookEventQuery {
+    limit: Option<u32>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    after_sequence: Option<u64>,
+    after_block_height: Option<u64>,
+    after_block_hash_hex: Option<String>,
+    after_event_index: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct FinalizedRepairAnchorQuery {
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct FinalizedRepairTaskQuery {
+    limit: Option<u32>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    after_task_id_hex: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct FinalizedRepairEventQuery {
+    limit: Option<u32>,
+    expected_finalized_height: Option<u64>,
+    expected_finalized_block_hash_hex: Option<String>,
+    after_sequence: Option<u64>,
+    after_block_height: Option<u64>,
+    after_block_hash_hex: Option<String>,
+    after_event_index: Option<u32>,
+}
+
 #[derive(Debug, Default, PartialEq, Eq)]
 struct EconomicsActivePricingQuery {
     observed_at_unix: Option<u64>,
@@ -2981,6 +3160,621 @@ impl OrderbookReadbackQuery {
         })?;
         Ok(query)
     }
+}
+
+impl FinalizedOrderbookReadQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
+            "expected_finalized_height" => {
+                parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
+            }
+            "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
+                &mut query.expected_finalized_block_hash_hex,
+                key,
+                value,
+            ),
+            "after_id_hex" => parse_orderbook_query_string(&mut query.after_id_hex, key, value),
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS orderbook query parameter `{key}`"),
+            ))),
+        })?;
+        if query
+            .limit
+            .is_some_and(|limit| !(1..=ORDERBOOK_QUERY_MAX_ITEMS_V1).contains(&limit))
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "SoraFS orderbook query limit must be within 1..={ORDERBOOK_QUERY_MAX_ITEMS_V1}"
+                ),
+            )));
+        }
+        validate_orderbook_cursor_pair(
+            query.expected_finalized_height,
+            query.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+        .map_err(ResponseError::from)?;
+        if let Some(after_id_hex) = query.after_id_hex.as_deref() {
+            parse_canonical_hex_fixed::<32>(after_id_hex, "after_id_hex")
+                .map_err(|error| ResponseError::from(json_error(StatusCode::BAD_REQUEST, error)))?;
+        }
+        Ok(query)
+    }
+
+    fn limit(&self) -> u32 {
+        self.limit
+            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
+            .clamp(1, ORDERBOOK_QUERY_MAX_ITEMS_V1)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
+        orderbook_finalized_cursor_from_query(
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+    }
+
+    fn after_id(&self) -> Result<Option<[u8; 32]>, Response> {
+        self.after_id_hex
+            .as_deref()
+            .map(|value| {
+                parse_canonical_hex_fixed::<32>(value, "after_id_hex")
+                    .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))
+            })
+            .transpose()
+    }
+}
+
+impl FinalizedOrderbookEventQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_orderbook_query_u32(&mut query.limit, key, value),
+            "expected_finalized_height" => {
+                parse_orderbook_query_u64(&mut query.expected_finalized_height, key, value)
+            }
+            "expected_finalized_block_hash_hex" => parse_orderbook_query_string(
+                &mut query.expected_finalized_block_hash_hex,
+                key,
+                value,
+            ),
+            "after_sequence" => parse_orderbook_query_u64(&mut query.after_sequence, key, value),
+            "after_block_height" => {
+                parse_orderbook_query_u64(&mut query.after_block_height, key, value)
+            }
+            "after_block_hash_hex" => {
+                parse_orderbook_query_string(&mut query.after_block_hash_hex, key, value)
+            }
+            "after_event_index" => {
+                parse_orderbook_query_u32(&mut query.after_event_index, key, value)
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS orderbook event query parameter `{key}`"),
+            ))),
+        })?;
+        if query
+            .limit
+            .is_some_and(|limit| !(1..=ORDERBOOK_QUERY_MAX_ITEMS_V1).contains(&limit))
+        {
+            return Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "SoraFS orderbook event query limit must be within 1..={ORDERBOOK_QUERY_MAX_ITEMS_V1}"
+                ),
+            )));
+        }
+        validate_orderbook_cursor_pair(
+            query.expected_finalized_height,
+            query.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+        .map_err(ResponseError::from)?;
+        validate_orderbook_event_cursor_parts(&query).map_err(ResponseError::from)?;
+        Ok(query)
+    }
+
+    fn limit(&self) -> u32 {
+        self.limit
+            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
+            .clamp(1, ORDERBOOK_QUERY_MAX_ITEMS_V1)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
+        orderbook_finalized_cursor_from_query(
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+    }
+
+    fn after(&self) -> Result<Option<OrderbookFinalizedEventCursorV1>, Response> {
+        let Some(sequence) = self.after_sequence else {
+            return Ok(None);
+        };
+        let block_height = self.after_block_height.ok_or_else(|| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "complete finalized orderbook event cursor is required",
+            )
+        })?;
+        let block_hash = parse_canonical_hex_fixed::<32>(
+            self.after_block_hash_hex.as_deref().ok_or_else(|| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "complete finalized orderbook event cursor is required",
+                )
+            })?,
+            "after_block_hash_hex",
+        )
+        .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+        let event_index = self.after_event_index.ok_or_else(|| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "complete finalized orderbook event cursor is required",
+            )
+        })?;
+        Ok(Some(OrderbookFinalizedEventCursorV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+        }))
+    }
+}
+
+impl FinalizedRepairAnchorQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "expected_finalized_height" => {
+                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+            }
+            "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                &mut query.expected_finalized_block_hash_hex,
+                key,
+                value,
+            ),
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS repair query parameter `{key}`"),
+            ))),
+        })?;
+        validate_repair_cursor_pair(
+            query.expected_finalized_height,
+            query.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+        .map_err(ResponseError::from)?;
+        Ok(query)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
+        repair_finalized_cursor_from_query(
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+    }
+}
+
+impl FinalizedRepairTaskQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_repair_query_u32(&mut query.limit, key, value),
+            "expected_finalized_height" => {
+                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+            }
+            "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                &mut query.expected_finalized_block_hash_hex,
+                key,
+                value,
+            ),
+            "after_task_id_hex" => {
+                parse_repair_query_string(&mut query.after_task_id_hex, key, value)
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS repair-task query parameter `{key}`"),
+            ))),
+        })?;
+        validate_repair_query_limit(query.limit, "task")?;
+        validate_repair_cursor_pair(
+            query.expected_finalized_height,
+            query.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+        .map_err(ResponseError::from)?;
+        if let Some(after_task_id_hex) = query.after_task_id_hex.as_deref() {
+            parse_nonzero_repair_hex(after_task_id_hex, "after_task_id_hex")
+                .map_err(ResponseError::from)?;
+        }
+        Ok(query)
+    }
+
+    fn limit(&self) -> u32 {
+        self.limit
+            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
+            .clamp(1, REPAIR_QUERY_MAX_ITEMS_V1)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
+        repair_finalized_cursor_from_query(
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+    }
+
+    fn after_task_id(&self) -> Result<Option<[u8; 32]>, Response> {
+        self.after_task_id_hex
+            .as_deref()
+            .map(|value| parse_nonzero_repair_hex(value, "after_task_id_hex"))
+            .transpose()
+    }
+}
+
+impl FinalizedRepairEventQuery {
+    fn parse(raw: Option<&str>) -> ApiResult<Self> {
+        let mut query = Self::default();
+        walk_query_params(raw, |key, value| match key {
+            "limit" => parse_repair_query_u32(&mut query.limit, key, value),
+            "expected_finalized_height" => {
+                parse_repair_query_u64(&mut query.expected_finalized_height, key, value)
+            }
+            "expected_finalized_block_hash_hex" => parse_repair_query_string(
+                &mut query.expected_finalized_block_hash_hex,
+                key,
+                value,
+            ),
+            "after_sequence" => parse_repair_query_u64(&mut query.after_sequence, key, value),
+            "after_block_height" => {
+                parse_repair_query_u64(&mut query.after_block_height, key, value)
+            }
+            "after_block_hash_hex" => {
+                parse_repair_query_string(&mut query.after_block_hash_hex, key, value)
+            }
+            "after_event_index" => {
+                parse_repair_query_u32(&mut query.after_event_index, key, value)
+            }
+            _ => Err(ResponseError::from(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("unknown finalized SoraFS repair-event query parameter `{key}`"),
+            ))),
+        })?;
+        validate_repair_query_limit(query.limit, "event")?;
+        validate_repair_cursor_pair(
+            query.expected_finalized_height,
+            query.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+        .map_err(ResponseError::from)?;
+        validate_repair_event_cursor_parts(&query).map_err(ResponseError::from)?;
+        Ok(query)
+    }
+
+    fn limit(&self) -> u32 {
+        self.limit
+            .unwrap_or(DEFAULT_LIST_LIMIT as u32)
+            .clamp(1, REPAIR_QUERY_MAX_ITEMS_V1)
+    }
+
+    fn expected_finalized_cursor(&self) -> Result<Option<RepairFinalizedCursorV1>, Response> {
+        repair_finalized_cursor_from_query(
+            self.expected_finalized_height,
+            self.expected_finalized_block_hash_hex.as_deref(),
+            "expected finalized",
+        )
+    }
+
+    fn after(&self) -> Result<Option<RepairFinalizedEventCursorV1>, Response> {
+        let Some(sequence) = self.after_sequence else {
+            return Ok(None);
+        };
+        let block_height = self.after_block_height.ok_or_else(|| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "complete finalized repair event cursor is required",
+            )
+        })?;
+        let block_hash = parse_nonzero_repair_hex(
+            self.after_block_hash_hex.as_deref().ok_or_else(|| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "complete finalized repair event cursor is required",
+                )
+            })?,
+            "after_block_hash_hex",
+        )?;
+        let event_index = self.after_event_index.ok_or_else(|| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                "complete finalized repair event cursor is required",
+            )
+        })?;
+        Ok(Some(RepairFinalizedEventCursorV1 {
+            sequence,
+            block_height,
+            block_hash,
+            event_index,
+        }))
+    }
+}
+
+fn parse_repair_query_u64(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
+        )));
+    }
+    let value = raw.parse::<u64>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid finalized SoraFS repair {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_repair_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
+        )));
+    }
+    let value = raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid finalized SoraFS repair {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_repair_query_string(
+    target: &mut Option<String>,
+    name: &str,
+    raw: &str,
+) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS repair query parameter `{name}`"),
+        )));
+    }
+    *target = Some(raw.to_owned());
+    Ok(())
+}
+
+fn validate_repair_query_limit(limit: Option<u32>, kind: &str) -> ApiResult<()> {
+    if limit.is_some_and(|limit| !(1..=REPAIR_QUERY_MAX_ITEMS_V1).contains(&limit)) {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "SoraFS repair {kind} query limit must be within 1..={REPAIR_QUERY_MAX_ITEMS_V1}"
+            ),
+        )));
+    }
+    Ok(())
+}
+
+fn validate_repair_cursor_pair(
+    height: Option<u64>,
+    block_hash_hex: Option<&str>,
+    label: &str,
+) -> Result<(), Response> {
+    if height.is_some() != block_hash_hex.is_some() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} height and block hash must be supplied together"),
+        ));
+    }
+    if height == Some(0) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} height must be non-zero"),
+        ));
+    }
+    if let Some(block_hash_hex) = block_hash_hex {
+        parse_nonzero_repair_hex(block_hash_hex, "expected_finalized_block_hash_hex")?;
+    }
+    Ok(())
+}
+
+fn validate_repair_event_cursor_parts(
+    query: &FinalizedRepairEventQuery,
+) -> Result<(), Response> {
+    let present = [
+        query.after_sequence.is_some(),
+        query.after_block_height.is_some(),
+        query.after_block_hash_hex.is_some(),
+        query.after_event_index.is_some(),
+    ];
+    if present.iter().any(|value| *value) && !present.iter().all(|value| *value) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "complete finalized repair event cursor is required",
+        ));
+    }
+    if query.after_sequence == Some(0) || query.after_block_height == Some(0) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "finalized repair event cursor sequence and height must be non-zero",
+        ));
+    }
+    if let Some(block_hash_hex) = query.after_block_hash_hex.as_deref() {
+        parse_nonzero_repair_hex(block_hash_hex, "after_block_hash_hex")?;
+    }
+    Ok(())
+}
+
+fn parse_nonzero_repair_hex(value: &str, field: &str) -> Result<[u8; 32], Response> {
+    let bytes = parse_canonical_hex_fixed::<32>(value, field)
+        .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+    if bytes == [0; 32] {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must be non-zero"),
+        ));
+    }
+    Ok(bytes)
+}
+
+fn repair_finalized_cursor_from_query(
+    height: Option<u64>,
+    block_hash_hex: Option<&str>,
+    label: &str,
+) -> Result<Option<RepairFinalizedCursorV1>, Response> {
+    validate_repair_cursor_pair(height, block_hash_hex, label)?;
+    let Some(height) = height else {
+        return Ok(None);
+    };
+    let block_hash = parse_nonzero_repair_hex(
+        block_hash_hex.expect("validated repair cursor pair has a block hash"),
+        "expected_finalized_block_hash_hex",
+    )?;
+    Ok(Some(RepairFinalizedCursorV1 { height, block_hash }))
+}
+
+fn parse_orderbook_query_u64(target: &mut Option<u64>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
+        )));
+    }
+    let value = raw.parse::<u64>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid finalized SoraFS orderbook {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_orderbook_query_u32(target: &mut Option<u32>, name: &str, raw: &str) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
+        )));
+    }
+    let value = raw.parse::<u32>().map_err(|_| {
+        ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid finalized SoraFS orderbook {name} value `{raw}`"),
+        ))
+    })?;
+    *target = Some(value);
+    Ok(())
+}
+
+fn parse_orderbook_query_string(
+    target: &mut Option<String>,
+    name: &str,
+    raw: &str,
+) -> ApiResult<()> {
+    if target.is_some() || raw.is_empty() {
+        return Err(ResponseError::from(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("duplicate or empty finalized SoraFS orderbook query parameter `{name}`"),
+        )));
+    }
+    *target = Some(raw.to_owned());
+    Ok(())
+}
+
+fn validate_orderbook_cursor_pair(
+    height: Option<u64>,
+    block_hash_hex: Option<&str>,
+    label: &str,
+) -> Result<(), Response> {
+    if height.is_some() != block_hash_hex.is_some() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} height and block hash must be supplied together"),
+        ));
+    }
+    if height == Some(0) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} height must be non-zero"),
+        ));
+    }
+    if let Some(block_hash_hex) = block_hash_hex {
+        let block_hash =
+            parse_canonical_hex_fixed::<32>(block_hash_hex, "expected_finalized_block_hash_hex")
+                .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+        if block_hash == [0; 32] {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                format!("{label} block hash must be non-zero"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_orderbook_event_cursor_parts(
+    query: &FinalizedOrderbookEventQuery,
+) -> Result<(), Response> {
+    let present = [
+        query.after_sequence.is_some(),
+        query.after_block_height.is_some(),
+        query.after_block_hash_hex.is_some(),
+        query.after_event_index.is_some(),
+    ];
+    if present.iter().any(|value| *value) && !present.iter().all(|value| *value) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "complete finalized orderbook event cursor is required",
+        ));
+    }
+    if query.after_sequence == Some(0) || query.after_block_height == Some(0) {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "finalized orderbook event cursor sequence and height must be non-zero",
+        ));
+    }
+    if let Some(block_hash_hex) = query.after_block_hash_hex.as_deref() {
+        let block_hash = parse_canonical_hex_fixed::<32>(block_hash_hex, "after_block_hash_hex")
+            .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+        if block_hash == [0; 32] {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "finalized orderbook event cursor block hash must be non-zero",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn orderbook_finalized_cursor_from_query(
+    height: Option<u64>,
+    block_hash_hex: Option<&str>,
+    label: &str,
+) -> Result<Option<OrderbookFinalizedCursorV1>, Response> {
+    validate_orderbook_cursor_pair(height, block_hash_hex, label)?;
+    let Some(height) = height else {
+        return Ok(None);
+    };
+    let block_hash = parse_canonical_hex_fixed::<32>(
+        block_hash_hex.expect("validated cursor pair has a block hash"),
+        "expected_finalized_block_hash_hex",
+    )
+    .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;
+    Ok(Some(OrderbookFinalizedCursorV1 { height, block_hash }))
 }
 
 impl EconomicsActivePricingQuery {
@@ -4339,7 +5133,7 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
     {
         return response;
     }
-    let (now_unix, config, previous_block_hash) =
+    let (now_unix, previous_block_hash) =
         match privacy_aggregate_publish_due_request_from_body(body.as_ref()) {
             Ok(request) => request,
             Err(response) => return response,
@@ -4348,7 +5142,6 @@ pub(crate) async fn handle_post_sorafs_transparency_privacy_aggregate_publish_du
         .sorafs_node
         .publish_due_configured_privacy_aggregate_cycle_from_source_events(
             now_unix,
-            config,
             previous_block_hash,
         ) {
         Ok(outcome) => outcome,
@@ -4785,6 +5578,7 @@ fn privacy_aggregate_source_event_from_request(
         request.population_digest_hex.as_deref(),
         "population_digest_hex",
     )?;
+    let subject_digest = decode_hex_32_field(&request.subject_digest_hex, "subject_digest_hex")?;
     let policy_digest =
         decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
     Ok(PrivacyAggregateSourceEvent {
@@ -4792,6 +5586,7 @@ fn privacy_aggregate_source_event_from_request(
         occurred_at_unix: request.occurred_at_unix,
         population_label: request.population_label,
         population_digest,
+        subject_digest,
         metrics: request
             .metrics
             .into_iter()
@@ -4839,6 +5634,10 @@ fn privacy_aggregate_source_event_ingest_json(
                 .unwrap_or(Value::Null),
         ),
         json_entry(
+            "subject_digest_hex",
+            Value::from(encode(event.subject_digest)),
+        ),
+        json_entry(
             "policy_digest_hex",
             event
                 .policy_digest
@@ -4856,14 +5655,7 @@ fn privacy_aggregate_source_event_ingest_json(
 
 fn privacy_aggregate_publish_due_request_from_body(
     body: &[u8],
-) -> Result<
-    (
-        u64,
-        sorafs_node::PrivacyAggregateCycleConfig,
-        Option<[u8; 32]>,
-    ),
-    Response,
-> {
+) -> Result<(u64, Option<[u8; 32]>), Response> {
     let request: TransparencyPrivacyAggregatePublishDueRequestDto = json::from_slice(body)
         .map_err(|err| {
             json_error(
@@ -4871,54 +5663,11 @@ fn privacy_aggregate_publish_due_request_from_body(
                 format!("failed to decode SoraFS privacy aggregate publish-due JSON: {err}"),
             )
         })?;
-    let privacy_mode = privacy_aggregate_mode_from_str(&request.privacy_mode)?;
-    let noise_seed =
-        decode_optional_hex_32_field(request.noise_seed_hex.as_deref(), "noise_seed_hex")?;
-    let policy_digest =
-        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
     let previous_block_hash = decode_optional_hex_32_field(
         request.previous_block_hash_hex.as_deref(),
         "previous_block_hash_hex",
     )?;
-    let metadata = request
-        .metadata
-        .unwrap_or_default()
-        .into_iter()
-        .map(|item| ModerationLedgerMetadataV1 {
-            key: item.key,
-            value: item.value,
-        })
-        .collect();
-    let config = sorafs_node::PrivacyAggregateCycleConfig {
-        aggregate_id_prefix: request.aggregate_id_prefix,
-        privacy: ModerationPrivacyParametersV1 {
-            version: MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
-            mode: privacy_mode,
-            epsilon_micros: request.epsilon_micros,
-            delta_ppb: request.delta_ppb,
-            noise_scale_micros: request.noise_scale_micros,
-            suppression_threshold: request.suppression_threshold,
-            suppressed_count: 0,
-        },
-        noise_seed,
-        policy_digest,
-        metadata,
-    };
-    Ok((request.now_unix, config, previous_block_hash))
-}
-
-fn privacy_aggregate_mode_from_str(raw: &str) -> Result<ModerationPrivacyModeV1, Response> {
-    match raw.trim().to_ascii_lowercase().replace('-', "_").as_str() {
-        "differential_privacy" | "dp" => Ok(ModerationPrivacyModeV1::DifferentialPrivacy),
-        "suppression" => Ok(ModerationPrivacyModeV1::Suppression),
-        "differential_privacy_with_suppression" | "dp_with_suppression" => {
-            Ok(ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression)
-        }
-        _ => Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported SoraFS privacy aggregate privacy_mode",
-        )),
-    }
+    Ok((request.now_unix, previous_block_hash))
 }
 
 fn privacy_aggregate_publish_due_outcome_json(
@@ -5116,11 +5865,7 @@ fn privacy_aggregate_publication_summary_json(
 
 fn is_privacy_aggregate_publish_due_request_error(message: &str) -> bool {
     message.contains("invalid privacy")
-        || message.contains("runtime noise seed")
-        || message.contains("noise_seed")
-        || message.contains("policy_digest")
-        || message.contains("metadata")
-        || message.contains("aggregate_id_prefix")
+        || message.contains("composition budget")
         || message.contains("build scheduled privacy aggregate cycle")
 }
 
@@ -8618,11 +9363,12 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
     if !state.sorafs_node.is_enabled() {
         return feature_disabled("sorafs moderation ballot API is not enabled on this node");
     }
-    if let Err(response) =
-        require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
-    {
-        return response;
-    }
+    let verified =
+        match require_moderation_request_auth(&state, &headers, &method, &uri, body.as_ref(), None)
+        {
+            Ok(verified) => verified,
+            Err(response) => return response,
+        };
     let request = match json::from_slice::<ModerationBallotTallyRequestDto>(body.as_ref()) {
         Ok(request) => request,
         Err(err) => {
@@ -8632,15 +9378,182 @@ pub(crate) async fn handle_post_sorafs_moderation_ballot_tally(
             );
         }
     };
-    let now_unix_ms = iroha_network_time_now_ms();
-    match state.sorafs_node.tally_moderation_ballot(
-        &request.case_id,
-        &request.round_id,
-        now_unix_ms,
+    let Some(orchestrator) = state.sorafs_moderation_orchestrator.as_ref() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized-chain SoraFS moderation orchestration is unavailable",
+        );
+    };
+    let action = ModerationNativeActionV1::FinalizeCase(FinalizeSorafsModerationCase::new(
+        request.case_id.clone(),
+        request.round_id.clone(),
+    ));
+    let canonical_target = uri
+        .path_and_query()
+        .map_or_else(|| uri.path(), |target| target.as_str());
+    let request_binding_digest = match moderation_request_binding_digest_v1(
+        method.as_str(),
+        canonical_target,
+        body.as_ref(),
+        &verified.account,
+        &action,
     ) {
-        Ok(tally) => JsonBody(moderation_ballot_tally_json(&tally)).into_response(),
-        Err(err) => moderation_ballot_runtime_error_response(err),
+        Ok(digest) => digest,
+        Err(error) => return moderation_orchestrator_error_response(error),
+    };
+    let outcome = match orchestrator.submit(verified.account, action, request_binding_digest) {
+        Ok(outcome) => outcome,
+        Err(error) => return moderation_orchestrator_error_response(error),
+    };
+    let projection = orchestrator.case(&request.case_id, &request.round_id);
+    if outcome.status == ModerationOperationStatusV1::Finalized
+        && projection
+            .as_ref()
+            .is_none_or(|projection| projection.outcome.is_none())
+    {
+        warn!("finalized SoraFS moderation operation is missing its committed case projection");
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized moderation projection is unavailable",
+        );
     }
+    let projection_json = match projection.as_ref().map(json::to_value).transpose() {
+        Ok(Some(value)) => value,
+        Ok(None) => Value::Null,
+        Err(_) => {
+            warn!("failed to encode finalized SoraFS moderation case projection");
+            return json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to encode finalized moderation projection",
+            );
+        }
+    };
+    let status = match outcome.status {
+        ModerationOperationStatusV1::Pending => StatusCode::ACCEPTED,
+        ModerationOperationStatusV1::Finalized => StatusCode::OK,
+        ModerationOperationStatusV1::Rejected => StatusCode::CONFLICT,
+    };
+    (
+        status,
+        JsonBody(moderation_orchestrator_submit_json(
+            &request.case_id,
+            &request.round_id,
+            &outcome,
+            projection_json,
+        )),
+    )
+        .into_response()
+}
+
+fn moderation_orchestrator_submit_json(
+    case_id: &str,
+    round_id: &str,
+    outcome: &ModerationSubmitOutcomeV1,
+    projection: Value,
+) -> Value {
+    let status = match outcome.status {
+        ModerationOperationStatusV1::Pending => "pending",
+        ModerationOperationStatusV1::Finalized => "finalized",
+        ModerationOperationStatusV1::Rejected => "rejected",
+    };
+    json_object(vec![
+        json_entry("schema", Value::from("sorafs.moderation.finalization.v1")),
+        json_entry("source", Value::from("finalized_chain")),
+        json_entry("case_id", Value::from(case_id.to_owned())),
+        json_entry("round_id", Value::from(round_id.to_owned())),
+        json_entry(
+            "operation_id_hex",
+            Value::from(hex::encode(outcome.operation_id)),
+        ),
+        json_entry(
+            "transaction_id_hex",
+            outcome
+                .transaction_id
+                .map_or(Value::Null, |id| Value::from(hex::encode(id))),
+        ),
+        json_entry("status", Value::from(status)),
+        json_entry("replay", Value::from(outcome.replay)),
+        json_entry(
+            "finalized_height",
+            Value::from(outcome.finalized_cursor.height),
+        ),
+        json_entry(
+            "finalized_block_hash_hex",
+            Value::from(hex::encode(outcome.finalized_cursor.block_hash)),
+        ),
+        json_entry("case_projection", projection),
+    ])
+}
+
+fn moderation_orchestrator_error_response(error: ModerationOrchestratorError) -> Response {
+    let (status, public_message, class) = match error {
+        ModerationOrchestratorError::InvalidAction(_) => (
+            StatusCode::BAD_REQUEST,
+            "invalid native moderation finalization request",
+            "invalid_action",
+        ),
+        ModerationOrchestratorError::InvalidRequestBinding => (
+            StatusCode::BAD_REQUEST,
+            "invalid moderation request binding",
+            "invalid_request_binding",
+        ),
+        ModerationOrchestratorError::AuthorityMismatch { .. } => (
+            StatusCode::FORBIDDEN,
+            "moderation finalization authority mismatch",
+            "authority_mismatch",
+        ),
+        ModerationOrchestratorError::IdempotencyConflict { .. }
+        | ModerationOrchestratorError::FinalizedConflict { .. } => (
+            StatusCode::CONFLICT,
+            "moderation finalization conflicts with an existing operation",
+            "operation_conflict",
+        ),
+        ModerationOrchestratorError::ResourceExhausted { .. } => (
+            StatusCode::TOO_MANY_REQUESTS,
+            "moderation orchestration capacity is exhausted",
+            "resource_exhausted",
+        ),
+        ModerationOrchestratorError::InvalidConfiguration(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "moderation orchestration is unavailable",
+            "invalid_configuration",
+        ),
+        ModerationOrchestratorError::FinalizedReaderUnavailable => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized moderation state is unavailable",
+            "finalized_reader_unavailable",
+        ),
+        ModerationOrchestratorError::InvalidFinalizedSnapshot(_) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized moderation state is invalid",
+            "invalid_finalized_snapshot",
+        ),
+        ModerationOrchestratorError::StaleFinalizedCursor { .. } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized moderation state is stale",
+            "stale_finalized_cursor",
+        ),
+        ModerationOrchestratorError::FinalizedEquivocation { .. } => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "finalized moderation state is inconsistent",
+            "finalized_equivocation",
+        ),
+        ModerationOrchestratorError::CheckpointCorrupt(_)
+        | ModerationOrchestratorError::CheckpointIo(_)
+        | ModerationOrchestratorError::CheckpointDurabilityUncertain(_)
+        | ModerationOrchestratorError::DurabilityFaulted
+        | ModerationOrchestratorError::GenerationOverflow
+        | ModerationOrchestratorError::StateLockPoisoned => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "durable moderation orchestration is unavailable",
+            "durability_failure",
+        ),
+    };
+    warn!(
+        error_class = class,
+        "SoraFS moderation finalization failed closed"
+    );
+    json_error(status, public_message)
 }
 
 pub(crate) async fn handle_get_sorafs_moderation_ballots(
@@ -8897,17 +9810,22 @@ pub(crate) async fn handle_post_sorafs_moderation_screening_result(
             );
         }
     };
-    let input = match moderation_screening_input_from_request(request) {
-        Ok(input) => input,
+    let request = match authenticated_moderation_screening_request_from_dto(request) {
+        Ok(request) => request,
         Err(response) => return response,
     };
-    match state.sorafs_node.record_moderation_screening_result(input) {
+    match state
+        .sorafs_node
+        .record_authenticated_moderation_screening_result(
+            request,
+            iroha_network_time_now_ms() / 1_000,
+        ) {
         Ok(outcome) => (
             StatusCode::ACCEPTED,
-            JsonBody(moderation_screening_outcome_json(&outcome)),
+            JsonBody(authenticated_moderation_screening_outcome_json(&outcome)),
         )
             .into_response(),
-        Err(err) => moderation_screening_error_response(err),
+        Err(err) => authenticated_moderation_screening_error_response(err),
     }
 }
 
@@ -10002,158 +10920,562 @@ fn economics_runtime_error_response(err: EconomicsRuntimeError) -> Response {
 pub(crate) async fn handle_post_sorafs_orderbook_order(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
-        }
-        let order = match decode_order_request_v1(body.as_ref()) {
-            Ok(order) => order,
-            Err(err) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("failed to decode SoraFS orderbook order: {err}"),
-                );
-            }
-        };
-        let owner_account = match orderbook_owner_account_id(&state, &order.owner_account) {
-            Ok(account) => account,
-            Err(response) => return response,
-        };
-        let verified = match require_orderbook_request_auth(
-            &state,
-            &headers,
-            &method,
-            &uri,
-            body.as_ref(),
-            Some(&owner_account),
-        ) {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-        if let Err(response) = ensure_orderbook_payload_signer(&verified, &order.signature) {
-            return response;
-        }
-        if let Err(response) = ensure_orderbook_order_provider_capability(&state, &order) {
-            return response;
-        }
-        let now_unix = unix_timestamp_now();
-        match state.sorafs_node.submit_orderbook_order(order, now_unix) {
-            Ok(outcome) => match orderbook_submit_outcome_json(&outcome) {
-                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
-                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-            },
-            Err(err) => orderbook_runtime_error_response(err),
-        }
-    })();
+    let response = submit_orderbook_signed_transaction(
+        state.clone(),
+        headers,
+        accept,
+        transaction,
+        OrderbookCommandRouteV1::SubmitOrder,
+    )
+    .await;
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_ORDERS, response)
 }
 
 pub(crate) async fn handle_post_sorafs_orderbook_cancel(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
-        }
-        let cancel = match decode_order_cancel_v1(body.as_ref()) {
-            Ok(cancel) => cancel,
-            Err(err) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("failed to decode SoraFS orderbook cancel: {err}"),
-                );
-            }
-        };
-        let owner_account = match orderbook_owner_account_id(&state, &cancel.owner_account) {
-            Ok(account) => account,
-            Err(response) => return response,
-        };
-        let verified = match require_orderbook_request_auth(
-            &state,
-            &headers,
-            &method,
-            &uri,
-            body.as_ref(),
-            Some(&owner_account),
-        ) {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-        if let Err(response) = ensure_orderbook_payload_signer(&verified, &cancel.signature) {
-            return response;
-        }
-        let now_unix = unix_timestamp_now();
-        match state.sorafs_node.cancel_orderbook_order(cancel, now_unix) {
-            Ok(outcome) => match orderbook_cancel_outcome_json(&outcome) {
-                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
-                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-            },
-            Err(err) => orderbook_runtime_error_response(err),
-        }
-    })();
+    let response = submit_orderbook_signed_transaction(
+        state.clone(),
+        headers,
+        accept,
+        transaction,
+        OrderbookCommandRouteV1::CancelOrder,
+    )
+    .await;
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CANCEL, response)
 }
 
 pub(crate) async fn handle_post_sorafs_orderbook_receipt(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
-    method: Method,
-    uri: Uri,
-    body: Bytes,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
 ) -> Response {
-    let response = (|| {
-        if !state.sorafs_node.is_enabled() {
-            return feature_disabled("sorafs orderbook API is not enabled on this node");
-        }
-        let receipt = match decode_settlement_receipt_v1(body.as_ref()) {
-            Ok(receipt) => receipt,
-            Err(err) => {
-                return json_error(
-                    StatusCode::BAD_REQUEST,
-                    format!("failed to decode SoraFS orderbook settlement receipt: {err}"),
-                );
-            }
-        };
-        let verified = match require_orderbook_request_auth(
-            &state,
-            &headers,
-            &method,
-            &uri,
-            body.as_ref(),
-            None,
-        ) {
-            Ok(verified) => verified,
-            Err(response) => return response,
-        };
-        if let Err(response) =
-            ensure_orderbook_payload_signer(&verified, &receipt.settlement_signature)
-        {
-            return response;
-        }
-        if let Err(response) = ensure_orderbook_receipt_provider_role(&state, &verified, &receipt) {
-            return response;
-        }
-        let now_unix = unix_timestamp_now();
-        match state
-            .sorafs_node
-            .submit_orderbook_receipt(receipt, now_unix)
-        {
-            Ok(outcome) => match orderbook_receipt_outcome_json(&outcome) {
-                Ok(value) => (StatusCode::OK, JsonBody(value)).into_response(),
-                Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
-            },
-            Err(err) => orderbook_runtime_error_response(err),
-        }
-    })();
+    let response = submit_orderbook_signed_transaction(
+        state.clone(),
+        headers,
+        accept,
+        transaction,
+        OrderbookCommandRouteV1::RecordReceipt,
+    )
+    .await;
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
+}
+
+pub(crate) async fn handle_post_sorafs_repair_report(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Report,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_slash(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Escalate,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_claim(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Claim,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_heartbeat(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Renew,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_complete(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Complete,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_fail(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Fail,
+    )
+    .await
+}
+
+pub(crate) async fn handle_post_sorafs_repair_appeal(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    JsonOrNoritoVersioned(transaction): JsonOrNoritoVersioned<SignedTransaction>,
+) -> Response {
+    submit_repair_signed_transaction(
+        state,
+        headers,
+        accept,
+        transaction,
+        RepairCommandRouteV1::Appeal,
+    )
+    .await
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RepairCommandRouteV1 {
+    Report,
+    Escalate,
+    Claim,
+    Renew,
+    Complete,
+    Fail,
+    Appeal,
+}
+
+async fn submit_repair_signed_transaction(
+    state: SharedAppState,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    transaction: SignedTransaction,
+    route: RepairCommandRouteV1,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs repair API is not enabled on this node");
+    }
+    if let Err(response) = validate_repair_signed_transaction(&transaction, route) {
+        return response;
+    }
+    match crate::submit_signed_transaction_for_ingress_strict_durable(
+        state,
+        headers,
+        accept,
+        transaction,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
+}
+
+fn validate_repair_signed_transaction(
+    transaction: &SignedTransaction,
+    route: RepairCommandRouteV1,
+) -> Result<(), Response> {
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS repair command transaction must contain one native instruction",
+        ));
+    };
+    if instructions.len() != 1 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS repair command transaction must contain exactly one native instruction",
+        ));
+    }
+
+    let instruction = &instructions[0];
+    let matches_route = match route {
+        RepairCommandRouteV1::Report => instruction
+            .as_any()
+            .downcast_ref::<SubmitSorafsRepairTask>()
+            .is_some(),
+        RepairCommandRouteV1::Appeal => instruction
+            .as_any()
+            .downcast_ref::<SubmitSorafsRepairAppeal>()
+            .is_some(),
+        RepairCommandRouteV1::Escalate
+        | RepairCommandRouteV1::Claim
+        | RepairCommandRouteV1::Renew
+        | RepairCommandRouteV1::Complete
+        | RepairCommandRouteV1::Fail => instruction
+            .as_any()
+            .downcast_ref::<ApplySorafsRepairTaskAction>()
+            .is_some_and(|apply| {
+                matches!(
+                    (route, &apply.action),
+                    (
+                        RepairCommandRouteV1::Escalate,
+                        SorafsRepairTaskActionV1::Escalate(_)
+                    ) | (
+                        RepairCommandRouteV1::Claim,
+                        SorafsRepairTaskActionV1::Claim(_)
+                    ) | (
+                        RepairCommandRouteV1::Renew,
+                        SorafsRepairTaskActionV1::Renew(_)
+                    ) | (
+                        RepairCommandRouteV1::Complete,
+                        SorafsRepairTaskActionV1::Complete(_)
+                    ) | (
+                        RepairCommandRouteV1::Fail,
+                        SorafsRepairTaskActionV1::Fail(_)
+                    )
+                )
+            }),
+    };
+    if matches_route {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!(
+                "SoraFS repair route requires exactly one `{}` native instruction",
+                repair_route_instruction_label(route)
+            ),
+        ))
+    }
+}
+
+fn repair_route_instruction_label(route: RepairCommandRouteV1) -> &'static str {
+    match route {
+        RepairCommandRouteV1::Report => "SubmitSorafsRepairTask",
+        RepairCommandRouteV1::Appeal => "SubmitSorafsRepairAppeal",
+        RepairCommandRouteV1::Escalate => "ApplySorafsRepairTaskAction::Escalate",
+        RepairCommandRouteV1::Claim => "ApplySorafsRepairTaskAction::Claim",
+        RepairCommandRouteV1::Renew => "ApplySorafsRepairTaskAction::Renew",
+        RepairCommandRouteV1::Complete => "ApplySorafsRepairTaskAction::Complete",
+        RepairCommandRouteV1::Fail => "ApplySorafsRepairTaskAction::Fail",
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OrderbookCommandRouteV1 {
+    SubmitOrder,
+    CancelOrder,
+    RecordReceipt,
+}
+
+async fn submit_orderbook_signed_transaction(
+    state: SharedAppState,
+    headers: HeaderMap,
+    accept: Option<ExtractAccept>,
+    transaction: SignedTransaction,
+    route: OrderbookCommandRouteV1,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs orderbook API is not enabled on this node");
+    }
+    if let Err(response) = validate_orderbook_signed_transaction(&state, &transaction, route) {
+        return response;
+    }
+    match crate::submit_signed_transaction_for_ingress_strict_durable(
+        state,
+        headers,
+        accept,
+        transaction,
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(error) => error.into_response(),
+    }
+}
+
+fn validate_orderbook_signed_transaction(
+    state: &SharedAppState,
+    transaction: &SignedTransaction,
+    route: OrderbookCommandRouteV1,
+) -> Result<(), Response> {
+    let Executable::Instructions(instructions) = transaction.instructions() else {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook command transaction must contain one native instruction",
+        ));
+    };
+    if instructions.len() != 1 {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook command transaction must contain exactly one native instruction",
+        ));
+    }
+
+    let instruction = &instructions[0];
+    let (matches_route, expected_instruction) = match route {
+        OrderbookCommandRouteV1::SubmitOrder => (
+            instruction
+                .as_any()
+                .downcast_ref::<SubmitSorafsOrderbookOrder>()
+                .is_some(),
+            "SubmitSorafsOrderbookOrder",
+        ),
+        OrderbookCommandRouteV1::CancelOrder => (
+            instruction
+                .as_any()
+                .downcast_ref::<CancelSorafsOrderbookOrder>()
+                .is_some(),
+            "CancelSorafsOrderbookOrder",
+        ),
+        OrderbookCommandRouteV1::RecordReceipt => (
+            instruction
+                .as_any()
+                .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
+                .is_some(),
+            "RecordSorafsOrderbookSettlementReceipt",
+        ),
+    };
+    if !matches_route {
+        return Err(orderbook_route_instruction_mismatch_response(
+            expected_instruction,
+        ));
+    }
+
+    let state_view = state.state.query_view();
+    let policy = FindSorafsOrderbookPolicy
+        .execute(&state_view)
+        .map_err(orderbook_finalized_query_error_response)?;
+
+    match route {
+        OrderbookCommandRouteV1::SubmitOrder => {
+            let submit = instruction
+                .as_any()
+                .downcast_ref::<SubmitSorafsOrderbookOrder>()
+                .expect("route instruction type was validated above");
+            ensure_orderbook_policy_digest(submit.policy_digest, policy.policy_digest)?;
+            let order = decode_order_request_v1(&submit.order_payload).map_err(|error| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!("invalid canonical SoraFS orderbook order payload: {error}"),
+                )
+            })?;
+            verify_order_request_signature_v1(&order).map_err(|_| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid SoraFS orderbook order payload signature",
+                )
+            })?;
+            ensure_orderbook_owner_authority(
+                transaction.authority(),
+                &order.owner_account,
+                &order.signature,
+            )
+        }
+        OrderbookCommandRouteV1::CancelOrder => {
+            let cancel_instruction = instruction
+                .as_any()
+                .downcast_ref::<CancelSorafsOrderbookOrder>()
+                .expect("route instruction type was validated above");
+            ensure_orderbook_policy_digest(cancel_instruction.policy_digest, policy.policy_digest)?;
+            let cancellation =
+                decode_order_cancel_v1(&cancel_instruction.cancel_payload).map_err(|error| {
+                    json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!("invalid canonical SoraFS orderbook cancellation payload: {error}"),
+                    )
+                })?;
+            verify_order_cancel_signature_v1(&cancellation).map_err(|_| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid SoraFS orderbook cancellation payload signature",
+                )
+            })?;
+            ensure_orderbook_owner_authority(
+                transaction.authority(),
+                &cancellation.owner_account,
+                &cancellation.signature,
+            )
+        }
+        OrderbookCommandRouteV1::RecordReceipt => {
+            let record = instruction
+                .as_any()
+                .downcast_ref::<RecordSorafsOrderbookSettlementReceipt>()
+                .expect("route instruction type was validated above");
+            ensure_orderbook_policy_digest(record.policy_digest, policy.policy_digest)?;
+            let receipt =
+                decode_settlement_receipt_v1(&record.receipt_payload).map_err(|error| {
+                    json_error(
+                        StatusCode::BAD_REQUEST,
+                        format!(
+                            "invalid canonical SoraFS orderbook settlement receipt payload: {error}"
+                        ),
+                    )
+                })?;
+            verify_settlement_receipt_signature_v1(&receipt).map_err(|_| {
+                json_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid SoraFS orderbook settlement receipt payload signature",
+                )
+            })?;
+            let channel = FindSorafsOrderbookChannelById::new(receipt.channel_id)
+                .execute(&state_view)
+                .map_err(orderbook_finalized_query_error_response)?;
+            if receipt.trade_id != channel.trade_id {
+                return Err(json_error(
+                    StatusCode::CONFLICT,
+                    "SoraFS orderbook receipt trade does not match its finalized channel",
+                ));
+            }
+            if transaction.authority().subject_id() != channel.settlement_authority.subject_id() {
+                return Err(json_error(
+                    StatusCode::FORBIDDEN,
+                    "SoraFS orderbook receipt transaction authority is not the finalized channel settlement authority",
+                ));
+            }
+            ensure_orderbook_signature_matches_authority(
+                &channel.provider,
+                &receipt.settlement_signature,
+            )
+        }
+    }
+}
+
+fn ensure_orderbook_policy_digest(supplied: [u8; 32], finalized: [u8; 32]) -> Result<(), Response> {
+    if supplied == finalized {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::CONFLICT,
+            "SoraFS orderbook command policy digest is stale",
+        ))
+    }
+}
+
+fn ensure_orderbook_owner_authority(
+    authority: &AccountId,
+    owner_account: &[u8],
+    signature: &OrderbookSignatureV1,
+) -> Result<(), Response> {
+    let owner_literal = std::str::from_utf8(owner_account).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook owner account must be canonical UTF-8 I105",
+        )
+    })?;
+    let parsed = AccountId::parse_encoded(owner_literal).map_err(|error| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS orderbook owner account: {}", error.reason()),
+        )
+    })?;
+    if parsed.canonical().as_bytes() != owner_account {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "SoraFS orderbook owner account must use exact canonical I105 bytes",
+        ));
+    }
+    let owner = parsed.account_id();
+    if owner.subject_id() != authority.subject_id() {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook payload owner does not match transaction authority",
+        ));
+    }
+    ensure_orderbook_signature_matches_authority(authority, signature)
+}
+
+fn ensure_orderbook_signature_matches_authority(
+    authority: &AccountId,
+    signature: &OrderbookSignatureV1,
+) -> Result<(), Response> {
+    if signature.algorithm != sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519 {
+        return Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook payload signer must use Ed25519",
+        ));
+    }
+    let public_key = authority.try_signatory().ok_or_else(|| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS V1 orderbook payloads require a single-signatory authority",
+        )
+    })?;
+    let (algorithm, bytes) = public_key.try_to_bytes().map_err(|_| {
+        json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook transaction authority has an invalid public key",
+        )
+    })?;
+    if algorithm == Algorithm::Ed25519 && bytes == signature.public_key.as_slice() {
+        Ok(())
+    } else {
+        Err(json_error(
+            StatusCode::FORBIDDEN,
+            "SoraFS orderbook payload signer does not match transaction authority",
+        ))
+    }
+}
+
+fn orderbook_route_instruction_mismatch_response(expected: &str) -> Response {
+    json_error(
+        StatusCode::BAD_REQUEST,
+        format!("SoraFS orderbook route requires exactly one `{expected}` instruction"),
+    )
+}
+
+fn orderbook_finalized_query_error_response(error: QueryExecutionFail) -> Response {
+    if matches!(error, QueryExecutionFail::Expired) {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS orderbook finalized cursor is stale; restart from the latest committed anchor",
+        );
+    }
+    warn!(
+        ?error,
+        "authoritative finalized SoraFS orderbook query failed"
+    );
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "authoritative finalized SoraFS orderbook state is unavailable",
+    )
 }
 
 fn moderation_announcement_from_request(
@@ -10577,77 +11899,6 @@ fn require_transparency_source_request_auth(
             Err(json_error(
                 StatusCode::UNAUTHORIZED,
                 "invalid SoraFS transparency source request authentication",
-            ))
-        }
-    }
-}
-
-fn orderbook_owner_account_id(
-    state: &SharedAppState,
-    owner_account: &[u8],
-) -> Result<AccountId, Response> {
-    let owner_literal = std::str::from_utf8(owner_account).map_err(|_| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook owner_account must be UTF-8 canonical account bytes",
-        )
-    })?;
-    if owner_literal.is_empty() {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook owner_account must not be empty",
-        ));
-    }
-    let (account, canonical) = crate::routing::parse_account_literal_with_state(
-        &state.state,
-        owner_literal,
-        &state.telemetry,
-        "sorafs_orderbook_owner_account",
-    )
-    .map_err(|err| {
-        json_error(
-            StatusCode::BAD_REQUEST,
-            format!("invalid SoraFS orderbook owner_account: {}", err.reason()),
-        )
-    })?;
-    if owner_literal != canonical {
-        return Err(json_error(
-            StatusCode::BAD_REQUEST,
-            "SoraFS orderbook owner_account must be canonical AccountId bytes",
-        ));
-    }
-    Ok(account)
-}
-
-fn require_orderbook_request_auth(
-    state: &SharedAppState,
-    headers: &HeaderMap,
-    method: &Method,
-    uri: &Uri,
-    body: &[u8],
-    expected_account: Option<&AccountId>,
-) -> Result<crate::app_auth::VerifiedCanonicalRequest, Response> {
-    match crate::app_auth::verify_canonical_request(
-        &state.state,
-        headers,
-        method,
-        uri,
-        body,
-        expected_account,
-    ) {
-        Ok(Some(verified)) => Ok(verified),
-        Ok(None) => Err(json_error(
-            StatusCode::UNAUTHORIZED,
-            "SoraFS orderbook submissions require X-Iroha canonical request authentication",
-        )),
-        Err(err) => {
-            warn!(
-                ?err,
-                "SoraFS orderbook canonical request authentication rejected"
-            );
-            Err(json_error(
-                StatusCode::UNAUTHORIZED,
-                "invalid SoraFS orderbook request authentication",
             ))
         }
     }
@@ -11221,126 +12472,6 @@ fn reserve_lifecycle_policy_id(
     *blake3_hash(&material).as_bytes()
 }
 
-fn ensure_orderbook_payload_signer(
-    verified: &crate::app_auth::VerifiedCanonicalRequest,
-    signature: &OrderbookSignatureV1,
-) -> Result<(), Response> {
-    if !matches!(
-        signature.algorithm,
-        sorafs_manifest::provider_advert::SignatureAlgorithm::Ed25519
-    ) {
-        return Err(json_error(
-            StatusCode::FORBIDDEN,
-            "SoraFS orderbook payload signer must use Ed25519",
-        ));
-    }
-    let matches_verified_signer = verified.verified_signers.iter().any(|signer| {
-        signer.try_to_bytes().is_ok_and(|(algorithm, payload)| {
-            algorithm == Algorithm::Ed25519 && payload == signature.public_key.as_slice()
-        })
-    });
-    if matches_verified_signer {
-        Ok(())
-    } else {
-        Err(json_error(
-            StatusCode::FORBIDDEN,
-            "SoraFS orderbook payload signer is not an authenticated request signer",
-        ))
-    }
-}
-
-fn ensure_orderbook_order_provider_capability(
-    state: &SharedAppState,
-    order: &OrderRequestV1,
-) -> Result<(), Response> {
-    if order.side != OrderSideV1::Ask {
-        return Ok(());
-    }
-    let provider_id = local_orderbook_provider_id_for_owner_account(&order.owner_account);
-    enforce_orderbook_provider_capability(state, &provider_id)
-}
-
-fn ensure_orderbook_receipt_provider_role(
-    state: &SharedAppState,
-    verified: &crate::app_auth::VerifiedCanonicalRequest,
-    receipt: &SettlementReceiptV1,
-) -> Result<(), Response> {
-    let snapshot = state
-        .sorafs_node
-        .orderbook_snapshot(unix_timestamp_now())
-        .map_err(orderbook_runtime_error_response)?;
-    let Some(channel) = snapshot
-        .settlement_channels
-        .iter()
-        .find(|channel| channel.channel_id == receipt.channel_id)
-    else {
-        return Ok(());
-    };
-    let signer_provider_id =
-        local_orderbook_provider_id_for_owner_account(verified.account.to_string().as_bytes());
-    if signer_provider_id == channel.provider_id {
-        enforce_orderbook_provider_capability(state, &channel.provider_id)
-    } else {
-        Err(json_error(
-            StatusCode::FORBIDDEN,
-            "SoraFS orderbook receipt signer is not the settlement-channel provider",
-        ))
-    }
-}
-
-fn enforce_orderbook_provider_capability(
-    state: &SharedAppState,
-    provider_id: &[u8; 32],
-) -> Result<(), Response> {
-    if !state.sorafs_gateway_config.enforce_capabilities {
-        return Ok(());
-    }
-    let capability = CapabilityType::ToriiGateway;
-    match state.provider_supports_capability(provider_id, capability) {
-        Some(true) => Ok(()),
-        Some(false) => Err(orderbook_provider_capability_response(
-            state,
-            StatusCode::PRECONDITION_FAILED,
-            "capability_missing",
-            "provider advert does not declare torii_gateway capability",
-            provider_id,
-            capability,
-        )),
-        None => Err(orderbook_provider_capability_response(
-            state,
-            StatusCode::PRECONDITION_FAILED,
-            "capability_state_unknown",
-            "gateway cannot confirm provider capability advertisement",
-            provider_id,
-            capability,
-        )),
-    }
-}
-
-fn orderbook_provider_capability_response(
-    state: &SharedAppState,
-    status: StatusCode,
-    error_code: &'static str,
-    reason: &'static str,
-    provider_id: &[u8; 32],
-    capability: CapabilityType,
-) -> Response {
-    let capability_label = capability_name(capability);
-    gateway_refusal_response(
-        state,
-        status,
-        error_code,
-        reason,
-        Some("orderbook"),
-        Some(provider_id),
-        TELEMETRY_ENDPOINT_ORDERBOOK,
-        [
-            ("capability", Value::from(capability_label)),
-            ("provider_id_hex", Value::from(hex::encode(provider_id))),
-        ],
-    )
-}
-
 fn unix_system_time(seconds: u64) -> SystemTime {
     UNIX_EPOCH
         .checked_add(Duration::from_secs(seconds))
@@ -11498,18 +12629,32 @@ pub(crate) async fn handle_get_sorafs_orderbook_book(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
-            Ok(snapshot) => snapshot,
-            Err(err) => return orderbook_runtime_error_response(err),
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
         };
-        match orderbook_snapshot_json(&snapshot, limit) {
+        let after = match query.after_id() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let status = match FindSorafsOrderbookStatus.execute(&state_view) {
+            Ok(status) => status,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        let page = match FindSorafsOrderbookOrders::new(expected, None, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        match orderbook_finalized_book_json(&status, &page) {
             Ok(value) => JsonBody(value).into_response(),
-            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_BOOK, response)
@@ -11523,25 +12668,28 @@ pub(crate) async fn handle_get_sorafs_orderbook_trades(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
-            Ok(snapshot) => snapshot,
-            Err(err) => return orderbook_runtime_error_response(err),
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
         };
-        let trades = snapshot
-            .trades
-            .iter()
-            .map(orderbook_trade_json)
-            .collect::<Result<Vec<_>, _>>();
-        match trades {
-            Ok(trades) => {
-                JsonBody(orderbook_readback_list_json("trades", trades, limit)).into_response()
-            }
-            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        let after = match query.after_id() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let page = match FindSorafsOrderbookTrades::new(expected, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        match orderbook_finalized_trade_page_json(&page) {
+            Ok(value) => JsonBody(value).into_response(),
+            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_TRADES, response)
@@ -11555,25 +12703,28 @@ pub(crate) async fn handle_get_sorafs_orderbook_channels(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
-            Ok(snapshot) => snapshot,
-            Err(err) => return orderbook_runtime_error_response(err),
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
         };
-        let channels = snapshot
-            .settlement_channels
-            .iter()
-            .map(orderbook_channel_json)
-            .collect::<Result<Vec<_>, _>>();
-        match channels {
-            Ok(channels) => {
-                JsonBody(orderbook_readback_list_json("channels", channels, limit)).into_response()
-            }
-            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        let after = match query.after_id() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let page = match FindSorafsOrderbookChannels::new(expected, None, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        match orderbook_finalized_channel_page_json(&page) {
+            Ok(value) => JsonBody(value).into_response(),
+            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_CHANNELS, response)
@@ -11587,44 +12738,87 @@ pub(crate) async fn handle_get_sorafs_orderbook_receipts(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match OrderbookReadbackQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookReadQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let snapshot = match state.sorafs_node.orderbook_snapshot(unix_timestamp_now()) {
-            Ok(snapshot) => snapshot,
-            Err(err) => return orderbook_runtime_error_response(err),
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
         };
-        let receipts = snapshot
-            .settlement_receipts
-            .iter()
-            .map(orderbook_receipt_json)
-            .collect::<Result<Vec<_>, _>>();
-        match receipts {
-            Ok(receipts) => {
-                JsonBody(orderbook_readback_list_json("receipts", receipts, limit)).into_response()
-            }
-            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        let after = match query.after_id() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let page = match FindSorafsOrderbookReceipts::new(expected, None, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        match orderbook_finalized_receipt_page_json(&page) {
+            Ok(value) => JsonBody(value).into_response(),
+            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_RECEIPTS, response)
 }
 
-fn orderbook_readback_list_json(
-    field_name: &'static str,
-    values: Vec<Value>,
-    limit: usize,
-) -> Value {
-    let count = values.len();
-    let (values, truncated) = limit_governance_readback_values(values, limit);
-    json_object(vec![
-        json_entry("count", count as u64),
-        json_entry("returned_count", values.len() as u64),
-        json_entry("limit", limit as u64),
-        json_entry("truncated", truncated),
-        json_entry(field_name, Value::Array(values)),
-    ])
+fn orderbook_finalized_book_json(
+    status: &OrderbookLedgerStatusV1,
+    page: &OrderbookOrderPageV1,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "status",
+            json::to_value(status)
+                .map_err(|error| format!("failed to encode orderbook status: {error}"))?,
+        ),
+        json_entry(
+            "orders",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook order page: {error}"))?,
+        ),
+    ]))
+}
+
+fn orderbook_finalized_trade_page_json(page: &OrderbookTradePageV1) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "trades",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook trade page: {error}"))?,
+        ),
+    ]))
+}
+
+fn orderbook_finalized_channel_page_json(
+    page: &OrderbookSettlementChannelPageV1,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "channels",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook channel page: {error}"))?,
+        ),
+    ]))
+}
+
+fn orderbook_finalized_receipt_page_json(
+    page: &OrderbookSettlementReceiptPageV1,
+) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "receipts",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook receipt page: {error}"))?,
+        ),
+    ]))
 }
 
 pub(crate) async fn handle_get_sorafs_orderbook_events(
@@ -11636,23 +12830,35 @@ pub(crate) async fn handle_get_sorafs_orderbook_events(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookEventQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let events = state.sorafs_node.orderbook_events_since(query.since, limit);
-        let tip_sequence = state
-            .sorafs_node
-            .latest_orderbook_event_sequence()
-            .unwrap_or(0);
-        let etag = orderbook_events_etag(query.since, limit, tip_sequence, &events);
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
+        };
+        let after = match query.after() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let page = match FindSorafsOrderbookEvents::new(expected, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        let etag = match orderbook_finalized_events_etag(&page) {
+            Ok(etag) => etag,
+            Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+        };
         if let Some(response) = reputation_not_modified_response(&headers, &etag) {
             return response;
         }
-        match orderbook_events_json(query.since, limit, &events) {
+        match orderbook_finalized_event_page_json(&page) {
             Ok(value) => reputation_json_response(value, &etag),
-            Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+            Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
         }
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS, response)
@@ -11666,14 +12872,33 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_stream(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookEventQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
-        let receiver = state.sorafs_node.subscribe_orderbook_events();
-        Sse::new(orderbook_event_sse_stream(initial_events, receiver)).into_response()
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
+        };
+        let after = match query.after() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let initial_page = match FindSorafsOrderbookEvents::new(expected, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        let event_stream = orderbook_finalized_event_stream(
+            state.clone(),
+            initial_page.events,
+            after,
+            query.limit(),
+        )
+        .map(|event| Ok::<_, Infallible>(orderbook_finalized_sse_event(&event)));
+        Sse::new(event_stream).into_response()
     })();
     orderbook_api_response(&state.telemetry, ORDERBOOK_ROUTE_EVENTS_STREAM, response)
 }
@@ -11688,18 +12913,38 @@ pub(crate) async fn handle_get_sorafs_orderbook_events_ws(
         if !state.sorafs_node.is_enabled() {
             return feature_disabled("sorafs orderbook API is not enabled on this node");
         }
-        let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+        let query = match FinalizedOrderbookEventQuery::parse(raw_query.as_deref()) {
             Ok(query) => query,
             Err(err) => return err.into_response(),
         };
-        let limit = normalize_limit(query.limit);
-        let initial_events = state.sorafs_node.orderbook_events_since(query.since, limit);
-        let receiver = state.sorafs_node.subscribe_orderbook_events();
+        let expected = match query.expected_finalized_cursor() {
+            Ok(expected) => expected,
+            Err(response) => return response,
+        };
+        let after = match query.after() {
+            Ok(after) => after,
+            Err(response) => return response,
+        };
+        let state_view = state.state.query_view();
+        let initial_page = match FindSorafsOrderbookEvents::new(expected, after, query.limit())
+            .execute(&state_view)
+        {
+            Ok(page) => page,
+            Err(error) => return orderbook_finalized_query_error_response(error),
+        };
+        let stream_state = state.clone();
+        let limit = query.limit();
         let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
         ws.on_upgrade(move |socket| async move {
             let _preauth_guard = preauth_guard;
-            if let Err(err) =
-                orderbook_event_websocket_stream(socket, initial_events, receiver).await
+            if let Err(err) = orderbook_finalized_event_websocket_stream(
+                socket,
+                stream_state,
+                initial_page.events,
+                after,
+                limit,
+            )
+            .await
             {
                 debug!(%err, "SoraFS orderbook WebSocket stream closed with error");
             }
@@ -12475,66 +13720,133 @@ pub(crate) async fn handle_get_sorafs_reserve_balance(
     }
 }
 
+pub(crate) async fn handle_get_sorafs_repair_status(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs repair API is not enabled on this node");
+    }
+    let query = match FinalizedRepairAnchorQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(error) => return error.into_response(),
+    };
+    let expected = match query.expected_finalized_cursor() {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    let state_view = state.state.query_view();
+    let status = match FindSorafsRepairStatus::new(expected).execute(&state_view) {
+        Ok(status) => status,
+        Err(error) => return repair_finalized_query_error_response(error),
+    };
+    repair_finalized_status_json(&status)
+        .map(JsonBody)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+}
+
+pub(crate) async fn handle_get_sorafs_repair_tasks(
+    State(state): State<SharedAppState>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs repair API is not enabled on this node");
+    }
+    let query = match FinalizedRepairTaskQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(error) => return error.into_response(),
+    };
+    let expected = match query.expected_finalized_cursor() {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    let after = match query.after_task_id() {
+        Ok(after) => after,
+        Err(response) => return response,
+    };
+    let state_view = state.state.query_view();
+    let page = match FindSorafsRepairTasks::new(expected, after, query.limit()).execute(&state_view) {
+        Ok(page) => page,
+        Err(error) => return repair_finalized_query_error_response(error),
+    };
+    repair_finalized_task_page_json(&page)
+        .map(JsonBody)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+}
+
+pub(crate) async fn handle_get_sorafs_repair_task(
+    State(state): State<SharedAppState>,
+    Path(ticket_id): Path<String>,
+    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
+) -> Response {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs repair API is not enabled on this node");
+    }
+    if let Err(error) =
+        sorafs_manifest::repair::RepairTicketId(ticket_id.clone()).validate()
+    {
+        return json_error(
+            StatusCode::BAD_REQUEST,
+            format!("invalid SoraFS repair ticket identifier: {error}"),
+        );
+    }
+    let query = match FinalizedRepairAnchorQuery::parse(raw_query.as_deref()) {
+        Ok(query) => query,
+        Err(error) => return error.into_response(),
+    };
+    let expected = match query.expected_finalized_cursor() {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    let state_view = state.state.query_view();
+    let task = match FindSorafsRepairTask::new(ticket_id, expected).execute(&state_view) {
+        Ok(task) => task,
+        Err(error) => return repair_finalized_query_error_response(error),
+    };
+    repair_finalized_task_json(&task)
+        .map(JsonBody)
+        .map(IntoResponse::into_response)
+        .unwrap_or_else(|error| json_error(StatusCode::INTERNAL_SERVER_ERROR, error))
+}
+
 pub(crate) async fn handle_get_sorafs_repair_events(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
     axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
 ) -> Response {
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
+    if !state.sorafs_node.is_enabled() {
+        return feature_disabled("sorafs repair API is not enabled on this node");
+    }
+    let query = match FinalizedRepairEventQuery::parse(raw_query.as_deref()) {
         Ok(query) => query,
-        Err(err) => return err.into_response(),
+        Err(error) => return error.into_response(),
     };
-    let limit = normalize_limit(query.limit);
-    let events = state.sorafs_node.repair_events_since(query.since, limit);
-    let tip_sequence = state
-        .sorafs_node
-        .latest_repair_event_sequence()
-        .unwrap_or(0);
-    let etag = repair_events_etag(query.since, limit, tip_sequence, &events);
+    let expected = match query.expected_finalized_cursor() {
+        Ok(expected) => expected,
+        Err(response) => return response,
+    };
+    let after = match query.after() {
+        Ok(after) => after,
+        Err(response) => return response,
+    };
+    let state_view = state.state.query_view();
+    let page = match FindSorafsRepairEvents::new(expected, after, query.limit()).execute(&state_view) {
+        Ok(page) => page,
+        Err(error) => return repair_finalized_query_error_response(error),
+    };
+    let etag = match repair_finalized_events_etag(&page) {
+        Ok(etag) => etag,
+        Err(error) => return json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
+    };
     if let Some(response) = reputation_not_modified_response(&headers, &etag) {
         return response;
     }
-    match repair_events_json(query.since, limit, &events) {
+    match repair_finalized_event_page_json(&page) {
         Ok(value) => reputation_json_response(value, &etag),
-        Err(err) => json_error(StatusCode::INTERNAL_SERVER_ERROR, err),
+        Err(error) => json_error(StatusCode::INTERNAL_SERVER_ERROR, error),
     }
-}
-
-pub(crate) async fn handle_get_sorafs_repair_events_stream(
-    State(state): State<SharedAppState>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-) -> Response {
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
-    let receiver = state.sorafs_node.subscribe_repair_events();
-    Sse::new(repair_event_sse_stream(initial_events, receiver)).into_response()
-}
-
-pub(crate) async fn handle_get_sorafs_repair_events_ws(
-    State(state): State<SharedAppState>,
-    preauth_guard: Option<Extension<crate::PreAuthGuardHandoff>>,
-    axum::extract::RawQuery(raw_query): axum::extract::RawQuery,
-    ws: WebSocketUpgrade,
-) -> Response {
-    let query = match ReputationEventsQuery::parse(raw_query.as_deref()) {
-        Ok(query) => query,
-        Err(err) => return err.into_response(),
-    };
-    let limit = normalize_limit(query.limit);
-    let initial_events = state.sorafs_node.repair_events_since(query.since, limit);
-    let receiver = state.sorafs_node.subscribe_repair_events();
-    let preauth_guard = crate::take_preauth_upgrade_guard(preauth_guard);
-    ws.on_upgrade(move |socket| async move {
-        let _preauth_guard = preauth_guard;
-        if let Err(err) = repair_event_websocket_stream(socket, initial_events, receiver).await {
-            debug!(%err, "SoraFS repair WebSocket stream closed with error");
-        }
-    })
-    .into_response()
 }
 
 pub(crate) async fn handle_get_sorafs_appeal_pricing_config() -> Response {
@@ -13023,6 +14335,376 @@ async fn submit_appeal_finance_deposit_settlement_step(
             receipt_publication_error.as_deref(),
         ),
     ))
+}
+
+const SORAFS_PROOF_OUTCOME_FORWARDER_SCAN_LIMIT_V1: usize = 256;
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SorafsProofOutcomeForwarderScanV1 {
+    scanned: usize,
+    finalized: usize,
+    signed: usize,
+    submitted: usize,
+    deferred: usize,
+    unauthorized_signer: usize,
+    dead_lettered: usize,
+}
+
+fn proof_outcome_authority_has_provider_permission(
+    world: &impl WorldReadOnly,
+    authority: &AccountId,
+    provider_id: ProviderId,
+) -> bool {
+    let required = Permission::from(CanRecordSorafsProofOutcome { provider_id });
+    crate::torii_account_has_permission(world, authority, &required)
+}
+
+pub(crate) fn spawn_sorafs_proof_outcome_forwarder_worker(
+    state: SharedAppState,
+    shutdown_signal: ShutdownSignal,
+) {
+    if !state.sorafs_node.is_enabled() {
+        debug!("SoraFS proof-outcome forwarder disabled: SoraFS storage is disabled");
+        return;
+    }
+    if state.sorafs_proof_outcome_signer.is_none() {
+        warn!(
+            "SoraFS proof-outcome forwarder has no runtime signer; finalized reconciliation remains active"
+        );
+    }
+    let worker_interval = state
+        .sorafs_node
+        .config()
+        .runtime_retention()
+        .proof_outcome_forwarder_interval();
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(worker_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = shutdown_signal.receive() => break,
+                _ = interval.tick() => {
+                    let scan = run_sorafs_proof_outcome_forwarder_scan(&state).await;
+                    if scan.scanned != 0 {
+                        debug!(
+                            scanned = scan.scanned,
+                            finalized = scan.finalized,
+                            signed = scan.signed,
+                            submitted = scan.submitted,
+                            deferred = scan.deferred,
+                            unauthorized_signer = scan.unauthorized_signer,
+                            dead_lettered = scan.dead_lettered,
+                            "processed durable SoraFS proof-outcome deliveries"
+                        );
+                    }
+                }
+            }
+        }
+    });
+}
+
+pub(crate) async fn run_sorafs_proof_outcome_forwarder_scan(
+    state: &SharedAppState,
+) -> SorafsProofOutcomeForwarderScanV1 {
+    let mut scan = SorafsProofOutcomeForwarderScanV1::default();
+    let pending = match state
+        .sorafs_node
+        .pending_proof_outcome_deliveries(SORAFS_PROOF_OUTCOME_FORWARDER_SCAN_LIMIT_V1)
+    {
+        Ok(pending) => pending,
+        Err(_) => {
+            warn!("failed to load durable SoraFS proof-outcome deliveries");
+            return scan;
+        }
+    };
+    for delivery in pending {
+        scan.scanned = scan.scanned.saturating_add(1);
+        let reconciliation = {
+            let view = state.state.query_view();
+            u64::try_from(view.block_hashes.len())
+                .ok()
+                .zip(view.block_hashes.last())
+                .map(|(height, hash)| ProofOutcomeFinalizedCursorV1 {
+                    height,
+                    block_hash: *hash.as_ref(),
+                })
+                .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
+                .map(|cursor| {
+                    let finalized =
+                        FindSorafsProofOutcome::new(delivery.kind, delivery.identity_digest, None)
+                            .execute(&view);
+                    (cursor, finalized)
+                })
+        };
+        let Some((finalized_cursor, finalized)) = reconciliation else {
+            scan.deferred = scan.deferred.saturating_add(1);
+            continue;
+        };
+        match finalized {
+            Ok(finalized) => {
+                match state
+                    .sorafs_node
+                    .mark_proof_outcome_finalized(delivery.operation_id, &finalized)
+                {
+                    Ok(()) => scan.finalized = scan.finalized.saturating_add(1),
+                    Err(sorafs_node::ProofOutcomeOutboxError::FinalizedConflict) => {
+                        scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                        warn!(
+                            proof_kind = ?delivery.kind,
+                            "finalized SoraFS proof outcome conflicts with the durable delivery"
+                        );
+                    }
+                    Err(_) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        warn!("failed to checkpoint finalized SoraFS proof outcome");
+                    }
+                }
+                continue;
+            }
+            Err(QueryExecutionFail::Find(FindError::SorafsProofOutcome(_))) => {}
+            Err(_) => {
+                scan.deferred = scan.deferred.saturating_add(1);
+                warn!("authoritative SoraFS proof-outcome reconciliation query failed");
+                continue;
+            }
+        }
+
+        match delivery.state {
+            sorafs_node::ProofOutcomeDeliveryStateV1::Ready => {
+                let Some(signer) = state.sorafs_proof_outcome_signer.clone() else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                };
+                let signer_is_authorized = {
+                    let view = state.state.query_view();
+                    proof_outcome_authority_has_provider_permission(
+                        view.world(),
+                        &signer.authority(),
+                        delivery.provider_id,
+                    )
+                };
+                if !signer_is_authorized {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    scan.unauthorized_signer = scan.unauthorized_signer.saturating_add(1);
+                    warn!(
+                        proof_kind = ?delivery.kind,
+                        "SoraFS proof-outcome runtime signer lacks the finalized provider-scoped permission"
+                    );
+                    continue;
+                }
+                let claimed = match state
+                    .sorafs_node
+                    .claim_proof_outcome_for_signing(delivery.operation_id, finalized_cursor)
+                {
+                    Ok(claimed) => claimed,
+                    Err(_) => {
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
+                };
+                let Some(transaction) =
+                    sign_sorafs_proof_outcome_delivery(state, signer, &claimed).await
+                else {
+                    let _ = state
+                        .sorafs_node
+                        .release_proof_outcome_signing_claim(delivery.operation_id);
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                };
+                match state
+                    .sorafs_node
+                    .store_signed_proof_outcome_transaction(delivery.operation_id, transaction)
+                {
+                    Ok(_) => scan.signed = scan.signed.saturating_add(1),
+                    Err(_) => {
+                        let _ = state
+                            .sorafs_node
+                            .release_proof_outcome_signing_claim(delivery.operation_id);
+                        scan.deferred = scan.deferred.saturating_add(1);
+                        continue;
+                    }
+                }
+                if submit_sorafs_proof_outcome_delivery(state, delivery.operation_id).await {
+                    scan.submitted = scan.submitted.saturating_add(1);
+                } else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                }
+            }
+            sorafs_node::ProofOutcomeDeliveryStateV1::Signed => {
+                if submit_sorafs_proof_outcome_delivery(state, delivery.operation_id).await {
+                    scan.submitted = scan.submitted.saturating_add(1);
+                } else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                }
+            }
+            sorafs_node::ProofOutcomeDeliveryStateV1::Ambiguous
+            | sorafs_node::ProofOutcomeDeliveryStateV1::Submitted => {
+                let Some(transaction) = delivery.signed_transaction.as_ref() else {
+                    scan.deferred = scan.deferred.saturating_add(1);
+                    continue;
+                };
+                match crate::pipeline_status_local_entry(state, &transaction.hash()) {
+                    Some((entry, _))
+                        if matches!(
+                            entry.kind,
+                            crate::PipelineStatusKind::Rejected
+                                | crate::PipelineStatusKind::Expired
+                        ) =>
+                    {
+                        match state.sorafs_node.mark_proof_outcome_transaction_rejected(
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Ok(()) => {
+                                scan.dead_lettered = scan.dead_lettered.saturating_add(1);
+                            }
+                            Err(_) => scan.deferred = scan.deferred.saturating_add(1),
+                        }
+                    }
+                    Some((_entry, _)) => {
+                        if delivery.state == sorafs_node::ProofOutcomeDeliveryStateV1::Ambiguous {
+                            let _ = state
+                                .sorafs_node
+                                .mark_proof_outcome_submitted(delivery.operation_id);
+                        }
+                        scan.deferred = scan.deferred.saturating_add(1);
+                    }
+                    None if finalized_cursor.height > delivery.baseline_finalized_height => {
+                        match state.sorafs_node.mark_proof_outcome_finalized_absent(
+                            delivery.operation_id,
+                            finalized_cursor,
+                        ) {
+                            Ok(()) => scan.deferred = scan.deferred.saturating_add(1),
+                            Err(_) => scan.deferred = scan.deferred.saturating_add(1),
+                        }
+                    }
+                    None => scan.deferred = scan.deferred.saturating_add(1),
+                }
+            }
+            sorafs_node::ProofOutcomeDeliveryStateV1::Signing => {
+                scan.deferred = scan.deferred.saturating_add(1);
+            }
+        }
+    }
+    scan
+}
+
+async fn sign_sorafs_proof_outcome_delivery(
+    state: &SharedAppState,
+    signer: Arc<dyn crate::SoraFsProofOutcomeTransactionSigner>,
+    delivery: &sorafs_node::ProofOutcomePendingDeliveryV1,
+) -> Option<SignedTransaction> {
+    let mut builder = TransactionBuilder::new(
+        (*state.chain_id).clone(),
+        signer.authority(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([InstructionBox::from(SubmitSorafsProofOutcome::new(
+        delivery.submission.clone(),
+    ))]);
+    builder.set_ttl(Duration::from_secs(300));
+    let mut payload = builder.into_payload().ok()?;
+    payload.fee_payment = crate::quote_internal_fee_payment(state, &payload).ok()?;
+    let expected_payload = payload.clone();
+    let transaction = tokio::task::spawn_blocking(move || signer.sign(payload))
+        .await
+        .ok()?
+        .ok()?;
+    (transaction.payload() == &expected_payload).then_some(transaction)
+}
+
+async fn submit_sorafs_proof_outcome_delivery(
+    state: &SharedAppState,
+    operation_id: [u8; 32],
+) -> bool {
+    let transaction = match state
+        .sorafs_node
+        .pending_proof_outcome_deliveries(SORAFS_PROOF_OUTCOME_FORWARDER_SCAN_LIMIT_V1)
+        .ok()
+        .and_then(|pending| {
+            pending
+                .into_iter()
+                .find(|entry| entry.operation_id == operation_id)
+        })
+        .and_then(|entry| entry.signed_transaction)
+    {
+        Some(transaction) => transaction,
+        None => return false,
+    };
+    let accepted = match crate::routing::accept_transaction_for_ingress(
+        state.chain_id.clone(),
+        state.state.clone(),
+        transaction.clone(),
+        &state.telemetry,
+    ) {
+        Ok(accepted) => accepted,
+        Err(_) => {
+            let finalized_cursor = {
+                let view = state.state.query_view();
+                u64::try_from(view.block_hashes.len())
+                    .ok()
+                    .zip(view.block_hashes.last())
+                    .map(|(height, hash)| ProofOutcomeFinalizedCursorV1 {
+                        height,
+                        block_hash: *hash.as_ref(),
+                    })
+                    .filter(|cursor| cursor.height != 0 && cursor.block_hash != [0; 32])
+            };
+            if let Some(finalized_cursor) = finalized_cursor {
+                let _ = state
+                    .sorafs_node
+                    .mark_proof_outcome_transaction_rejected(operation_id, finalized_cursor);
+            }
+            return false;
+        }
+    };
+    let routing_plan = match state
+        .queue
+        .route_plan_with_state(&accepted, state.state.as_ref())
+    {
+        Ok(plan) => plan,
+        Err(_) => return false,
+    };
+    let routing_decision = routing_plan.coordinator_route();
+    let exact_transaction = match state
+        .sorafs_node
+        .begin_proof_outcome_submission(operation_id)
+    {
+        Ok(transaction) => transaction,
+        Err(_) => return false,
+    };
+    if exact_transaction.hash() != transaction.hash() {
+        return false;
+    }
+
+    let submitted = if crate::should_execute_route_locally(state.as_ref(), routing_decision) {
+        crate::routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+            state.queue.clone(),
+            state.state.clone(),
+            accepted,
+            routing_plan,
+        )
+        .is_ok()
+    } else {
+        crate::execute_torii_transaction_via_proxy(
+            state,
+            exact_transaction.into(),
+            routing_plan,
+            true,
+        )
+        .await
+        .status()
+        .is_success()
+    };
+    if submitted {
+        state
+            .sorafs_node
+            .mark_proof_outcome_submitted(operation_id)
+            .is_ok()
+    } else {
+        false
+    }
 }
 
 pub(crate) fn spawn_sorafs_appeal_finance_settlement_worker(
@@ -16437,35 +18119,6 @@ fn appeal_finance_weekly_rollup_publish_json(rollup: &SoraFsAppealFinanceWeeklyR
     ])
 }
 
-fn orderbook_runtime_error_response(err: OrderbookRuntimeError) -> Response {
-    let status = match err {
-        OrderbookRuntimeError::DuplicateOrderId { .. }
-        | OrderbookRuntimeError::StaleOwnerNonce { .. } => StatusCode::CONFLICT,
-        OrderbookRuntimeError::DuplicateReceiptId { .. }
-        | OrderbookRuntimeError::ReceiptRangeOverlap { .. } => StatusCode::CONFLICT,
-        OrderbookRuntimeError::OrderNotFound { .. } => StatusCode::NOT_FOUND,
-        OrderbookRuntimeError::SettlementChannelNotFound { .. } => StatusCode::NOT_FOUND,
-        OrderbookRuntimeError::Validation(_)
-        | OrderbookRuntimeError::OrderBelowMinimum { .. }
-        | OrderbookRuntimeError::OrderPriceTickMismatch { .. }
-        | OrderbookRuntimeError::CancelOwnerMismatch => StatusCode::BAD_REQUEST,
-        OrderbookRuntimeError::ReserveLifecycleAdvertDisabled { .. } => {
-            StatusCode::PRECONDITION_FAILED
-        }
-        OrderbookRuntimeError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
-        OrderbookRuntimeError::InvalidSnapshot(_) => StatusCode::BAD_REQUEST,
-        OrderbookRuntimeError::Checkpoint(_) => StatusCode::SERVICE_UNAVAILABLE,
-        OrderbookRuntimeError::InvalidPriceTick { .. }
-        | OrderbookRuntimeError::SettlementLedgerOverflow
-        | OrderbookRuntimeError::SequenceOverflow
-        | OrderbookRuntimeError::EventSequenceOverflow
-        | OrderbookRuntimeError::MissingMatchedOrder
-        | OrderbookRuntimeError::InvalidMatchedSides
-        | OrderbookRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
-    };
-    json_error(status, format!("sorafs orderbook error: {err}"))
-}
-
 fn reserve_lifecycle_runtime_error_response(err: ReserveLifecycleRuntimeError) -> Response {
     let status = match err {
         ReserveLifecycleRuntimeError::ProjectionFailed(_) => StatusCode::BAD_REQUEST,
@@ -16512,47 +18165,6 @@ fn reserve_appeal_runtime_error_response(err: ReserveAppealRuntimeError) -> Resp
         | ReserveAppealRuntimeError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs reserve appeal error: {err}"))
-}
-
-#[cfg(test)]
-#[test]
-fn orderbook_admission_and_replay_errors_map_to_expected_status() {
-    let response = orderbook_runtime_error_response(OrderbookRuntimeError::OrderBelowMinimum {
-        quantity_gib: 1,
-        min_order_gib: 8,
-    });
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let response =
-        orderbook_runtime_error_response(OrderbookRuntimeError::OrderPriceTickMismatch {
-            price: "1.605".parse().expect("canonical XOR price"),
-            tick: "0.01".parse().expect("canonical XOR price tick"),
-        });
-    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-
-    let response =
-        orderbook_runtime_error_response(OrderbookRuntimeError::ReserveLifecycleAdvertDisabled {
-            provider_id_hex: hex::encode([0xAB; 32]),
-            stage: "default".to_owned(),
-        });
-    assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
-
-    let response = orderbook_runtime_error_response(OrderbookRuntimeError::StaleOwnerNonce {
-        owner_account_hex: hex::encode(b"buyer@sora"),
-        nonce: 7,
-        highest_nonce: 7,
-    });
-    assert_eq!(response.status(), StatusCode::CONFLICT);
-
-    let response = orderbook_runtime_error_response(OrderbookRuntimeError::InvalidPriceTick {
-        tick: "0.0000000001".to_owned(),
-        reason: "scale exceeds the XOR precision bound".to_owned(),
-    });
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
-
-    let response =
-        orderbook_runtime_error_response(OrderbookRuntimeError::SettlementLedgerOverflow);
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 fn moderation_ballot_runtime_error_response(err: ModerationBallotRuntimeError) -> Response {
@@ -16766,49 +18378,148 @@ fn moderation_corpus_registry_record_json(record: &ModerationCorpusRegistryRecor
     ])
 }
 
-fn moderation_screening_input_from_request(
+fn authenticated_moderation_screening_request_from_dto(
     request: ModerationScreeningResultRequestDto,
-) -> Result<ModerationScreeningInput, Response> {
-    let subject_digest = decode_hex_32_field(&request.subject_digest_hex, "subject_digest_hex")?;
-    let manifest_id = parse_hex_fixed::<16>(&request.manifest_id_hex, "manifest_id_hex")
-        .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
-    let runner_hash = decode_hex_32_field(&request.runner_hash_hex, "runner_hash_hex")?;
-    let verdict = parse_moderation_screening_verdict(&request.verdict)?;
-    let evidence_digest = decode_optional_hex_32_field(
-        request.evidence_digest_hex.as_deref(),
-        "evidence_digest_hex",
-    )?;
-    let policy_digest =
-        decode_optional_hex_32_field(request.policy_digest_hex.as_deref(), "policy_digest_hex")?;
-    let screened_at_unix = request
-        .screened_at_unix
-        .unwrap_or_else(|| iroha_network_time_now_ms() / 1_000);
-    Ok(ModerationScreeningInput {
-        subject: request.subject,
-        subject_digest,
-        manifest_id,
-        runner_hash,
-        combined_score_bps: request.combined_score_bps,
-        verdict,
-        screened_at_unix,
-        evidence_digest,
-        policy_digest,
-        notes: request.notes,
+) -> Result<ModerationAuthenticatedScreeningRequestV1, Response> {
+    let idempotency_key =
+        parse_hex_fixed::<32>(&request.idempotency_key_hex, "idempotency_key_hex")
+            .map_err(|err| json_error(StatusCode::BAD_REQUEST, err))?;
+    if idempotency_key == [0; 32] {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "idempotency_key_hex must not be all zeroes",
+        ));
+    }
+    let evidence = match request.evidence_kind.as_str() {
+        "signed_result" => {
+            if !request.committee_member_results_b64.is_empty() {
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    "signed_result must not include committee_member_results_b64",
+                ));
+            }
+            ModerationAuthenticatedScreeningEvidenceV1::Signed(
+                decode_canonical_moderation_screening_authority(
+                    &request.authority_b64,
+                    "signed screening result",
+                    MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES,
+                )?,
+            )
+        }
+        "committee_aggregate" => {
+            if request.committee_member_results_b64.is_empty()
+                || request.committee_member_results_b64.len() > MODERATION_COMMITTEE_MAX_RESULTS_V1
+            {
+                return Err(json_error(
+                    StatusCode::BAD_REQUEST,
+                    format!(
+                        "committee_member_results_b64 must contain 1..={MODERATION_COMMITTEE_MAX_RESULTS_V1} signed results"
+                    ),
+                ));
+            }
+            let aggregate = decode_canonical_moderation_screening_authority(
+                &request.authority_b64,
+                "moderation committee aggregate",
+                MODERATION_SCREENING_AUTHORITY_MAX_CANONICAL_BYTES,
+            )?;
+            let signed_results = request
+                .committee_member_results_b64
+                .iter()
+                .enumerate()
+                .map(|(index, encoded)| {
+                    decode_canonical_moderation_screening_authority(
+                        encoded,
+                        &format!("moderation committee member result {index}"),
+                        MODERATION_SCREENING_MEMBER_MAX_CANONICAL_BYTES,
+                    )
+                })
+                .collect::<Result<Vec<ModerationSignedScreeningResultV1>, _>>()?;
+            ModerationAuthenticatedScreeningEvidenceV1::Committee {
+                aggregate,
+                signed_results,
+            }
+        }
+        other => {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "unknown moderation screening evidence_kind `{other}`; expected `signed_result` or `committee_aggregate`"
+                ),
+            ));
+        }
+    };
+    Ok(ModerationAuthenticatedScreeningRequestV1 {
+        idempotency_key,
+        evidence,
     })
 }
 
-fn parse_moderation_screening_verdict(value: &str) -> Result<ModerationScreeningVerdict, Response> {
-    match value.trim() {
-        "pass" => Ok(ModerationScreeningVerdict::Pass),
-        "warn" => Ok(ModerationScreeningVerdict::Warn),
-        "quarantine" => Ok(ModerationScreeningVerdict::Quarantine),
-        "escalate" => Ok(ModerationScreeningVerdict::Escalate),
-        "block" => Ok(ModerationScreeningVerdict::Block),
-        other => Err(json_error(
+fn decode_canonical_moderation_screening_authority<T>(
+    encoded: &str,
+    label: &str,
+    max_canonical_bytes: usize,
+) -> Result<T, Response>
+where
+    for<'de> T: norito::NoritoDeserialize<'de>,
+    T: norito::NoritoSerialize,
+{
+    let max_base64_bytes = max_canonical_bytes
+        .saturating_mul(4)
+        .div_ceil(3)
+        .saturating_add(4);
+    if encoded.is_empty() || encoded.len() > max_base64_bytes {
+        return Err(json_error(
             StatusCode::BAD_REQUEST,
-            format!("unknown SoraFS moderation screening verdict `{other}`"),
-        )),
+            format!("{label} base64 length must encode 1..={max_canonical_bytes} canonical bytes"),
+        ));
     }
+    let bytes = BASE64_STANDARD
+        .decode(encoded.as_bytes())
+        .map_err(|error| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid standard base64 for {label}: {error}"),
+            )
+        })?;
+    if bytes.is_empty() || bytes.len() > max_canonical_bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} canonical length must be 1..={max_canonical_bytes} bytes"),
+        ));
+    }
+    if BASE64_STANDARD.encode(&bytes) != encoded {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} must use canonical padded standard base64"),
+        ));
+    }
+    let decode_limits = norito::DecodeLimits::new(
+        1_024,
+        max_canonical_bytes,
+        8_192,
+        max_canonical_bytes.saturating_mul(4),
+        64,
+    );
+    let value =
+        norito::decode_from_bytes_with_limits::<T>(&bytes, decode_limits).map_err(|error| {
+            json_error(
+                StatusCode::BAD_REQUEST,
+                format!("invalid bounded canonical Norito {label}: {error}"),
+            )
+        })?;
+    let canonical = norito::to_bytes(&value).map_err(|error| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("failed to re-encode canonical Norito {label}: {error}"),
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{label} is not canonically encoded"),
+        ));
+    }
+    Ok(value)
 }
 
 fn moderation_quarantine_review_input_from_request(
@@ -17076,7 +18787,9 @@ fn ensure_evidence_viewer_access_binds_quarantine(
 fn moderation_screening_error_response(err: ModerationScreeningError) -> Response {
     let status = match err {
         ModerationScreeningError::ResourceExhausted { .. } => StatusCode::TOO_MANY_REQUESTS,
-        ModerationScreeningError::ConflictingRecord { .. } => StatusCode::CONFLICT,
+        ModerationScreeningError::ConflictingRecord { .. }
+        | ModerationScreeningError::ConflictingIdempotencyKey { .. }
+        | ModerationScreeningError::ReplayedAuthority { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::UnknownQuarantine { .. } => StatusCode::NOT_FOUND,
         ModerationScreeningError::InvalidTransition { .. } => StatusCode::CONFLICT,
         ModerationScreeningError::InvalidInput { .. }
@@ -17085,6 +18798,41 @@ fn moderation_screening_error_response(err: ModerationScreeningError) -> Respons
         ModerationScreeningError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(status, format!("sorafs moderation screening error: {err}"))
+}
+
+fn authenticated_moderation_screening_error_response(
+    err: ModerationAuthenticatedScreeningAdmissionError,
+) -> Response {
+    match err {
+        ModerationAuthenticatedScreeningAdmissionError::Runtime(error) => {
+            moderation_screening_error_response(error)
+        }
+        ModerationAuthenticatedScreeningAdmissionError::Authentication(error) => {
+            let status = match error {
+                ModerationScreeningAuthenticationError::AuthorityUnavailable { .. } => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+                ModerationScreeningAuthenticationError::PolicyRollback { .. }
+                | ModerationScreeningAuthenticationError::PolicyEquivocation { .. } => {
+                    StatusCode::CONFLICT
+                }
+                ModerationScreeningAuthenticationError::MissingIdempotencyKey
+                | ModerationScreeningAuthenticationError::InvalidTrustPolicy { .. }
+                | ModerationScreeningAuthenticationError::CommitteeRequired { .. }
+                | ModerationScreeningAuthenticationError::InvalidSignedResult { .. }
+                | ModerationScreeningAuthenticationError::InvalidCommittee { .. }
+                | ModerationScreeningAuthenticationError::NonCanonicalAggregate
+                | ModerationScreeningAuthenticationError::UnsupportedVerdict { .. }
+                | ModerationScreeningAuthenticationError::PolicyDigest { .. } => {
+                    StatusCode::BAD_REQUEST
+                }
+            };
+            json_error(
+                status,
+                format!("sorafs authenticated moderation screening error: {error}"),
+            )
+        }
+    }
 }
 
 fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectError) -> Response {
@@ -17096,10 +18844,13 @@ fn moderation_quarantine_object_error_response(err: ModerationQuarantineObjectEr
         ModerationQuarantineObjectError::DigestMismatch { .. }
         | ModerationQuarantineObjectError::ConflictingObject { .. }
         | ModerationQuarantineObjectError::AuthenticationFailed { .. } => StatusCode::CONFLICT,
+        ModerationQuarantineObjectError::KeyWrapperUnavailable
+        | ModerationQuarantineObjectError::KeyWrapping { .. }
+        | ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::InvalidInput { .. }
         | ModerationQuarantineObjectError::InvalidSnapshot { .. }
+        | ModerationQuarantineObjectError::InvalidRange { .. }
         | ModerationQuarantineObjectError::Codec { .. } => StatusCode::BAD_REQUEST,
-        ModerationQuarantineObjectError::Io { .. } => StatusCode::SERVICE_UNAVAILABLE,
         ModerationQuarantineObjectError::StateLockPoisoned => StatusCode::INTERNAL_SERVER_ERROR,
     };
     json_error(
@@ -17165,17 +18916,65 @@ fn moderation_resource_exhaustion_errors_map_to_too_many_requests() {
     }
 }
 
-fn moderation_screening_outcome_json(outcome: &ModerationScreeningOutcome) -> Value {
+#[cfg(test)]
+#[tokio::test]
+async fn moderation_quarantine_provider_error_detail_is_redacted_from_http() {
+    const SECRET_SENTINEL: &str = "SECRET-KMS-BEARER-DO-NOT-EMIT";
+    let error = ModerationQuarantineObjectError::redacted_key_operation_failure(
+        "kms:test/redacted-http".to_owned(),
+        SECRET_SENTINEL.to_owned(),
+    );
+    assert!(!error.to_string().contains(SECRET_SENTINEL));
+    assert!(!format!("{error:?}").contains(SECRET_SENTINEL));
+
+    let response = moderation_quarantine_object_error_response(error);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("collect redacted key-provider response");
+    let rendered = String::from_utf8(body.to_vec()).expect("HTTP error body must be UTF-8");
+    assert!(!rendered.contains(SECRET_SENTINEL));
+    assert!(!rendered.contains("BEARER"));
+}
+
+fn authenticated_moderation_screening_outcome_json(
+    outcome: &ModerationAuthenticatedScreeningOutcomeV1,
+) -> Value {
     json_object(vec![
         json_entry(
             "schema",
-            Value::from("sorafs.moderation.screening_result.ingest.v1"),
+            Value::from("sorafs.moderation.screening_result.authenticated_ingest.v1"),
         ),
         json_entry("status", Value::from("accepted")),
-        json_entry("record", moderation_screening_record_json(&outcome.record)),
+        json_entry(
+            "admission",
+            json_object(vec![
+                json_entry(
+                    "idempotency_key_hex",
+                    Value::from(encode(outcome.admission.idempotency_key)),
+                ),
+                json_entry(
+                    "authority_digest_hex",
+                    Value::from(encode(outcome.admission.authority_digest)),
+                ),
+                json_entry(
+                    "authority_kind",
+                    Value::from(outcome.admission.authority_kind.clone()),
+                ),
+                json_entry(
+                    "receipt_digest_hex",
+                    Value::from(encode(outcome.admission.receipt_digest)),
+                ),
+            ]),
+        ),
+        json_entry(
+            "record",
+            moderation_screening_record_json(&outcome.screening.record),
+        ),
         json_entry(
             "quarantine",
             outcome
+                .screening
                 .quarantine
                 .as_ref()
                 .map(moderation_quarantine_record_json)
@@ -17626,6 +19425,7 @@ fn moderation_screening_snapshot_json(
 ) -> Value {
     let screening_count = snapshot.screening_records.len();
     let quarantine_count = snapshot.quarantine_records.len();
+    let authenticated_admission_count = snapshot.authenticated_admissions.len();
     let records = snapshot
         .screening_records
         .iter()
@@ -17644,6 +19444,10 @@ fn moderation_screening_snapshot_json(
             Value::from("sorafs.moderation.screening_results.v1"),
         ),
         json_entry("source", Value::from("local")),
+        json_entry(
+            "authenticated_admission_count",
+            Value::from(authenticated_admission_count as u64),
+        ),
         json_entry("screening_count", Value::from(screening_count as u64)),
         json_entry(
             "returned_screening_count",
@@ -17726,14 +19530,6 @@ fn moderation_screening_record_json(record: &ModerationScreeningRecord) -> Value
             record
                 .policy_digest
                 .map(encode)
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
-            "notes",
-            record
-                .notes
-                .as_deref()
                 .map(Value::from)
                 .unwrap_or(Value::Null),
         ),
@@ -17827,18 +19623,15 @@ fn moderation_quarantine_object_record_json(record: &ModerationQuarantineObjectR
                 .unwrap_or(Value::Null),
         ),
         json_entry(
-            "notes",
-            record
-                .notes
-                .as_deref()
-                .map(Value::from)
-                .unwrap_or(Value::Null),
-        ),
-        json_entry(
             "encryption_algorithm",
             Value::from(record.encryption_algorithm.clone()),
         ),
-        json_entry("key_id_hex", Value::from(encode(record.key_id))),
+        json_entry("nonce_prefix_hex", Value::from(encode(record.nonce_prefix))),
+        json_entry(
+            "chunk_plaintext_bytes",
+            Value::from(record.chunk_plaintext_bytes),
+        ),
+        json_entry("chunk_count", Value::from(record.chunk_count)),
         json_entry("envelope_path", Value::from(record.envelope_path.clone())),
     ])
 }
@@ -18679,212 +20472,7 @@ fn moderation_ballot_event_kind_label(kind: ModerationBallotEventKind) -> &'stat
     }
 }
 
-fn orderbook_submit_outcome_json(outcome: &OrderbookSubmitOutcome) -> Result<Value, String> {
-    let fills = outcome
-        .fills
-        .iter()
-        .map(orderbook_fill_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let channels = outcome
-        .settlement_channels_opened
-        .iter()
-        .map(orderbook_channel_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let mut root = Map::new();
-    root.insert("status".into(), Value::from("accepted"));
-    root.insert("sequence".into(), Value::from(outcome.sequence));
-    root.insert(
-        "open_order_count".into(),
-        Value::from(outcome.open_order_count as u64),
-    );
-    root.insert(
-        "accepted_order".into(),
-        orderbook_order_json(&outcome.accepted_order),
-    );
-    root.insert("fills".into(), Value::Array(fills));
-    root.insert("settlement_channels_opened".into(), Value::Array(channels));
-    root.insert(
-        "expired_order_ids_hex".into(),
-        orderbook_digest_list_json(&outcome.expired_order_ids),
-    );
-    Ok(Value::Object(root))
-}
-
-fn orderbook_cancel_outcome_json(outcome: &OrderbookCancelOutcome) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("status".into(), Value::from("cancelled"));
-    root.insert(
-        "reason".into(),
-        Value::from(orderbook_cancel_reason_label(outcome.reason)),
-    );
-    root.insert(
-        "open_order_count".into(),
-        Value::from(outcome.open_order_count as u64),
-    );
-    root.insert(
-        "cancelled_order".into(),
-        orderbook_order_json(&outcome.cancelled_order),
-    );
-    Ok(Value::Object(root))
-}
-
-fn orderbook_receipt_outcome_json(outcome: &OrderbookReceiptOutcome) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("status".into(), Value::from("accepted"));
-    root.insert(
-        "settlement_receipt_count".into(),
-        Value::from(outcome.settlement_receipt_count as u64),
-    );
-    root.insert(
-        "open_settlement_channel_count".into(),
-        Value::from(outcome.open_settlement_channel_count as u64),
-    );
-    root.insert(
-        "accepted_receipt".into(),
-        orderbook_receipt_json(&outcome.accepted_receipt)?,
-    );
-    root.insert(
-        "updated_channel".into(),
-        orderbook_channel_json(&outcome.updated_channel)?,
-    );
-    Ok(Value::Object(root))
-}
-
-fn orderbook_snapshot_json(snapshot: &OrderbookSnapshot, limit: usize) -> Result<Value, String> {
-    let orders = snapshot
-        .open_orders
-        .iter()
-        .map(orderbook_entry_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let trades = snapshot
-        .trades
-        .iter()
-        .map(orderbook_trade_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let channels = snapshot
-        .settlement_channels
-        .iter()
-        .map(orderbook_channel_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let receipts = snapshot
-        .settlement_receipts
-        .iter()
-        .map(orderbook_receipt_json)
-        .collect::<Result<Vec<_>, _>>()?;
-    let order_count = orders.len();
-    let trade_count = trades.len();
-    let channel_count = channels.len();
-    let receipt_count = receipts.len();
-    let (orders, truncated_orders) = limit_governance_readback_values(orders, limit);
-    let (trades, truncated_trades) = limit_governance_readback_values(trades, limit);
-    let (channels, truncated_channels) = limit_governance_readback_values(channels, limit);
-    let (receipts, truncated_receipts) = limit_governance_readback_values(receipts, limit);
-    let mut root = Map::new();
-    root.insert("schema".into(), Value::from("sorafs.orderbook.local.v1"));
-    root.insert("source".into(), Value::from("local"));
-    root.insert(
-        "generated_at_unix".into(),
-        Value::from(snapshot.generated_at_unix),
-    );
-    root.insert("next_sequence".into(), Value::from(snapshot.next_sequence));
-    root.insert("open_order_count".into(), Value::from(order_count as u64));
-    root.insert("trade_count".into(), Value::from(trade_count as u64));
-    root.insert(
-        "settlement_channel_count".into(),
-        Value::from(channel_count as u64),
-    );
-    root.insert(
-        "settlement_receipt_count".into(),
-        Value::from(receipt_count as u64),
-    );
-    root.insert("limit".into(), Value::from(limit as u64));
-    root.insert(
-        "returned_open_order_count".into(),
-        Value::from(orders.len() as u64),
-    );
-    root.insert(
-        "returned_trade_count".into(),
-        Value::from(trades.len() as u64),
-    );
-    root.insert(
-        "returned_settlement_channel_count".into(),
-        Value::from(channels.len() as u64),
-    );
-    root.insert(
-        "returned_settlement_receipt_count".into(),
-        Value::from(receipts.len() as u64),
-    );
-    root.insert(
-        "truncated_open_orders".into(),
-        Value::from(truncated_orders),
-    );
-    root.insert("truncated_trades".into(), Value::from(truncated_trades));
-    root.insert(
-        "truncated_settlement_channels".into(),
-        Value::from(truncated_channels),
-    );
-    root.insert(
-        "truncated_settlement_receipts".into(),
-        Value::from(truncated_receipts),
-    );
-    root.insert("depth".into(), orderbook_depth_json(&snapshot.open_orders));
-    root.insert("open_orders".into(), Value::Array(orders));
-    root.insert("trades".into(), Value::Array(trades));
-    root.insert("settlement_channels".into(), Value::Array(channels));
-    root.insert("settlement_receipts".into(), Value::Array(receipts));
-    root.insert(
-        "expired_order_ids_hex".into(),
-        orderbook_digest_list_json(&snapshot.expired_order_ids),
-    );
-    Ok(Value::Object(root))
-}
-
-fn orderbook_depth_json(entries: &[OrderBookEntryV1]) -> Value {
-    let mut hot_bid = 0u64;
-    let mut hot_ask = 0u64;
-    let mut warm_bid = 0u64;
-    let mut warm_ask = 0u64;
-    let mut archive_bid = 0u64;
-    let mut archive_ask = 0u64;
-    for entry in entries {
-        match (entry.order.tier, entry.order.side) {
-            (OrderTierV1::Hot, OrderSideV1::Bid) => {
-                hot_bid = hot_bid.saturating_add(entry.order.remaining_gib);
-            }
-            (OrderTierV1::Hot, OrderSideV1::Ask) => {
-                hot_ask = hot_ask.saturating_add(entry.order.remaining_gib);
-            }
-            (OrderTierV1::Warm, OrderSideV1::Bid) => {
-                warm_bid = warm_bid.saturating_add(entry.order.remaining_gib);
-            }
-            (OrderTierV1::Warm, OrderSideV1::Ask) => {
-                warm_ask = warm_ask.saturating_add(entry.order.remaining_gib);
-            }
-            (OrderTierV1::Archive, OrderSideV1::Bid) => {
-                archive_bid = archive_bid.saturating_add(entry.order.remaining_gib);
-            }
-            (OrderTierV1::Archive, OrderSideV1::Ask) => {
-                archive_ask = archive_ask.saturating_add(entry.order.remaining_gib);
-            }
-        }
-    }
-    json_object(vec![
-        json_entry("hot_bid_gib", hot_bid),
-        json_entry("hot_ask_gib", hot_ask),
-        json_entry("warm_bid_gib", warm_bid),
-        json_entry("warm_ask_gib", warm_ask),
-        json_entry("archive_bid_gib", archive_bid),
-        json_entry("archive_ask_gib", archive_ask),
-    ])
-}
-
-fn orderbook_entry_json(entry: &OrderBookEntryV1) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert("sequence".into(), Value::from(entry.sequence));
-    root.insert("order".into(), orderbook_order_json(&entry.order));
-    Ok(Value::Object(root))
-}
-
+#[cfg(test)]
 fn orderbook_order_json(order: &OrderRequestV1) -> Value {
     let mut root = Map::new();
     root.insert("version".into(), Value::from(order.version as u64));
@@ -18921,6 +20509,7 @@ fn orderbook_order_json(order: &OrderRequestV1) -> Value {
     Value::Object(root)
 }
 
+#[cfg(test)]
 fn orderbook_signature_json(signature: &OrderbookSignatureV1) -> Value {
     let mut root = Map::new();
     root.insert(
@@ -18938,6 +20527,7 @@ fn orderbook_signature_json(signature: &OrderbookSignatureV1) -> Value {
     Value::Object(root)
 }
 
+#[cfg(test)]
 fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
     let mut root = Map::new();
     root.insert("trade".into(), orderbook_trade_json(&fill.trade)?);
@@ -18953,6 +20543,7 @@ fn orderbook_fill_json(fill: &OrderFillOutcomeV1) -> Result<Value, String> {
     Ok(Value::Object(root))
 }
 
+#[cfg(test)]
 fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
     let mut root = Map::new();
     root.insert("version".into(), Value::from(trade.version as u64));
@@ -18980,6 +20571,7 @@ fn orderbook_trade_json(trade: &TradeEventV1) -> Result<Value, String> {
     Ok(Value::Object(root))
 }
 
+#[cfg(test)]
 fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String> {
     let mut root = Map::new();
     root.insert("version".into(), Value::from(channel.version as u64));
@@ -19017,6 +20609,7 @@ fn orderbook_channel_json(channel: &SettlementChannelV1) -> Result<Value, String
     Ok(Value::Object(root))
 }
 
+#[cfg(test)]
 fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String> {
     let mut root = Map::new();
     root.insert("version".into(), Value::from(receipt.version as u64));
@@ -19058,6 +20651,7 @@ fn orderbook_receipt_json(receipt: &SettlementReceiptV1) -> Result<Value, String
     Ok(Value::Object(root))
 }
 
+#[cfg(test)]
 fn orderbook_byte_range_json(receipt: &SettlementReceiptV1) -> Value {
     json_object(vec![
         json_entry("start", receipt.range.start),
@@ -19069,30 +20663,13 @@ fn xor_quantity_json(amount: &XorQuantity) -> Value {
     Value::from(amount.to_string())
 }
 
-fn orderbook_events_etag(
-    since: Option<u64>,
-    limit: usize,
-    tip_sequence: u64,
-    events: &[OrderbookEvent],
-) -> String {
-    let since = since.unwrap_or(0).to_le_bytes();
-    let limit = (limit as u64).to_le_bytes();
-    let tip = tip_sequence.to_le_bytes();
-    let count = (events.len() as u64).to_le_bytes();
-    let last_sequence = events
-        .last()
-        .map_or(0, |event| event.sequence)
-        .to_le_bytes();
-    orderbook_cache_etag(
-        "events",
-        &[
-            since.as_ref(),
-            limit.as_ref(),
-            tip.as_ref(),
-            count.as_ref(),
-            last_sequence.as_ref(),
-        ],
-    )
+fn orderbook_finalized_events_etag(page: &OrderbookFinalizedEventPageV1) -> Result<String, String> {
+    let canonical = norito::to_bytes(page)
+        .map_err(|error| format!("failed to encode finalized orderbook event page: {error}"))?;
+    Ok(orderbook_cache_etag(
+        "finalized-events",
+        &[canonical.as_slice()],
+    ))
 }
 
 fn orderbook_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
@@ -19106,105 +20683,85 @@ fn orderbook_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
     format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
 }
 
-fn orderbook_events_json(
-    since: Option<u64>,
-    limit: usize,
-    events: &[OrderbookEvent],
+fn orderbook_finalized_event_page_json(
+    page: &OrderbookFinalizedEventPageV1,
 ) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert(
-        "since".into(),
-        since.map_or(Value::Null, |value| Value::from(value)),
-    );
-    root.insert("limit".into(), Value::from(limit as u64));
-    root.insert("count".into(), Value::from(events.len() as u64));
-    root.insert(
-        "next_since".into(),
-        events
-            .last()
-            .map_or(Value::Null, |event| Value::from(event.sequence)),
-    );
-    root.insert(
-        "events".into(),
-        Value::Array(events.iter().map(orderbook_event_json).collect()),
-    );
-    Ok(Value::Object(root))
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "events",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode orderbook event page: {error}"))?,
+        ),
+    ]))
 }
 
-fn orderbook_event_sse_stream(
-    initial_events: Vec<OrderbookEvent>,
-    receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
-) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
-    struct OrderbookSseState {
-        pending: VecDeque<OrderbookEvent>,
-        receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
+fn orderbook_finalized_event_stream(
+    state: SharedAppState,
+    initial_events: Vec<OrderbookFinalizedEventV1>,
+    after: Option<OrderbookFinalizedEventCursorV1>,
+    limit: u32,
+) -> impl futures::Stream<Item = OrderbookFinalizedEventV1> {
+    struct OrderbookFinalizedEventStreamState {
+        state: SharedAppState,
+        pending: VecDeque<OrderbookFinalizedEventV1>,
+        after: Option<OrderbookFinalizedEventCursorV1>,
+        limit: u32,
     }
 
     stream::unfold(
-        OrderbookSseState {
+        OrderbookFinalizedEventStreamState {
+            state,
             pending: initial_events.into_iter().collect(),
-            receiver,
+            after,
+            limit,
         },
         |mut state| async move {
-            use tokio::sync::broadcast::error::RecvError;
-
-            if let Some(event) = state.pending.pop_front() {
-                return Some((Ok(orderbook_sse_event(&event)), state));
-            }
             loop {
-                match state.receiver.recv().await {
-                    Ok(event) => return Some((Ok(orderbook_sse_event(&event)), state)),
-                    Err(RecvError::Lagged(skipped)) => {
-                        return Some((
-                            Ok(SseEvent::default()
-                                .event("lagged")
-                                .data(skipped.to_string())),
-                            state,
-                        ));
+                if let Some(event) = state.pending.pop_front() {
+                    state.after = Some(event.cursor());
+                    return Some((event, state));
+                }
+                tokio::time::sleep(Duration::from_millis(250)).await;
+                let state_view = state.state.state.query_view();
+                match FindSorafsOrderbookEvents::new(None, state.after, state.limit)
+                    .execute(&state_view)
+                {
+                    Ok(page) => {
+                        state.pending.extend(page.events);
                     }
-                    Err(RecvError::Closed) => return None,
+                    Err(error) => warn!(
+                        ?error,
+                        "finalized SoraFS orderbook event stream poll failed"
+                    ),
                 }
             }
         },
     )
 }
 
-async fn orderbook_event_websocket_stream(
+async fn orderbook_finalized_event_websocket_stream(
     ws: WebSocket,
-    initial_events: Vec<OrderbookEvent>,
-    mut receiver: tokio::sync::broadcast::Receiver<OrderbookEvent>,
+    state: SharedAppState,
+    initial_events: Vec<OrderbookFinalizedEventV1>,
+    after: Option<OrderbookFinalizedEventCursorV1>,
+    limit: u32,
 ) -> Result<(), String> {
-    use tokio::sync::broadcast::error::RecvError;
-
     let (mut sender, mut reader) = ws.split();
-    for event in initial_events {
-        let text = orderbook_websocket_frame(&event);
-        sender
-            .send(WsMessage::Text(Utf8Bytes::from(text)))
-            .await
-            .map_err(|err| format!("failed to send orderbook backlog frame: {err}"))?;
-    }
+    let event_stream = orderbook_finalized_event_stream(state, initial_events, after, limit);
+    tokio::pin!(event_stream);
 
     loop {
         tokio::select! {
-            received = receiver.recv() => {
-                match received {
-                    Ok(event) => {
-                        let text = orderbook_websocket_frame(&event);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send orderbook live frame: {err}"))?;
-                    }
-                    Err(RecvError::Lagged(skipped)) => {
-                        let text = reputation_lagged_websocket_frame(skipped);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send orderbook lag frame: {err}"))?;
-                    }
-                    Err(RecvError::Closed) => return Ok(()),
-                }
+            event = event_stream.next() => {
+                let Some(event) = event else {
+                    return Ok(());
+                };
+                let text = orderbook_finalized_websocket_frame(&event);
+                sender
+                    .send(WsMessage::Text(Utf8Bytes::from(text)))
+                    .await
+                    .map_err(|err| format!("failed to send finalized orderbook event frame: {err}"))?;
             }
             message = reader.next() => {
                 match message {
@@ -19227,79 +20784,33 @@ async fn orderbook_event_websocket_stream(
     }
 }
 
-fn orderbook_sse_event(event: &OrderbookEvent) -> SseEvent {
-    let data = json::to_string(&orderbook_event_json(event)).unwrap_or_else(|_| "{}".to_owned());
+fn orderbook_finalized_sse_event(event: &OrderbookFinalizedEventV1) -> SseEvent {
+    let data = json::to_string(event).unwrap_or_else(|_| "{}".to_owned());
     SseEvent::default()
-        .event(orderbook_event_kind_label(event.kind))
+        .event(orderbook_finalized_event_kind_label(event.event.kind))
         .id(event.sequence.to_string())
         .data(data)
 }
 
-fn orderbook_websocket_frame(event: &OrderbookEvent) -> String {
+fn orderbook_finalized_websocket_frame(event: &OrderbookFinalizedEventV1) -> String {
     let mut frame = Map::new();
     frame.insert(
         "event".into(),
-        Value::from(orderbook_event_kind_label(event.kind)),
+        Value::from(orderbook_finalized_event_kind_label(event.event.kind)),
     );
-    frame.insert("data".into(), orderbook_event_json(event));
+    frame.insert("data".into(), json::to_value(event).unwrap_or(Value::Null));
     json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
 }
 
-fn orderbook_event_json(event: &OrderbookEvent) -> Value {
-    let mut root = Map::new();
-    root.insert("sequence".into(), Value::from(event.sequence));
-    root.insert(
-        "kind".into(),
-        Value::from(orderbook_event_kind_label(event.kind)),
-    );
-    root.insert(
-        "generated_at_unix".into(),
-        Value::from(event.generated_at_unix),
-    );
-    root.insert(
-        "order_id_hex".into(),
-        event
-            .order_id
-            .map_or(Value::Null, |order_id| Value::from(hex::encode(order_id))),
-    );
-    root.insert(
-        "trade_ids_hex".into(),
-        orderbook_digest_list_json(&event.trade_ids),
-    );
-    root.insert(
-        "settlement_channel_ids_hex".into(),
-        orderbook_digest_list_json(&event.settlement_channel_ids),
-    );
-    root.insert(
-        "receipt_id_hex".into(),
-        event.receipt_id.map_or(Value::Null, |receipt_id| {
-            Value::from(hex::encode(receipt_id))
-        }),
-    );
-    root.insert(
-        "expired_order_ids_hex".into(),
-        orderbook_digest_list_json(&event.expired_order_ids),
-    );
-    root.insert(
-        "open_order_count".into(),
-        Value::from(event.open_order_count),
-    );
-    root.insert(
-        "open_settlement_channel_count".into(),
-        Value::from(event.open_settlement_channel_count),
-    );
-    root.insert(
-        "settlement_receipt_count".into(),
-        Value::from(event.settlement_receipt_count),
-    );
-    Value::Object(root)
-}
-
-fn orderbook_event_kind_label(kind: OrderbookEventKind) -> &'static str {
+fn orderbook_finalized_event_kind_label(kind: SorafsOrderbookLedgerEventKind) -> &'static str {
     match kind {
-        OrderbookEventKind::OrderAccepted => "order_accepted",
-        OrderbookEventKind::OrderCancelled => "order_cancelled",
-        OrderbookEventKind::SettlementReceiptAccepted => "settlement_receipt_accepted",
+        SorafsOrderbookLedgerEventKind::PolicyActivated => "policy_activated",
+        SorafsOrderbookLedgerEventKind::OrderAdmitted => "order_admitted",
+        SorafsOrderbookLedgerEventKind::OrderCancelled => "order_cancelled",
+        SorafsOrderbookLedgerEventKind::TradeMatched => "trade_matched",
+        SorafsOrderbookLedgerEventKind::OrderExpired => "order_expired",
+        SorafsOrderbookLedgerEventKind::ChannelExpired => "channel_expired",
+        SorafsOrderbookLedgerEventKind::ReceiptRecorded => "receipt_recorded",
     }
 }
 
@@ -20284,30 +21795,13 @@ fn reserve_appeal_visible_to(record: &ReserveAppealRecord, account: &[u8]) -> bo
             .is_some_and(|decision_account| decision_account == account)
 }
 
-fn repair_events_etag(
-    since: Option<u64>,
-    limit: usize,
-    tip_sequence: u64,
-    events: &[RepairEvent],
-) -> String {
-    let since = since.unwrap_or(0).to_le_bytes();
-    let limit = (limit as u64).to_le_bytes();
-    let tip = tip_sequence.to_le_bytes();
-    let count = (events.len() as u64).to_le_bytes();
-    let last_sequence = events
-        .last()
-        .map_or(0, |event| event.sequence)
-        .to_le_bytes();
-    repair_cache_etag(
-        "events",
-        &[
-            since.as_ref(),
-            limit.as_ref(),
-            tip.as_ref(),
-            count.as_ref(),
-            last_sequence.as_ref(),
-        ],
-    )
+fn repair_finalized_events_etag(page: &RepairFinalizedEventPageV1) -> Result<String, String> {
+    let canonical = norito::to_bytes(page)
+        .map_err(|error| format!("failed to encode finalized repair event page: {error}"))?;
+    Ok(repair_cache_etag(
+        "finalized-events",
+        &[canonical.as_slice()],
+    ))
 }
 
 fn repair_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
@@ -20321,226 +21815,71 @@ fn repair_cache_etag(kind: &str, parts: &[&[u8]]) -> String {
     format!("\"{}\"", hex::encode(blake3_hash(&material).as_bytes()))
 }
 
-fn repair_events_json(
-    since: Option<u64>,
-    limit: usize,
-    events: &[RepairEvent],
-) -> Result<Value, String> {
-    let mut root = Map::new();
-    root.insert(
-        "since".into(),
-        since.map_or(Value::Null, |value| Value::from(value)),
-    );
-    root.insert("limit".into(), Value::from(limit as u64));
-    root.insert("count".into(), Value::from(events.len() as u64));
-    root.insert(
-        "next_since".into(),
-        events
-            .last()
-            .map_or(Value::Null, |event| Value::from(event.sequence)),
-    );
-    root.insert(
-        "events".into(),
-        Value::Array(
-            events
-                .iter()
-                .map(repair_event_json)
-                .collect::<Result<Vec<_>, _>>()?,
+fn repair_finalized_status_json(status: &RepairFinalizedStatusV1) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "status",
+            json::to_value(status)
+                .map_err(|error| format!("failed to encode finalized repair status: {error}"))?,
         ),
-    );
-    Ok(Value::Object(root))
+    ]))
 }
 
-fn repair_event_sse_stream(
-    initial_events: Vec<RepairEvent>,
-    receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
-) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
-    struct RepairSseState {
-        pending: VecDeque<RepairEvent>,
-        receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
+fn repair_finalized_task_page_json(page: &RepairLedgerTaskPageV1) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "tasks",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode finalized repair task page: {error}"))?,
+        ),
+    ]))
+}
+
+fn repair_finalized_task_json(task: &RepairFinalizedTaskV1) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "task",
+            json::to_value(task)
+                .map_err(|error| format!("failed to encode finalized repair task: {error}"))?,
+        ),
+    ]))
+}
+
+fn repair_finalized_event_page_json(page: &RepairFinalizedEventPageV1) -> Result<Value, String> {
+    Ok(json_object(vec![
+        json_entry("source", "finalized_chain"),
+        json_entry(
+            "events",
+            json::to_value(page)
+                .map_err(|error| format!("failed to encode finalized repair event page: {error}"))?,
+        ),
+    ]))
+}
+
+fn repair_finalized_query_error_response(error: QueryExecutionFail) -> Response {
+    if matches!(error, QueryExecutionFail::Expired) {
+        return json_error(
+            StatusCode::CONFLICT,
+            "SoraFS repair finalized cursor is stale; restart from the latest committed anchor",
+        );
     }
-
-    stream::unfold(
-        RepairSseState {
-            pending: initial_events.into_iter().collect(),
-            receiver,
-        },
-        |mut state| async move {
-            use tokio::sync::broadcast::error::RecvError;
-
-            if let Some(event) = state.pending.pop_front() {
-                return Some((Ok(repair_sse_event(&event)), state));
-            }
-            loop {
-                match state.receiver.recv().await {
-                    Ok(event) => return Some((Ok(repair_sse_event(&event)), state)),
-                    Err(RecvError::Lagged(skipped)) => {
-                        return Some((
-                            Ok(SseEvent::default()
-                                .event("lagged")
-                                .data(skipped.to_string())),
-                            state,
-                        ));
-                    }
-                    Err(RecvError::Closed) => return None,
-                }
-            }
-        },
+    if matches!(
+        &error,
+        QueryExecutionFail::Find(FindError::SorafsRepairTask(_))
+    ) {
+        return json_error(StatusCode::NOT_FOUND, "SoraFS repair task was not found");
+    }
+    warn!(?error, "authoritative finalized SoraFS repair query failed");
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "authoritative finalized SoraFS repair state is unavailable",
     )
 }
 
-async fn repair_event_websocket_stream(
-    ws: WebSocket,
-    initial_events: Vec<RepairEvent>,
-    mut receiver: tokio::sync::broadcast::Receiver<RepairEvent>,
-) -> Result<(), String> {
-    use tokio::sync::broadcast::error::RecvError;
-
-    let (mut sender, mut reader) = ws.split();
-    for event in initial_events {
-        let text = repair_websocket_frame(&event);
-        sender
-            .send(WsMessage::Text(Utf8Bytes::from(text)))
-            .await
-            .map_err(|err| format!("failed to send repair backlog frame: {err}"))?;
-    }
-
-    loop {
-        tokio::select! {
-            received = receiver.recv() => {
-                match received {
-                    Ok(event) => {
-                        let text = repair_websocket_frame(&event);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send repair live frame: {err}"))?;
-                    }
-                    Err(RecvError::Lagged(skipped)) => {
-                        let text = reputation_lagged_websocket_frame(skipped);
-                        sender
-                            .send(WsMessage::Text(Utf8Bytes::from(text)))
-                            .await
-                            .map_err(|err| format!("failed to send repair lag frame: {err}"))?;
-                    }
-                    Err(RecvError::Closed) => return Ok(()),
-                }
-            }
-            message = reader.next() => {
-                match message {
-                    Some(Ok(WsMessage::Close(_))) | None => return Ok(()),
-                    Some(Ok(WsMessage::Ping(payload))) => {
-                        sender
-                            .send(WsMessage::Pong(payload))
-                            .await
-                            .map_err(|err| format!("failed to send repair pong frame: {err}"))?;
-                    }
-                    Some(Ok(WsMessage::Text(_)
-                        | WsMessage::Binary(_)
-                        | WsMessage::Pong(_))) => {}
-                    Some(Err(err)) => {
-                        return Err(format!("failed to receive repair WebSocket frame: {err}"));
-                    }
-                }
-            }
-        }
-    }
-}
-
-fn repair_sse_event(event: &RepairEvent) -> SseEvent {
-    let data = repair_event_json(event)
-        .and_then(|value| {
-            json::to_string(&value)
-                .map_err(|err| format!("failed to serialize repair event: {err}"))
-        })
-        .unwrap_or_else(|err| {
-            let mut map = Map::new();
-            map.insert("error".into(), Value::from(err));
-            json::to_string(&Value::Object(map)).unwrap_or_else(|_| "{}".to_owned())
-        });
-    SseEvent::default()
-        .event(repair_status_label(event.event.status))
-        .id(event.sequence.to_string())
-        .data(data)
-}
-
-fn repair_websocket_frame(event: &RepairEvent) -> String {
-    let data = repair_event_json(event).unwrap_or_else(|err| {
-        let mut map = Map::new();
-        map.insert("error".into(), Value::from(err));
-        Value::Object(map)
-    });
-    let mut frame = Map::new();
-    frame.insert(
-        "event".into(),
-        Value::from(repair_status_label(event.event.status)),
-    );
-    frame.insert("data".into(), data);
-    json::to_string(&Value::Object(frame)).unwrap_or_else(|_| "{}".to_owned())
-}
-
-fn repair_event_json(event: &RepairEvent) -> Result<Value, String> {
-    event
-        .event
-        .validate()
-        .map_err(|err| format!("invalid repair event: {err}"))?;
-    let mut root = Map::new();
-    root.insert("sequence".into(), Value::from(event.sequence));
-    root.insert("event".into(), repair_task_event_json(&event.event));
-    Ok(Value::Object(root))
-}
-
-fn repair_task_event_json(event: &RepairTaskEventV1) -> Value {
-    let mut root = Map::new();
-    root.insert("version".into(), Value::from(u64::from(event.version)));
-    root.insert("ticket_id".into(), Value::from(event.ticket_id.to_string()));
-    root.insert(
-        "manifest_digest_hex".into(),
-        Value::from(hex::encode(event.manifest_digest)),
-    );
-    root.insert(
-        "provider_id_hex".into(),
-        Value::from(hex::encode(event.provider_id)),
-    );
-    root.insert(
-        "status".into(),
-        Value::from(repair_status_label(event.status)),
-    );
-    root.insert(
-        "occurred_at_unix".into(),
-        Value::from(event.occurred_at_unix),
-    );
-    root.insert(
-        "actor".into(),
-        event.actor.clone().map_or(Value::Null, Value::from),
-    );
-    root.insert(
-        "message".into(),
-        event.message.clone().map_or(Value::Null, Value::from),
-    );
-    Value::Object(root)
-}
-
-fn repair_status_label(status: RepairTaskStatusV1) -> &'static str {
-    match status {
-        RepairTaskStatusV1::Queued => "queued",
-        RepairTaskStatusV1::Verifying => "verifying",
-        RepairTaskStatusV1::InProgress => "in_progress",
-        RepairTaskStatusV1::Completed => "completed",
-        RepairTaskStatusV1::Failed => "failed",
-        RepairTaskStatusV1::Escalated => "escalated",
-    }
-}
-
-fn orderbook_digest_list_json(digests: &[[u8; 32]]) -> Value {
-    Value::Array(
-        digests
-            .iter()
-            .map(|digest| Value::from(hex::encode(digest)))
-            .collect(),
-    )
-}
-
+#[cfg(test)]
 fn orderbook_side_label(side: OrderSideV1) -> &'static str {
     match side {
         OrderSideV1::Bid => "bid",
@@ -20548,6 +21887,7 @@ fn orderbook_side_label(side: OrderSideV1) -> &'static str {
     }
 }
 
+#[cfg(test)]
 fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
     match tier {
         OrderTierV1::Hot => "hot",
@@ -20556,15 +21896,7 @@ fn orderbook_tier_label(tier: OrderTierV1) -> &'static str {
     }
 }
 
-fn orderbook_cancel_reason_label(reason: OrderCancelReasonV1) -> &'static str {
-    match reason {
-        OrderCancelReasonV1::OwnerRequested => "owner_requested",
-        OrderCancelReasonV1::Expired => "expired",
-        OrderCancelReasonV1::Governance => "governance",
-        OrderCancelReasonV1::Replaced => "replaced",
-    }
-}
-
+#[cfg(test)]
 fn orderbook_channel_status_label(status: SettlementChannelStatusV1) -> &'static str {
     match status {
         SettlementChannelStatusV1::Open => "open",
@@ -27883,10 +29215,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             latency_clamped,
             note,
         ) {
-            Ok((receipt, receipt_b64, status_label)) => {
-                if let Err(err) = state.sorafs_node.record_potr_receipt(receipt) {
-                    error!(?err, "failed to record PoTR receipt");
-                }
+            Ok((_receipt, receipt_b64, status_label)) => {
                 response_headers.insert(
                     HeaderName::from_static(HEADER_SORA_POTR_RECEIPT),
                     header_value(&receipt_b64, "Sora-PoTR-Receipt"),
@@ -28192,10 +29521,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
             latency_clamped,
             note,
         ) {
-            Ok((receipt, receipt_b64, status_label)) => {
-                if let Err(err) = state.sorafs_node.record_potr_receipt(receipt) {
-                    error!(?err, "failed to record PoTR receipt");
-                }
+            Ok((_receipt, receipt_b64, status_label)) => {
                 response_headers.insert(
                     HeaderName::from_static(HEADER_SORA_POTR_RECEIPT),
                     header_value(&receipt_b64, "Sora-PoTR-Receipt"),
@@ -28239,6 +29565,29 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
             StatusCode::BAD_REQUEST,
             format!("count must be at most {MAX_POR_SAMPLE_COUNT}"),
         );
+    }
+    let requested_provider =
+        match parse_canonical_hex_fixed::<32>(&req.provider_id_hex, "provider_id_hex") {
+            Ok(provider) => provider,
+            Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+        };
+    match validate_storage_por_provider_binding(
+        state.sorafs_node.capacity_usage().provider_id,
+        requested_provider,
+    ) {
+        Ok(()) => {}
+        Err(StoragePorProviderBindingError::Unconfigured) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "SoraFS provider identity is not configured",
+            );
+        }
+        Err(StoragePorProviderBindingError::Mismatch) => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "requested provider does not match this SoraFS node",
+            );
+        }
     }
 
     let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
@@ -28286,117 +29635,826 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_post_sorafs_proof_stream(
-    State(state): State<SharedAppState>,
-    JsonOnly(req): JsonOnly<ProofStreamRequestDto>,
-) -> Response {
-    if !state.sorafs_node.is_enabled() {
-        return storage_disabled_response();
-    }
-
-    let manifest_digest_hex_request = req.manifest_digest_hex.trim().to_ascii_lowercase();
-    if manifest_digest_hex_request.is_empty() {
-        return json_error(
+fn decode_bounded_pdp_base64(
+    encoded: &str,
+    max_bytes: usize,
+    field: &'static str,
+) -> Result<Vec<u8>, Response> {
+    let max_encoded = max_bytes.saturating_mul(4).div_ceil(3).saturating_add(4);
+    if encoded.is_empty() || encoded.len() > max_encoded {
+        return Err(json_error(
             StatusCode::BAD_REQUEST,
-            "manifest_digest_hex must be provided and non-empty",
+            format!("{field} exceeds the bounded PDP payload size"),
+        ));
+    }
+    let bytes = BASE64_STANDARD.decode(encoded.as_bytes()).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must be canonical base64"),
+        )
+    })?;
+    if bytes.is_empty() || bytes.len() > max_bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} exceeds the bounded PDP payload size"),
+        ));
+    }
+    if BASE64_STANDARD.encode(&bytes) != encoded {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            format!("{field} must use canonical padded base64"),
+        ));
+    }
+    Ok(bytes)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_decode_limits(max_bytes: usize) -> norito::DecodeLimits {
+    norito::DecodeLimits::new(
+        max_bytes.max(1),
+        max_bytes,
+        max_bytes,
+        max_bytes.saturating_mul(4),
+        64,
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn decode_pdp_commitment(encoded: &str) -> Result<PdpCommitmentV1, Response> {
+    let bytes = decode_bounded_pdp_base64(
+        encoded,
+        PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1,
+        "commitment_b64",
+    )?;
+    let commitment: PdpCommitmentV1 = norito::decode_from_bytes_with_limits(
+        &bytes,
+        pdp_decode_limits(PDP_COMMITMENT_MAX_CANONICAL_BYTES_V1),
+    )
+    .map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 is not a valid canonical PDP commitment",
+        )
+    })?;
+    let canonical = norito::to_bytes(&commitment).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 could not be canonicalized",
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "commitment_b64 is not canonically encoded",
+        ));
+    }
+    Ok(commitment)
+}
+
+#[cfg(feature = "app_api")]
+fn decode_pdp_challenge(encoded: &str) -> Result<PdpChallengeV1, Response> {
+    let bytes = decode_bounded_pdp_base64(
+        encoded,
+        PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1,
+        "challenge_b64",
+    )?;
+    let challenge: PdpChallengeV1 = norito::decode_from_bytes_with_limits(
+        &bytes,
+        pdp_decode_limits(PDP_CHALLENGE_MAX_CANONICAL_BYTES_V1),
+    )
+    .map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 is not a valid canonical PDP challenge",
+        )
+    })?;
+    let canonical = norito::to_bytes(&challenge).map_err(|_| {
+        json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 could not be canonicalized",
+        )
+    })?;
+    if canonical != bytes {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "challenge_b64 is not canonically encoded",
+        ));
+    }
+    Ok(challenge)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_protocol_error_response(error: sorafs_node::PdpProviderProtocolError) -> Response {
+    use sorafs_node::PdpProviderProtocolError;
+
+    let (status, message) = match error {
+        PdpProviderProtocolError::UntrustedAdmission
+        | PdpProviderProtocolError::AdmissionProviderMismatch
+        | PdpProviderProtocolError::AdmissionInactive
+        | PdpProviderProtocolError::UnauthorizedProviderKey
+        | PdpProviderProtocolError::UnauthorizedProofSignature(_) => {
+            (StatusCode::FORBIDDEN, "PDP provider authentication failed")
+        }
+        PdpProviderProtocolError::UnknownChallenge => {
+            (StatusCode::NOT_FOUND, "PDP challenge was not found")
+        }
+        PdpProviderProtocolError::ChallengeConflict
+        | PdpProviderProtocolError::ChallengeScopeReplay
+        | PdpProviderProtocolError::TerminalReplayConflict
+        | PdpProviderProtocolError::ConcurrentTransition
+        | PdpProviderProtocolError::StaleCheckpoint => (
+            StatusCode::CONFLICT,
+            "PDP request conflicts with durable state",
+        ),
+        PdpProviderProtocolError::PendingRetentionExhausted { .. }
+        | PdpProviderProtocolError::TerminalRetentionExhausted { .. } => (
+            StatusCode::INSUFFICIENT_STORAGE,
+            "PDP durable retention is exhausted",
+        ),
+        PdpProviderProtocolError::ArchiveHandoff(_)
+        | PdpProviderProtocolError::RepairHandoff(_)
+        | PdpProviderProtocolError::CheckpointBusy => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP terminal handoff is durably pending",
+        ),
+        PdpProviderProtocolError::InvalidPolicy(_)
+        | PdpProviderProtocolError::InvalidCommitment(_)
+        | PdpProviderProtocolError::InvalidChallenge(_)
+        | PdpProviderProtocolError::InvalidProof(_)
+        | PdpProviderProtocolError::MalformedPayload { .. }
+        | PdpProviderProtocolError::NonCanonicalPayload { .. }
+        | PdpProviderProtocolError::PayloadTooLarge { .. }
+        | PdpProviderProtocolError::EpochMismatch { .. }
+        | PdpProviderProtocolError::ChallengeExpiredAtEnqueue
+        | PdpProviderProtocolError::ChallengeFromFuture
+        | PdpProviderProtocolError::InvalidResponseWindow
+        | PdpProviderProtocolError::ChallengeCommitmentMismatch
+        | PdpProviderProtocolError::InvalidLookup
+        | PdpProviderProtocolError::InvalidExportLimit { .. }
+        | PdpProviderProtocolError::ChallengeNotExpired
+        | PdpProviderProtocolError::InvalidTerminalTimestamp
+        | PdpProviderProtocolError::SampleCountOverflow => (
+            StatusCode::BAD_REQUEST,
+            "PDP request failed protocol validation",
+        ),
+        PdpProviderProtocolError::ChallengeRequiresExpiry { .. } => (
+            StatusCode::CONFLICT,
+            "PDP challenge must be expired through its terminal path",
+        ),
+        other => {
+            error!(?other, "PDP provider protocol failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PDP provider protocol failed",
+            )
+        }
+    };
+    json_error(status, message)
+}
+
+#[cfg(feature = "app_api")]
+fn pdp_status_json(status: sorafs_node::PdpChallengeStatusV1) -> Value {
+    let lifecycle = match status.lifecycle {
+        sorafs_node::PdpChallengeLifecycleV1::Pending => "pending",
+        sorafs_node::PdpChallengeLifecycleV1::HandoffPending => "handoff_pending",
+        sorafs_node::PdpChallengeLifecycleV1::Terminal => "terminal",
+    };
+    let mut map = Map::new();
+    map.insert("sequence".into(), Value::from(status.sequence));
+    map.insert(
+        "challenge_id_hex".into(),
+        Value::from(hex::encode(status.challenge_id)),
+    );
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex::encode(status.manifest_digest)),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(hex::encode(status.provider_id)),
+    );
+    map.insert("epoch_id".into(), Value::from(status.epoch_id));
+    map.insert("lifecycle".into(), Value::from(lifecycle));
+    if let Some(deadline) = status.response_deadline_unix {
+        map.insert("response_deadline_unix".into(), Value::from(deadline));
+    }
+    if let Some(proof_digest) = status.proof_digest {
+        map.insert(
+            "proof_digest_hex".into(),
+            Value::from(hex::encode(proof_digest)),
         );
     }
-
-    let provider_id_hex = req.provider_id_hex.trim().to_ascii_lowercase();
-    if provider_id_hex.is_empty() {
-        return json_error(
-            StatusCode::BAD_REQUEST,
-            "provider_id_hex must be provided and non-empty",
-        );
+    if let Some(decision) = status.decision {
+        let (decision_label, rejection_reason) = match decision {
+            sorafs_node::PdpTerminalDecisionV1::Accepted => ("accepted", None),
+            sorafs_node::PdpTerminalDecisionV1::Rejected(reason) => {
+                let reason = match reason {
+                    sorafs_node::PdpRejectionReasonV1::DeadlineExpired => "deadline_expired",
+                    sorafs_node::PdpRejectionReasonV1::SubmissionLate => "submission_late",
+                    sorafs_node::PdpRejectionReasonV1::FutureTimestamp => "future_timestamp",
+                    sorafs_node::PdpRejectionReasonV1::InvalidProof => "invalid_proof",
+                    sorafs_node::PdpRejectionReasonV1::AdmissionRevoked => "admission_revoked",
+                    sorafs_node::PdpRejectionReasonV1::AdmissionInactive => "admission_inactive",
+                    sorafs_node::PdpRejectionReasonV1::StorageUnavailable => "storage_unavailable",
+                };
+                ("rejected", Some(reason))
+            }
+        };
+        map.insert("decision".into(), Value::from(decision_label));
+        if let Some(reason) = rejection_reason {
+            map.insert("rejection_reason".into(), Value::from(reason));
+        }
     }
+    Value::Object(map)
+}
 
-    let proof_kind = match parse_proof_kind(&req.proof_kind) {
-        Some(kind) => kind,
-        None => {
-            return json_error(
-                StatusCode::BAD_REQUEST,
-                "unsupported proof_kind; expected `por` or `potr`",
+#[cfg(feature = "app_api")]
+fn finalized_proof_stream_item_json(
+    finalized: &ProofOutcomeFinalizedRecordV1,
+) -> Result<Value, String> {
+    let outcome = &finalized.outcome;
+    let mut map = Map::new();
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(hex::encode(outcome.manifest_digest.as_bytes())),
+    );
+    map.insert(
+        "provider_id_hex".into(),
+        Value::from(hex::encode(outcome.provider_id.as_bytes())),
+    );
+    map.insert(
+        "outcome_identity_hex".into(),
+        Value::from(hex::encode(outcome.identity_digest)),
+    );
+    map.insert(
+        "outcome_digest_hex".into(),
+        Value::from(hex::encode(outcome.outcome_digest)),
+    );
+    map.insert(
+        "admission_envelope_digest_hex".into(),
+        Value::from(hex::encode(outcome.admission_envelope_digest)),
+    );
+    map.insert(
+        "finalized_block_height".into(),
+        Value::from(finalized.finalized_cursor.height),
+    );
+    map.insert(
+        "finalized_block_hash_hex".into(),
+        Value::from(hex::encode(finalized.finalized_cursor.block_hash)),
+    );
+    map.insert(
+        "committed_at_ms".into(),
+        Value::from(outcome.committed_at_unix_ms),
+    );
+
+    let (proof_kind, result, failure_reason) = match &outcome.projection {
+        ProofOutcomeProjectionV1::Pdp(projection) => {
+            map.insert(
+                "challenge_id_hex".into(),
+                Value::from(hex::encode(outcome.identity_digest)),
             );
+            let (result, reason) = match projection.status {
+                PdpOutcomeStatusV1::Accepted => ("success", None),
+                PdpOutcomeStatusV1::DeadlineExpired => ("failure", Some("deadline_expired")),
+                PdpOutcomeStatusV1::SubmissionLate => ("failure", Some("submission_late")),
+                PdpOutcomeStatusV1::FutureTimestamp => ("failure", Some("future_timestamp")),
+                PdpOutcomeStatusV1::InvalidProof => ("failure", Some("invalid_proof")),
+                PdpOutcomeStatusV1::AdmissionRevoked => ("failure", Some("admission_revoked")),
+                PdpOutcomeStatusV1::AdmissionInactive => ("failure", Some("admission_inactive")),
+                PdpOutcomeStatusV1::StorageUnavailable => ("failure", Some("storage_unavailable")),
+            };
+            ("pdp", result, reason)
+        }
+        ProofOutcomeProjectionV1::Potr(projection) => {
+            let receipt: PotrReceiptV1 =
+                norito::decode_from_bytes(&projection.canonical_signed_receipt)
+                    .map_err(|error| format!("failed to decode committed PoTR receipt: {error}"))?;
+            receipt
+                .validate()
+                .map_err(|error| format!("committed PoTR receipt is invalid: {error}"))?;
+            let canonical_receipt = receipt
+                .signed_receipt_bytes()
+                .map_err(|error| format!("failed to encode committed PoTR receipt: {error}"))?;
+            if canonical_receipt != projection.canonical_signed_receipt {
+                return Err("committed PoTR receipt is not exact canonical Norito".to_owned());
+            }
+            map.insert(
+                "receipt_b64".into(),
+                Value::from(BASE64_STANDARD.encode(canonical_receipt)),
+            );
+            map.insert(
+                "latency_ms".into(),
+                Value::from(u64::from(projection.latency_ms)),
+            );
+            map.insert(
+                "deadline_ms".into(),
+                Value::from(u64::from(projection.deadline_ms)),
+            );
+            map.insert("tier".into(), Value::from(receipt.tier.as_str()));
+            if let Some(trace_id) = receipt.trace_id {
+                map.insert("trace_id".into(), Value::from(hex::encode(trace_id)));
+            }
+            map.insert(
+                "recorded_at_ms".into(),
+                Value::from(projection.recorded_at_ms),
+            );
+            let (result, reason) = match projection.status {
+                PotrOutcomeStatusV1::Success => ("success", None),
+                PotrOutcomeStatusV1::MissedDeadline => ("failure", Some("missed_deadline")),
+                PotrOutcomeStatusV1::ProviderError => ("failure", Some("provider_error")),
+                PotrOutcomeStatusV1::GatewayError => ("failure", Some("gateway_error")),
+                PotrOutcomeStatusV1::ClientCancelled => ("failure", Some("client_cancelled")),
+            };
+            ("potr", result, reason)
+        }
+    };
+    map.insert("proof_kind".into(), Value::from(proof_kind));
+    map.insert("result".into(), Value::from(result));
+    if let Some(reason) = failure_reason {
+        map.insert("failure_reason".into(), Value::from(reason));
+    }
+    Ok(Value::Object(map))
+}
+
+#[cfg(feature = "app_api")]
+fn proof_outcome_query_error_response(error: QueryExecutionFail, proof_kind: &str) -> Response {
+    if matches!(
+        &error,
+        QueryExecutionFail::Find(FindError::SorafsProofOutcome(_))
+    ) {
+        return json_error(
+            StatusCode::NOT_FOUND,
+            format!("finalized {proof_kind} proof outcome was not found"),
+        );
+    }
+    if matches!(&error, QueryExecutionFail::Expired) {
+        return json_error(
+            StatusCode::CONFLICT,
+            format!("finalized {proof_kind} proof outcome cursor is stale"),
+        );
+    }
+    warn!("authoritative finalized SoraFS proof-outcome query failed");
+    json_error(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "authoritative finalized SoraFS proof-outcome state is unavailable",
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn proof_outcome_request_mismatch_response(proof_kind: &str) -> Response {
+    json_error(
+        StatusCode::NOT_FOUND,
+        format!("finalized {proof_kind} proof outcome was not found"),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn render_finalized_proof_stream_response(
+    state: &SharedAppState,
+    finalized: &ProofOutcomeFinalizedRecordV1,
+    request: &sorafs_manifest::ProofStreamRequestV1,
+) -> Response {
+    let outcome = &finalized.outcome;
+    let proof_kind_label = request.proof_kind.as_str();
+    if outcome.manifest_digest.as_bytes() != &request.manifest_digest
+        || outcome.provider_id.as_bytes() != &request.provider_id
+    {
+        return proof_outcome_request_mismatch_response(proof_kind_label);
+    }
+
+    let (result_label, failure_reason, tier_label, latency_ms) = match &outcome.projection {
+        ProofOutcomeProjectionV1::Pdp(projection) => {
+            if request.proof_kind != ProofStreamKind::Pdp
+                || request.challenge_id != Some(outcome.identity_digest)
+            {
+                return proof_outcome_request_mismatch_response(proof_kind_label);
+            }
+            let (result, reason) = match projection.status {
+                PdpOutcomeStatusV1::Accepted => ("success", None),
+                PdpOutcomeStatusV1::DeadlineExpired => ("failure", Some("deadline_expired")),
+                PdpOutcomeStatusV1::SubmissionLate => ("failure", Some("submission_late")),
+                PdpOutcomeStatusV1::FutureTimestamp => ("failure", Some("future_timestamp")),
+                PdpOutcomeStatusV1::InvalidProof => ("failure", Some("invalid_proof")),
+                PdpOutcomeStatusV1::AdmissionRevoked => ("failure", Some("admission_revoked")),
+                PdpOutcomeStatusV1::AdmissionInactive => ("failure", Some("admission_inactive")),
+                PdpOutcomeStatusV1::StorageUnavailable => ("failure", Some("storage_unavailable")),
+            };
+            (
+                result,
+                reason,
+                request.tier.map(ProofStreamTier::as_str),
+                None,
+            )
+        }
+        ProofOutcomeProjectionV1::Potr(projection) => {
+            if request.proof_kind != ProofStreamKind::Potr
+                || request.deadline_ms != Some(projection.deadline_ms)
+            {
+                return proof_outcome_request_mismatch_response(proof_kind_label);
+            }
+            let receipt: PotrReceiptV1 =
+                match norito::decode_from_bytes(&projection.canonical_signed_receipt) {
+                    Ok(receipt) => receipt,
+                    Err(_) => {
+                        return json_error(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "authoritative finalized SoraFS proof-outcome state is unavailable",
+                        );
+                    }
+                };
+            let expected_job_id = request
+                .orchestrator_job_id
+                .expect("validated PoTR request has an orchestrator job id");
+            if receipt.request_id != Some(expected_job_id)
+                || request.tier.is_some_and(|tier| tier != receipt.tier)
+            {
+                return proof_outcome_request_mismatch_response(proof_kind_label);
+            }
+            let (result, reason) = match projection.status {
+                PotrOutcomeStatusV1::Success => ("success", None),
+                PotrOutcomeStatusV1::MissedDeadline => ("failure", Some("missed_deadline")),
+                PotrOutcomeStatusV1::ProviderError => ("failure", Some("provider_error")),
+                PotrOutcomeStatusV1::GatewayError => ("failure", Some("gateway_error")),
+                PotrOutcomeStatusV1::ClientCancelled => ("failure", Some("client_cancelled")),
+            };
+            (
+                result,
+                reason,
+                Some(receipt.tier.as_str()),
+                Some(f64::from(projection.latency_ms)),
+            )
         }
     };
 
-    if matches!(proof_kind, ProofStreamKind::Pdp) {
+    let value = match finalized_proof_stream_item_json(finalized) {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authoritative finalized SoraFS proof-outcome state is unavailable",
+            );
+        }
+    };
+    if sorafs_car::proof_stream::ProofStreamItem::from_json(&value).is_err() {
         return json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported proof_kind; expected `por` or `potr`",
+            StatusCode::SERVICE_UNAVAILABLE,
+            "authoritative finalized SoraFS proof-outcome projection is invalid",
         );
     }
+    let mut rendered =
+        json::to_vec(&value).expect("validated proof-outcome projection must encode");
+    rendered.push(b'\n');
+    state.telemetry.with_metrics(|metrics| {
+        metrics.record_sorafs_proof_stream_event(
+            proof_kind_label,
+            result_label,
+            failure_reason,
+            Some(hex::encode(request.provider_id).as_str()),
+            tier_label,
+            latency_ms,
+        );
+    });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .body(Body::from(rendered))
+        .unwrap()
+}
 
-    let nonce = match decode_nonce(&req.nonce_b64) {
-        Ok(nonce) => nonce,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_challenge(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpChallengeEnqueueRequestDto>,
+) -> Response {
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
     };
-
-    let orchestrator_job_id = match req
-        .orchestrator_job_id_hex
+    let commitment = match decode_pdp_commitment(&req.commitment_b64) {
+        Ok(commitment) => commitment,
+        Err(response) => return response,
+    };
+    let challenge = match decode_pdp_challenge(&req.challenge_b64) {
+        Ok(challenge) => challenge,
+        Err(response) => return response,
+    };
+    let admission = match state
+        .sorafs_admission
         .as_ref()
-        .map(|value| parse_hex_fixed::<16>(value, "orchestrator_job_id_hex"))
-        .transpose()
+        .and_then(|registry| registry.entry(&challenge.provider_id))
     {
-        Ok(id) => id,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
+        Some(admission) => admission,
+        None => {
+            return json_error(
+                StatusCode::FORBIDDEN,
+                "PDP provider has no active council admission",
+            );
+        }
     };
-
-    let tier = match parse_tier(req.tier.as_deref()) {
-        Ok(tier) => tier,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP challenge admission") {
+        Ok(now) => now,
+        Err(response) => return response,
     };
-
-    let manifest_digest =
-        match parse_hex_fixed::<32>(&manifest_digest_hex_request, "manifest_digest_hex") {
-            Ok(digest) => digest,
-            Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
-        };
-
-    let provider_id = match parse_hex_fixed::<32>(&provider_id_hex, "provider_id_hex") {
-        Ok(id) => id,
-        Err(err) => return json_error(StatusCode::BAD_REQUEST, &err),
-    };
-
-    let request = ProofStreamRequestV1 {
-        manifest_digest,
-        provider_id,
-        proof_kind,
-        sample_count: req.sample_count,
-        deadline_ms: req.deadline_ms,
-        sample_seed: req.sample_seed,
-        nonce,
-        orchestrator_job_id,
-        tier,
-    };
-
-    if let Err(err) = request.validate() {
-        let message = request_error_message(err);
-        return json_error(StatusCode::BAD_REQUEST, message.as_ref());
-    }
-
-    let manifest = match state
-        .sorafs_node
-        .manifest_metadata_by_digest(&request.manifest_digest)
-    {
-        Ok(manifest) => manifest,
-        Err(err) => return node_storage_error_response(err),
-    };
-
-    let manifest_digest = *manifest.manifest_digest();
-    let manifest_digest_hex = hex::encode(manifest_digest);
-    let manifest_root_cid_hex = hex::encode(manifest.manifest_cid());
-
-    if let Err(response) = enforce_chunker_support_gateway(
-        &state,
-        manifest.chunk_profile_handle(),
-        TELEMETRY_ENDPOINT_PROOF_STREAM,
+    let challenge_id = challenge.challenge_id;
+    match protocol.enqueue_challenge(
+        commitment,
+        challenge,
+        admission.as_ref(),
+        req.expected_epoch_id,
+        now_unix,
     ) {
-        return response;
+        Ok(outcome) => {
+            let (result, sequence) = match outcome {
+                sorafs_node::PdpChallengeEnqueueOutcome::Inserted { sequence } => {
+                    ("inserted", sequence)
+                }
+                sorafs_node::PdpChallengeEnqueueOutcome::Existing { sequence } => {
+                    ("existing", sequence)
+                }
+            };
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry("result", Value::from(result)),
+                    json_entry("sequence", Value::from(sequence)),
+                    json_entry("challenge_id_hex", Value::from(hex::encode(challenge_id))),
+                ])),
+            )
+                .into_response()
+        }
+        Err(error) => pdp_protocol_error_response(error),
     }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_next(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpNextChallengeRequestDto>,
+) -> Response {
+    let provider_id = match parse_canonical_hex_fixed::<32>(&req.provider_id_hex, "provider_id_hex")
+    {
+        Ok(provider_id) => provider_id,
+        Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+    };
+    if state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(&provider_id))
+        .is_none()
+    {
+        return json_error(
+            StatusCode::FORBIDDEN,
+            "PDP provider has no active council admission",
+        );
+    }
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP next challenge") {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
+    match protocol.next_challenge(provider_id, now_unix) {
+        Ok(Some(next)) => {
+            let challenge_b64 = match norito::to_bytes(&next.challenge) {
+                Ok(bytes) => BASE64_STANDARD.encode(bytes),
+                Err(error) => {
+                    error!(?error, "failed to encode PDP next challenge");
+                    return json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "failed to encode PDP next challenge",
+                    );
+                }
+            };
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry("sequence", Value::from(next.sequence)),
+                    json_entry(
+                        "challenge_id_hex",
+                        Value::from(hex::encode(next.challenge.challenge_id)),
+                    ),
+                    json_entry("challenge_b64", Value::from(challenge_b64)),
+                    json_entry("enqueued_at_unix", Value::from(next.enqueued_at_unix)),
+                ])),
+            )
+                .into_response()
+        }
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_proof(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpProofSubmitRequestDto>,
+) -> Response {
+    let challenge_id =
+        match parse_canonical_hex_fixed::<32>(&req.challenge_id_hex, "challenge_id_hex") {
+            Ok(challenge_id) => challenge_id,
+            Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+        };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    let challenge_status = match protocol.challenge_status(&challenge_id) {
+        Ok(Some(status)) => status,
+        Ok(None) => return json_error(StatusCode::NOT_FOUND, "PDP challenge was not found"),
+        Err(error) => return pdp_protocol_error_response(error),
+    };
+    let now_unix = match system_time_to_secs(SystemTime::now(), "PDP proof submission") {
+        Ok(now) => now,
+        Err(response) => return response,
+    };
+    let admission = match state
+        .sorafs_admission
+        .as_ref()
+        .and_then(|registry| registry.entry(&challenge_status.provider_id))
+    {
+        Some(admission) => admission,
+        None => {
+            return match protocol.reject_revoked(challenge_id, now_unix, &state.sorafs_node) {
+                Ok(_) => match protocol.challenge_status(&challenge_id) {
+                    Ok(Some(status)) => {
+                        (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response()
+                    }
+                    Ok(None) => json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "PDP challenge disappeared after admission revocation",
+                    ),
+                    Err(error) => pdp_protocol_error_response(error),
+                },
+                Err(error) => pdp_protocol_error_response(error),
+            };
+        }
+    };
+    // The explicit challenge identity is authenticated before decoding proof
+    // material. Even invalid base64 or an oversized proof is represented by a
+    // bounded malformed byte slice so the protocol can durably reject the
+    // named challenge and enqueue its authoritative repair.
+    let proof_bytes = match decode_bounded_pdp_base64(
+        &req.proof_b64,
+        PDP_PROOF_MAX_CANONICAL_BYTES_V1,
+        "proof_b64",
+    ) {
+        Ok(bytes) => bytes,
+        Err(_) => Vec::new(),
+    };
+    match protocol.submit_proof_for_challenge_bytes(
+        challenge_id,
+        &proof_bytes,
+        admission.as_ref(),
+        now_unix,
+        &state.sorafs_node,
+    ) {
+        Ok(_) => match protocol.challenge_status(&challenge_id) {
+            Ok(Some(status)) => (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response(),
+            Ok(None) => json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "PDP challenge disappeared after proof submission",
+            ),
+            Err(error) => pdp_protocol_error_response(error),
+        },
+        Err(
+            sorafs_node::PdpProviderProtocolError::AdmissionInactive
+            | sorafs_node::PdpProviderProtocolError::UnauthorizedProviderKey,
+        ) => match protocol.reject_revoked(challenge_id, now_unix, &state.sorafs_node) {
+            Ok(_) => match protocol.challenge_status(&challenge_id) {
+                Ok(Some(status)) => {
+                    (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response()
+                }
+                Ok(None) => json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "PDP challenge disappeared after admission rotation",
+                ),
+                Err(error) => pdp_protocol_error_response(error),
+            },
+            Err(error) => pdp_protocol_error_response(error),
+        },
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_status(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpChallengeStatusRequestDto>,
+) -> Response {
+    let challenge_id =
+        match parse_canonical_hex_fixed::<32>(&req.challenge_id_hex, "challenge_id_hex") {
+            Ok(challenge_id) => challenge_id,
+            Err(error) => return json_error(StatusCode::BAD_REQUEST, error),
+        };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    match protocol.challenge_status(&challenge_id) {
+        Ok(Some(status)) => (StatusCode::OK, JsonBody(pdp_status_json(status))).into_response(),
+        Ok(None) => json_error(StatusCode::NOT_FOUND, "PDP challenge was not found"),
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_pdp_export(
+    State(state): State<SharedAppState>,
+    JsonOnly(req): JsonOnly<PdpStatusExportRequestDto>,
+) -> Response {
+    let limit = req.limit.unwrap_or(100);
+    let limit = match usize::try_from(limit) {
+        Ok(limit) => limit,
+        Err(_) => {
+            return json_error(StatusCode::BAD_REQUEST, "PDP export limit is invalid");
+        }
+    };
+    let Some(protocol) = state.sorafs_node.pdp_provider_protocol() else {
+        return json_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "PDP provider protocol is unavailable",
+        );
+    };
+    match protocol.export_statuses(req.after_sequence.unwrap_or(0), limit) {
+        Ok(statuses) => {
+            let next_sequence = statuses
+                .last()
+                .map_or(req.after_sequence.unwrap_or(0), |status| status.sequence);
+            (
+                StatusCode::OK,
+                JsonBody(json_object(vec![
+                    json_entry(
+                        "items",
+                        Value::Array(statuses.into_iter().map(pdp_status_json).collect()),
+                    ),
+                    json_entry("next_sequence", Value::from(next_sequence)),
+                ])),
+            )
+                .into_response()
+        }
+        Err(error) => pdp_protocol_error_response(error),
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_sorafs_proof_stream(
+    State(state): State<SharedAppState>,
+    JsonOnly(envelope): JsonOnly<ProofStreamHttpRequestV1>,
+) -> Response {
+    let request = envelope.into_request();
+    let proof_kind = request.proof_kind;
+    let provider_id = request.provider_id;
+    let provider_id_hex = hex::encode(provider_id);
+    let requested_tier_label = request.tier.map(ProofStreamTier::as_str);
 
     match proof_kind {
         ProofStreamKind::Por => {
+            if !state.sorafs_node.is_enabled() {
+                return storage_disabled_response();
+            }
+            match validate_storage_por_provider_binding(
+                state.sorafs_node.capacity_usage().provider_id,
+                provider_id,
+            ) {
+                Ok(()) => {}
+                Err(StoragePorProviderBindingError::Unconfigured) => {
+                    return json_error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "SoraFS provider identity is not configured",
+                    );
+                }
+                Err(StoragePorProviderBindingError::Mismatch) => {
+                    return json_error(
+                        StatusCode::FORBIDDEN,
+                        "requested provider does not match this SoraFS node",
+                    );
+                }
+            }
+            let manifest = match state
+                .sorafs_node
+                .manifest_metadata_by_digest(&request.manifest_digest)
+            {
+                Ok(manifest) => manifest,
+                Err(err) => return node_storage_error_response(err),
+            };
+            let manifest_digest_hex = hex::encode(manifest.manifest_digest());
+            if let Err(response) = enforce_chunker_support_gateway(
+                &state,
+                manifest.chunk_profile_handle(),
+                TELEMETRY_ENDPOINT_PROOF_STREAM,
+            ) {
+                return response;
+            }
             let sample_count = request
                 .sample_count
                 .expect("validation guarantees sample_count for PoR");
@@ -28420,7 +30478,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                             "error",
                             Some("storage_error"),
                             Some(provider_id_hex.as_str()),
-                            req.tier.as_deref(),
+                            requested_tier_label,
                             None,
                         );
                         metrics.dec_sorafs_proof_stream_inflight("por");
@@ -28437,18 +30495,8 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 elapsed_ms / sample_len as f64
             };
 
-            let sample_seed = request.sample_seed;
-            let orchestrator_job_hex = req
-                .orchestrator_job_id_hex
-                .as_ref()
-                .map(|job| job.trim().to_ascii_lowercase());
-            let requested_tier_label = req
-                .tier
-                .as_ref()
-                .map(|tier| tier.trim().to_ascii_lowercase());
             let telemetry = state.telemetry.clone();
             let manifest_digest_hex_stream = manifest_digest_hex.clone();
-            let manifest_root_cid_hex_stream = manifest_root_cid_hex.clone();
             let provider_id_hex_stream = provider_id_hex.clone();
             let (tx, rx) = mpsc::channel::<Bytes>(16);
             let stream = ReceiverStream::new(rx).map(Ok::<Bytes, Infallible>);
@@ -28463,10 +30511,6 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                         Value::from(manifest_digest_hex_stream.clone()),
                     );
                     map.insert(
-                        "manifest_cid_hex".into(),
-                        Value::from(manifest_root_cid_hex_stream.clone()),
-                    );
-                    map.insert(
                         "provider_id_hex".into(),
                         Value::from(provider_id_hex_stream.clone()),
                     );
@@ -28476,18 +30520,8 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                         "latency_ms".into(),
                         Value::from(round_clamped_u64(per_item_latency)),
                     );
-                    map.insert("failure_reason".into(), Value::Null);
-                    if let Some(seed) = sample_seed {
-                        map.insert("sample_seed".into(), Value::from(seed));
-                    }
-                    if let Some(job_hex) = orchestrator_job_hex.as_ref() {
-                        map.insert(
-                            "orchestrator_job_id_hex".into(),
-                            Value::from(job_hex.clone()),
-                        );
-                    }
-                    if let Some(tier_label) = requested_tier_label.as_ref() {
-                        map.insert("tier".into(), Value::from(tier_label.clone()));
+                    if let Some(tier_label) = requested_tier_label {
+                        map.insert("tier".into(), Value::from(tier_label));
                     }
                     let mut rendered =
                         json::to_vec(&Value::Object(map)).expect("serialize PoR proof item");
@@ -28504,7 +30538,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                             "success",
                             None,
                             Some(provider_id_hex_stream.as_str()),
-                            requested_tier_label.as_deref(),
+                            requested_tier_label,
                             Some(per_item_latency),
                         );
                     }
@@ -28519,169 +30553,48 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
                 .unwrap()
         }
         ProofStreamKind::Potr => {
-            let _deadline_ms = request
-                .deadline_ms
-                .expect("validation guarantees deadline for PoTR");
-
             state.telemetry.with_metrics(|metrics| {
                 metrics.inc_sorafs_proof_stream_inflight("potr");
             });
-
-            let receipts =
-                state
-                    .sorafs_node
-                    .potr_receipts(&manifest_digest, &provider_id, request.tier);
-
-            let orchestrator_job_hex = req
-                .orchestrator_job_id_hex
-                .as_ref()
-                .map(|job| job.trim().to_ascii_lowercase());
-            let requested_tier_label = req
-                .tier
-                .as_ref()
-                .map(|tier| tier.trim().to_ascii_lowercase());
-            let telemetry = state.telemetry.clone();
-            let manifest_digest_hex_stream = manifest_digest_hex.clone();
-            let manifest_root_cid_hex_stream = manifest_root_cid_hex.clone();
-            let provider_id_hex_stream = provider_id_hex.clone();
-            let (tx, rx) = mpsc::channel::<Bytes>(16);
-            let stream = ReceiverStream::new(rx).map(Ok::<Bytes, Infallible>);
-            let body = Body::from_stream(stream);
-
-            tokio::spawn(async move {
-                let sender = tx;
-                for receipt in receipts {
-                    let (result_label, metrics_reason) = match receipt.status {
-                        PotrStatus::Success => ("success", None),
-                        PotrStatus::MissedDeadline => ("failure", Some("missed_deadline")),
-                        PotrStatus::ProviderError => ("failure", Some("provider_error")),
-                        PotrStatus::GatewayError => ("failure", Some("gateway_error")),
-                        PotrStatus::ClientCancelled => ("failure", Some("client_cancelled")),
-                    };
-
-                    let failure_text = receipt.note.as_ref().map_or_else(
-                        || metrics_reason.map(ToOwned::to_owned),
-                        |note| {
-                            if note.trim().is_empty() {
-                                metrics_reason.map(ToOwned::to_owned)
-                            } else {
-                                Some(note.clone())
-                            }
-                        },
-                    );
-
-                    let mut map = Map::new();
-                    map.insert(
-                        "manifest_digest_hex".into(),
-                        Value::from(manifest_digest_hex_stream.clone()),
-                    );
-                    map.insert(
-                        "manifest_cid_hex".into(),
-                        Value::from(manifest_root_cid_hex_stream.clone()),
-                    );
-                    map.insert(
-                        "provider_id_hex".into(),
-                        Value::from(provider_id_hex_stream.clone()),
-                    );
-                    map.insert("proof_kind".into(), Value::from("potr"));
-                    map.insert("result".into(), Value::from(result_label));
-                    map.insert(
-                        "latency_ms".into(),
-                        Value::from(u64::from(receipt.latency_ms)),
-                    );
-                    map.insert(
-                        "deadline_ms".into(),
-                        Value::from(u64::from(receipt.deadline_ms)),
-                    );
-                    let receipt_tier_label = match receipt.tier {
-                        ProofStreamTier::Hot => "hot",
-                        ProofStreamTier::Warm => "warm",
-                        ProofStreamTier::Archive => "archive",
-                    };
-                    map.insert("tier".into(), Value::from(receipt_tier_label));
-                    map.insert(
-                        "requested_at_ms".into(),
-                        Value::from(receipt.requested_at_ms),
-                    );
-                    map.insert(
-                        "responded_at_ms".into(),
-                        Value::from(receipt.responded_at_ms),
-                    );
-                    map.insert("range_start".into(), Value::from(receipt.range_start));
-                    map.insert("range_end".into(), Value::from(receipt.range_end));
-                    if let Some(request_id) = receipt.request_id {
-                        map.insert("request_id".into(), Value::from(encode(request_id)));
-                    }
-                    if let Some(trace_id) = receipt.trace_id {
-                        map.insert("trace_id".into(), Value::from(encode(trace_id)));
-                    }
-                    map.insert("recorded_at_ms".into(), Value::from(receipt.recorded_at_ms));
-                    if let Some(reason) = failure_text.as_ref() {
-                        map.insert("failure_reason".into(), Value::from(reason.clone()));
-                    } else {
-                        map.insert("failure_reason".into(), Value::Null);
-                    }
-                    if let Some(note) = receipt.note.as_ref() {
-                        if !note.trim().is_empty() {
-                            map.insert("note".into(), Value::from(note.clone()));
-                        }
-                    }
-                    if let Some(job_hex) = orchestrator_job_hex.as_ref() {
-                        map.insert(
-                            "orchestrator_job_id_hex".into(),
-                            Value::from(job_hex.clone()),
-                        );
-                    }
-                    if let Some(tier_label) = requested_tier_label.as_ref() {
-                        map.insert("requested_tier".into(), Value::from(tier_label.clone()));
-                    }
-                    if let Some(signature) = receipt.gateway_signature.as_ref() {
-                        map.insert(
-                            "gateway_signature".into(),
-                            potr_signature_to_json(signature),
-                        );
-                    }
-                    if let Some(signature) = receipt.provider_signature.as_ref() {
-                        map.insert(
-                            "provider_signature".into(),
-                            potr_signature_to_json(signature),
-                        );
-                    }
-
-                    let mut rendered =
-                        json::to_vec(&Value::Object(map)).expect("serialize PoTR receipt item");
-                    rendered.push(b'\n');
-                    if sender.send(Bytes::from(rendered)).await.is_err() {
-                        break;
-                    }
-
-                    telemetry.with_metrics(|metrics| {
-                        metrics.record_sorafs_proof_stream_event(
-                            "potr",
-                            result_label,
-                            metrics_reason,
-                            Some(provider_id_hex_stream.as_str()),
-                            Some(receipt_tier_label),
-                            Some(f64::from(receipt.latency_ms)),
-                        );
-                    });
+            let job_id = request
+                .orchestrator_job_id
+                .expect("validation guarantees orchestrator job id for PoTR");
+            let identity_digest =
+                potr_request_scope_digest_v1(request.manifest_digest, provider_id, job_id);
+            let query =
+                FindSorafsProofOutcome::new(ProofOutcomeKindV1::Potr, identity_digest, None);
+            let finalized = query.execute(&state.state.query_view());
+            let response = match finalized {
+                Ok(finalized) => {
+                    render_finalized_proof_stream_response(&state, &finalized, &request)
                 }
-
-                telemetry.with_metrics(|metrics| {
-                    metrics.dec_sorafs_proof_stream_inflight("potr");
-                });
+                Err(error) => proof_outcome_query_error_response(error, "potr"),
+            };
+            state.telemetry.with_metrics(|metrics| {
+                metrics.dec_sorafs_proof_stream_inflight("potr");
             });
-
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CONTENT_TYPE, "application/x-ndjson")
-                .body(body)
-                .unwrap()
+            response
         }
-        ProofStreamKind::Pdp => json_error(
-            StatusCode::BAD_REQUEST,
-            "unsupported proof_kind; expected `por` or `potr`",
-        ),
+        ProofStreamKind::Pdp => {
+            state.telemetry.with_metrics(|metrics| {
+                metrics.inc_sorafs_proof_stream_inflight("pdp");
+            });
+            let challenge_id = request
+                .challenge_id
+                .expect("validation guarantees challenge id for PDP");
+            let query = FindSorafsProofOutcome::new(ProofOutcomeKindV1::Pdp, challenge_id, None);
+            let finalized = query.execute(&state.state.query_view());
+            let response = match finalized {
+                Ok(finalized) => {
+                    render_finalized_proof_stream_response(&state, &finalized, &request)
+                }
+                Err(error) => proof_outcome_query_error_response(error, "pdp"),
+            };
+            state.telemetry.with_metrics(|metrics| {
+                metrics.dec_sorafs_proof_stream_inflight("pdp");
+            });
+            response
+        }
     }
 }
 
@@ -29885,23 +31798,14 @@ fn storage_disabled_response() -> Response {
     feature_disabled("sorafs storage API is not enabled on this node")
 }
 
-fn decode_nonce(input: &str) -> Result<[u8; 16], String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Err("nonce_b64 must not be empty".to_string());
-    }
-    let decoded = BASE64_STANDARD
-        .decode(trimmed.as_bytes())
-        .map_err(|err| format!("invalid nonce_b64: {err}"))?;
-    if decoded.len() != 16 {
+fn parse_canonical_hex_fixed<const N: usize>(input: &str, field: &str) -> Result<[u8; N], String> {
+    let parsed = parse_hex_fixed::<N>(input, field)?;
+    if input != hex::encode(parsed) {
         return Err(format!(
-            "nonce_b64 must decode to 16 bytes (found {})",
-            decoded.len()
+            "{field} must use canonical lowercase hexadecimal without surrounding whitespace"
         ));
     }
-    let mut out = [0u8; 16];
-    out.copy_from_slice(&decoded);
-    Ok(out)
+    Ok(parsed)
 }
 
 fn parse_hex_fixed<const N: usize>(input: &str, field: &str) -> Result<[u8; N], String> {
@@ -29952,53 +31856,6 @@ fn record_storage_metrics(state: &SharedAppState) {
     }
     #[cfg(not(feature = "telemetry"))]
     let _ = state;
-}
-
-fn parse_proof_kind(label: &str) -> Option<ProofStreamKind> {
-    match label.trim().to_ascii_lowercase().as_str() {
-        "por" => Some(ProofStreamKind::Por),
-        "pdp" => Some(ProofStreamKind::Pdp),
-        "potr" => Some(ProofStreamKind::Potr),
-        _ => None,
-    }
-}
-
-fn parse_tier(label: Option<&str>) -> Result<Option<ProofStreamTier>, String> {
-    label.map_or(Ok(None), |value| {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "hot" => Ok(Some(ProofStreamTier::Hot)),
-            "warm" => Ok(Some(ProofStreamTier::Warm)),
-            "archive" => Ok(Some(ProofStreamTier::Archive)),
-            _ => Err("tier must be hot, warm, or archive".to_string()),
-        }
-    })
-}
-
-fn request_error_message(error: ProofStreamRequestError) -> Cow<'static, str> {
-    match error {
-        ProofStreamRequestError::InvalidManifestDigest => {
-            Cow::Borrowed("manifest_digest_hex must be non-zero")
-        }
-        ProofStreamRequestError::InvalidProviderId => {
-            Cow::Borrowed("provider_id_hex must be non-zero")
-        }
-        ProofStreamRequestError::InvalidNonce => Cow::Borrowed("nonce must be non-zero"),
-        ProofStreamRequestError::MissingSampleCount => {
-            Cow::Borrowed("sample_count is required for PoR/PDP proof kinds")
-        }
-        ProofStreamRequestError::MissingDeadlineMs => {
-            Cow::Borrowed("deadline_ms is required when requesting PoTR proofs")
-        }
-        ProofStreamRequestError::ZeroSampleCount => {
-            Cow::Borrowed("sample_count must be greater than zero")
-        }
-        ProofStreamRequestError::SampleCountTooLarge => Cow::Owned(format!(
-            "sample_count must be at most {MAX_PROOF_STREAM_SAMPLE_COUNT}"
-        )),
-        ProofStreamRequestError::ZeroDeadlineMs => {
-            Cow::Borrowed("deadline_ms must be greater than zero milliseconds")
-        }
-    }
 }
 
 fn node_storage_error_response(err: NodeStorageError) -> Response {
@@ -31026,39 +32883,57 @@ mod advert_tests {
         state::{State, World},
     };
     use iroha_crypto::{
-        Algorithm, Hash, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
+        Algorithm, Hash, HashOf, KeyPair, PublicKey, Signature as IrohaSignature, SignatureOf,
     };
     use iroha_data_model::{
-        Encode, Registrable,
+        Encode, IntoKeyValue, Registrable,
         account::{Account, AccountId},
         asset::{Asset, AssetDefinition, AssetId},
         block::BlockHeader,
         domain::Domain,
         domain::DomainId,
+        isi::sorafs::{
+            SetSorafsProofOutcomeSignerPolicy, SorafsPdpProofOutcomeSubmissionV1,
+            SorafsPotrProofOutcomeSubmissionV1, SorafsProofOutcomeSubmissionV1,
+            SubmitSorafsProofOutcome,
+        },
         metadata::Metadata,
+        permission::{Permission, Permissions},
         soracloud::{
             SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
             SoraContainerManifestV1, SoraDeploymentBundleV1, SoraServiceConfigEntryV1,
             SoraServiceDeploymentStateV1, SoraServiceManifestV1,
         },
         sorafs::{
-            capacity::{CapacityDeclarationRecord, ProviderId},
+            capacity::CapacityDeclarationRecord,
             moderation::{
                 ADVERSARIAL_CORPUS_VERSION_V1, AdversarialCorpusManifestV1,
                 AdversarialPerceptualFamilyV1, AdversarialPerceptualVariantV1,
-                MODERATION_REPRO_MANIFEST_VERSION_V1, ModerationModelFingerprintV1,
-                ModerationReproBodyV1, ModerationReproManifestV1, ModerationReproSignatureV1,
-                ModerationSeedMaterialV1, ModerationThresholdsV1,
+                MODERATION_REPRO_MANIFEST_VERSION_V1, MODERATION_SIGNED_RESULT_VERSION_V1,
+                MODERATION_TRUST_POLICY_VERSION_V1, ModerationModelFingerprintV1,
+                ModerationModelScoreV1, ModerationReproBodyV1, ModerationReproManifestV1,
+                ModerationReproSignatureV1, ModerationSeedMaterialV1,
+                ModerationSignedScreeningBodyV1, ModerationSignedScreeningResultV1,
+                ModerationThresholdsV1, ModerationTrustPolicyBodyV1,
+                ModerationTrustPolicySignatureV1, ModerationTrustPolicyV1,
+                ModerationTrustedSignerV1,
             },
             pin_registry::{
                 ChunkerProfileHandle, ManifestAliasBinding, ManifestAliasRecord, ManifestDigest,
                 PinFeePayment, PinManifestRecord, PinPolicy as RegistryPinPolicy, PinStatus,
                 ReplicationOrderId, ReplicationOrderRecord, ReplicationOrderStatus, StorageClass,
             },
+            proof_ledger::{
+                PROOF_OUTCOME_RECORD_VERSION_V1, PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
+                PdpOutcomeProjectionV1, ProofOutcomeFinalizedCursorV1, ProofOutcomeRecordV1,
+                ProofOutcomeSignerPolicyV1,
+            },
             reserve::{ReserveDuration, ReservePolicyV1, ReserveTier},
         },
     };
+    use iroha_executor_data_model::permission::sorafs::CanManageSorafsProofOutcomePolicy;
     use iroha_primitives::json::Json;
+    use iroha_test_samples::gen_account_in;
     use norito::to_bytes;
     use rand::rand_core::{TryCryptoRng, TryRngCore};
     use sorafs_manifest::{
@@ -31066,8 +32941,9 @@ mod advert_tests {
         BYTES_PER_GIB as ORDERBOOK_BYTES_PER_GIB, ByteRangeV1, CapabilityTlv, CapabilityType,
         CouncilSignature, DagCodecId, ENDPOINT_ATTESTATION_VERSION_V1, EndpointAdmissionV1,
         EndpointAttestationKind, EndpointAttestationV1, EndpointKind, EndpointMetadata,
-        EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder, PROVIDER_ADVERT_VERSION_V1,
-        PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
+        EndpointMetadataKey, MAX_ADVERT_TTL_SECS, ManifestBuilder, OrderCancelReasonV1,
+        OrderCancelV1, OrderFillOutcomeV1, OrderRequestV1, OrderSideV1, OrderTierV1,
+        PROVIDER_ADVERT_VERSION_V1, PathDiversityPolicy, PinPolicy, ProviderAdmissionCouncilPolicy,
         ProviderAdmissionEnvelopeV1, ProviderAdmissionProposalV1, ProviderAdvertBodyV1,
         ProviderAdvertV1, QosHints, REPUTATION_PROVIDER_INPUT_VERSION_V1,
         REPUTATION_PROVIDER_METRICS_VERSION_V1, REPUTATION_SCORING_EVIDENCE_VERSION_V1,
@@ -31076,13 +32952,18 @@ mod advert_tests {
         ReputationReserveStageV1, ReputationScoringEvidenceV1, ReputationSnapshotSignatureV1,
         ReputationSnapshotTrustPolicyV1, ReputationTrustedSignerV1, ReputationWeightsV1,
         SETTLEMENT_RECEIPT_VERSION_V1, SIGNED_REPUTATION_SNAPSHOT_VERSION_V1,
-        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SignatureAlgorithm,
-        SoraFsAppealFinanceAccountFlowV1, SoraFsAppealFinanceJurorPayoutV1,
-        SoraFsAppealFinanceOutcomeV1, SoraFsAppealFinanceReportV1,
-        SoraFsAppealFinanceWeeklyRollupV1, StakePointer, build_reputation_snapshot,
+        SORAFS_APPEAL_FINANCE_REPORT_VERSION_V1, SettlementChannelStatusV1, SettlementChannelV1,
+        SettlementReceiptV1, SignatureAlgorithm, SoraFsAppealFinanceAccountFlowV1,
+        SoraFsAppealFinanceJurorPayoutV1, SoraFsAppealFinanceOutcomeV1,
+        SoraFsAppealFinanceReportV1, SoraFsAppealFinanceWeeklyRollupV1, StakePointer, TradeEventV1,
+        build_reputation_snapshot,
         capacity::{CAPACITY_DECLARATION_VERSION_V1, CapacityDeclarationV1, ChunkerCommitmentV1},
         chunker_registry, compute_advert_body_digest, compute_envelope_authorization_digest,
         compute_proposal_digest,
+        pdp::{
+            PDP_GOVERNANCE_ARCHIVE_VERSION_V1, PdpChallengeV1, PdpGovernanceArchiveV1,
+            PdpRejectionReasonV1, PdpTerminalDecisionV1,
+        },
         pin_registry::{
             AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
         },
@@ -31091,10 +32972,13 @@ mod advert_tests {
             POR_PROOF_VERSION_V1, PorChallengeV1, PorProofSampleV1, PorProofV1, PorReportIsoWeek,
             derive_challenge_id, derive_challenge_seed,
         },
-        potr::{POTR_RECEIPT_VERSION_V1, PotrReceiptV1, PotrStatus},
+        potr::PotrReceiptV1,
         proof_stream::ProofStreamTier,
     };
-    use sorafs_node::config::StorageConfig;
+    use sorafs_node::{
+        ModerationQuarantineKeyWrapper, NodeRuntimeDeps, PrivacyCyclePrfProviderErrorV1,
+        PrivacyCyclePrfProviderV1, PrivacyCyclePrfRequestV1, config::StorageConfig,
+    };
     use std::collections::{BTreeMap, HashSet};
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
@@ -34660,6 +36544,29 @@ mod advert_tests {
         (app, temp_dir, auth)
     }
 
+    fn sorafs_app_state_with_orderbook_auth_without_screening_authority()
+    -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        let auth = orderbook_auth_fixture();
+        let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let cfg = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(temp_dir.path().join("storage"))
+            .build();
+        let node = sorafs_node::NodeHandle::try_new_with_quarantine_key_wrapper(
+            cfg,
+            torii_test_quarantine_key_wrapper(),
+        )
+        .expect("initialise test node without screening authority");
+        let app_inner = Arc::get_mut(&mut app).expect("unique app state");
+        app_inner.sorafs_node = node;
+        #[cfg(feature = "telemetry")]
+        {
+            app_inner.telemetry = isolated_test_telemetry();
+        }
+        (app, temp_dir, auth)
+    }
+
     fn sorafs_app_state_with_moderation_operator_auth()
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
         let auth = orderbook_auth_fixture();
@@ -34761,6 +36668,20 @@ mod advert_tests {
 
     fn sorafs_app_state_with_privacy_aggregate_schedule()
     -> (SharedAppState, TempDir, OrderbookAuthFixture) {
+        struct TestPrivacyCyclePrfProvider;
+
+        impl PrivacyCyclePrfProviderV1 for TestPrivacyCyclePrfProvider {
+            fn derive_cycle_output(
+                &self,
+                request: &PrivacyCyclePrfRequestV1,
+            ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1> {
+                let mut hasher = blake3::Hasher::new();
+                hasher.update(b"sorafs.torii.test-privacy-cycle-prf.v1");
+                hasher.update(&request.binding_digest());
+                Ok(*hasher.finalize().as_bytes())
+            }
+        }
+
         let auth = orderbook_auth_fixture();
         let mut app = mk_app_state_for_tests_with_world(orderbook_world(&auth));
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -34774,8 +36695,14 @@ mod advert_tests {
                 cycle_seconds: 100,
                 publish_delay_seconds: 10,
             }))
+            .privacy_aggregate_policy(Some(privacy_aggregate_api_policy_config()))
             .build();
-        let node = sorafs_node::NodeHandle::new(cfg);
+        let node = sorafs_node::NodeHandle::try_new_with_runtime_deps(
+            cfg,
+            NodeRuntimeDeps::default()
+                .with_privacy_cycle_prf_provider(Arc::new(TestPrivacyCyclePrfProvider)),
+        )
+        .expect("initialise test node with privacy-cycle PRF provider");
         assert!(node.has_governance_publisher());
         let app_inner = Arc::get_mut(&mut app).expect("unique app state");
         app_inner.sorafs_node = node;
@@ -34894,6 +36821,7 @@ mod advert_tests {
             occurred_at_unix,
             population_label: "jurisdiction-a".to_string(),
             population_digest_hex: Some(hex::encode([0xA0; 32])),
+            subject_digest_hex: hex::encode(blake3::hash(event_id.as_bytes()).as_bytes()),
             metrics: vec![
                 TransparencyPrivacyAggregateSourceMetricDto {
                     key: "appeals_upheld".to_string(),
@@ -34923,19 +36851,7 @@ mod advert_tests {
     ) -> TransparencyPrivacyAggregatePublishDueRequestDto {
         TransparencyPrivacyAggregatePublishDueRequestDto {
             now_unix,
-            aggregate_id_prefix: "torii-source".to_string(),
-            privacy_mode: "suppression".to_string(),
-            epsilon_micros: None,
-            delta_ppb: None,
-            noise_scale_micros: None,
-            suppression_threshold: Some(1),
-            noise_seed_hex: None,
-            policy_digest_hex: Some(hex::encode([0xC0; 32])),
             previous_block_hash_hex: None,
-            metadata: Some(vec![TransparencyLedgerMetadataDto {
-                key: "publisher".to_string(),
-                value: "torii".to_string(),
-            }]),
         }
     }
 
@@ -34954,16 +36870,32 @@ mod advert_tests {
                 version:
                     iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
                 mode: iroha_data_model::sorafs::transparency::ModerationPrivacyModeV1::Suppression,
-                epsilon_micros: None,
+                epsilon_numerator: None,
+                epsilon_denominator: None,
                 delta_ppb: None,
-                noise_scale_micros: None,
+                per_subject_metric_cap: None,
                 suppression_threshold: Some(1),
                 suppressed_count: 0,
             },
-            noise_seed: None,
             policy_digest: Some([0xC0; 32]),
             metadata: Vec::new(),
         }
+    }
+
+    fn privacy_aggregate_api_policy_config() -> sorafs_node::config::PrivacyAggregatePolicyConfig {
+        let cycle = privacy_aggregate_api_cycle_config();
+        sorafs_node::config::PrivacyAggregatePolicyConfig::new(
+            cycle.aggregate_id_prefix,
+            cycle.privacy,
+            cycle.policy_digest.expect("privacy API test policy digest"),
+            sorafs_node::PrivacyCompositionBudgetPolicyV1 {
+                budget_id: [0xC0; 32],
+                epsilon_limit_numerator: 10,
+                epsilon_limit_denominator: 1,
+                max_publications: 10,
+            },
+        )
+        .expect("privacy API test policy")
     }
 
     fn appeal_finance_weekly_rollup_body(rollup: SoraFsAppealFinanceWeeklyRollupV1) -> Bytes {
@@ -36910,30 +38842,6 @@ mod advert_tests {
             Some(1)
         );
         assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
-
-        let publication = app
-            .sorafs_node
-            .publish_privacy_aggregate_cycle_from_source_events(
-                *b"cycle-prv-api001",
-                1_800_000_000,
-                1_800_604_800,
-                1_800_604_801,
-                None,
-                privacy_aggregate_api_cycle_config(),
-            )
-            .expect("publish privacy aggregate cycle from API source event");
-        assert_eq!(publication.block.entry_count, 1);
-        assert_eq!(publication.proofs.len(), 1);
-        assert_eq!(
-            publication.proofs[0].entry.kind,
-            ModerationLedgerEntryKindV1::PrivacyAggregate
-        );
-        assert!(
-            publication.proofs[0]
-                .entry
-                .subject
-                .contains("jurisdiction-a")
-        );
     }
 
     #[tokio::test]
@@ -36950,6 +38858,51 @@ mod advert_tests {
             post_privacy_aggregate_source_event(app.clone(), &auth.provider, body).await;
         assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         assert_eq!(app.sorafs_node.privacy_aggregate_source_event_count(), 1);
+    }
+
+    #[test]
+    fn privacy_aggregate_source_event_requires_subject_digest() {
+        let body = norito::json::to_vec(&norito::json!({
+            "event_id": "privacy-event-a",
+            "occurred_at_unix": 1_800_000_010_u64,
+            "population_label": "jurisdiction-a",
+            "metrics": [
+                {"key": "appeals_upheld", "value": 1_u64, "unit": "count"}
+            ],
+        }))
+        .expect("encode source event without subject digest");
+
+        let response = privacy_aggregate_source_event_from_body(&body)
+            .expect_err("missing subject digest must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn privacy_aggregate_publish_due_rejects_caller_supplied_policy() {
+        let body = norito::json::to_vec(&norito::json!({
+            "now_unix": 211_u64,
+            "aggregate_id_prefix": "legacy-caller-policy",
+            "privacy_mode": "suppression",
+            "suppression_threshold": 1_u64,
+        }))
+        .expect("encode retired publish-due policy fields");
+
+        let response = privacy_aggregate_publish_due_request_from_body(&body)
+            .expect_err("caller-supplied privacy policy must be rejected");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn privacy_aggregate_publish_due_rejects_caller_supplied_prf_output() {
+        let body = norito::json::to_vec(&norito::json!({
+            "now_unix": 211_u64,
+            "cycle_prf_output_hex": ("5a".repeat(32)),
+        }))
+        .expect("encode retired caller PRF field");
+
+        let response = privacy_aggregate_publish_due_request_from_body(&body)
+            .expect_err("caller-supplied PRF output must be rejected as an unknown field");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -37005,7 +38958,7 @@ mod advert_tests {
             value
                 .get("retained_source_event_count")
                 .and_then(Value::as_u64),
-            Some(1)
+            Some(0)
         );
         let window = value
             .get("window")
@@ -37139,6 +39092,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -37594,7 +39548,18 @@ mod advert_tests {
         let method = Method::POST;
         let uri = orderbook_uri(ORDERBOOK_ORDER_URI);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_orderbook_order(State(app), headers, method, uri, body).await
+        let transaction = signed_orderbook_command_transaction(
+            &app,
+            signer,
+            SubmitSorafsOrderbookOrder::new(body.to_vec(), [0; 32]).into(),
+        );
+        handle_post_sorafs_orderbook_order(
+            State(app),
+            headers,
+            None,
+            JsonOrNoritoVersioned(transaction),
+        )
+        .await
     }
 
     async fn post_orderbook_cancel(
@@ -37605,7 +39570,18 @@ mod advert_tests {
         let method = Method::POST;
         let uri = orderbook_uri(ORDERBOOK_CANCEL_URI);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_orderbook_cancel(State(app), headers, method, uri, body).await
+        let transaction = signed_orderbook_command_transaction(
+            &app,
+            signer,
+            CancelSorafsOrderbookOrder::new(body.to_vec(), [0; 32]).into(),
+        );
+        handle_post_sorafs_orderbook_cancel(
+            State(app),
+            headers,
+            None,
+            JsonOrNoritoVersioned(transaction),
+        )
+        .await
     }
 
     async fn post_orderbook_receipt(
@@ -37616,7 +39592,32 @@ mod advert_tests {
         let method = Method::POST;
         let uri = orderbook_uri(ORDERBOOK_RECEIPT_URI);
         let headers = signed_app_headers(&signer.account, &signer.keypair, &method, &uri, &body);
-        handle_post_sorafs_orderbook_receipt(State(app), headers, method, uri, body).await
+        let transaction = signed_orderbook_command_transaction(
+            &app,
+            signer,
+            RecordSorafsOrderbookSettlementReceipt::new(body.to_vec(), [0; 32]).into(),
+        );
+        handle_post_sorafs_orderbook_receipt(
+            State(app),
+            headers,
+            None,
+            JsonOrNoritoVersioned(transaction),
+        )
+        .await
+    }
+
+    fn signed_orderbook_command_transaction(
+        app: &SharedAppState,
+        signer: &OrderbookAccountFixture,
+        instruction: InstructionBox,
+    ) -> SignedTransaction {
+        TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            signer.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(signer.keypair.private_key())
     }
 
     async fn post_reserve_lifecycle_update(
@@ -38185,6 +40186,98 @@ mod advert_tests {
         }
     }
 
+    fn moderation_screening_test_material() -> (
+        ModerationReproManifestV1,
+        ModerationTrustPolicyV1,
+        KeyPair,
+        BTreeSet<PublicKey>,
+    ) {
+        let manifest_key =
+            KeyPair::try_from_seed(vec![0xA8; 32], Algorithm::Ed25519).expect("manifest key");
+        let governance_key =
+            KeyPair::try_from_seed(vec![0xA6; 32], Algorithm::Ed25519).expect("governance key");
+        let runner_key =
+            KeyPair::try_from_seed(vec![0xA7; 32], Algorithm::Ed25519).expect("runner key");
+        let mut body = ModerationReproBodyV1 {
+            schema_version: MODERATION_REPRO_MANIFEST_VERSION_V1,
+            manifest_id: [0x57; 16],
+            manifest_digest: [0; 32],
+            runner_hash: [0x67; 32],
+            runtime_version: "sorafs-ai-runner test-auth-v1".to_owned(),
+            issued_at_unix: 1_700_000_000,
+            seed_material: ModerationSeedMaterialV1 {
+                domain_tag: "sfm4a:test-auth".to_owned(),
+                seed_version: 1,
+                run_nonce: [0x44; 32],
+            },
+            thresholds: ModerationThresholdsV1 {
+                quarantine: 6_000,
+                escalate: 8_500,
+            },
+            models: vec![ModerationModelFingerprintV1 {
+                model_id: [0x55; 16],
+                artifact_path: "models/model-55.norito".to_owned(),
+                artifact_bytes: 1,
+                artifact_digest: [0x66; 32],
+                weights_digest: [0x77; 32],
+                engine: iroha_data_model::sorafs::moderation::ModerationModelEngineV1::DeterministicLinearV1,
+                feature_profile: iroha_data_model::sorafs::moderation::ModerationFeatureProfileV1::ByteHistogramAndBigramV1,
+                calibration_knot_count: 2,
+                max_input_bytes: 1024,
+                max_operations: 3073,
+                working_memory_bytes: 4096,
+                weight: Some(10_000),
+            }],
+            notes: Some("authenticated screening API fixture".to_owned()),
+        };
+        body.refresh_manifest_digest().expect("manifest digest");
+        let manifest = ModerationReproManifestV1 {
+            signatures: vec![ModerationReproSignatureV1 {
+                role: "council".to_owned(),
+                public_key: manifest_key.public_key().clone(),
+                signature: SignatureOf::try_new(manifest_key.private_key(), &body)
+                    .expect("sign manifest"),
+            }],
+            body,
+        };
+        let mut policy_body = ModerationTrustPolicyBodyV1 {
+            schema_version: MODERATION_TRUST_POLICY_VERSION_V1,
+            policy_id: [0xB1; 16],
+            policy_digest: [0; 32],
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            issued_at_unix: 1_700_000_100,
+            valid_from_unix: 1_700_000_100,
+            valid_until_unix: 2_000_000_000,
+            result_quorum: 1,
+            governance_quorum: 1,
+            max_result_age_secs: 3_600,
+            max_result_ttl_secs: 600,
+            max_clock_skew_secs: 30,
+            trusted_signers: vec![ModerationTrustedSignerV1 {
+                role: "runner".to_owned(),
+                public_key: runner_key.public_key().clone(),
+                valid_from_unix: 1_700_000_100,
+                valid_until_unix: 2_000_000_000,
+                revoked_at_unix: None,
+            }],
+            notes: None,
+        };
+        policy_body.refresh_policy_digest().expect("policy digest");
+        let policy = ModerationTrustPolicyV1 {
+            signatures: vec![ModerationTrustPolicySignatureV1 {
+                role: "governance".to_owned(),
+                public_key: governance_key.public_key().clone(),
+                signature: SignatureOf::try_new(governance_key.private_key(), &policy_body)
+                    .expect("sign trust policy"),
+            }],
+            body: policy_body,
+        };
+        let anchors = BTreeSet::from([governance_key.public_key().clone()]);
+        (manifest, policy, runner_key, anchors)
+    }
+
     fn adversarial_corpus_manifest_fixture() -> AdversarialCorpusManifestV1 {
         AdversarialCorpusManifestV1 {
             schema_version: ADVERSARIAL_CORPUS_VERSION_V1,
@@ -38221,26 +40314,20 @@ mod advert_tests {
     fn moderation_screening_result_body(
         subject: &str,
         subject_digest_byte: u8,
-        manifest_id_byte: u8,
-        runner_hash_byte: u8,
+        _manifest_id_byte: u8,
+        _runner_hash_byte: u8,
         combined_score_bps: u16,
         verdict: &str,
         screened_at_unix: u64,
     ) -> Bytes {
-        Bytes::from(
-            norito::json::to_vec(&ModerationScreeningResultRequestDto {
-                subject: subject.to_owned(),
-                subject_digest_hex: hex::encode([subject_digest_byte; 32]),
-                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
-                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
-                combined_score_bps,
-                verdict: verdict.to_owned(),
-                screened_at_unix: Some(screened_at_unix),
-                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
-                policy_digest_hex: Some(hex::encode([0xC7; 32])),
-                notes: Some("local screening API fixture".to_owned()),
-            })
-            .expect("encode screening result request"),
+        moderation_screening_result_body_with_subject_digest(
+            subject,
+            hex::encode([subject_digest_byte; 32]),
+            0,
+            0,
+            combined_score_bps,
+            verdict,
+            screened_at_unix,
         )
     }
 
@@ -38327,24 +40414,70 @@ mod advert_tests {
     fn moderation_screening_result_body_with_subject_digest(
         subject: &str,
         subject_digest_hex: String,
-        manifest_id_byte: u8,
-        runner_hash_byte: u8,
+        _manifest_id_byte: u8,
+        _runner_hash_byte: u8,
         combined_score_bps: u16,
         verdict: &str,
         screened_at_unix: u64,
     ) -> Bytes {
+        let (manifest, policy, runner_key, _) = moderation_screening_test_material();
+        let screened_at_unix_now = iroha_network_time_now_ms() / 1_000;
+        let expected_verdict = if combined_score_bps >= manifest.body.thresholds.escalate {
+            "escalate"
+        } else if combined_score_bps >= manifest.body.thresholds.quarantine {
+            "quarantine"
+        } else {
+            "pass"
+        };
+        assert_eq!(verdict, expected_verdict);
+        let mut signed_body = ModerationSignedScreeningBodyV1 {
+            schema_version: MODERATION_SIGNED_RESULT_VERSION_V1,
+            manifest_id: manifest.body.manifest_id,
+            manifest_digest: manifest.body.manifest_digest,
+            runner_hash: manifest.body.runner_hash,
+            trust_policy_id: policy.body.policy_id,
+            trust_policy_digest: policy.body.policy_digest,
+            subject: subject.to_owned(),
+            subject_digest: parse_hex_fixed::<32>(&subject_digest_hex, "subject_digest_hex")
+                .expect("fixture subject digest"),
+            model_scores: vec![ModerationModelScoreV1 {
+                model_id: manifest.body.models[0].model_id,
+                artifact_digest: manifest.body.models[0].artifact_digest,
+                score_bps: combined_score_bps,
+            }],
+            combined_score_bps,
+            verdict: verdict.to_owned(),
+            screened_at_unix: screened_at_unix_now,
+            expires_at_unix: screened_at_unix_now + 300,
+            policy_digest: manifest
+                .body
+                .computed_screening_policy_digest()
+                .expect("screening policy digest"),
+            evidence_digest: [0; 32],
+            notes: Some("authenticated screening API fixture".to_owned()),
+        };
+        signed_body
+            .refresh_evidence_digest()
+            .expect("evidence digest");
+        let signed_result = ModerationSignedScreeningResultV1 {
+            signer_public_key: runner_key.public_key().clone(),
+            signature: SignatureOf::try_new(runner_key.private_key(), &signed_body)
+                .expect("sign screening result"),
+            body: signed_body,
+        };
+        let mut idempotency_hasher = blake3::Hasher::new();
+        idempotency_hasher.update(b"sorafs.torii.test.screening.idempotency.v1");
+        idempotency_hasher.update(subject.as_bytes());
+        idempotency_hasher.update(&screened_at_unix.to_le_bytes());
+        idempotency_hasher.update(&combined_score_bps.to_le_bytes());
+        let authority_b64 = BASE64_STANDARD
+            .encode(norito::to_bytes(&signed_result).expect("encode signed screening result"));
         Bytes::from(
             norito::json::to_vec(&ModerationScreeningResultRequestDto {
-                subject: subject.to_owned(),
-                subject_digest_hex,
-                manifest_id_hex: hex::encode([manifest_id_byte; 16]),
-                runner_hash_hex: hex::encode([runner_hash_byte; 32]),
-                combined_score_bps,
-                verdict: verdict.to_owned(),
-                screened_at_unix: Some(screened_at_unix),
-                evidence_digest_hex: Some(hex::encode([0xE4; 32])),
-                policy_digest_hex: Some(hex::encode([0xC7; 32])),
-                notes: Some("local screening API fixture".to_owned()),
+                idempotency_key_hex: hex::encode(idempotency_hasher.finalize().as_bytes()),
+                evidence_kind: "signed_result".to_owned(),
+                authority_b64,
+                committee_member_results_b64: Vec::new(),
             })
             .expect("encode screening result request"),
         )
@@ -38356,7 +40489,7 @@ mod advert_tests {
                 payload_b64: BASE64_STANDARD.encode(payload),
                 captured_at_unix: Some(captured_at_unix),
                 content_type: Some("application/octet-stream".to_owned()),
-                notes: Some("object endpoint fixture".to_owned()),
+                notes: None,
             })
             .expect("encode quarantine object request"),
         )
@@ -39029,53 +41162,199 @@ mod advert_tests {
         assert!((ratio - (2.0 / 3.0)).abs() < f64::EPSILON);
     }
 
-    #[tokio::test]
-    async fn orderbook_order_endpoint_requires_canonical_request_auth() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let body = orderbook_order_body(orderbook_order_fixture(
-            41,
-            OrderSideV1::Ask,
-            1_500_000,
-            &auth.provider,
-        ));
-        let response = handle_post_sorafs_orderbook_order(
-            State(app),
-            HeaderMap::new(),
-            Method::POST,
-            orderbook_uri(ORDERBOOK_ORDER_URI),
-            body,
-        )
-        .await;
+    #[test]
+    fn finalized_orderbook_queries_require_bounded_exact_cursors() {
+        assert!(FinalizedOrderbookReadQuery::parse(Some("limit=0")).is_err());
+        let oversized_limit = format!("limit={}", ORDERBOOK_QUERY_MAX_ITEMS_V1 + 1);
+        assert!(FinalizedOrderbookReadQuery::parse(Some(&oversized_limit)).is_err());
+        assert!(FinalizedOrderbookReadQuery::parse(Some("expected_finalized_height=7")).is_err());
+        assert!(FinalizedOrderbookReadQuery::parse(Some("limit=1&limit=2")).is_err());
+        assert!(FinalizedOrderbookReadQuery::parse(Some("since=1")).is_err());
 
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
-    }
-
-    #[tokio::test]
-    async fn orderbook_order_endpoint_rejects_payload_signer_mismatch() {
-        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
-        let order = sign_orderbook_order(
-            OrderRequestV1 {
-                version: sorafs_manifest::ORDERBOOK_ORDER_VERSION_V1,
-                order_id: derive_orderbook_order_id_v1(&orderbook_owner_bytes(&auth.buyer), 42),
-                side: OrderSideV1::Bid,
-                tier: OrderTierV1::Hot,
-                price_per_gib: sorafs_manifest::deal::XorQuantity::try_from_micro(1_600_000)
-                    .expect("legacy micro-XOR value is representable"),
-                quantity_gib: 4,
-                remaining_gib: 4,
-                owner_account: orderbook_owner_bytes(&auth.buyer),
-                expiry_unix: unix_timestamp_now().saturating_add(300),
-                nonce: 42,
-                maker_fee_bps: 10,
-                taker_fee_bps: 20,
-                signature: orderbook_signature_fixture(),
-            },
-            &auth.provider.keypair,
+        let block_hash = hex::encode([0x11; 32]);
+        let after_id = hex::encode([0x22; 32]);
+        let raw = format!(
+            "limit=17&expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&after_id_hex={after_id}"
+        );
+        let query = FinalizedOrderbookReadQuery::parse(Some(&raw)).expect("valid exact cursor");
+        assert_eq!(query.limit(), 17);
+        assert_eq!(
+            query
+                .expected_finalized_cursor()
+                .expect("decode finalized cursor"),
+            Some(OrderbookFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x11; 32],
+            })
+        );
+        assert_eq!(
+            query.after_id().expect("decode page cursor"),
+            Some([0x22; 32])
         );
 
-        let response = post_orderbook_order(app, &auth.buyer, orderbook_order_body(order)).await;
+        assert!(
+            FinalizedOrderbookEventQuery::parse(Some("after_sequence=2&after_block_height=7"))
+                .is_err()
+        );
+        let raw = format!(
+            "limit=9&after_sequence=2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+        );
+        let query =
+            FinalizedOrderbookEventQuery::parse(Some(&raw)).expect("valid exact event cursor");
+        assert_eq!(
+            query.after().expect("decode event cursor"),
+            Some(OrderbookFinalizedEventCursorV1 {
+                sequence: 2,
+                block_height: 7,
+                block_hash: [0x11; 32],
+                event_index: 3,
+            })
+        );
+    }
 
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    #[test]
+    fn finalized_repair_queries_require_bounded_exact_cursors() {
+        assert!(FinalizedRepairAnchorQuery::parse(Some("expected_finalized_height=7")).is_err());
+        assert!(
+            FinalizedRepairAnchorQuery::parse(Some("expected_finalized_height=0&expected_finalized_block_hash_hex=1111111111111111111111111111111111111111111111111111111111111111"))
+                .is_err()
+        );
+        assert!(FinalizedRepairAnchorQuery::parse(Some("status=queued")).is_err());
+
+        let block_hash = hex::encode([0x11; 32]);
+        let after_task_id = hex::encode([0x22; 32]);
+        let raw = format!(
+            "limit=17&expected_finalized_height=7&expected_finalized_block_hash_hex={block_hash}&after_task_id_hex={after_task_id}"
+        );
+        let query = FinalizedRepairTaskQuery::parse(Some(&raw)).expect("valid repair task cursor");
+        assert_eq!(query.limit(), 17);
+        assert_eq!(
+            query
+                .expected_finalized_cursor()
+                .expect("decode repair finalized cursor"),
+            Some(RepairFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x11; 32],
+            })
+        );
+        assert_eq!(
+            query.after_task_id().expect("decode repair task cursor"),
+            Some([0x22; 32])
+        );
+        assert!(FinalizedRepairTaskQuery::parse(Some("limit=0")).is_err());
+        let oversized_limit = format!("limit={}", REPAIR_QUERY_MAX_ITEMS_V1 + 1);
+        assert!(FinalizedRepairTaskQuery::parse(Some(&oversized_limit)).is_err());
+        assert!(FinalizedRepairTaskQuery::parse(Some("limit=1&limit=2")).is_err());
+        assert!(FinalizedRepairTaskQuery::parse(Some(
+            "after_task_id_hex=0000000000000000000000000000000000000000000000000000000000000000"
+        ))
+        .is_err());
+
+        assert!(
+            FinalizedRepairEventQuery::parse(Some("after_sequence=2&after_block_height=7"))
+                .is_err()
+        );
+        let raw = format!(
+            "limit=9&after_sequence=2&after_block_height=7&after_block_hash_hex={block_hash}&after_event_index=3"
+        );
+        let query =
+            FinalizedRepairEventQuery::parse(Some(&raw)).expect("valid repair event cursor");
+        assert_eq!(
+            query.after().expect("decode repair event cursor"),
+            Some(RepairFinalizedEventCursorV1 {
+                sequence: 2,
+                block_height: 7,
+                block_hash: [0x11; 32],
+                event_index: 3,
+            })
+        );
+    }
+
+    #[test]
+    fn repair_command_contract_requires_one_route_exact_native_instruction() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let report: InstructionBox =
+            SubmitSorafsRepairTask::new([0x71; 32], vec![0x01]).into();
+        let multiple = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([report.clone(), report])
+        .sign(auth.provider.keypair.private_key());
+        let response = validate_repair_signed_transaction(&multiple, RepairCommandRouteV1::Report)
+            .expect_err("multiple repair instructions must be rejected before ingress");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let claim: InstructionBox = ApplySorafsRepairTaskAction::new(
+            "REP-ROUTE-1".to_owned(),
+            1,
+            SorafsRepairTaskActionV1::Claim(
+                iroha_data_model::isi::sorafs::SorafsRepairClaimV1 {
+                    lease_duration_ms: 60_000,
+                    idempotency_key: "claim-route-1".to_owned(),
+                },
+            ),
+        )
+        .into();
+        let transaction = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([claim])
+        .sign(auth.provider.keypair.private_key());
+        validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Claim)
+            .expect("matching claim route must pass pre-ingress contract validation");
+        let response = validate_repair_signed_transaction(&transaction, RepairCommandRouteV1::Fail)
+            .expect_err("claim action must not enter the fail route");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn orderbook_command_contract_rejects_more_than_one_native_instruction() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let instruction: InstructionBox =
+            SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
+        let transaction = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction.clone(), instruction])
+        .sign(auth.provider.keypair.private_key());
+
+        let response = validate_orderbook_signed_transaction(
+            &app,
+            &transaction,
+            OrderbookCommandRouteV1::SubmitOrder,
+        )
+        .expect_err("multiple instructions must fail before ledger admission");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn orderbook_command_contract_rejects_route_mismatch_before_ledger_query() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let instruction: InstructionBox =
+            SubmitSorafsOrderbookOrder::new(Vec::new(), [0; 32]).into();
+        let transaction = TransactionBuilder::new(
+            app.chain_id.as_ref().clone(),
+            auth.provider.account.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([instruction])
+        .sign(auth.provider.keypair.private_key());
+
+        let response = validate_orderbook_signed_transaction(
+            &app,
+            &transaction,
+            OrderbookCommandRouteV1::CancelOrder,
+        )
+        .expect_err("route mismatch must fail before authoritative policy lookup");
+
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]
@@ -39587,6 +41866,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook coupling removed from the finalized-chain API"]
     async fn reserve_lifecycle_policy_reprojects_existing_provider_and_syncs_compliance() {
         let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
@@ -39676,6 +41956,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook coupling removed from the finalized-chain API"]
     async fn reserve_lifecycle_advance_ages_provider_and_syncs_service_flows() {
         let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
@@ -39782,6 +42063,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook coupling removed from the finalized-chain API"]
     async fn reserve_lifecycle_scheduler_tick_ages_provider_and_syncs_service_flows() {
         let (mut app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let denylist = Arc::new(crate::sorafs::gateway::GatewayDenylist::new());
@@ -40924,7 +43206,7 @@ mod advert_tests {
             norito::json::from_slice(&body_bytes).expect("decode screening quarantine body");
         assert_eq!(
             value.get("schema").and_then(Value::as_str),
-            Some("sorafs.moderation.screening_result.ingest.v1")
+            Some("sorafs.moderation.screening_result.authenticated_ingest.v1")
         );
         assert_eq!(
             value
@@ -40980,6 +43262,12 @@ mod advert_tests {
         );
         assert_eq!(
             value.get("screening_count").and_then(Value::as_u64),
+            Some(2)
+        );
+        assert_eq!(
+            value
+                .get("authenticated_admission_count")
+                .and_then(Value::as_u64),
             Some(2)
         );
         assert_eq!(
@@ -41047,6 +43335,108 @@ mod advert_tests {
             quarantines[0].get("state").and_then(Value::as_str),
             Some("pending_review")
         );
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_authenticated_ingest_is_idempotent_and_replay_safe() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let request_body = moderation_screening_result_body(
+            "bafy-authenticated-replay",
+            0x47,
+            0x57,
+            0x67,
+            7_250,
+            "quarantine",
+            1_800_000_120,
+        );
+
+        let response =
+            post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
+                .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let first_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect first authenticated screening response");
+        let first_value: Value =
+            norito::json::from_slice(&first_body).expect("decode first screening response");
+        let first_receipt_digest = first_value
+            .get("admission")
+            .and_then(|admission| admission.get("receipt_digest_hex"))
+            .and_then(Value::as_str)
+            .expect("first receipt digest")
+            .to_owned();
+
+        let response =
+            post_moderation_screening_result(app.clone(), &auth.provider, request_body.clone())
+                .await;
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let retry_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect idempotent authenticated screening response");
+        let retry_value: Value =
+            norito::json::from_slice(&retry_body).expect("decode idempotent screening response");
+        assert_eq!(
+            retry_value
+                .get("admission")
+                .and_then(|admission| admission.get("receipt_digest_hex"))
+                .and_then(Value::as_str),
+            Some(first_receipt_digest.as_str())
+        );
+
+        let mut replay_request: ModerationScreeningResultRequestDto =
+            norito::json::from_slice(request_body.as_ref()).expect("decode screening request");
+        replay_request.idempotency_key_hex = "48".repeat(32);
+        let replay_body = Bytes::from(
+            norito::json::to_vec(&replay_request).expect("encode replay screening request"),
+        );
+        let response = post_moderation_screening_result(app, &auth.provider, replay_body).await;
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
+    async fn moderation_screening_authenticated_ingest_rejects_tampering_and_missing_authority() {
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
+        let request_body = moderation_screening_result_body(
+            "bafy-authenticated-tamper",
+            0x49,
+            0x59,
+            0x69,
+            7_250,
+            "quarantine",
+            1_800_000_121,
+        );
+        let mut tampered_request: ModerationScreeningResultRequestDto =
+            norito::json::from_slice(request_body.as_ref()).expect("decode screening request");
+        let mut authority = BASE64_STANDARD
+            .decode(tampered_request.authority_b64.as_bytes())
+            .expect("decode signed authority");
+        let final_byte = authority
+            .last_mut()
+            .expect("signed screening authority is non-empty");
+        *final_byte ^= 1;
+        tampered_request.authority_b64 = BASE64_STANDARD.encode(authority);
+        let tampered_body = Bytes::from(
+            norito::json::to_vec(&tampered_request).expect("encode tampered screening request"),
+        );
+        let response = post_moderation_screening_result(app, &auth.provider, tampered_body).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth_without_screening_authority();
+        let response = post_moderation_screening_result(
+            app,
+            &auth.provider,
+            moderation_screening_result_body(
+                "bafy-authenticated-no-authority",
+                0x4A,
+                0x5A,
+                0x6A,
+                1_250,
+                "pass",
+                1_800_000_122,
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[tokio::test]
@@ -41598,6 +43988,29 @@ mod advert_tests {
         )
         .await;
 
+        let private_note = "SECRET-PRIVATE-OBJECT-NOTE-DO-NOT-EMIT";
+        let private_note_body = Bytes::from(
+            norito::json::to_vec(&ModerationQuarantineObjectStoreRequestDto {
+                payload_b64: BASE64_STANDARD.encode(payload),
+                captured_at_unix: Some(1_800_000_310),
+                content_type: Some("application/octet-stream".to_owned()),
+                notes: Some(private_note.to_owned()),
+            })
+            .expect("encode forbidden plaintext-note request"),
+        );
+        let response = post_moderation_quarantine_object(
+            app.clone(),
+            &auth.provider,
+            &quarantine_id_hex,
+            private_note_body,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let error_body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("collect plaintext-note rejection");
+        assert!(!String::from_utf8_lossy(&error_body).contains(private_note));
+
         let response = post_moderation_quarantine_object(
             app.clone(),
             &auth.provider,
@@ -41635,10 +44048,7 @@ mod advert_tests {
             record.get("content_type").and_then(Value::as_str),
             Some("application/octet-stream")
         );
-        assert_eq!(
-            record.get("notes").and_then(Value::as_str),
-            Some("object endpoint fixture")
-        );
+        assert!(record.get("notes").is_none());
         assert_eq!(
             record
                 .get("object_id_hex")
@@ -41653,6 +44063,18 @@ mod advert_tests {
                 .map(str::len),
             Some(64)
         );
+        assert_eq!(
+            record
+                .get("nonce_prefix_hex")
+                .and_then(Value::as_str)
+                .map(str::len),
+            Some(16)
+        );
+        assert_eq!(
+            record.get("chunk_plaintext_bytes").and_then(Value::as_u64),
+            Some(64 * 1024)
+        );
+        assert_eq!(record.get("chunk_count").and_then(Value::as_u64), Some(1));
         assert!(
             record
                 .get("envelope_path")
@@ -43007,18 +45429,11 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let response = post_moderation_tally(
-            app.clone(),
-            &auth.provider,
-            moderation_tally_body(case_id, round_id, 3_600),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect moderation tally body");
-        let value: Value =
-            norito::json::from_slice(&body_bytes).expect("decode moderation tally body");
+        let tally = app
+            .sorafs_node
+            .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
+            .expect("legacy local ballot fixture tally");
+        let value = moderation_ballot_tally_json(&tally);
         assert_eq!(
             value.get("winning_choice").and_then(Value::as_str),
             Some("uphold")
@@ -43554,13 +45969,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let response = post_moderation_tally(
-            app.clone(),
-            &auth.provider,
-            moderation_tally_body(case_id, round_id, now_unix_ms.saturating_add(6_100)),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        app.sorafs_node
+            .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
+            .expect("legacy challenged-ballot fixture tally");
 
         let response = handle_get_sorafs_moderation_ballot(
             State(app),
@@ -43726,13 +46137,9 @@ mod advert_tests {
         .await;
         assert_eq!(response.status(), StatusCode::OK);
 
-        let response = post_moderation_tally(
-            app.clone(),
-            &auth.provider,
-            moderation_tally_body(case_id, round_id, 3_600),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        app.sorafs_node
+            .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
+            .expect("legacy settlement-worker fixture tally");
         let event = app
             .sorafs_node
             .moderation_ballot_events_since(Some(0), 10)
@@ -43852,13 +46259,9 @@ mod advert_tests {
         )
         .await;
         assert_eq!(response.status(), StatusCode::OK);
-        let response = post_moderation_tally(
-            app.clone(),
-            &auth.provider,
-            moderation_tally_body(case_id, round_id, 3_600),
-        )
-        .await;
-        assert_eq!(response.status(), StatusCode::OK);
+        app.sorafs_node
+            .tally_moderation_ballot(case_id, round_id, iroha_network_time_now_ms())
+            .expect("legacy retry-worker fixture tally");
         let event = app
             .sorafs_node
             .moderation_ballot_events_since(Some(0), 10)
@@ -44141,7 +46544,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
-    async fn moderation_ballot_tally_ignores_client_timestamp_override() {
+    async fn moderation_ballot_tally_fails_closed_without_chain_orchestrator() {
         let case_id = "case-tally-time";
         let round_id = "round-1";
         let (app, _dir, auth, deposit_confirmation) =
@@ -44170,16 +46573,23 @@ mod advert_tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let response = post_moderation_tally(
-            app,
+            app.clone(),
             &auth.provider,
             moderation_tally_body(case_id, round_id, reveal_deadline_unix_ms.saturating_add(1)),
         )
         .await;
 
-        assert_eq!(response.status(), StatusCode::PRECONDITION_FAILED);
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(
+            app.sorafs_node
+                .moderation_ballot(case_id, round_id)
+                .is_some_and(|record| record.tally.is_none()),
+            "the production tally route must not mutate the local ballot runtime"
+        );
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_ask_requires_provider_capability_when_enforced() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let provider_id =
@@ -44226,6 +46636,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_ask_accepts_advertised_provider_capability_when_enforced() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let provider_id =
@@ -44252,6 +46663,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_ask_rejects_defaulted_reserve_lifecycle_provider() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let provider_id =
@@ -44378,6 +46790,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_receipt_endpoint_requires_channel_provider_signer() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let response = post_orderbook_order(
@@ -44427,6 +46840,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_receipt_requires_provider_capability_when_enforced() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let response = post_orderbook_order(
@@ -44485,6 +46899,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook projection removed"]
     async fn orderbook_order_match_and_read_endpoints_share_local_runtime() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
 
@@ -44561,6 +46976,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook projection removed"]
     async fn orderbook_receipt_endpoint_updates_channel_and_rejects_overlap() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let response = post_orderbook_order(
@@ -44669,6 +47085,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook projection removed"]
     async fn orderbook_readback_limit_bounds_snapshot_arrays() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
 
@@ -44912,6 +47329,7 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook event bus removed"]
     async fn orderbook_events_endpoint_returns_backlog_and_sse_replay() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let response = post_orderbook_order(
@@ -44996,119 +47414,48 @@ mod advert_tests {
     }
 
     #[test]
-    fn orderbook_websocket_frames_wrap_event_payloads() {
-        let event = OrderbookEvent {
+    fn orderbook_websocket_frames_wrap_finalized_typed_events() {
+        let (authority, _) = gen_account_in("wonderland");
+        let event = OrderbookFinalizedEventV1 {
             sequence: 42,
-            kind: OrderbookEventKind::SettlementReceiptAccepted,
-            generated_at_unix: 1_800_000_555,
-            order_id: Some([0x11; 32]),
-            trade_ids: vec![[0x22; 32]],
-            settlement_channel_ids: vec![[0x33; 32]],
-            receipt_id: Some([0x44; 32]),
-            expired_order_ids: vec![[0x55; 32]],
-            open_order_count: 7,
-            open_settlement_channel_count: 3,
-            settlement_receipt_count: 2,
+            block_height: 7,
+            block_hash: [0xAA; 32],
+            event_index: 3,
+            event: SorafsOrderbookLedgerEvent {
+                kind: SorafsOrderbookLedgerEventKind::ReceiptRecorded,
+                order_id: Some([0x11; 32]),
+                trade_id: Some([0x22; 32]),
+                channel_id: Some([0x33; 32]),
+                receipt_id: Some([0x44; 32]),
+                provider_id: None,
+                book_revision: 9,
+                authority,
+                occurred_at_unix_ms: 1_800_000_555_000,
+            },
         };
 
-        let frame: Value =
-            norito::json::from_str(&orderbook_websocket_frame(&event)).expect("decode frame");
+        let frame: Value = norito::json::from_str(&orderbook_finalized_websocket_frame(&event))
+            .expect("decode frame");
         assert_eq!(
             frame.get("event").and_then(Value::as_str),
-            Some("settlement_receipt_accepted")
+            Some("receipt_recorded")
         );
         let data = frame
             .get("data")
             .and_then(Value::as_object)
             .expect("frame data");
         assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(42));
+        assert_eq!(data.get("block_height").and_then(Value::as_u64), Some(7));
         assert_eq!(
-            data.get("kind").and_then(Value::as_str),
-            Some("settlement_receipt_accepted")
-        );
-        assert_eq!(
-            data.get("order_id_hex").and_then(Value::as_str),
-            Some(hex::encode([0x11; 32]).as_str())
-        );
-        assert_eq!(
-            data.get("receipt_id_hex").and_then(Value::as_str),
-            Some(hex::encode([0x44; 32]).as_str())
-        );
-        assert_eq!(
-            data.get("open_order_count").and_then(Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            data.get("open_settlement_channel_count")
+            data.get("event")
+                .and_then(|event| event.get("book_revision"))
                 .and_then(Value::as_u64),
-            Some(3)
+            Some(9)
         );
-        assert_eq!(
-            data.get("settlement_receipt_count").and_then(Value::as_u64),
-            Some(2)
-        );
-        let trade_ids = data
-            .get("trade_ids_hex")
-            .and_then(Value::as_array)
-            .expect("trade id list");
-        assert_eq!(
-            trade_ids.first().and_then(Value::as_str),
-            Some(hex::encode([0x22; 32]).as_str())
-        );
-    }
-
-    #[test]
-    fn repair_event_frames_wrap_canonical_task_events() {
-        let event = RepairEvent {
-            sequence: 7,
-            event: RepairTaskEventV1 {
-                version: sorafs_manifest::repair::REPAIR_TASK_EVENT_VERSION_V1,
-                ticket_id: sorafs_manifest::repair::RepairTicketId("REP-STREAM".into()),
-                manifest_digest: [0x11; 32],
-                provider_id: [0x22; 32],
-                status: RepairTaskStatusV1::Queued,
-                occurred_at_unix: 1_800_000_000,
-                actor: Some("auditor".into()),
-                message: Some("queued".into()),
-            },
-        };
-
-        let page = repair_events_json(Some(6), 10, std::slice::from_ref(&event))
-            .expect("repair event page");
-        let page = page.as_object().expect("repair event page object");
-        assert_eq!(page.get("count").and_then(Value::as_u64), Some(1));
-        assert_eq!(page.get("next_since").and_then(Value::as_u64), Some(7));
-
-        let frame: Value =
-            norito::json::from_str(&repair_websocket_frame(&event)).expect("decode frame");
-        assert_eq!(frame.get("event").and_then(Value::as_str), Some("queued"));
-        let data = frame
-            .get("data")
-            .and_then(Value::as_object)
-            .expect("frame data");
-        assert_eq!(data.get("sequence").and_then(Value::as_u64), Some(7));
-        let task = data
-            .get("event")
-            .and_then(Value::as_object)
-            .expect("canonical repair task event");
-        assert_eq!(
-            task.get("ticket_id").and_then(Value::as_str),
-            Some("REP-STREAM")
-        );
-        assert_eq!(task.get("status").and_then(Value::as_str), Some("queued"));
-        assert_eq!(
-            task.get("manifest_digest_hex").and_then(Value::as_str),
-            Some(hex::encode([0x11; 32]).as_str())
-        );
-        assert_eq!(
-            task.get("provider_id_hex").and_then(Value::as_str),
-            Some(hex::encode([0x22; 32]).as_str())
-        );
-        assert_eq!(task.get("actor").and_then(Value::as_str), Some("auditor"));
-        assert_eq!(task.get("message").and_then(Value::as_str), Some("queued"));
     }
 
     #[tokio::test]
+    #[ignore = "pre-V1 local orderbook endpoint removed in favor of native committed state"]
     async fn orderbook_cancel_rejects_wrong_owner_and_removes_matching_order() {
         let (app, _dir, auth) = sorafs_app_state_with_orderbook_auth();
         let response = post_orderbook_order(
@@ -45499,280 +47846,606 @@ mod advert_tests {
         assert_eq!(lagged.get("skipped").and_then(Value::as_u64), Some(3));
     }
 
-    #[tokio::test]
-    async fn proof_stream_rejects_pdp_as_bad_request() {
-        let mut state = mk_app_state_for_tests();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        Arc::get_mut(&mut state)
-            .expect("unique app state required")
-            .sorafs_node = node;
-
-        let request = ProofStreamRequestDto {
-            manifest_digest_hex: "aa".to_string(),
-            provider_id_hex: "bb".to_string(),
-            proof_kind: "pdp".to_string(),
-            sample_count: Some(1),
-            deadline_ms: None,
-            sample_seed: None,
-            nonce_b64: String::new(),
-            orchestrator_job_id_hex: None,
-            tier: None,
-        };
-
-        let response = handle_post_sorafs_proof_stream(State(state), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body_bytes = BodyExt::collect(response.into_body())
-            .await
-            .expect("collect response body")
-            .to_bytes();
-        let body_text = String::from_utf8(body_bytes.to_vec()).expect("utf8");
-        assert!(body_text.contains("unsupported proof_kind"));
-        assert!(body_text.contains("`por` or `potr`"));
-    }
-
-    #[tokio::test]
-    async fn proof_stream_rejects_oversized_sample_count_before_manifest_lookup() {
-        let mut state = mk_app_state_for_tests();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        Arc::get_mut(&mut state)
-            .expect("unique app state required")
-            .sorafs_node = node;
-
-        let request = ProofStreamRequestDto {
-            manifest_digest_hex: "11".repeat(32),
-            provider_id_hex: "22".repeat(32),
-            proof_kind: "por".to_string(),
-            sample_count: Some(MAX_PROOF_STREAM_SAMPLE_COUNT + 1),
-            deadline_ms: None,
-            sample_seed: None,
-            nonce_b64: BASE64_STANDARD.encode([0x33u8; 16]),
-            orchestrator_job_id_hex: None,
-            tier: None,
-        };
-
-        let response = handle_post_sorafs_proof_stream(State(state), JsonOnly(request)).await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        let body_bytes = body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("collect body");
-        let value: Value = norito::json::from_slice(&body_bytes).expect("decode error response");
-        let message = value
-            .get("error")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        assert!(
-            message.contains("sample_count must be at most 500"),
-            "unexpected error message: {message}"
+    #[test]
+    fn proof_stream_envelope_rejects_pdp_without_challenge_identity() {
+        let value = norito::json!({
+            "manifest_digest_hex": ("aa".repeat(32)),
+            "provider_id_hex": ("bb".repeat(32)),
+            "proof_kind": "pdp",
+            "nonce_b64": (BASE64_STANDARD.encode([0x33u8; 16])),
+        });
+        assert_eq!(
+            ProofStreamHttpRequestV1::from_json_value(&value),
+            Err(
+                sorafs_manifest::ProofStreamHttpRequestError::InvalidRequest(
+                    sorafs_manifest::ProofStreamRequestError::MissingChallengeId
+                )
+            )
         );
     }
 
-    #[tokio::test]
-    async fn proof_stream_potr_streams_recorded_receipts() {
-        let mut state = mk_app_state_for_tests();
-        let (node, _dir) = sorafs_node_with_temp_storage();
-        Arc::get_mut(&mut state)
-            .expect("unique app state required")
-            .sorafs_node = node;
-        let provider_id = [0xBB; 32];
-        let trace_id = [0x44; 16];
-        let state = state;
+    #[test]
+    fn proof_stream_envelope_rejects_noncanonical_spellings() {
+        let canonical_digest = "ab".repeat(32);
+        let canonical_nonce = BASE64_STANDARD.encode([0x33u8; 16]);
+        let base = norito::json!({
+            "manifest_digest_hex": (canonical_digest.clone()),
+            "provider_id_hex": ("cd".repeat(32)),
+            "proof_kind": "por",
+            "sample_count": 1,
+            "nonce_b64": (canonical_nonce.clone()),
+            "tier": "hot",
+        });
+        ProofStreamHttpRequestV1::from_json_value(&base).expect("canonical proof request");
 
-        let payload = b"proof stream manifest payload";
-        let plan = CarBuildPlan::single_file(payload).expect("plan");
-        let manifest = ManifestBuilder::new()
-            .root_cid(vec![0xAA; 16])
-            .dag_codec(DagCodecId(0x71))
-            .chunking_from_profile(
-                sorafs_chunker::ChunkProfile::DEFAULT,
-                sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
+        for (field, invalid) in [
+            ("manifest_digest_hex", canonical_digest.to_ascii_uppercase()),
+            ("manifest_digest_hex", format!(" {canonical_digest}")),
+            ("manifest_digest_hex", format!("{canonical_digest} ")),
+            (
+                "nonce_b64",
+                canonical_nonce.trim_end_matches('=').to_string(),
+            ),
+            ("nonce_b64", format!(" {canonical_nonce}")),
+            ("nonce_b64", format!("{canonical_nonce} ")),
+            ("proof_kind", "PDP".to_string()),
+            ("proof_kind", " pdp".to_string()),
+            ("proof_kind", "pdp ".to_string()),
+            ("tier", "HOT".to_string()),
+            ("tier", " hot".to_string()),
+            ("tier", "hot ".to_string()),
+        ] {
+            let mut object = base.as_object().expect("request object").clone();
+            object.insert(field.into(), Value::from(invalid.clone()));
+            assert!(
+                ProofStreamHttpRequestV1::from_json_value(&Value::Object(object)).is_err(),
+                "accepted noncanonical `{field}` value `{invalid}`"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_outcome_runtime_signer_permission_is_exact_and_fails_closed() {
+        let signer_key = KeyPair::try_from_seed(vec![0xA1; 32], Algorithm::Ed25519)
+            .expect("derive proof-outcome runtime signer key");
+        let signer_id = AccountId::new(signer_key.public_key().clone());
+        let signer_account = Account::new(signer_id.clone()).build(&signer_id);
+        let mut world = World::with([], [signer_account], []);
+        let provider_id = ProviderId::new([0x31; 32]);
+
+        assert!(!proof_outcome_authority_has_provider_permission(
+            &world.view(),
+            &signer_id,
+            provider_id,
+        ));
+
+        let mut wrong_provider_permissions = Permissions::new();
+        wrong_provider_permissions.insert(Permission::from(CanRecordSorafsProofOutcome {
+            provider_id: ProviderId::new([0x32; 32]),
+        }));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(signer_id.clone(), wrong_provider_permissions);
+        assert!(!proof_outcome_authority_has_provider_permission(
+            &world.view(),
+            &signer_id,
+            provider_id,
+        ));
+
+        let mut exact_permissions = Permissions::new();
+        exact_permissions.insert(Permission::from(CanRecordSorafsProofOutcome {
+            provider_id,
+        }));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(signer_id.clone(), exact_permissions);
+        assert!(proof_outcome_authority_has_provider_permission(
+            &world.view(),
+            &signer_id,
+            provider_id,
+        ));
+    }
+
+    fn finalized_pdp_outcome_fixture() -> ProofOutcomeFinalizedRecordV1 {
+        ProofOutcomeFinalizedRecordV1 {
+            finalized_cursor: ProofOutcomeFinalizedCursorV1 {
+                height: 7,
+                block_hash: [0x66; 32],
+            },
+            outcome: ProofOutcomeRecordV1 {
+                version: PROOF_OUTCOME_RECORD_VERSION_V1,
+                identity_digest: [0x11; 32],
+                outcome_digest: [0x44; 32],
+                provider_id: ProviderId::new([0x33; 32]),
+                manifest_digest: ManifestDigest::new([0x22; 32]),
+                admission_envelope_digest: [0x55; 32],
+                submitted_by: test_account(),
+                committed_at_unix_ms: 11_000,
+                projection: ProofOutcomeProjectionV1::Pdp(PdpOutcomeProjectionV1 {
+                    source_sequence: 7,
+                    epoch_id: 9,
+                    status: PdpOutcomeStatusV1::DeadlineExpired,
+                    proof_digest: None,
+                    provider_attestation: None,
+                    sampled_segments: 1,
+                    sampled_hot_leaves: 1,
+                    sampled_bytes: 0,
+                    issued_at_unix: 1,
+                    response_deadline_unix: 10,
+                    decided_at_unix: 10,
+                }),
+            },
+        }
+    }
+
+    #[test]
+    fn pdp_proof_stream_item_is_a_closed_finalized_projection() {
+        let finalized = finalized_pdp_outcome_fixture();
+        let value =
+            finalized_proof_stream_item_json(&finalized).expect("render finalized PDP outcome");
+        let object = value.as_object().expect("PDP proof item object");
+        assert_eq!(
+            object.len(),
+            12,
+            "PDP stream must carry only the terminal result and finalized provenance"
+        );
+        for field in [
+            "challenge_id_hex",
+            "manifest_digest_hex",
+            "provider_id_hex",
+            "outcome_identity_hex",
+            "outcome_digest_hex",
+            "admission_envelope_digest_hex",
+            "finalized_block_height",
+            "finalized_block_hash_hex",
+            "committed_at_ms",
+            "proof_kind",
+            "result",
+            "failure_reason",
+        ] {
+            assert!(
+                object.contains_key(field),
+                "missing canonical field `{field}`"
+            );
+        }
+        for status_only in [
+            "sequence",
+            "epoch_id",
+            "lifecycle",
+            "response_deadline_unix",
+            "proof_digest_hex",
+            "decision",
+            "rejection_reason",
+        ] {
+            assert!(
+                !object.contains_key(status_only),
+                "status-only field `{status_only}` leaked into proof stream"
+            );
+        }
+        let item = sorafs_car::proof_stream::ProofStreamItem::from_json(&value)
+            .expect("canonical PDP item must pass the shared closed-schema parser");
+        assert_eq!(item.proof_kind(), sorafs_car::proof_stream::ProofKind::Pdp);
+        assert_eq!(
+            item.status(),
+            sorafs_car::proof_stream::VerificationStatus::Failure
+        );
+        assert_eq!(item.failure_reason(), Some("deadline_expired"));
+        assert_eq!(item.outcome_identity_hex(), item.challenge_id_hex());
+    }
+
+    #[test]
+    fn proof_stream_envelope_rejects_oversized_sample_count_before_handler() {
+        let value = norito::json!({
+            "manifest_digest_hex": ("11".repeat(32)),
+            "provider_id_hex": ("22".repeat(32)),
+            "proof_kind": "por",
+            "sample_count": (MAX_PROOF_STREAM_SAMPLE_COUNT + 1),
+            "nonce_b64": (BASE64_STANDARD.encode([0x33u8; 16])),
+        });
+        assert_eq!(
+            ProofStreamHttpRequestV1::from_json_value(&value),
+            Err(
+                sorafs_manifest::ProofStreamHttpRequestError::InvalidRequest(
+                    sorafs_manifest::ProofStreamRequestError::SampleCountTooLarge
+                )
             )
-            .content_length(plan.content_length)
-            .car_digest(blake3::hash(payload).into())
-            .car_size(plan.content_length)
-            .pin_policy(PinPolicy::default())
-            .governance(test_governance_proofs())
-            .build()
-            .expect("manifest");
+        );
+    }
+
+    const PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX: u64 = 1_700_000_400;
+    const PROOF_OUTCOME_TEST_ADMISSION_DIGEST: [u8; 32] = [0x77; 32];
+
+    fn canonical_potr_receipt_fixture() -> PotrReceiptV1 {
+        let bytes = include_bytes!("../../../../fixtures/sorafs_manifest/potr/receipt_v1.to");
+        let receipt: PotrReceiptV1 =
+            norito::decode_from_bytes(bytes).expect("decode canonical signed PoTR fixture");
+        receipt
+            .validate()
+            .expect("canonical signed PoTR fixture validates");
+        assert_eq!(
+            receipt
+                .signed_receipt_bytes()
+                .expect("re-encode signed PoTR fixture"),
+            bytes
+        );
+        receipt
+    }
+
+    fn deadline_expired_pdp_archive_fixture(challenge: &PdpChallengeV1) -> PdpGovernanceArchiveV1 {
+        let canonical_challenge =
+            norito::to_bytes(challenge).expect("encode canonical PDP challenge");
+        let sampled_hot_leaves = challenge
+            .samples
+            .iter()
+            .map(|sample| sample.hot_leaf_indices.len())
+            .sum::<usize>();
+        let archive = PdpGovernanceArchiveV1 {
+            version: PDP_GOVERNANCE_ARCHIVE_VERSION_V1,
+            sequence: 1,
+            challenge_id: challenge.challenge_id,
+            commitment_digest: challenge.commitment_digest,
+            manifest_digest: challenge.manifest_digest,
+            provider_id: challenge.provider_id,
+            epoch_id: challenge.epoch_id,
+            decision: PdpTerminalDecisionV1::Rejected(PdpRejectionReasonV1::DeadlineExpired),
+            proof_digest: None,
+            sampled_segments: u16::try_from(challenge.samples.len())
+                .expect("fixture segment count fits u16"),
+            sampled_hot_leaves: u16::try_from(sampled_hot_leaves)
+                .expect("fixture hot-leaf count fits u16"),
+            sampled_bytes: 0,
+            issued_at_unix: challenge.issued_at_unix,
+            response_deadline_unix: challenge.response_deadline_unix,
+            decided_at_unix: challenge.response_deadline_unix,
+            admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
+            canonical_challenge,
+            canonical_proof: None,
+        };
+        archive
+            .validate()
+            .expect("deadline-expired PDP archive fixture validates");
+        archive
+    }
+
+    fn app_with_finalized_proof_outcomes() -> (
+        SharedAppState,
+        PdpChallengeV1,
+        PotrReceiptV1,
+        ProofOutcomeFinalizedCursorV1,
+    ) {
+        let receipt = canonical_potr_receipt_fixture();
+        let challenge: PdpChallengeV1 = norito::decode_from_bytes(include_bytes!(
+            "../../../../fixtures/sorafs_manifest/pdp/challenge_v1.to"
+        ))
+        .expect("decode canonical PDP challenge fixture");
+        challenge
+            .validate()
+            .expect("canonical PDP challenge fixture validates");
+        assert_eq!(challenge.provider_id, receipt.provider_id);
+        assert_eq!(challenge.manifest_digest, receipt.manifest_digest);
+
+        let manager_key = KeyPair::try_from_seed(vec![0x91; 32], Algorithm::Ed25519)
+            .expect("derive proof-outcome manager key");
+        let manager_id = AccountId::new(manager_key.public_key().clone());
+        let manager_account = Account::new(manager_id.clone()).build(&manager_id);
+        let mut world = World::with([], [manager_account], []);
+        let provider_id = ProviderId::new(receipt.provider_id);
+        let mut manager_permissions = Permissions::new();
+        manager_permissions.insert(Permission::from(CanManageSorafsProofOutcomePolicy));
+        manager_permissions.insert(Permission::from(CanRecordSorafsProofOutcome {
+            provider_id,
+        }));
+        world
+            .account_permissions_mut_for_testing()
+            .insert(manager_id.clone(), manager_permissions);
+        world
+            .provider_owners_mut_for_testing()
+            .insert(provider_id, manager_id.clone());
+
+        let gateway_public_key: [u8; 32] = receipt
+            .gateway_signature
+            .as_ref()
+            .expect("fixture gateway signature")
+            .public_key
+            .as_slice()
+            .try_into()
+            .expect("fixture gateway Ed25519 public key");
+        let provider_public_key = receipt
+            .provider_signature
+            .as_ref()
+            .expect("fixture provider signature")
+            .public_key
+            .clone();
+        let (pdp_algorithm, pdp_public_key) = manager_key
+            .public_key()
+            .try_to_bytes()
+            .expect("encode fixture PDP public key");
+        assert_eq!(pdp_algorithm, Algorithm::Ed25519);
+        let policy = ProofOutcomeSignerPolicyV1 {
+            version: PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
+            provider_id,
+            revision: 1,
+            predecessor_digest: None,
+            admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
+            pdp_public_key: pdp_public_key
+                .try_into()
+                .expect("fixture PDP Ed25519 public key"),
+            potr_mldsa_public_key: provider_public_key,
+            gateway_public_key,
+            valid_from_unix: 1_699_999_900,
+            valid_until_unix: PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX + 100,
+        };
+        let pdp_archive = deadline_expired_pdp_archive_fixture(&challenge);
+        let pdp_submission = SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Pdp(
+            SorafsPdpProofOutcomeSubmissionV1 {
+                archive_payload: norito::to_bytes(&pdp_archive)
+                    .expect("encode canonical PDP archive"),
+            },
+        ));
+        let potr_submission = SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Potr(
+            SorafsPotrProofOutcomeSubmissionV1 {
+                receipt_payload: receipt
+                    .signed_receipt_bytes()
+                    .expect("encode canonical signed PoTR receipt"),
+                admission_envelope_digest: PROOF_OUTCOME_TEST_ADMISSION_DIGEST,
+            },
+        ));
+
+        let mut app = mk_app_state_for_tests_with_world(world);
+        let header = BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero fixture block height"),
+            None,
+            None,
+            None,
+            PROOF_OUTCOME_TEST_BLOCK_TIME_UNIX * 1_000,
+            0,
+        );
+        let finalized_cursor = ProofOutcomeFinalizedCursorV1 {
+            height: 1,
+            block_hash: *HashOf::new(&header).as_ref(),
+        };
+        let app_inner = Arc::get_mut(&mut app).expect("unique proof-outcome app state");
+        let core_state =
+            Arc::get_mut(&mut app_inner.state).expect("unique proof-outcome core state");
+        {
+            let mut block = core_state.block(header.clone());
+            let mut transaction = block.transaction();
+            SetSorafsProofOutcomeSignerPolicy::new(policy)
+                .execute(&manager_id, &mut transaction)
+                .expect("activate fixture proof-outcome signer policy");
+            pdp_submission
+                .execute(&manager_id, &mut transaction)
+                .expect("commit fixture PDP outcome");
+            potr_submission
+                .execute(&manager_id, &mut transaction)
+                .expect("commit fixture PoTR outcome");
+            transaction.apply();
+            block.commit().expect("commit fixture proof-outcome block");
+        }
+        core_state.push_block_hash_for_testing(HashOf::new(&header));
+        (app, challenge, receipt, finalized_cursor)
+    }
+
+    async fn proof_stream_body(response: Response) -> (StatusCode, String) {
+        let status = response.status();
+        let body = BodyExt::collect(response.into_body())
+            .await
+            .expect("collect proof-stream response")
+            .to_bytes();
+        (
+            status,
+            String::from_utf8(body.to_vec()).expect("proof-stream response is UTF-8"),
+        )
+    }
+
+    #[tokio::test]
+    async fn proof_stream_pdp_and_potr_return_exact_finalized_chain_outcomes_without_storage() {
+        let (state, challenge, receipt, finalized_cursor) = app_with_finalized_proof_outcomes();
+        assert!(
+            !state.sorafs_node.is_enabled(),
+            "fixture deliberately has no process-local storage runtime"
+        );
+
+        let pdp_request = ProofStreamHttpRequestV1::new(sorafs_manifest::ProofStreamRequestV1 {
+            manifest_digest: challenge.manifest_digest,
+            provider_id: challenge.provider_id,
+            proof_kind: ProofStreamKind::Pdp,
+            challenge_id: Some(challenge.challenge_id),
+            sample_count: None,
+            deadline_ms: None,
+            sample_seed: None,
+            nonce: [0x12; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        })
+        .expect("canonical PDP query envelope");
+        let (status, body) = proof_stream_body(
+            handle_post_sorafs_proof_stream(State(state.clone()), JsonOnly(pdp_request)).await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "unexpected PDP response: {body}");
+        let pdp_lines = body.lines().collect::<Vec<_>>();
+        assert_eq!(pdp_lines.len(), 1, "PDP lookup returns exactly one outcome");
+        let pdp = sorafs_car::proof_stream::ProofStreamItem::from_ndjson(pdp_lines[0].as_bytes())
+            .expect("parse finalized PDP row");
+        assert_eq!(pdp.proof_kind(), sorafs_car::proof_stream::ProofKind::Pdp);
+        assert_eq!(pdp.failure_reason(), Some("deadline_expired"));
+        assert_eq!(pdp.finalized_block_height(), Some(finalized_cursor.height));
+        assert_eq!(
+            pdp.finalized_block_hash_hex(),
+            Some(hex::encode(finalized_cursor.block_hash).as_str())
+        );
+
+        let request_id = receipt.request_id.expect("fixture request id");
+        let potr_request = ProofStreamHttpRequestV1::new(sorafs_manifest::ProofStreamRequestV1 {
+            manifest_digest: receipt.manifest_digest,
+            provider_id: receipt.provider_id,
+            proof_kind: ProofStreamKind::Potr,
+            challenge_id: None,
+            sample_count: None,
+            deadline_ms: Some(receipt.deadline_ms),
+            sample_seed: None,
+            nonce: [0x13; 16],
+            orchestrator_job_id: Some(request_id),
+            tier: Some(receipt.tier),
+        })
+        .expect("canonical PoTR query envelope");
+        let (status, body) = proof_stream_body(
+            handle_post_sorafs_proof_stream(State(state), JsonOnly(potr_request)).await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "unexpected PoTR response: {body}");
+        let potr_lines = body.lines().collect::<Vec<_>>();
+        assert_eq!(
+            potr_lines.len(),
+            1,
+            "exact PoTR scope must never fan out into receipt history"
+        );
+        let potr = sorafs_car::proof_stream::ProofStreamItem::from_ndjson(potr_lines[0].as_bytes())
+            .expect("parse finalized PoTR row");
+        assert_eq!(potr.proof_kind(), sorafs_car::proof_stream::ProofKind::Potr);
+        assert_eq!(potr.potr_receipt(), Some(&receipt));
+        assert_eq!(potr.finalized_block_height(), Some(finalized_cursor.height));
+    }
+
+    #[tokio::test]
+    async fn proof_stream_potr_rejects_wrong_job_deadline_tier_and_manifest() {
+        let (state, _challenge, receipt, _) = app_with_finalized_proof_outcomes();
+        let canonical_request = || sorafs_manifest::ProofStreamRequestV1 {
+            manifest_digest: receipt.manifest_digest,
+            provider_id: receipt.provider_id,
+            proof_kind: ProofStreamKind::Potr,
+            challenge_id: None,
+            sample_count: None,
+            deadline_ms: Some(receipt.deadline_ms),
+            sample_seed: None,
+            nonce: [0x14; 16],
+            orchestrator_job_id: receipt.request_id,
+            tier: Some(receipt.tier),
+        };
+
+        let mut wrong_job = canonical_request();
+        wrong_job.orchestrator_job_id = Some([0xA1; 16]);
+        let mut wrong_deadline = canonical_request();
+        wrong_deadline.deadline_ms = Some(receipt.deadline_ms + 1);
+        let mut wrong_tier = canonical_request();
+        wrong_tier.tier = Some(ProofStreamTier::Archive);
+        let mut wrong_manifest = canonical_request();
+        wrong_manifest.manifest_digest = [0xA2; 32];
+
+        for (label, request) in [
+            ("job", wrong_job),
+            ("deadline", wrong_deadline),
+            ("tier", wrong_tier),
+            ("manifest", wrong_manifest),
+        ] {
+            let request =
+                ProofStreamHttpRequestV1::new(request).expect("valid negative PoTR envelope");
+            let (status, body) = proof_stream_body(
+                handle_post_sorafs_proof_stream(State(state.clone()), JsonOnly(request)).await,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "wrong {label} must not resolve a committed PoTR outcome: {body}"
+            );
+            assert!(
+                !body.contains(&hex::encode(
+                    receipt
+                        .signed_receipt_digest()
+                        .expect("digest fixture receipt")
+                )),
+                "not-found response must not disclose committed receipt identity"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn proof_stream_pdp_rejects_wrong_challenge_manifest_and_provider() {
+        let (state, challenge, _receipt, _) = app_with_finalized_proof_outcomes();
+        let canonical_request = || sorafs_manifest::ProofStreamRequestV1 {
+            manifest_digest: challenge.manifest_digest,
+            provider_id: challenge.provider_id,
+            proof_kind: ProofStreamKind::Pdp,
+            challenge_id: Some(challenge.challenge_id),
+            sample_count: None,
+            deadline_ms: None,
+            sample_seed: None,
+            nonce: [0x15; 16],
+            orchestrator_job_id: None,
+            tier: None,
+        };
+
+        let mut wrong_challenge = canonical_request();
+        wrong_challenge.challenge_id = Some([0xB1; 32]);
+        let mut wrong_manifest = canonical_request();
+        wrong_manifest.manifest_digest = [0xB2; 32];
+        let mut wrong_provider = canonical_request();
+        wrong_provider.provider_id = [0xB3; 32];
+
+        for (label, request) in [
+            ("challenge", wrong_challenge),
+            ("manifest", wrong_manifest),
+            ("provider", wrong_provider),
+        ] {
+            let request =
+                ProofStreamHttpRequestV1::new(request).expect("valid negative PDP envelope");
+            let (status, body) = proof_stream_body(
+                handle_post_sorafs_proof_stream(State(state.clone()), JsonOnly(request)).await,
+            )
+            .await;
+            assert_eq!(
+                status,
+                StatusCode::NOT_FOUND,
+                "wrong {label} must not resolve a committed PDP outcome: {body}"
+            );
+            assert!(
+                !body.contains(&hex::encode(challenge.challenge_id)),
+                "not-found response must not disclose the committed challenge identity"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn proof_stream_por_requires_the_local_declared_provider_before_manifest_lookup() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+        let request_for = |provider_id| {
+            ProofStreamHttpRequestV1::new(sorafs_manifest::ProofStreamRequestV1 {
+                manifest_digest: [0xC1; 32],
+                provider_id,
+                proof_kind: ProofStreamKind::Por,
+                challenge_id: None,
+                sample_count: Some(1),
+                deadline_ms: None,
+                sample_seed: Some(7),
+                nonce: [0xC2; 16],
+                orchestrator_job_id: None,
+                tier: Some(ProofStreamTier::Hot),
+            })
+            .expect("valid PoR request")
+        };
+
+        let response = handle_post_sorafs_proof_stream(
+            State(state.clone()),
+            JsonOnly(request_for([0xC3; 32])),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+        let descriptor = chunker_registry::default_descriptor();
         let chunker_handle = format!(
             "{}.{}@{}",
-            manifest.chunking.namespace, manifest.chunking.name, manifest.chunking.semver
+            descriptor.namespace, descriptor.name, descriptor.semver
         );
-        seed_capacity_declaration(&state.sorafs_node, provider_id, &chunker_handle);
-        let mut reader = payload.as_slice();
-        let manifest_id_hex = state
-            .sorafs_node
-            .ingest_manifest(&manifest, &plan, &mut reader)
-            .expect("ingest manifest");
-        let manifest_digest: [u8; 32] = manifest
-            .digest()
-            .expect("compute manifest digest for receipts")
-            .into();
-        let manifest_digest_hex = hex::encode(manifest_digest);
-        let manifest_root_cid_hex = hex::encode(&manifest.root_cid);
-        assert_eq!(
-            manifest_id_hex, manifest_digest_hex,
-            "manifest id should use manifest digest"
-        );
-        let provider_id_hex = hex::encode(provider_id);
-        let trace_id_hex = hex::encode(trace_id);
-
-        let success_receipt = PotrReceiptV1 {
-            version: POTR_RECEIPT_VERSION_V1,
-            manifest_digest,
-            provider_id,
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 90_000,
-            latency_ms: 45,
-            status: PotrStatus::Success,
-            requested_at_ms: 1_700_000_000_000,
-            responded_at_ms: 1_700_000_000_045,
-            recorded_at_ms: 1_700_000_000_050,
-            range_start: 0,
-            range_end: 4_194_303,
-            request_id: None,
-            trace_id: Some(trace_id),
-            note: None,
-            gateway_signature: None,
-            provider_signature: None,
-        };
-        state
-            .sorafs_node
-            .record_potr_receipt(success_receipt)
-            .expect("record PoTR receipt");
-
-        let failure_receipt = PotrReceiptV1 {
-            version: POTR_RECEIPT_VERSION_V1,
-            manifest_digest,
-            provider_id,
-            tier: ProofStreamTier::Hot,
-            deadline_ms: 90_000,
-            latency_ms: 120,
-            status: PotrStatus::MissedDeadline,
-            requested_at_ms: 1_700_000_100_000,
-            responded_at_ms: 1_700_000_100_120,
-            recorded_at_ms: 1_700_000_500_000,
-            range_start: 0,
-            range_end: 4_194_303,
-            request_id: None,
-            trace_id: None,
-            note: None,
-            gateway_signature: None,
-            provider_signature: None,
-        };
-        state
-            .sorafs_node
-            .record_potr_receipt(failure_receipt)
-            .expect("record PoTR receipt");
-
-        let request = ProofStreamRequestDto {
-            manifest_digest_hex: manifest_digest_hex.clone(),
-            provider_id_hex: provider_id_hex.clone(),
-            proof_kind: "potr".to_string(),
-            sample_count: None,
-            deadline_ms: Some(90_000),
-            sample_seed: None,
-            nonce_b64: BASE64_STANDARD.encode([0x12u8; 16]),
-            orchestrator_job_id_hex: None,
-            tier: None,
-        };
-
+        seed_capacity_declaration(&state.sorafs_node, [0xC4; 32], &chunker_handle);
         let response =
-            handle_post_sorafs_proof_stream(State(state.clone()), JsonOnly(request)).await;
-        let status = response.status();
-        let body_bytes = BodyExt::collect(response.into_body())
-            .await
-            .expect("collect response body")
-            .to_bytes();
-        let body_text = String::from_utf8(body_bytes.to_vec()).expect("utf8");
-        assert_eq!(
-            status,
-            StatusCode::OK,
-            "unexpected status {status} body: {body_text}"
-        );
-        let lines: Vec<&str> = body_text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .collect();
-        assert_eq!(lines.len(), 2, "expected two streamed receipts");
-
-        let first: json::Value = json::from_str(lines[0]).expect("parse first item");
-        assert_eq!(
-            first.get("proof_kind").and_then(json::Value::as_str),
-            Some("potr")
-        );
-        assert_eq!(
-            first.get("result").and_then(json::Value::as_str),
-            Some("success")
-        );
-        assert_eq!(
-            first.get("deadline_ms").and_then(json::Value::as_u64),
-            Some(90_000)
-        );
-        assert_eq!(
-            first.get("recorded_at_ms").and_then(json::Value::as_u64),
-            Some(1_700_000_000_050)
-        );
-        assert!(
-            matches!(first.get("failure_reason"), Some(json::Value::Null) | None),
-            "success item should not include failure reason"
-        );
-        assert_eq!(
-            first
-                .get("manifest_digest_hex")
-                .and_then(json::Value::as_str),
-            Some(manifest_digest_hex.as_str())
-        );
-        assert_eq!(
-            first.get("manifest_cid_hex").and_then(json::Value::as_str),
-            Some(manifest_root_cid_hex.as_str())
-        );
-        assert_eq!(
-            first
-                .get("manifest_digest_hex")
-                .and_then(json::Value::as_str),
-            Some(manifest_digest_hex.as_str())
-        );
-        assert_eq!(
-            first.get("manifest_cid_hex").and_then(json::Value::as_str),
-            Some(manifest_root_cid_hex.as_str())
-        );
-        assert_eq!(
-            first
-                .get("trace_id")
-                .and_then(json::Value::as_str)
-                .map(str::to_ascii_lowercase),
-            Some(trace_id_hex.clone())
-        );
-
-        let second: json::Value = json::from_str(lines[1]).expect("parse second item");
-        assert_eq!(
-            second.get("result").and_then(json::Value::as_str),
-            Some("failure")
-        );
-        assert_eq!(
-            second.get("failure_reason").and_then(json::Value::as_str),
-            Some("missed_deadline")
-        );
-        assert_eq!(
-            second
-                .get("manifest_digest_hex")
-                .and_then(json::Value::as_str),
-            Some(manifest_digest_hex.as_str())
-        );
-        assert_eq!(
-            second.get("manifest_cid_hex").and_then(json::Value::as_str),
-            Some(manifest_root_cid_hex.as_str())
-        );
-        assert_eq!(
-            second
-                .get("manifest_digest_hex")
-                .and_then(json::Value::as_str),
-            Some(manifest_digest_hex.as_str())
-        );
-        assert_eq!(
-            second.get("manifest_cid_hex").and_then(json::Value::as_str),
-            Some(manifest_root_cid_hex.as_str())
-        );
+            handle_post_sorafs_proof_stream(State(state), JsonOnly(request_for([0xC5; 32]))).await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 
     #[tokio::test]
@@ -46503,13 +49176,129 @@ mod advert_tests {
     }
     use tokio::sync::RwLock;
 
+    #[derive(Debug)]
+    struct ToriiTestQuarantineKeyWrapper {
+        key_id: String,
+        key: [u8; 32],
+    }
+
+    impl ToriiTestQuarantineKeyWrapper {
+        fn nonce(&self, context_digest: [u8; 32]) -> [u8; 12] {
+            let mut hasher = blake3::Hasher::new_keyed(&self.key);
+            hasher.update(b"sorafs.torii.test-quarantine-wrapper.nonce.v1");
+            hasher.update(self.key_id.as_bytes());
+            hasher.update(&context_digest);
+            let mut nonce = [0_u8; 12];
+            nonce.copy_from_slice(&hasher.finalize().as_bytes()[..12]);
+            nonce
+        }
+    }
+
+    impl ModerationQuarantineKeyWrapper for ToriiTestQuarantineKeyWrapper {
+        fn active_key_id(&self) -> &str {
+            &self.key_id
+        }
+
+        fn wrap_dek(&self, context_digest: [u8; 32], dek: &[u8; 32]) -> Result<Vec<u8>, String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
+                .map_err(|error| error.to_string())?
+                .encrypt(
+                    self.nonce(context_digest).as_slice(),
+                    context_digest.as_slice(),
+                    dek.as_slice(),
+                )
+                .map_err(|error| error.to_string())
+        }
+
+        fn unwrap_dek(
+            &self,
+            key_id: &str,
+            context_digest: [u8; 32],
+            wrapped_dek: &[u8],
+        ) -> Result<[u8; 32], String> {
+            use iroha_crypto::encryption::{ChaCha20Poly1305, SymmetricEncryptor};
+
+            if key_id != self.key_id {
+                return Err("unknown Torii test wrapping key handle".to_owned());
+            }
+            SymmetricEncryptor::<ChaCha20Poly1305>::new_with_key(self.key)
+                .map_err(|error| error.to_string())?
+                .decrypt(
+                    self.nonce(context_digest).as_slice(),
+                    context_digest.as_slice(),
+                    wrapped_dek,
+                )
+                .map_err(|error| error.to_string())?
+                .try_into()
+                .map_err(|_| "unwrapped Torii test DEK is not 32 bytes".to_owned())
+        }
+    }
+
+    fn torii_test_quarantine_key_wrapper() -> Arc<dyn ModerationQuarantineKeyWrapper> {
+        Arc::new(ToriiTestQuarantineKeyWrapper {
+            key_id: "kms:test/torii-quarantine-v1".to_owned(),
+            key: [0xA6; 32],
+        })
+    }
+
     fn sorafs_node_with_temp_storage() -> (sorafs_node::NodeHandle, TempDir) {
+        sorafs_node_with_temp_storage_policy(false)
+    }
+
+    fn sorafs_node_with_temp_storage_and_repair() -> (sorafs_node::NodeHandle, TempDir) {
+        sorafs_node_with_temp_storage_policy(true)
+    }
+
+    fn sorafs_node_with_temp_storage_policy(
+        repair_enabled: bool,
+    ) -> (sorafs_node::NodeHandle, TempDir) {
         let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let temp_root = fs::canonicalize(temp_dir.path()).expect("canonicalize temp root");
+        let (manifest, policy, _, anchors) = moderation_screening_test_material();
+        let authority_bundle = sorafs_node::ModerationScreeningAuthorityBundleV1 {
+            version: sorafs_node::MODERATION_SCREENING_AUTHORITY_BUNDLE_VERSION_V1,
+            manifest,
+            policy,
+            governance_trust_anchors: anchors.into_iter().collect(),
+            minimum_governance_quorum: 1,
+        };
+        let authority_bundle_bytes =
+            norito::to_bytes(&authority_bundle).expect("encode screening authority bundle");
+        let authority_bundle_path = temp_root.join("moderation-screening-authority.to");
+        fs::write(&authority_bundle_path, &authority_bundle_bytes)
+            .expect("write screening authority bundle");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+
+            fs::set_permissions(&authority_bundle_path, fs::Permissions::from_mode(0o600))
+                .expect("secure screening authority bundle permissions");
+        }
         let cfg = StorageConfig::builder()
             .enabled(true)
-            .data_dir(temp_dir.path().join("storage"))
+            .data_dir(temp_root.join("storage"))
+            .moderation_screening_enabled(true)
+            .moderation_screening_authority_bundle_path(Some(authority_bundle_path))
+            .moderation_screening_authority_bundle_digest(Some(
+                *blake3::hash(&authority_bundle_bytes).as_bytes(),
+            ))
             .build();
-        (sorafs_node::NodeHandle::new(cfg), temp_dir)
+        let repair_config = sorafs_node::config::RepairConfig::from(
+            &iroha_config::parameters::actual::SorafsRepair {
+                enabled: repair_enabled,
+                ..Default::default()
+            },
+        );
+        let node = sorafs_node::NodeHandle::try_new_with_policies_and_quarantine_key_wrapper(
+            cfg,
+            repair_config,
+            sorafs_node::config::GcConfig::default(),
+            torii_test_quarantine_key_wrapper(),
+        )
+        .expect("initialise test node with quarantine key wrapper");
+        (node, temp_dir)
     }
 
     fn workspace_fixture(path: &str) -> std::path::PathBuf {
@@ -46665,6 +49454,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -46694,8 +49484,12 @@ mod advert_tests {
         gateway_config.enforce_admission = false;
         gateway_config.require_manifest_envelope = false;
         app.sorafs_gateway_config = gateway_config;
-        let components =
-            build_sorafs_gateway_security(&app.sorafs_gateway_config, app.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &app.sorafs_gateway_config,
+            app.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
@@ -46715,6 +49509,7 @@ mod advert_tests {
     }
 
     fn manifest_for_payload(seed: u8, payload: &[u8]) -> ManifestV1 {
+        let plan = CarBuildPlan::single_file(payload).expect("canonical fixture chunk plan");
         let manifest = ManifestBuilder::new()
             .root_cid(vec![seed; 16])
             .dag_codec(DagCodecId(0x71))
@@ -46722,6 +49517,7 @@ mod advert_tests {
                 sorafs_chunker::ChunkProfile::DEFAULT,
                 sorafs_manifest::BLAKE3_256_MULTIHASH_CODE,
             )
+            .chunk_digest_sha3_256(compute_chunk_plan_digest_sha3(&plan.chunks))
             .content_length(payload.len() as u64)
             .car_digest(blake3::hash(payload).into())
             .car_size(payload.len() as u64)
@@ -46752,7 +49548,7 @@ mod advert_tests {
             committed_capacity_gib: 1,
             chunker_commitments: vec![ChunkerCommitmentV1 {
                 profile_id: chunker_handle.to_string(),
-                profile_aliases: Some(vec![chunker_handle.to_string()]),
+                profile_aliases: None,
                 committed_gib: 1,
                 capability_refs: vec![
                     CapabilityType::ToriiGateway,
@@ -46854,8 +49650,12 @@ mod advert_tests {
         seed_capacity_declaration(&app.sorafs_node, provider_id, &chunker_handle);
 
         app.sorafs_gateway_config.enforce_admission = false;
-        let components =
-            build_sorafs_gateway_security(&app.sorafs_gateway_config, app.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &app.sorafs_gateway_config,
+            app.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
         app.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
@@ -48217,6 +51017,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -49422,6 +52224,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -49937,6 +52741,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -50052,6 +52858,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(components.policy.clone());
         inner.sorafs_gateway_denylist = Some(components.denylist.clone());
@@ -50474,6 +53282,7 @@ mod advert_tests {
 
         let sample_request = StoragePorSampleRequestDto {
             manifest_id_hex,
+            provider_id_hex: hex::encode([0xAD; 32]),
             count: 2,
             seed: Some(42),
         };
@@ -50503,6 +53312,7 @@ mod advert_tests {
 
         let sample_request = StoragePorSampleRequestDto {
             manifest_id_hex: "00".repeat(32),
+            provider_id_hex: "00".repeat(32),
             count: MAX_POR_SAMPLE_COUNT as u64 + 1,
             seed: Some(42),
         };
@@ -50520,6 +53330,23 @@ mod advert_tests {
         assert!(
             message.contains("count must be at most"),
             "unexpected error message: {message}"
+        );
+    }
+
+    #[test]
+    fn storage_por_provider_binding_fails_closed_and_matches_exactly() {
+        let provider = [0xA5; 32];
+        assert_eq!(
+            validate_storage_por_provider_binding(None, provider),
+            Err(StoragePorProviderBindingError::Unconfigured)
+        );
+        assert_eq!(
+            validate_storage_por_provider_binding(Some([0x5A; 32]), provider),
+            Err(StoragePorProviderBindingError::Mismatch)
+        );
+        assert_eq!(
+            validate_storage_por_provider_binding(Some(provider), provider),
+            Ok(())
         );
     }
 
@@ -50603,6 +53430,8 @@ mod advert_tests {
             let components = build_sorafs_gateway_security(
                 &app_inner.sorafs_gateway_config,
                 app_inner.sorafs_admission.clone(),
+                None,
+                None,
             );
             app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
             app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -50679,6 +53508,8 @@ mod advert_tests {
             let components = build_sorafs_gateway_security(
                 &app_inner.sorafs_gateway_config,
                 app_inner.sorafs_admission.clone(),
+                None,
+                None,
             );
             app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
             app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -50723,6 +53554,7 @@ mod advert_tests {
 
         let request = StoragePorSampleRequestDto {
             manifest_id_hex: context.manifest_id_hex.clone(),
+            provider_id_hex: hex::encode(declaration.provider_id),
             count: 4,
             seed: None,
         };
@@ -50760,6 +53592,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -50807,6 +53641,8 @@ mod advert_tests {
         let components_after = build_sorafs_gateway_security(
             &inner_after.sorafs_gateway_config,
             inner_after.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner_after.sorafs_gateway_policy = Some(Arc::clone(&components_after.policy));
         inner_after.sorafs_gateway_denylist = Some(Arc::clone(&components_after.denylist));
@@ -52510,6 +55346,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &app_inner.sorafs_gateway_config,
             app_inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52575,6 +55413,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52674,6 +55514,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52784,6 +55626,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &app_inner.sorafs_gateway_config,
             app_inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52819,6 +55663,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52921,8 +55767,12 @@ mod advert_tests {
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         let mut gateway_config = inner.sorafs_gateway_config.clone();
         gateway_config.require_manifest_envelope = false;
-        let components =
-            build_sorafs_gateway_security(&gateway_config, inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         inner.sorafs_gateway_config = gateway_config;
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -52972,6 +55822,8 @@ mod advert_tests {
         let components = build_sorafs_gateway_security(
             &inner.sorafs_gateway_config,
             inner.sorafs_admission.clone(),
+            None,
+            None,
         );
         inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -53781,8 +56633,12 @@ mod advert_tests {
         app_inner.sorafs_admission = Some(Arc::new(AdmissionRegistry::empty()));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.enforce_admission = true;
-        let components =
-            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            app_inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -53868,8 +56724,12 @@ mod advert_tests {
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.denylist.path = Some(denylist_path.clone());
-        let components =
-            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            app_inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -53930,8 +56790,12 @@ mod advert_tests {
         gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
         gateway_config.rate_limit.window = Duration::from_mins(1);
         gateway_config.rate_limit.ban = None;
-        let components =
-            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            app_inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -54028,8 +56892,12 @@ mod advert_tests {
         gateway_config.rate_limit.max_requests = Some(NonZeroU32::new(1).expect("non-zero"));
         gateway_config.rate_limit.window = Duration::from_mins(1);
         gateway_config.rate_limit.ban = None;
-        let components =
-            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            app_inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -54166,8 +57034,12 @@ mod advert_tests {
             .unwrap_or_else(|_| panic!("token test context should hold unique app state"));
         let mut gateway_config = app_inner.sorafs_gateway_config.clone();
         gateway_config.denylist.path = Some(denylist_path.clone());
-        let components =
-            build_sorafs_gateway_security(&gateway_config, app_inner.sorafs_admission.clone());
+        let components = build_sorafs_gateway_security(
+            &gateway_config,
+            app_inner.sorafs_admission.clone(),
+            None,
+            None,
+        );
         app_inner.sorafs_gateway_config = gateway_config;
         app_inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
         app_inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
@@ -54896,6 +57768,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -54926,6 +57799,7 @@ mod advert_tests {
             vec![
                 CapabilityType::ToriiGateway,
                 CapabilityType::ChunkRangeFetch,
+                CapabilityType::PotrMlDsa,
             ],
             Arc::new(admission),
         );
@@ -54966,6 +57840,13 @@ mod advert_tests {
         provider_id: [u8; 32],
     ) -> ProviderFixture {
         let signing_key = SigningKey::from_bytes(&[0xA5; 32]);
+        let potr_provider_key = KeyPair::try_from_seed(vec![0xAB; 32], Algorithm::MlDsa)
+            .expect("derive fixture PoTR provider key");
+        let (potr_algorithm, potr_provider_public_key) = potr_provider_key
+            .public_key()
+            .try_to_bytes()
+            .expect("encode fixture PoTR provider key");
+        assert_eq!(potr_algorithm, Algorithm::MlDsa);
         let stake_pool_id = [0x21; 32];
         let capabilities = vec![
             CapabilityTlv {
@@ -54983,6 +57864,10 @@ mod advert_tests {
                 }
                 .to_bytes()
                 .expect("encode range capability"),
+            },
+            CapabilityTlv {
+                cap_type: CapabilityType::PotrMlDsa,
+                payload: potr_provider_public_key.to_vec(),
             },
         ];
 

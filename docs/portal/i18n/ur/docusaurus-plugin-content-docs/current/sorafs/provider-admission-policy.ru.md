@@ -37,7 +37,7 @@ translation_last_reviewed: 2026-02-07
 ## داخلہ کا عمل
 
 1. ** ایک پیش کش بنائیں **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...` شامل کریں ،
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں ،
      `ProviderAdmissionProposalV1` + سرٹیفیکیشن بنڈل تشکیل دینا۔
    - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کی موجودگی کو یقینی بنائیں۔
 2. ** گورننس کی منظوری **
@@ -55,7 +55,7 @@ translation_last_reviewed: 2026-02-07
 ## نفاذ کے کام| خطہ | مسئلہ | مالک (زبانیں) | حیثیت |
 | --------- | -------- | ---------- | -------- |
 | اسکیم | `ProviderAdmissionProposalV1` ، `ProviderAdmissionEnvelopeV1` ، `EndpointAttestationV1` (Norito) سے `crates/sorafs_manifest/src/provider_admission.rs` کی وضاحت کریں۔ توثیق کے مددگاروں کے ساتھ `sorafs_manifest::provider_admission` میں نافذ کیا گیا ہے اسٹوریج / گورننس | ✅ مکمل |
-| سی ایل آئی ٹولز | `sorafs_manifest_stub` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ مکمل |
+| سی ایل آئی ٹولز | `sorafs_manifest_builder` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ مکمل |
 
 سی ایل آئی اسٹریم اب انٹرمیڈیٹ سرٹیفکیٹ بنڈل (`--endpoint-attestation-intermediate`) کو قبول کرتا ہے ،
 `sign`/`verify` کے دوران کونسل کے دستخطوں کی تصدیق اور کونسل کے دستخطوں کی تصدیق کرتے ہیں۔ آپریٹرز کر سکتے ہیں
@@ -64,7 +64,7 @@ translation_last_reviewed: 2026-02-07
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -99,7 +99,7 @@ translation_last_reviewed: 2026-02-07
     `--revoked-at`/`--notes`۔ Norito پے لوڈ لکھتا ہے
     `--revocation-out` اور ہضم اور دستخطوں کی تعداد کے ساتھ JSON رپورٹ پرنٹ کرتا ہے۔
 | چیک | Torii ، گیٹ ویز اور `sorafs-node` کے ذریعہ استعمال کردہ ایک مشترکہ توثیق کار کو نافذ کریں۔ یونٹ + سی ایل آئی انضمام کے ٹیسٹ مہیا کریں نیٹ ورکنگ TL/اسٹوریج | ✅ مکمل |
-| انضمام Torii | Torii میں اشتہارات قبول کرنے کے لئے توثیق کرنے والے کو مربوط کریں ، پالیسی سے باہر اشتہارات کو مسترد کریں اور ٹیلی میٹری شائع کریں۔ | نیٹ ورکنگ TL | ✅ مکمل | Torii اب گورننس لفافے (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے ، استقبالیہ پر ہضم/دستخطی میچ چیک کرتا ہے اور ٹیلی میٹری کو شائع کرتا ہے داخلہ۔ 【f: کریٹس/اروہ_ٹوری/ایس آر سی/سرفس/داخلہ| اپ ڈیٹ | اپ ڈیٹ/یاد رکھنے والی اسکیمیں + سی ایل آئی مددگار شامل کریں ، دستاویزات میں لائف سائیکل شائع کریں (نیچے رن بک دیکھیں اور سی ایل آئی کمانڈز میں شامل کریں۔ `provider-admission renewal`/`revoke`). 【کریٹس/sorafs_car/src/sorafs_manifest_stub/فراہم کنندہ_ایڈیشن.رس#l477 】【 دستاویزات/ماخذ/sorafs/فراہم کنندہ_ایڈیشن_پولیسی.مڈی: 120】 | اسٹوریج / گورننس | ✅ مکمل |
+| انضمام Torii | Torii میں اشتہارات قبول کرنے کے لئے توثیق کرنے والے کو مربوط کریں ، پالیسی سے باہر اشتہارات کو مسترد کریں اور ٹیلی میٹری شائع کریں۔ | نیٹ ورکنگ TL | ✅ مکمل | Torii اب گورننس لفافے (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے ، استقبالیہ پر ہضم/دستخطی میچ چیک کرتا ہے اور ٹیلی میٹری کو شائع کرتا ہے داخلہ۔ 【f: کریٹس/اروہ_ٹوری/ایس آر سی/سرفس/داخلہ| اپ ڈیٹ | اپ ڈیٹ/یاد رکھنے والی اسکیمیں + سی ایل آئی مددگار شامل کریں ، دستاویزات میں لائف سائیکل شائع کریں (نیچے رن بک دیکھیں اور سی ایل آئی کمانڈز میں شامل کریں۔ `provider-admission renewal`/`revoke`). 【کریٹس/sorafs_car/src/sorafs_manifest_builder/فراہم کنندہ_ایڈیشن.رس#l477 】【 دستاویزات/ماخذ/sorafs/فراہم کنندہ_ایڈیشن_پولیسی.مڈی: 120】 | اسٹوریج / گورننس | ✅ مکمل |
 | ٹیلی میٹری | ڈیش بورڈز/الرٹس `provider_admission` کی وضاحت کریں (یاد تازہ کاری ، لفافے کی میعاد ختم ہونے کی تاریخ)۔ | مشاہدہ | 🟠 ترقی میں | کاؤنٹر `torii_sorafs_admission_total{result,reason}` موجود ہے ؛ ڈیش بورڈز/انتباہات جاری ہیں
 
 ### رن بک اپڈیٹس اور آراء
@@ -109,7 +109,7 @@ translation_last_reviewed: 2026-02-07
    `--retention-epoch` میں اضافہ اور ضرورت کے مطابق اسٹیکس/اختتامی مقامات کو اپ ڈیٹ کرنا۔
 2. عمل کریں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -119,7 +119,7 @@ translation_last_reviewed: 2026-02-07
    ```
    کمانڈ صلاحیت/پروفائل فیلڈز کے ذریعہ عدم استحکام کی جانچ پڑتال کرتا ہے
    `AdmissionRecord::apply_renewal` ، `ProviderAdmissionRenewalV1` کو جاری کرتا ہے اور پرنٹ ہضم ہوتا ہے
-   گورننس میگزین۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_اڈمیشن. rs#l422】
+   گورننس میگزین۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_اڈمیشن. rs#l422】
 3. پچھلے لفافے کو `torii.sorafs.admission_envelopes_dir` میں تبدیل کریں ، Norito/JSON تازہ کاریوں کا ارتکاب کریں
    گورننس ریپوزٹری میں اور `docs/source/sorafs/migration_ledger.md` میں اپ ڈیٹ ہیش + برقرار رکھنے کے عہد کو شامل کریں۔
 4. آپریٹرز کو مطلع کریں کہ نیا لفافہ فعال اور مانیٹر ہے
@@ -130,7 +130,7 @@ translation_last_reviewed: 2026-02-07
 #### ایمرجنسی یاد
 1. سمجھوتہ شدہ لفافے کی شناخت کریں اور رائے جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -141,7 +141,7 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/revocation.json
    ```
    سی ایل آئی کے اشارے `ProviderAdmissionRevocationV1` ، کے ذریعہ سیٹ کے سیٹ کی تصدیق کرتے ہیں
-   `verify_revocation_signatures` اور ایک جائزہ ڈائجسٹ کی اطلاع دیتا ہے۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#l593 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_ایڈیشن. rs#l486】
+   `verify_revocation_signatures` اور ایک جائزہ ڈائجسٹ کی اطلاع دیتا ہے۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#l593 】【 f: creats/sorafs_manifest/src/فراہم کنندہ_ایڈیشن. rs#l486】
 2. `torii.sorafs.admission_envelopes_dir` سے لفافہ کو ہٹا دیں ، Norito/JSON آراء کو داخلہ کیچوں میں تقسیم کریں
    اور گورننس پروٹوکول میں ہیش وجوہات کو ریکارڈ کریں۔
 3. ٹریک `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` کی تصدیق کے ل .۔

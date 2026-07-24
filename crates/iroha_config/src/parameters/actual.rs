@@ -7900,6 +7900,18 @@ pub struct SorafsStorage {
     pub pdp_sample_window: u16,
     /// Aggregate in-memory budget for canonical PDP tree indexes.
     pub pdp_tree_memory_limit_bytes: Bytes<u64>,
+    /// Whether authenticated moderation-screening admission is enabled.
+    pub moderation_screening_enabled: bool,
+    /// Canonical non-secret moderation authority bundle path.
+    pub moderation_screening_authority_bundle_path: Option<PathBuf>,
+    /// Reviewed BLAKE3 digest of the exact canonical authority bundle bytes.
+    pub moderation_screening_authority_bundle_digest: Option<[u8; 32]>,
+    /// Governed PoP credential-service policy. Runtime key material is injected
+    /// separately and is never represented in configuration.
+    pub pop_credentials: Option<SorafsPopCredentialService>,
+    /// Finalized-chain moderation orchestration policy. Transaction signing,
+    /// finalized reads, and terminal sinks remain runtime-injected.
+    pub moderation_orchestrator: Option<SorafsModerationOrchestrator>,
     /// Durable admission-bound PDP provider protocol policy.
     pub pdp_provider: SorafsPdpProviderPolicy,
     /// Retention and checkpoint bounds for auxiliary embedded runtime state.
@@ -8049,6 +8061,10 @@ pub struct SorafsRuntimeRetention {
     pub state_entry_limit: usize,
     /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Finalized reconciliation cadence for durable proof-outcome delivery.
+    pub proof_outcome_forwarder_interval: Duration,
+    /// Submission attempts allowed for one exact proof-outcome transaction.
+    pub proof_outcome_max_attempts: u32,
 }
 
 /// Durable admission-bound PDP provider protocol policy.
@@ -8074,6 +8090,81 @@ pub struct SorafsPdpProviderPolicy {
     pub terminal_retention_secs: u64,
 }
 
+/// One governed PoP dual-control approver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPopApprovalSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 public key bytes.
+    pub public_key: [u8; 32],
+    /// Finalized epoch at which the signer is revoked.
+    pub revoked_at_epoch: Option<u64>,
+}
+
+/// Non-secret production policy for the Torii PoP credential service.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsPopCredentialService {
+    /// Durable issuer checkpoint directory.
+    pub issuer_state_dir: PathBuf,
+    /// Encrypted wallet-vault directory.
+    pub wallet_state_dir: PathBuf,
+    /// Exact active finalized issuer-policy digest.
+    pub issuer_policy_digest: [u8; 32],
+    /// Governed issuer identifier.
+    pub issuer_id: String,
+    /// Non-secret runtime HSM key handle.
+    pub issuer_hsm_key_id: String,
+    /// Governed raw Ed25519 issuer public key.
+    pub issuer_public_key: [u8; 32],
+    /// Non-secret runtime hybrid recipient-key handle.
+    pub enrollment_recipient_key_id: String,
+    /// Required distinct active approval count.
+    pub approval_quorum: u8,
+    /// Canonically signer-id-ordered approval authority.
+    pub approval_signers: Vec<SorafsPopApprovalSigner>,
+    /// Maximum pending encrypted enrollments.
+    pub max_pending_enrollments: u32,
+    /// Maximum durable registry outbox entries.
+    pub max_outbox_entries: u32,
+    /// Maximum durable dead letters.
+    pub max_dead_letters: u32,
+    /// Maximum consumed proof nullifiers.
+    pub max_seen_nullifiers: u32,
+    /// Submission attempts before terminal dead-lettering.
+    pub max_submission_attempts: u16,
+    /// Registry worker cadence.
+    pub worker_interval: Duration,
+    /// Maximum absolute skew between finalized and runtime clock time.
+    pub max_finalized_time_skew: Duration,
+}
+
+/// Non-secret production policy for finalized-chain moderation orchestration.
+#[derive(Debug, Clone)]
+pub struct SorafsModerationOrchestrator {
+    /// Private canonical checkpoint path.
+    pub checkpoint_path: PathBuf,
+    /// Governance authority used only for deterministic deadline maintenance.
+    pub maintenance_authority: AccountId,
+    /// Maximum appeals and activated cases in one complete finalized snapshot.
+    pub max_cases: usize,
+    /// Maximum finalized typed events retained in one snapshot.
+    pub max_events: usize,
+    /// Maximum pending native transactions.
+    pub max_outbox_entries: usize,
+    /// Maximum stable operation identities and terminal dead letters.
+    pub max_idempotency_records: usize,
+    /// Maximum settlement/publication handoff identities.
+    pub max_handoffs: usize,
+    /// Safe attempts under one unchanged operation identity.
+    pub max_submit_attempts: u32,
+    /// Maximum canonical checkpoint size.
+    pub checkpoint_max_bytes: Bytes<u64>,
+    /// Finalized reconciliation and maintenance cadence.
+    pub worker_interval: Duration,
+    /// Maximum native maintenance actions emitted in one scan.
+    pub maintenance_batch_limit: usize,
+}
+
 /// SoraFS local orderbook admission policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsOrderbook {
@@ -8084,7 +8175,7 @@ pub struct SorafsOrderbook {
 }
 
 /// Local SFM-4c privacy aggregate publication scheduler.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SorafsPrivacyAggregateSchedule {
     /// Whether config-backed due-cycle publication is enabled.
     pub enabled: bool,
@@ -8092,6 +8183,26 @@ pub struct SorafsPrivacyAggregateSchedule {
     pub cycle_seconds: u64,
     /// Delay after a cycle closes before publication, in seconds.
     pub publish_delay_seconds: u64,
+    /// Public aggregate identifier prefix.
+    pub aggregate_id_prefix: String,
+    /// Governed privacy mode.
+    pub privacy_mode: String,
+    /// Reduced governed epsilon numerator.
+    pub epsilon_numerator: u64,
+    /// Reduced governed epsilon denominator.
+    pub epsilon_denominator: u64,
+    /// Maximum contribution from one private subject to one metric.
+    pub per_subject_metric_cap: u64,
+    /// Minimum distinct-subject count required for publication.
+    pub suppression_threshold: u64,
+    /// Reviewed governed privacy-policy digest.
+    pub policy_digest: Option<[u8; 32]>,
+    /// Reduced composed-epsilon budget numerator.
+    pub composition_budget_epsilon_numerator: u64,
+    /// Reduced composed-epsilon budget denominator.
+    pub composition_budget_epsilon_denominator: u64,
+    /// Maximum publications retained under this composition-budget policy.
+    pub composition_budget_max_publications: u64,
 }
 
 /// Local SFM-4b3 evidence-viewer audit-report publication scheduler.
@@ -8142,6 +8253,11 @@ impl Default for SorafsStorage {
             por_sample_interval_secs: defaults::sorafs::storage::POR_SAMPLE_INTERVAL_SECS,
             pdp_sample_window: defaults::sorafs::storage::PDP_SAMPLE_WINDOW,
             pdp_tree_memory_limit_bytes: defaults::sorafs::storage::PDP_TREE_MEMORY_LIMIT_BYTES,
+            moderation_screening_enabled: defaults::sorafs::storage::MODERATION_SCREENING_ENABLED,
+            moderation_screening_authority_bundle_path: None,
+            moderation_screening_authority_bundle_digest: None,
+            pop_credentials: None,
+            moderation_orchestrator: None,
             pdp_provider: SorafsPdpProviderPolicy::default(),
             runtime: SorafsRuntimeRetention::default(),
             alias: defaults::sorafs::storage::alias(),
@@ -8206,6 +8322,11 @@ impl Default for SorafsRuntimeRetention {
             event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
             state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
             checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
+            proof_outcome_forwarder_interval: Duration::from_millis(
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS.get(),
+            ),
+            proof_outcome_max_attempts:
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS.get(),
         }
     }
 }
@@ -8244,6 +8365,25 @@ impl Default for SorafsPrivacyAggregateSchedule {
             cycle_seconds: defaults::sorafs::storage::privacy_aggregates::CYCLE_SECONDS,
             publish_delay_seconds:
                 defaults::sorafs::storage::privacy_aggregates::PUBLISH_DELAY_SECONDS,
+            aggregate_id_prefix:
+                defaults::sorafs::storage::privacy_aggregates::AGGREGATE_ID_PREFIX.to_string(),
+            privacy_mode:
+                defaults::sorafs::storage::privacy_aggregates::PRIVACY_MODE.to_string(),
+            epsilon_numerator:
+                defaults::sorafs::storage::privacy_aggregates::EPSILON_NUMERATOR,
+            epsilon_denominator:
+                defaults::sorafs::storage::privacy_aggregates::EPSILON_DENOMINATOR,
+            per_subject_metric_cap:
+                defaults::sorafs::storage::privacy_aggregates::PER_SUBJECT_METRIC_CAP,
+            suppression_threshold:
+                defaults::sorafs::storage::privacy_aggregates::SUPPRESSION_THRESHOLD,
+            policy_digest: None,
+            composition_budget_epsilon_numerator:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_NUMERATOR,
+            composition_budget_epsilon_denominator:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_EPSILON_DENOMINATOR,
+            composition_budget_max_publications:
+                defaults::sorafs::storage::privacy_aggregates::COMPOSITION_BUDGET_MAX_PUBLICATIONS,
         }
     }
 }
@@ -8680,6 +8820,8 @@ pub struct SorafsGateway {
     pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// ACME automation configuration.
     pub acme: SorafsGatewayAcme,
+    /// Governed signed compliance controller configuration.
+    pub compliance: Option<SorafsGatewayCompliance>,
     /// Optional direct-mode override configuration.
     pub direct_mode: Option<SorafsGatewayDirectMode>,
 }
@@ -8702,6 +8844,7 @@ impl Default for SorafsGateway {
             ),
             untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             acme: SorafsGatewayAcme::default(),
+            compliance: None,
             direct_mode: None,
         }
     }
@@ -8911,6 +9054,80 @@ impl Default for SorafsGatewayAcme {
             ech_enabled: defaults::sorafs::gateway::acme::ECH_ENABLED,
         }
     }
+}
+
+/// One governed Ed25519 identity in the gateway compliance policy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceSigner {
+    /// Stable payload-free signer identifier.
+    pub signer_id: String,
+    /// Raw Ed25519 verifying key.
+    pub public_key: [u8; 32],
+}
+
+/// One exact HTTPS host and its accepted TLS SPKI identities.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceFeedHost {
+    /// Canonical lowercase DNS hostname.
+    pub hostname: String,
+    /// Accepted SHA-256 SPKI digests in canonical order.
+    pub accepted_spki_sha256: Vec<[u8; 32]>,
+}
+
+/// One authenticated external compliance feed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SorafsGatewayComplianceFeed {
+    /// Stable feed identifier.
+    pub feed_id: String,
+    /// Exact credential-free HTTPS URL.
+    pub url: String,
+    /// Whether every promoted catalog must bind this feed.
+    pub required: bool,
+    /// Exact initial/redirect host allowlist.
+    pub hosts: Vec<SorafsGatewayComplianceFeedHost>,
+}
+
+/// Non-secret production policy for the governed gateway compliance controller.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayCompliance {
+    /// Absolute durable checkpoint file path.
+    pub checkpoint_path: PathBuf,
+    /// Non-zero governance policy identity.
+    pub policy_id: [u8; 32],
+    /// Required distinct catalog approvals.
+    pub catalog_threshold: u16,
+    /// Canonically ordered catalog signers.
+    pub catalog_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked catalog signer identifiers.
+    pub revoked_catalog_signer_ids: Vec<String>,
+    /// Required distinct regional-gateway acknowledgements.
+    pub gateway_ack_threshold: u16,
+    /// Canonically ordered regional-gateway signers.
+    pub gateway_signers: Vec<SorafsGatewayComplianceSigner>,
+    /// Canonically ordered revoked gateway signer identifiers.
+    pub revoked_gateway_signer_ids: Vec<String>,
+    /// Canonically ordered authenticated feeds.
+    pub feeds: Vec<SorafsGatewayComplianceFeed>,
+    /// Maximum encoded feed response bytes.
+    pub max_encoded_bytes: Bytes<u64>,
+    /// Maximum normalized/decompressed feed response bytes.
+    pub max_decoded_bytes: Bytes<u64>,
+    /// Maximum redirect count.
+    pub max_redirects: u8,
+    /// Maximum distinct public DNS answers.
+    pub max_dns_addresses: usize,
+    /// Per-connection timeout.
+    pub connect_timeout: Duration,
+    /// Total feed operation timeout.
+    pub total_timeout: Duration,
+    /// Maximum timestamp skew.
+    pub max_clock_skew: Duration,
+    /// Maximum age of a source feed at catalog construction.
+    pub max_feed_age: Duration,
+    /// Maximum signed catalog validity interval.
+    pub max_catalog_validity: Duration,
+    /// Maximum durable promotion/rollback history.
+    pub max_history_entries: usize,
 }
 
 /// Optional direct-mode override details for gateway configuration.
@@ -9622,6 +9839,8 @@ pub struct Offline {
     pub kagemusha_release_policy_path: Option<PathBuf>,
     /// Directory containing manifest-digest-addressed Kagemusha release artifacts.
     pub kagemusha_artifact_dir: Option<PathBuf>,
+    /// Estimated decoded Kagemusha verifier budget under the 256 MiB safety ceiling.
+    pub kagemusha_max_decoded_bytes: u64,
 }
 
 impl Default for Offline {
@@ -9632,6 +9851,7 @@ impl Default for Offline {
             kagemusha_release_policy_path:
                 defaults::settlement::offline::kagemusha_release_policy_path(),
             kagemusha_artifact_dir: defaults::settlement::offline::kagemusha_artifact_dir(),
+            kagemusha_max_decoded_bytes: defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES,
         }
     }
 }
@@ -11097,6 +11317,10 @@ mod tests {
         let offline = Offline::default();
         assert!(offline.kagemusha_release_policy_path.is_none());
         assert!(offline.kagemusha_artifact_dir.is_none());
+        assert_eq!(
+            offline.kagemusha_max_decoded_bytes,
+            defaults::settlement::offline::KAGEMUSHA_MAX_DECODED_BYTES
+        );
     }
 
     #[test]

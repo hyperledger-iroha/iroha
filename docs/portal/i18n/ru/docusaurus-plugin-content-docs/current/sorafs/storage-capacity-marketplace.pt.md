@@ -63,7 +63,7 @@ Armazenamento заявляет о возможности компрометац�
 - Вспомогательные элементы сравнения (`CapacityMetadataEntry`, `PricingScheduleV1`, валидаторы дорожек/атрибутов/SLA) обеспечивают детерминированную проверку данных и отчет об ошибках при повторном использовании для CI и последующих инструментов. [crates/sorafs_manifest/src/capacity.rs:230]
 - `PinProviderRegistry` ранее отображал или делал снимок в цепочке через `/v1/sorafs/capacity/state`, комбинировал декларации поставщиков и вводимые данные в реестр комиссий для определенного Norito JSON. [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - Кобертура проверки подлинности осуществляет принудительное выполнение канонических ручек, обнаружение дубликатов, ограничение полос, защиту атрибутов репликации и проверку дальности телеметрии, чтобы немедленно регрессировать в CI. [crates/sorafs_manifest/src/capacity.rs:792]
-- Инструменты для операторов: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` конвертируют легитимные спецификации в полезные нагрузки Norito canonicos, blobs base64 и резюме JSON для подготовки операторами приспособлений `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и заказов репликации с локальной проверкой. [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] Фиксаторы ссылок, которые можно использовать в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и создаются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Инструменты для операторов: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` конвертируют легитимные спецификации в полезные нагрузки Norito canonicos, blobs base64 и резюме JSON для подготовки операторами приспособлений `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и заказов репликации с локальной проверкой. [crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1] Фиксаторы ссылок, которые можно использовать в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и создаются через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Интеграция плана контроля| Тарефа | Ответить(есть) | Заметки |
 |------|------------------|-------|
@@ -152,7 +152,7 @@ Armazenamento заявляет о возможности компрометац�
   объединение с пакетами управления.
 
 ### Доказательства спора и порезов
-- Архивировать споры через `sorafs_manifest_stub capacity dispute` (тесты:
+- Архивировать споры через `sorafs_manifest_builder capacity dispute` (тесты:
   `cargo test -p sorafs_car --test capacity_cli`) параметр полезных данных canonicos.
 - Выполнить `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e как наборы
   штраф (`record_capacity_telemetry_penalises_persistent_under_delivery`) для проверки
@@ -161,7 +161,7 @@ Armazenamento заявляет о возможности компрометац�
   Ссылка на подтверждение забастовки не связана с проверкой подлинности.
 
 ### Регистрация поставщиков и выходные дымовые тесты
-- Восстановить артефакты объявления/телеметрии с `sorafs_manifest_stub capacity ...` и ездить на ОС.
+- Восстановить артефакты объявления/телеметрии с `sorafs_manifest_builder capacity ...` и ездить на ОС.
   тесты CLI перед отправкой (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Подмета через Torii (`/v1/sorafs/capacity/declare`) и захват `/v1/sorafs/capacity/state` чаще всего
   скриншоты делаю Grafana. Проверьте или потекли в `docs/source/sorafs/capacity_onboarding_runbook.md`.

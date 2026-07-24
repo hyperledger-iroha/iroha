@@ -137,7 +137,7 @@ NX-7 change controls include the signed bundle references automatically:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-url https://torii.example.com/v1/sumeragi/status \
+  --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
   --metrics-url https://torii.example.com/metrics \
   --lane-alias payments \
   --expected-lane-count 3 \
@@ -169,6 +169,11 @@ directly inside the smoke helper, and pass
 `--allow-missing-lane-metrics` only when staging clusters have not yet exposed those gauges
 (production evidence should keep the defaults enforced).
 
+`--lifecycle-url` and `--lifecycle-file` are the canonical spellings.
+`--status-url` and `--status-file` remain deprecated script aliases for
+compatibility, but they still expect the `/v1/nexus/lifecycle` shape; they must
+not be pointed at `/v1/sumeragi/status`.
+
 The same helper now enforces scheduler load-test telemetry. Use `--min-teu-capacity` to prove each
 lane reports a non-zero `nexus_scheduler_lane_teu_capacity`, gate the slot utilisation with
 `--max-teu-slot-commit-ratio` (compares `nexus_scheduler_lane_teu_slot_committed` against capacity),
@@ -183,12 +188,12 @@ After the smoke run succeeds, archive the Prometheus snapshot and slot summary w
 The helper copies both artefacts into `artifacts/nx18/` and emits `slot_bundle_manifest.json`
 with SHA-256 digests so the NX-18 evidence bundle contains exactly what the gate evaluated.
 
-For air-gapped validations (or CI) you can replay a captured Torii response instead of hitting a live
-endpoint:
+For air-gapped validations (or CI) you can replay a captured Nexus lifecycle
+response instead of hitting a live endpoint:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-file fixtures/nexus/lanes/status_ready.json \
+  --lifecycle-file fixtures/nexus/lanes/status_ready.json \
   --metrics-file fixtures/nexus/lanes/metrics_ready.prom \
   --lane-alias core \
   --lane-alias payments \
@@ -212,8 +217,10 @@ scripts/nexus_lane_smoke.py \
   --min-slot-samples 10
 ```
 
-The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts produced by the bootstrap
-helper so new manifests can be linted without bespoke scripting. CI exercises the same flow via
+The recorded fixtures under `fixtures/nexus/lanes/` mirror the artefacts
+produced by the bootstrap helper so new manifests can be linted without
+bespoke scripting. The historical `status_ready.json` filename contains a
+Nexus lifecycle payload. CI exercises the same flow via
 `ci/check_nexus_lane_smoke.sh` and also runs `ci/check_nexus_lane_registry_bundle.sh`
 (alias: `make check-nexus-lanes`) to prove the NX-7 smoke helper stays aligned with the published
 payload format and to ensure bundle digests/overlays remain reproducible.
@@ -225,7 +232,7 @@ and `--require-alias-migration old:new` asserts that a `alias_migrated` event re
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-file fixtures/nexus/lanes/status_ready.json \
+  --lifecycle-file fixtures/nexus/lanes/status_ready.json \
   --metrics-file fixtures/nexus/lanes/metrics_ready.prom \
   --telemetry-file fixtures/nexus/lanes/telemetry_alias_migrated.ndjson \
   --lane-alias payments \
@@ -274,7 +281,7 @@ bundle manifest into one artefact set so load runs can be published directly to 
 
    ```bash
    scripts/nexus_lane_smoke.py \
-     --status-url https://torii.example.com/v1/sumeragi/status \
+     --lifecycle-url https://torii.example.com/v1/nexus/lifecycle \
      --metrics-url https://torii.example.com/metrics \
      --lane-alias payments \
      --expected-lane-count 3 \
@@ -304,14 +311,15 @@ bundle manifest into one artefact set so load runs can be published directly to 
    keep the workload seed + slot range handy; the metadata is consumed by the telemetry manifest
    validator in §6.3.
 
-5. Package the load-run evidence with the new helper. Supply the captured status/metrics/telemetry
-   payloads, the lane aliases, and any alias-migration events that should appear in telemetry. The
-   helper writes `smoke.log`, `slot_summary.json`, a slot bundle manifest, and `load_test_manifest.json`
-   tying everything together for governance review:
+5. Package the load-run evidence with the new helper. Supply the captured
+   lifecycle/metrics/telemetry payloads, the lane aliases, and any
+   alias-migration events that should appear in telemetry. The helper writes
+   `smoke.log`, `slot_summary.json`, a slot bundle manifest, and
+   `load_test_manifest.json` tying everything together for governance review:
 
    ```bash
    scripts/nexus_lane_load_test.py \
-     --status-file artifacts/nexus/load/payments-2026q2/torii_status.json \
+     --lifecycle-file artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json \
      --metrics-file artifacts/nexus/load/payments-2026q2/metrics.prom \
      --telemetry-file artifacts/nexus/load/payments-2026q2/nexus.lane.topology.ndjson \
      --lane-alias payments \
@@ -330,14 +338,24 @@ bundle manifest into one artefact set so load runs can be published directly to 
 
 While the workload is saturating the lane:
 
-1. Snapshot Torii status + metrics:
+1. Snapshot lifecycle, authoritative consensus status, operational diagnostics,
+   and metrics separately:
 
    ```bash
+   curl -sS https://torii.example.com/v1/nexus/lifecycle \
+     > artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json
    curl -sS https://torii.example.com/v1/sumeragi/status \
-     > artifacts/nexus/load/payments-2026q2/torii_status.json
+     > artifacts/nexus/load/payments-2026q2/sumeragi_status.json
+   curl -sS https://torii.example.com/v1/sumeragi/diagnostics \
+     > artifacts/nexus/load/payments-2026q2/sumeragi_diagnostics.json
    curl -sS https://torii.example.com/metrics \
      > artifacts/nexus/load/payments-2026q2/metrics.prom
    ```
+
+   `nexus_lane_smoke.py` consumes the lifecycle payload. The status snapshot is
+   the authoritative `SumeragiV2Status`; diagnostics contain the
+   non-authoritative lane, Native participant-application, and autonomous
+   execution evidence. Do not substitute one payload for another.
 
 2. Compute slot-duration quantiles and archive the summary:
 
@@ -360,7 +378,7 @@ While the workload is saturating the lane:
 
    ```bash
    cargo xtask nexus-lane-audit \
-     --status artifacts/nexus/load/payments-2026q2/torii_status.json \
+     --status artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json \
      --json-out artifacts/nexus/load/payments-2026q2/lane_audit.json \
      --parquet-out artifacts/nexus/load/payments-2026q2/lane_audit.parquet \
      --captured-at 2026-05-10T10:15:00Z
@@ -369,6 +387,8 @@ While the workload is saturating the lane:
    The JSON/Parquet snapshot now records TEU utilisation, scheduler trigger
    levels, RBC chunk/byte counters, and transaction graph statistics for each
    lane so the rollout evidence shows both backlog and execution pressure.
+   The xtask's `--status` option is its retained CLI spelling; the input is the
+   captured `/v1/nexus/lifecycle` document.
 
 4. Run the smoke helper again at peak load so the thresholds are evaluated under stress (write the
    output to `smoke_during.log`) and re-run once the workload finishes (`smoke_after.log`).
@@ -394,7 +414,7 @@ renames during the test:
 
 ```bash
 scripts/nexus_lane_smoke.py \
-  --status-file artifacts/nexus/load/payments-2026q2/torii_status.json \
+  --lifecycle-file artifacts/nexus/load/payments-2026q2/nexus_lifecycle.json \
   --metrics-file artifacts/nexus/load/payments-2026q2/metrics.prom \
   --telemetry-file artifacts/nexus/load/payments-2026q2/nexus.lane.topology.ndjson \
   --require-alias-migration core:payments \
@@ -410,6 +430,8 @@ scripts/nexus_lane_smoke.py \
 Archive the following artefacts for the governance ticket:
 
 - `smoke_before.log`, `smoke_during.log`, `smoke_after.log`
+- `nexus_lifecycle.json`, `sumeragi_status.json`,
+  `sumeragi_diagnostics.json`
 - `metrics.prom`, `slot_summary.json`, `slot_bundle_manifest.json`
 - `lane_audit.{json,parquet}`
 - `telemetry_manifest.json` + pack contents (`prometheus.tgz`, `otlp.ndjson`, etc.)
@@ -417,6 +439,12 @@ Archive the following artefacts for the governance ticket:
 
 The run can now be referenced inside Space Directory manifests and governance trackers as the
 canonical NX-7 load test for the lane.
+
+This NX-7 onboarding/load packet is not the production multilane release
+packet. The fresh unskipped four-peer suites, 10/10 twelve-peer corridor, the
+two-hour fault soak, pinned-hardware one-versus-four-lane scaling runs,
+SDK/formal evidence, and prescribed full-workspace build/test/strict-Clippy
+checks remain separate open gates until their own artifacts pass.
 
 ## 7. Telemetry & governance follow-ups
 

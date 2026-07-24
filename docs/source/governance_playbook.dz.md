@@ -66,7 +66,7 @@ repository དེ་འབདཝ་ལས་ ངོ་རྐྱང་གི་�
    འཛུལ་སྒོ་ཚུ།
 ༢ མིང་རྟགས་བཀོད་པའི་ཡིག་ཤུབས་དང་གཅིག་ཁར་ གསལ་སྟོན་གསལ་སྟོན་འདི་གཡོག་བཀོལ།
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

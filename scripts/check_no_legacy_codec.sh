@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 violations=()
 retired_codec_pattern='parity[-_]'"scale"
+retired_native_amx_v1_pattern='NativeAmxAttestationBodyV1|NativeAmxAttestationQcV1|struct[[:space:]]+NativeAmxLegRecord[[:space:]]*[{]|impl_decode_from_slice_via_codec![(]NativeAmxLegRecord[)]|iroha:native-amx:v1'
+retired_lane_handoff_pattern='LaneExecutablePayloadHandoff|LANE_EXECUTABLE_PAYLOAD_HANDOFF_VERSION(_V[[:digit:]]+)?|nexus:lane-executable-payload-handoff:v[[:digit:]]+'
 if rg -q "$retired_codec_pattern" "$ROOT/Cargo.toml"; then
   violations+=("$ROOT/Cargo.toml")
 fi
@@ -25,4 +27,38 @@ if [[ ${#violations[@]} -ne 0 ]]; then
   exit 1
 fi
 
+native_amx_v1_violations=()
+for dir in crates integration_tests; do
+  base="$ROOT/$dir"
+  [[ -d "$base" ]] || continue
+  while IFS= read -r source; do
+    [[ -z "$source" ]] && continue
+    native_amx_v1_violations+=("$source")
+  done < <(rg -l --glob '*.rs' "$retired_native_amx_v1_pattern" "$base" || true)
+done
+
+if [[ ${#native_amx_v1_violations[@]} -ne 0 ]]; then
+  echo "retired Native AMX V1 consensus codec detected in:" >&2
+  printf '  %s\n' "${native_amx_v1_violations[@]}" >&2
+  exit 1
+fi
+
+lane_handoff_violations=()
+for dir in crates integration_tests; do
+  base="$ROOT/$dir"
+  [[ -d "$base" ]] || continue
+  while IFS= read -r source; do
+    [[ -z "$source" ]] && continue
+    lane_handoff_violations+=("$source")
+  done < <(rg -l --glob '*.rs' "$retired_lane_handoff_pattern" "$base" || true)
+done
+
+if [[ ${#lane_handoff_violations[@]} -ne 0 ]]; then
+  echo "retired lane executable payload handoff codec detected in:" >&2
+  printf '  %s\n' "${lane_handoff_violations[@]}" >&2
+  exit 1
+fi
+
 echo "No retired codec dependencies found."
+echo "No retired Native AMX V1 consensus codecs found."
+echo "No retired lane executable payload handoff codecs found."

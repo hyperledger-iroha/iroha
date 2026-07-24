@@ -61,7 +61,7 @@ I18NT000000011X архитектураһы RFC-ла һүрәтләнгән һә�
 | Район | Эш | Хужа(тар) | Статус |
 |-----|------|-----------|--------|
 | Схема | `ProviderAdmissionEnvelopeV1`, I18NNNNNNNNNNNI0000000048X буйынса I18NI0000000047X. I18NI000000049X-та валидация ярҙамсылары менән тормошҡа ашырыла.【F:крет/сорафтар_манифест/src/provider_admission.rs#L1】 | Һаҡлау / Идара | ✅ Төҙөлгән |
-| CLI инструменттар | `sorafs_manifest_stub` оҙайтыу менән подкомандалар: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Ҡолғау WG | ✅ |
+| CLI инструменттар | `sorafs_manifest_builder` оҙайтыу менән подкомандалар: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Ҡолғау WG | ✅ |
 
 CLI ағымы хәҙер уртаса сертификат өйөмдәрен ҡабул итә (I18NI000000054X), сыға.
 канон тәҡдим/конверт байт, һәм совет ҡултамғаларын раҫлай ваҡытында `sign`/I18NI000000056X. Операторҙар ала
@@ -109,7 +109,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
     үҙләштереү һәм ҡултамға иҫәбен тотоу.
 | Тикшереү | Torii, шлюздар һәм I18NI0000000999X тарафынан ҡулланылған тикшерелгән тормошҡа ашырыу. 1990 йылдарҙа был йүнәлештәге эшмәкәрлекте үҫтереүҙең берәмеге + CLI интеграция һынауҙары. Селтәрле ТЛ / Һаҡлау | ✅ Төҙөлгән |
 | I18NT000000016X интеграцияһы | Эток тикшерелгән I18NT00000000017X реклама ашау, сәйәсәттән тыш реклама кире ҡағыу, телеметрия сығарыу. | Селтәрле TL | ✅ Төҙөлгән | I18NT0000000018X хәҙер идара итеү конверттарын йөкләй (`torii.sorafs.admission_envelopes_dir`), ашау ваҡытында һеңдереүҙең/ҡултамға тап килгәнен раҫлай, ә ер өҫтө ҡабул итеү . Телеметрия.【F:крет/ироха_тории/сраф/адмиссия.р#L1】 F:крет/ироха_тории/сраф/сораф/асыу.r1】【F:крет/ироха_тори/срк/аф.
-| Яңыртыу | Яңыртыу / ҡабул итеү схемаһы + CLI ярҙамсылары, docs-та йәшәү циклы етәксеһе баҫтырыу (аҫтағы runbook-ты ҡарағыҙ һәм CLI командалары . I18NI0000101X/I18NI0000102X).【крат/sorafs_cr/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【док/сорафс/провиратор_администрация_полиция.мд:120】 | Һаҡлау / Идара | ✅ Төҙөлгән |
+| Яңыртыу | Яңыртыу / ҡабул итеү схемаһы + CLI ярҙамсылары, docs-та йәшәү циклы етәксеһе баҫтырыу (аҫтағы runbook-ты ҡарағыҙ һәм CLI командалары . I18NI0000101X/I18NI0000102X).【крат/sorafs_cr/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【док/сорафс/провиратор_администрация_полиция.мд:120】 | Һаҡлау / Идара | ✅ Төҙөлгән |
 | Телеметрия | Билдәләү `provider_admission` приборҙар таҡтаһы & иҫкәртмәләр (яңыртыу үткәрмәү, конверт срогы). | Күҙәтеүсән | 🟠 Алданы | `torii_sorafs_admission_total{result,reason}` һаны бар; Приборҙар панелдәре/иҫкәртмәләр көтә.【F:крет/ироха_телеметрия/src/src.rs#L3798】【F:доктар/сығанаҡ/телеметрия.мд#L614】 |
 ### Яңыртыу & Ҡабул итеү runbook
 
@@ -117,7 +117,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
 1. `provider-admission proposal` һәм `provider-admission sign` менән вариҫлыҡ тәҡдиме/реклама парын төҙөү, `--retention-epoch`-ны арттырыу һәм кәрәк булғанда акциялар/аҙаҡҡы нөктәләрҙе яңыртыу.
 2.  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
    ```
    Команда үҙгәрешһеҙ мөмкинлектәр/профиль ҡырҙары аша раҫлай
    `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` X, һәм диспетчерҙарҙы баҫтырып сығара.
-   Идара итеү журналы.【крат/сорафтар/срк/бин/sorafs_manifest_stub/provider_admission.rs#L477】【F:крет/сорафтар_манифест/src/provider_readmission.rs#L42】
+   Идара итеү журналы.【крат/сорафтар/срк/бин/sorafs_manifest_builder/provider_admission.rs#L477】【F:крет/сорафтар_манифест/src/provider_readmission.rs#L42】
 .
 .
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` аша канонлы ҡорамалдарҙы яңырта һәм үтәгеҙ; CI (`ci/check_sorafs_fixtures.sh`) раҫлай I18NT0000000006X сығыштары тотороҡло ҡала.
@@ -135,7 +135,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
 #### Ғәҙәттән тыш хәлдәрҙе тартып алыу
 1. Компрометацияланған конвертты билдәләгеҙ һәм ҡайтарыу сығарыу:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI ағымы хәҙер уртаса сертификат өйөмдәрен �
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI ҡул ҡуя I18NI0000000115X, раҫлау ҡултамғаһы аша ҡуйылған .
-   `verify_revocation_signatures`, һәм хәбәр итеүҙәрҙе ҡабул итеү дисперсияһы.【крат/sorafs_scr/src/bin/sorafs_manifest_stub/provider_admission.r593】【 F:крет/sorafs_manifest/src/provider_readmismi
+   `verify_revocation_signatures`, һәм хәбәр итеүҙәрҙе ҡабул итеү дисперсияһы.【крат/sorafs_scr/src/bin/sorafs_manifest_builder/provider_admission.r593】【 F:крет/sorafs_manifest/src/provider_readmismi
 .
 . инцидент ретроспективтарында тартып алыу артефакттарын һаҡларға.
 

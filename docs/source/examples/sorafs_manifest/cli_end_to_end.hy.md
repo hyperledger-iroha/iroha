@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS Մանիֆեստ CLI-ի ավարտից մինչև վերջ օրինակ
 
 Այս օրինակը անցնում է SoraFS-ում փաստաթղթերի կառուցման հրապարակման միջոցով՝ օգտագործելով
-`sorafs_manifest_stub` CLI դետերմինիստական կտրատող հարմարանքների հետ միասին
+`sorafs_manifest_builder` CLI դետերմինիստական կտրատող հարմարանքների հետ միասին
 նկարագրված է SoraFS Architecture RFC-ում: Հոսքը ընդգրկում է մանիֆեստի սերունդը,
 ակնկալիքների ստուգում, առբերման պլանի վավերացում և առբերման ապացույցի փորձ, այսպես
 թիմերը կարող են ներդնել նույն քայլերը CI-ում:
@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 ## Քայլ 1 — Ստեղծեք մանիֆեստ, մեքենա, ստորագրություններ և բեռնման պլան
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ CI միջավայրերի համար տրամադրեք առանձին բեռն�
 ներկայացնել մանիֆեստը CLI-ի միջոցով.
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

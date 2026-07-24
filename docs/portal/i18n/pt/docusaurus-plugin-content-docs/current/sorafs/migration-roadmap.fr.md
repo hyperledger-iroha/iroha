@@ -44,14 +44,14 @@ que governança e engenharia de liberação permanecem sincronizadas.
 |-------|-------|-------------|----------|--------|
 | Repetições de jogos | M0 | Hebdomadaires comparam resumos locais de pedaços com `fixtures/sorafs_chunker`. Publique um relatório sob `docs/source/sorafs/reports/`. | Provedores de armazenamento | `determinism-<date>.md` com matriz aprovada/reprovada. |
 | Exigir assinaturas | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` ecoam assinaturas ou manifestos derivados. As substituições dev exigem um adido de governança de renúncia ao PR. | GT Ferramentaria | Log CI, garantia versus ticket de waiver (se aplicável). |
-| Sinalizadores de expectativa | M1 | Os pipelines recorrentes `sorafs_manifest_stub` com expectativas explícitas para definir as saídas: | Documentos CI | Os scripts agora se referem aos sinalizadores de expectativa (veja o bloco de comando ci-dessous). |
+| Sinalizadores de expectativa | M1 | Os pipelines recorrentes `sorafs_manifest_builder` com expectativas explícitas para definir as saídas: | Documentos CI | Os scripts agora se referem aos sinalizadores de expectativa (veja o bloco de comando ci-dessous). |
 | Fixando o registro primeiro | M2 | `sorafs pin propose` e `sorafs pin approve` envolvem as mensagens do manifesto; A CLI por padrão utiliza `--require-registry`. | Operações de Governança | Registro de auditoria do registro CLI, taxas de telemetria de propostas. |
 | Paridade observabilidade | M3 | Os painéis Prometheus/Grafana alertam quando os inventários de pedaços divergentes do registro de manifestos; alertes branchees sur l'astreinte ops. | Observabilidade | Painel de garantia, IDs das regras de alerta, resultados do GameDay. |
 
 #### Comando canônico de publicação
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

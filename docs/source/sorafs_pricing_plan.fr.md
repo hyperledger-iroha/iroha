@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_pricing_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e251ff6fe06e13dd96b63291b85257651fefd8afdb995da8465742a0d86d1c64
+source_hash: bafabbb732a74de0601f7e1f2578ba7633396c7d15ef4cbfe5883a82d21d4f43
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
 ---

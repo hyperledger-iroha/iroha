@@ -33,8 +33,6 @@ pub const AUDIT_VERDICT_VERSION_V1: u8 = 1;
 pub const POR_CHALLENGE_STATUS_VERSION_V1: u8 = 1;
 /// Current weekly report schema version.
 pub const POR_WEEKLY_REPORT_VERSION_V1: u8 = 1;
-/// Current manual PoR challenge request schema version.
-pub const MANUAL_POR_CHALLENGE_VERSION_V1: u8 = 1;
 /// Maximum provider success rate expressed in basis points (100%).
 pub const POR_SUCCESS_RATE_BPS_MAX: u16 = 10_000;
 /// Current provider VRF submission schema version.
@@ -1170,82 +1168,6 @@ impl norito::json::JsonSerialize for PorChallengeOutcome {
     }
 }
 
-/// Manual challenge request submitted by auditors/governance.
-#[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
-pub struct ManualPorChallengeV1 {
-    /// Schema version ([`MANUAL_POR_CHALLENGE_VERSION_V1`]).
-    pub version: u8,
-    /// Target manifest digest.
-    pub manifest_digest: [u8; 32],
-    /// Target provider identifier.
-    pub provider_id: [u8; 32],
-    /// Optional explicit sample-count override.
-    #[norito(default)]
-    pub requested_samples: Option<u16>,
-    /// Optional deadline override in seconds after issuance.
-    #[norito(default)]
-    pub requested_deadline_secs: Option<u32>,
-    /// Human-readable reason justifying the manual trigger.
-    pub reason: String,
-}
-
-impl ManualPorChallengeV1 {
-    /// Validate the manual challenge payload.
-    pub fn validate(&self) -> Result<(), ManualPorChallengeValidationError> {
-        if self.version != MANUAL_POR_CHALLENGE_VERSION_V1 {
-            return Err(ManualPorChallengeValidationError::UnsupportedVersion {
-                found: self.version,
-            });
-        }
-        if self.manifest_digest.iter().all(|&byte| byte == 0) {
-            return Err(ManualPorChallengeValidationError::InvalidManifestDigest);
-        }
-        if self.provider_id.iter().all(|&byte| byte == 0) {
-            return Err(ManualPorChallengeValidationError::InvalidProviderId);
-        }
-        if let Some(samples) = self.requested_samples
-            && samples == 0
-        {
-            return Err(ManualPorChallengeValidationError::InvalidSampleOverride);
-        }
-        if let Some(deadline) = self.requested_deadline_secs
-            && deadline == 0
-        {
-            return Err(ManualPorChallengeValidationError::InvalidDeadlineOverride);
-        }
-        if self.reason.trim().is_empty() {
-            return Err(ManualPorChallengeValidationError::MissingReason);
-        }
-        Ok(())
-    }
-}
-
-/// Validation errors for [`ManualPorChallengeV1`].
-#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
-pub enum ManualPorChallengeValidationError {
-    /// The payload advertises an unsupported schema version.
-    #[error("unsupported manual challenge version {found}")]
-    UnsupportedVersion {
-        /// Unsupported version carried by the payload.
-        found: u8,
-    },
-    /// The manifest digest is the inert all-zero value.
-    #[error("manifest digest must be non-zero")]
-    InvalidManifestDigest,
-    /// The provider identifier is the inert all-zero value.
-    #[error("provider id must be non-zero")]
-    InvalidProviderId,
-    /// An explicit sample override is zero.
-    #[error("requested sample override must be non-zero")]
-    InvalidSampleOverride,
-    /// An explicit deadline override is zero.
-    #[error("deadline override must be non-zero seconds")]
-    InvalidDeadlineOverride,
-    /// The request provides no meaningful rationale.
-    #[error("reason must not be empty")]
-    MissingReason,
-}
-
 /// Status snapshot returned by the PoR coordinator.
 #[derive(Debug, Clone, NoritoSerialize, NoritoDeserialize, JsonSerialize, PartialEq, Eq)]
 pub struct PorChallengeStatusV1 {
@@ -2256,33 +2178,6 @@ mod tests {
             let from_numeric = PorChallengeOutcome::try_from(numeric).expect("from numeric");
             assert_eq!(outcome, from_numeric);
         }
-    }
-
-    #[test]
-    fn manual_challenge_requires_reason() {
-        let manual = ManualPorChallengeV1 {
-            version: MANUAL_POR_CHALLENGE_VERSION_V1,
-            manifest_digest: [1; 32],
-            provider_id: [2; 32],
-            requested_samples: Some(16),
-            requested_deadline_secs: Some(600),
-            reason: String::new(),
-        };
-        let error = manual.validate().expect_err("empty reason rejected");
-        assert_eq!(error, ManualPorChallengeValidationError::MissingReason);
-    }
-
-    #[test]
-    fn manual_challenge_validation_succeeds() {
-        let manual = ManualPorChallengeV1 {
-            version: MANUAL_POR_CHALLENGE_VERSION_V1,
-            manifest_digest: [1; 32],
-            provider_id: [2; 32],
-            requested_samples: Some(32),
-            requested_deadline_secs: None,
-            reason: "trigger due to latency regression".into(),
-        };
-        assert!(manual.validate().is_ok());
     }
 
     #[test]

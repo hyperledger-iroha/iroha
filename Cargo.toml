@@ -368,9 +368,23 @@ codegen-units = 256
 debug = 0
 codegen-units = 256
 
+# `iroha_data_model` is a workspace member, so the wildcard dependency override
+# above does not apply to it. Its very large generated/derived surface otherwise
+# uses 256 incremental dev CGUs. Keep enough partitions to prevent its derived
+# decoder IR from coalescing into memory-heavy LLVM modules while avoiding the
+# full incremental default; Cargo's jobs=1 does not control this partitioning.
+[profile.dev.package.iroha_data_model]
+codegen-units = 8
+
 [profile.test.package."*"]
 debug = 0
 codegen-units = 256
+
+# Eight, 16, and 64 CGUs all measured about 12.1 GiB before decoder de-duplication;
+# one CGU reached 19.32 GiB. Eight was the lowest measured partition count, and
+# the shared decoder engine reduced its exact no-run reproducer to 11.466 GiB.
+[profile.test.package.iroha_data_model]
+codegen-units = 8
 
 # `iroha_data_model` is a very broad derive-heavy crate. LLVM `-O3` for this
 # one package exceeds the reviewed mobile/Kagemusha release-build memory

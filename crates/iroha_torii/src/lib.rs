@@ -249,11 +249,12 @@ use iroha_core::{
         TransactionsReadOnly, WorldReadOnly,
     },
     torii_proxy::{
-        TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
-        ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1,
-        ToriiProxyRequestV2, ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
-        ToriiReadFanoutMergeV1, ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1,
-        ToriiRouteHintV1, ToriiRoutingPlanHintV1,
+        TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1, ToriiFanoutRouteScopeV1,
+        ToriiHostedHttpProxyRequestV1, ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2,
+        ToriiProxyRequestV3, ToriiProxyResponseFormatV1, ToriiProxyResponseV1,
+        ToriiProxyTransactionAdmissionV1, ToriiReadEndpointV1, ToriiReadFanoutMergeV1,
+        ToriiReadFanoutProxyRequestV1, ToriiReadProxyRequestV1, ToriiRouteHintV1,
+        ToriiRoutingPlanHintV1,
     },
     tx::{
         AcceptTransactionFail, DecodedVersionedSignedTransaction, SignatureRejectionCode,
@@ -322,7 +323,6 @@ use iroha_executor_data_model::permission::account::{
 #[cfg(feature = "app_api")]
 use iroha_executor_data_model::permission::nexus::CanEnrollFeeSponsorProgram;
 use iroha_executor_data_model::permission::query::CanReadRestrictedDataspace;
-use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_futures::supervisor::ShutdownSignal;
 #[cfg(feature = "app_api")]
 use iroha_primitives::soradns::hosts::taira_mon_pretty_gateway_suffix;
@@ -348,10 +348,6 @@ use norito::json::{self};
 use norito::json::{JsonDeserialize, JsonSerialize};
 #[cfg(feature = "app_api")]
 use sorafs_manifest::provider_advert::CapabilityType;
-use sorafs_manifest::repair::{
-    REPAIR_WORKER_SIGNATURE_VERSION_V1, RepairTicketId, RepairWorkerActionV1,
-    RepairWorkerSignaturePayloadV1,
-};
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::{
     net::TcpListener,
@@ -1982,7 +1978,6 @@ struct AppState {
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
-    sorafs_repair_auditor_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     proof_body_inflight: Arc<tokio::sync::Semaphore>,
@@ -2075,7 +2070,16 @@ struct AppState {
     #[cfg(feature = "app_api")]
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     #[cfg(feature = "app_api")]
+    sorafs_routing_authority_cache: Arc<sorafs::delegated_routing::RoutingAuthorityCache>,
+    #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
+    #[cfg(feature = "app_api")]
+    sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
     #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
     #[cfg(feature = "app_api")]
@@ -16441,7 +16445,7 @@ async fn handler_runtime_abi_hash(
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn handler_internal_torii_proxy_request(
     State(app): State<SharedAppState>,
-    Norito(request): Norito<ToriiProxyRequestV2>,
+    Norito(request): Norito<ToriiProxyRequestV3>,
 ) -> Response {
     let immediate_sender_peer_id = request.visited_peer_ids.last().cloned();
     execute_incoming_torii_proxy_request(&app, request, immediate_sender_peer_id).await
@@ -21247,7 +21251,7 @@ fn should_execute_route_locally_cached(
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn should_execute_incoming_torii_proxy_request_locally(
     app: &AppState,
-    request_kind: &ToriiProxyRequestKindV1,
+    request_kind: &ToriiProxyRequestKindV2,
     routing_decision: RoutingDecision,
 ) -> bool {
     match request_kind {
@@ -21255,13 +21259,13 @@ fn should_execute_incoming_torii_proxy_request_locally(
         // authoritative-peer selection on every receiver can create multi-hop proxy cascades when
         // lane-roster views are briefly inconsistent, which turns healthy reads into 60s+ timeouts
         // and late responses.
-        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
-        | ToriiProxyRequestKindV1::SignedQueryFanout { .. }
-        | ToriiProxyRequestKindV1::Read(_)
-        | ToriiProxyRequestKindV1::ReadFanout(_) => true,
-        ToriiProxyRequestKindV1::SubmitTransaction { .. }
-        | ToriiProxyRequestKindV1::SignedQuery { .. }
-        | ToriiProxyRequestKindV1::HostedHttp(_) => {
+        ToriiProxyRequestKindV2::SignedQueryRouteScan { .. }
+        | ToriiProxyRequestKindV2::SignedQueryFanout { .. }
+        | ToriiProxyRequestKindV2::Read(_)
+        | ToriiProxyRequestKindV2::ReadFanout(_) => true,
+        ToriiProxyRequestKindV2::SubmitTransaction { .. }
+        | ToriiProxyRequestKindV2::SignedQuery { .. }
+        | ToriiProxyRequestKindV2::HostedHttp(_) => {
             should_execute_route_locally(app, routing_decision)
         }
     }
@@ -22081,15 +22085,19 @@ fn current_torii_backpressure(app: &AppState) -> queue::BackpressureState {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn next_torii_proxy_request_id(app: &AppState, request: &ToriiProxyRequestKindV1) -> Hash {
+fn torii_proxy_request_id_for_sequence(sequence: u64, request: &ToriiProxyRequestKindV2) -> Hash {
     Hash::new(
-        norito::to_bytes(&(
-            "torii:proxy",
-            app.torii_proxy_sequence
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            request.clone(),
-        ))
-        .expect("Torii proxy request id encoding should be infallible"),
+        norito::to_bytes(&("torii:proxy", sequence, request.clone()))
+            .expect("Torii proxy request id encoding should be infallible"),
+    )
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn next_torii_proxy_request_id(app: &AppState, request: &ToriiProxyRequestKindV2) -> Hash {
+    torii_proxy_request_id_for_sequence(
+        app.torii_proxy_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        request,
     )
 }
 
@@ -22129,8 +22137,8 @@ async fn mark_torii_proxy_request_completed(app: &SharedAppState, request_id: Ha
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn new_torii_proxy_request(
     app: &AppState,
-    request: ToriiProxyRequestKindV1,
-) -> Result<ToriiProxyRequestV2, Response> {
+    request: ToriiProxyRequestKindV2,
+) -> Result<ToriiProxyRequestV3, Response> {
     let Some(local_peer_id) = app.local_peer_id.as_ref() else {
         return Err(torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -22140,8 +22148,8 @@ fn new_torii_proxy_request(
     };
 
     let request_id = next_torii_proxy_request_id(app, &request);
-    Ok(ToriiProxyRequestV2 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+    Ok(ToriiProxyRequestV3 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V3,
         request_id,
         hop_count: 1,
         max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
@@ -22152,9 +22160,9 @@ fn new_torii_proxy_request(
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 fn forwarded_torii_proxy_request(
-    request: &ToriiProxyRequestV2,
+    request: &ToriiProxyRequestV3,
     local_peer_id: &PeerId,
-) -> ToriiProxyRequestV2 {
+) -> ToriiProxyRequestV3 {
     let mut visited_peer_ids = request.visited_peer_ids.clone();
     if !visited_peer_ids
         .iter()
@@ -22163,8 +22171,8 @@ fn forwarded_torii_proxy_request(
         visited_peer_ids.push(local_peer_id.clone());
     }
 
-    ToriiProxyRequestV2 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+    ToriiProxyRequestV3 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V3,
         request_id: request.request_id.clone(),
         hop_count: request.hop_count.saturating_add(1),
         max_hops: request.max_hops,
@@ -23699,7 +23707,7 @@ async fn execute_torii_signed_query_route_scan_via_proxy(
     let response = execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV1::SignedQueryRouteScan {
+        ToriiProxyRequestKindV2::SignedQueryRouteScan {
             query_bytes,
             expected_route: ToriiRouteHintV1::from(routing_decision),
             response_format: ToriiProxyResponseFormatV1::Norito,
@@ -24146,7 +24154,7 @@ async fn execute_torii_query_via_nexus_fanout(
     execute_torii_proxy_request_with_fallback(
         app,
         nexus_route,
-        ToriiProxyRequestKindV1::SignedQueryFanout {
+        ToriiProxyRequestKindV2::SignedQueryFanout {
             query_bytes,
             response_format,
         },
@@ -29108,34 +29116,385 @@ fn should_retry_torii_proxy_status(status: StatusCode) -> bool {
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV1) -> &'static str {
-    match request {
-        ToriiProxyRequestKindV1::SubmitTransaction { .. } => "submit_transaction",
-        ToriiProxyRequestKindV1::SignedQuery { .. } => "signed_query",
-        ToriiProxyRequestKindV1::SignedQueryRouteScan { .. } => "signed_query_route_scan",
-        ToriiProxyRequestKindV1::SignedQueryFanout { .. } => "signed_query_fanout",
-        ToriiProxyRequestKindV1::Read(_) => "read",
-        ToriiProxyRequestKindV1::ReadFanout(_) => "read_fanout",
-        ToriiProxyRequestKindV1::HostedHttp(_) => "hosted_http",
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ToriiProxyAttemptError {
+    /// The request failed before any bytes could have reached the authority.
+    DefinitelyNotDispatched(String),
+    /// Dispatch began, but no complete authenticated response was recovered.
+    DispatchedWithoutResponse(String),
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+impl ToriiProxyAttemptError {
+    fn before_dispatch(reason: impl Into<String>) -> Self {
+        Self::DefinitelyNotDispatched(reason.into())
+    }
+
+    fn after_dispatch(reason: impl Into<String>) -> Self {
+        Self::DispatchedWithoutResponse(reason.into())
+    }
+
+    fn may_have_reached_authority(&self) -> bool {
+        matches!(self, Self::DispatchedWithoutResponse(_))
     }
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV1) -> Duration {
-    match request {
-        ToriiProxyRequestKindV1::SubmitTransaction { .. } => Duration::from_secs(10),
-        ToriiProxyRequestKindV1::SignedQuery { .. }
-        | ToriiProxyRequestKindV1::SignedQueryRouteScan { .. }
-        | ToriiProxyRequestKindV1::Read(_)
-        | ToriiProxyRequestKindV1::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
-        ToriiProxyRequestKindV1::SignedQueryFanout { .. }
-        | ToriiProxyRequestKindV1::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
+impl std::fmt::Display for ToriiProxyAttemptError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DefinitelyNotDispatched(reason) => {
+                write!(formatter, "request was not dispatched: {reason}")
+            }
+            Self::DispatchedWithoutResponse(reason) => {
+                write!(formatter, "request dispatch outcome is unknown: {reason}")
+            }
+        }
     }
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV1) -> usize {
-    if matches!(request, ToriiProxyRequestKindV1::HostedHttp(_)) {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct QueuePlanSyncedAcceptanceExpectation {
+    transaction_hash: HashOf<SignedTransaction>,
+    entrypoint_hash: HashOf<TransactionEntrypoint>,
+    signed_transaction_hash: Option<HashOf<SignedTransaction>>,
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_synced_acceptance_expectation(
+    request: &ToriiProxyRequestKindV2,
+) -> Option<QueuePlanSyncedAcceptanceExpectation> {
+    let ToriiProxyRequestKindV2::SubmitTransaction {
+        transaction,
+        admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        ..
+    } = request
+    else {
+        return None;
+    };
+    let entrypoint_hash = transaction.hash();
+    Some(QueuePlanSyncedAcceptanceExpectation {
+        transaction_hash: HashOf::from_untyped_unchecked(Hash::from(entrypoint_hash.clone())),
+        entrypoint_hash,
+        signed_transaction_hash: signed_transaction_hash_for_entrypoint(transaction),
+    })
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_synced_transaction_hash(
+    request: &ToriiProxyRequestKindV2,
+) -> Option<HashOf<SignedTransaction>> {
+    queue_plan_synced_acceptance_expectation(request)
+        .map(|expectation| expectation.transaction_hash)
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_outcome_unknown_response(
+    transaction_hash: HashOf<SignedTransaction>,
+    reason: impl Into<String>,
+) -> Response {
+    Error::PushIntoQueue {
+        source: Box::new(queue::Error::PlanJournalDurabilityIndeterminate {
+            transaction_hash,
+            reason: reason.into(),
+        }),
+        backpressure: queue::BackpressureState::default(),
+    }
+    .into_response()
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE: &str = "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN";
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+const QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE: &str = "queue_plan_journal_outcome_unknown";
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn is_queue_plan_outcome_unknown_response(response: &Response) -> bool {
+    torii_response_has_reject_code(response, QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_queue_plan_synced_response_header(
+    snapshot: &ToriiProxyHttpResponseV1,
+    header_name: &'static str,
+    expected_value: Option<&str>,
+) -> Result<(), String> {
+    let values = snapshot
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case(header_name))
+        .collect::<Vec<_>>();
+    match expected_value {
+        Some(expected_value)
+            if values.len() == 1 && values[0].value.as_slice() == expected_value.as_bytes() =>
+        {
+            Ok(())
+        }
+        Some(_) => Err(format!(
+            "`{header_name}` is missing, duplicated, or does not match the submitted transaction"
+        )),
+        None if values.is_empty() => Ok(()),
+        None => Err(format!(
+            "`{header_name}` is present for an entrypoint without an inner signed transaction"
+        )),
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn validate_queue_plan_synced_acceptance(
+    snapshot: &ToriiProxyHttpResponseV1,
+    expected: &QueuePlanSyncedAcceptanceExpectation,
+) -> Result<(), String> {
+    if snapshot.status_code != StatusCode::ACCEPTED.as_u16() {
+        return Err("status is not 202 Accepted".to_owned());
+    }
+
+    validate_queue_plan_synced_response_header(
+        snapshot,
+        "content-type",
+        Some(utils::NORITO_MIME_TYPE),
+    )?;
+    let entrypoint_hash_literal = expected.entrypoint_hash.to_string();
+    validate_queue_plan_synced_response_header(
+        snapshot,
+        "x-iroha-entrypoint-hash",
+        Some(entrypoint_hash_literal.as_str()),
+    )?;
+    validate_queue_plan_synced_response_header(
+        snapshot,
+        "x-iroha-transaction-hash",
+        Some(entrypoint_hash_literal.as_str()),
+    )?;
+    let signed_transaction_hash_literal = expected
+        .signed_transaction_hash
+        .as_ref()
+        .map(ToString::to_string);
+    validate_queue_plan_synced_response_header(
+        snapshot,
+        "x-iroha-signed-transaction-hash",
+        signed_transaction_hash_literal.as_deref(),
+    )?;
+
+    let receipt = norito::decode_from_bytes::<TransactionSubmissionReceipt>(&snapshot.body)
+        .map_err(|error| format!("body is not a decodable Norito submission receipt: {error}"))?;
+    let canonical_receipt = norito::to_bytes(&receipt)
+        .map_err(|error| format!("submission receipt cannot be canonically encoded: {error}"))?;
+    if canonical_receipt != snapshot.body {
+        return Err("submission receipt body is not the canonical Norito encoding".to_owned());
+    }
+    receipt
+        .verify()
+        .map_err(|error| format!("submission receipt signature is invalid: {error}"))?;
+    if receipt.payload.tx_hash != expected.transaction_hash {
+        return Err(
+            "submission receipt transaction hash does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+    if receipt.payload.entrypoint_hash != expected.entrypoint_hash {
+        return Err(
+            "submission receipt entrypoint hash does not match the submitted transaction".to_owned(),
+        );
+    }
+    if receipt.payload.signed_transaction_hash != expected.signed_transaction_hash {
+        return Err(
+            "submission receipt signed-transaction hash does not match the submitted transaction"
+                .to_owned(),
+        );
+    }
+
+    Ok(())
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn queue_plan_synced_snapshot_to_response(
+    snapshot: ToriiProxyHttpResponseV1,
+    expected: &QueuePlanSyncedAcceptanceExpectation,
+) -> Response {
+    let expected_transaction_hash = &expected.transaction_hash;
+    let expected_transaction_hash_literal = expected_transaction_hash.to_string();
+    let reject_code_headers = snapshot
+        .headers
+        .iter()
+        .filter(|header| header.name.eq_ignore_ascii_case("x-iroha-reject-code"))
+        .collect::<Vec<_>>();
+    let decoded_envelope = norito::decode_from_bytes::<ErrorEnvelope>(&snapshot.body).ok();
+    let header_claims_outcome_unknown = reject_code_headers.iter().any(|header| {
+        header.value.as_slice() == QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes()
+            || header.value.as_slice() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE.as_bytes()
+    });
+    let envelope_claims_outcome_unknown = decoded_envelope.as_ref().is_some_and(|envelope| {
+        envelope.code() == QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE
+            || envelope.details.as_ref().is_some_and(|details| {
+                details.reject_code.as_deref() == Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE)
+            })
+    });
+
+    if !header_claims_outcome_unknown && !envelope_claims_outcome_unknown {
+        let status =
+            StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
+        if status.is_success()
+            && let Err(reason) = validate_queue_plan_synced_acceptance(&snapshot, expected)
+        {
+            return torii_proxy_error_response(
+                StatusCode::BAD_GATEWAY,
+                "invalid_proxy_response",
+                format!(
+                    "authoritative QueuePlanSynced durable-acceptance evidence is invalid: {reason}"
+                ),
+            );
+        }
+        return torii_proxy_snapshot_to_response(snapshot);
+    }
+
+    let validation_error = if snapshot.status_code != StatusCode::SERVICE_UNAVAILABLE.as_u16() {
+        Some("status is not 503 Service Unavailable")
+    } else if reject_code_headers.len() != 1
+        || reject_code_headers[0].value.as_slice()
+            != QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE.as_bytes()
+    {
+        Some("reject-code header is missing, duplicated, or non-canonical")
+    } else {
+        match decoded_envelope {
+            None => Some("body is not a decodable Norito error envelope"),
+            Some(ref envelope) if envelope.code() != QUEUE_PLAN_OUTCOME_UNKNOWN_ENVELOPE_CODE => {
+                Some("error-envelope code is not canonical")
+            }
+            Some(ref envelope) => match envelope.details.as_ref() {
+                None => Some("error envelope is missing details"),
+                Some(details)
+                    if details.reject_code.as_deref()
+                        != Some(QUEUE_PLAN_OUTCOME_UNKNOWN_REJECT_CODE) =>
+                {
+                    Some("error-envelope reject code is missing or non-canonical")
+                }
+                Some(details)
+                    if details.tx_hash.as_deref()
+                        != Some(expected_transaction_hash_literal.as_str()) =>
+                {
+                    Some("error-envelope transaction hash does not match the submitted transaction")
+                }
+                Some(_) => None,
+            },
+        }
+    };
+
+    if let Some(reason) = validation_error {
+        return torii_proxy_error_response(
+            StatusCode::BAD_GATEWAY,
+            "invalid_proxy_response",
+            format!("authoritative QueuePlanSynced outcome-unknown evidence is invalid: {reason}"),
+        );
+    }
+
+    queue_plan_outcome_unknown_response(
+        expected_transaction_hash.clone(),
+        "authenticated authority reported an indeterminate durable-admission outcome",
+    )
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn retain_strongest_retryable_response(slot: &mut Option<Response>, candidate: Response) {
+    let candidate_is_unknown = is_queue_plan_outcome_unknown_response(&candidate);
+    let current_is_unknown = slot
+        .as_ref()
+        .is_some_and(is_queue_plan_outcome_unknown_response);
+    if slot.is_none() || candidate_is_unknown || !current_is_unknown {
+        *slot = Some(candidate);
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn retain_strongest_queue_plan_synced_failure(
+    slot: &mut Option<(u8, usize, Response)>,
+    candidate_index: usize,
+    candidate: Response,
+) {
+    // An indeterminate admission dominates every definite failure because any
+    // dispatched authority may already own the exact transaction. Among
+    // definite failures, retain an authenticated non-retryable response ahead
+    // of a generic retryable response. Candidate order breaks equal-priority
+    // ties so asynchronous completion order cannot change the public result.
+    let priority = if is_queue_plan_outcome_unknown_response(&candidate) {
+        2
+    } else if should_retry_torii_proxy_status(candidate.status()) {
+        0
+    } else {
+        1
+    };
+    let replace = slot
+        .as_ref()
+        .is_none_or(|(current_priority, current_index, _)| {
+            priority > *current_priority
+                || (priority == *current_priority && candidate_index < *current_index)
+        });
+    if replace {
+        *slot = Some((priority, candidate_index, candidate));
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_request_kind_name(request: &ToriiProxyRequestKindV2) -> &'static str {
+    match request {
+        ToriiProxyRequestKindV2::SubmitTransaction { .. } => "submit_transaction",
+        ToriiProxyRequestKindV2::SignedQuery { .. } => "signed_query",
+        ToriiProxyRequestKindV2::SignedQueryRouteScan { .. } => "signed_query_route_scan",
+        ToriiProxyRequestKindV2::SignedQueryFanout { .. } => "signed_query_fanout",
+        ToriiProxyRequestKindV2::Read(_) => "read",
+        ToriiProxyRequestKindV2::ReadFanout(_) => "read_fanout",
+        ToriiProxyRequestKindV2::HostedHttp(_) => "hosted_http",
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_attempt_timeout(request: &ToriiProxyRequestKindV2) -> Duration {
+    match request {
+        ToriiProxyRequestKindV2::SubmitTransaction { .. } => Duration::from_secs(10),
+        ToriiProxyRequestKindV2::SignedQuery { .. }
+        | ToriiProxyRequestKindV2::SignedQueryRouteScan { .. }
+        | ToriiProxyRequestKindV2::Read(_)
+        | ToriiProxyRequestKindV2::HostedHttp(_) => DEFAULT_ROUTE_TIMEOUT,
+        ToriiProxyRequestKindV2::SignedQueryFanout { .. }
+        | ToriiProxyRequestKindV2::ReadFanout(_) => DEFAULT_ROUTE_TIMEOUT + Duration::from_secs(5),
+    }
+}
+
+#[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
+static TORII_PROXY_AFTER_NETWORK_POST_OBSERVERS: std::sync::LazyLock<
+    std::sync::Mutex<BTreeMap<(Hash, PeerId), Arc<tokio::sync::Notify>>>,
+> = std::sync::LazyLock::new(|| std::sync::Mutex::new(BTreeMap::new()));
+
+#[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
+fn register_torii_proxy_after_network_post_observer(
+    pending_key: (Hash, PeerId),
+) -> Arc<tokio::sync::Notify> {
+    let observer = Arc::new(tokio::sync::Notify::new());
+    let replaced = TORII_PROXY_AFTER_NETWORK_POST_OBSERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(pending_key, observer.clone());
+    assert!(
+        replaced.is_none(),
+        "Torii proxy after-network-post observer key must be unique"
+    );
+    observer
+}
+
+#[cfg(all(test, any(feature = "p2p_ws", feature = "connect")))]
+fn notify_torii_proxy_after_network_post(pending_key: &(Hash, PeerId)) {
+    if let Some(observer) = TORII_PROXY_AFTER_NETWORK_POST_OBSERVERS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(pending_key)
+    {
+        observer.notify_one();
+    }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+fn torii_proxy_response_body_limit(app: &AppState, request: &ToriiProxyRequestKindV2) -> usize {
+    if matches!(request, ToriiProxyRequestKindV2::HostedHttp(_)) {
         app.soracloud_public_max_response_bytes.max(1)
     } else {
         usize::MAX
@@ -29192,10 +29551,12 @@ async fn reqwest_response_to_torii_proxy_snapshot(
 async fn execute_torii_proxy_request_via_peer(
     app: &SharedAppState,
     target_peer_id: PeerId,
-    request: ToriiProxyRequestV2,
-) -> Result<ToriiProxyHttpResponseV1, String> {
+    request: ToriiProxyRequestV3,
+) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
     let Some(network) = app.p2p.as_ref() else {
-        return Err("Torii ingress routing requires an attached P2P network".to_owned());
+        return Err(ToriiProxyAttemptError::before_dispatch(
+            "Torii ingress routing requires an attached P2P network",
+        ));
     };
 
     let request_id = request.request_id.clone();
@@ -29223,13 +29584,15 @@ async fn execute_torii_proxy_request_via_peer(
         priority: iroha_p2p::Priority::High,
         data: iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(request)),
     });
+    #[cfg(test)]
+    notify_torii_proxy_after_network_post(&pending_key);
 
     match tokio::time::timeout(attempt_timeout, rx).await {
         Ok(Ok(response)) => Ok(response),
-        Ok(Err(_)) => Err(format!(
+        Ok(Err(_)) => Err(ToriiProxyAttemptError::after_dispatch(format!(
             "Torii proxy request `{}` to peer `{target_peer_id}` closed before returning a response",
             pending_key.0
-        )),
+        ))),
         Err(_) => {
             app.torii_proxy_pending.lock().await.remove(&pending_key);
             iroha_logger::warn!(
@@ -29239,10 +29602,10 @@ async fn execute_torii_proxy_request_via_peer(
                 attempt_timeout_ms = attempt_timeout.as_millis() as u64,
                 "Torii proxy request timed out before any authoritative response"
             );
-            Err(format!(
+            Err(ToriiProxyAttemptError::after_dispatch(format!(
                 "Torii proxy request `{}` to peer `{target_peer_id}` timed out after {:?} kind={request_kind_name}",
                 pending_key.0, attempt_timeout,
-            ))
+            )))
         }
     }
 }
@@ -29252,16 +29615,16 @@ async fn execute_torii_proxy_request_via_http_bridge(
     app: &SharedAppState,
     target_peer_id: PeerId,
     torii_url: String,
-    request: ToriiProxyRequestV2,
-) -> Result<ToriiProxyHttpResponseV1, String> {
+    request: ToriiProxyRequestV3,
+) -> Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError> {
     let request_kind_name = torii_proxy_request_kind_name(&request.request);
     let attempt_timeout = torii_proxy_attempt_timeout(&request.request);
     let response_body_limit = torii_proxy_response_body_limit(app.as_ref(), &request.request);
     let body = norito::to_bytes(&request).map_err(|error| {
-        format!(
+        ToriiProxyAttemptError::before_dispatch(format!(
             "failed to encode Torii proxy request `{}` for authoritative HTTP bridge to peer `{target_peer_id}`: {error}",
             request.request_id
-        )
+        ))
     })?;
     let uri = TORII_INTERNAL_PROXY_HTTP_PATH
         .parse::<crate::Uri>()
@@ -29273,10 +29636,10 @@ async fn execute_torii_proxy_request_via_http_bridge(
         &body,
     )
     .map_err(|error| {
-        format!(
+        ToriiProxyAttemptError::before_dispatch(format!(
             "failed to sign Torii proxy request `{}` for authoritative HTTP bridge to peer `{target_peer_id}`: {error}",
             request.request_id
-        )
+        ))
     })?;
     headers.insert(
         axum::http::header::CONTENT_TYPE,
@@ -29287,7 +29650,8 @@ async fn execute_torii_proxy_request_via_http_bridge(
         HeaderValue::from_static("application/x-norito"),
     );
 
-    let request_url = torii_proxy_bridge_request_url(&torii_url)?;
+    let request_url = torii_proxy_bridge_request_url(&torii_url)
+        .map_err(ToriiProxyAttemptError::before_dispatch)?;
     iroha_logger::debug!(
         request_id = %request.request_id,
         peer_id = %target_peer_id,
@@ -29300,7 +29664,17 @@ async fn execute_torii_proxy_request_via_http_bridge(
         "sending Torii proxy request over authoritative HTTP bridge"
     );
 
-    let client = reqwest::Client::new();
+    let queue_plan_synced = queue_plan_synced_transaction_hash(&request.request).is_some();
+    let mut client_builder = reqwest::Client::builder();
+    if queue_plan_synced {
+        client_builder = client_builder.redirect(reqwest::redirect::Policy::none());
+    }
+    let client = client_builder.build().map_err(|error| {
+        ToriiProxyAttemptError::before_dispatch(format!(
+            "failed to build Torii proxy HTTP client for request `{}` to peer `{target_peer_id}`: {error}",
+            request.request_id
+        ))
+    })?;
     let response = client
         .post(request_url.clone())
         .headers(headers)
@@ -29309,20 +29683,28 @@ async fn execute_torii_proxy_request_via_http_bridge(
         .send()
         .await
         .map_err(|error| {
-            format!(
+            let definitely_not_dispatched = error.is_connect();
+            let reason = format!(
                 "Torii proxy request `{}` to peer `{target_peer_id}` via authoritative HTTP bridge `{request_url}` failed: {error}",
                 request.request_id
-            )
+            );
+            if definitely_not_dispatched {
+                ToriiProxyAttemptError::before_dispatch(reason)
+            } else {
+                ToriiProxyAttemptError::after_dispatch(reason)
+            }
         })?;
 
-    reqwest_response_to_torii_proxy_snapshot(response, response_body_limit).await
+    reqwest_response_to_torii_proxy_snapshot(response, response_body_limit)
+        .await
+        .map_err(ToriiProxyAttemptError::after_dispatch)
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_torii_proxy_request_with_fallback(
     app: &SharedAppState,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestKindV1,
+    request: ToriiProxyRequestKindV2,
 ) -> Response {
     let request = match new_torii_proxy_request(app.as_ref(), request) {
         Ok(request) => request,
@@ -29394,7 +29776,7 @@ async fn execute_torii_proxy_request_with_fallback(
 async fn execute_torii_proxy_request_with_fallback(
     _app: &SharedAppState,
     routing_decision: RoutingDecision,
-    _request: ToriiProxyRequestKindV1,
+    _request: ToriiProxyRequestKindV2,
 ) -> Response {
     torii_proxy_error_response(
         StatusCode::SERVICE_UNAVAILABLE,
@@ -29412,7 +29794,7 @@ async fn forward_incoming_torii_proxy_request(
     app: &SharedAppState,
     immediate_sender_peer_id: &PeerId,
     routing_decision: RoutingDecision,
-    request: &ToriiProxyRequestV2,
+    request: &ToriiProxyRequestV3,
 ) -> Response {
     if request.hop_count >= request.max_hops {
         iroha_logger::warn!(
@@ -29518,19 +29900,23 @@ async fn forward_incoming_torii_proxy_request(
 async fn execute_torii_proxy_request_across_candidates<F, Fut, C, CFut>(
     candidate_peers: Vec<ToriiProxyCandidate>,
     routing_decision: RoutingDecision,
-    request: ToriiProxyRequestV2,
+    request: ToriiProxyRequestV3,
     hedge_delay: Duration,
     mut execute: F,
     complete_request: C,
 ) -> Response
 where
-    F: FnMut(ToriiProxyCandidate, ToriiProxyRequestV2) -> Fut,
-    Fut: core::future::Future<Output = Result<ToriiProxyHttpResponseV1, String>>,
+    F: FnMut(ToriiProxyCandidate, ToriiProxyRequestV3) -> Fut,
+    Fut: core::future::Future<Output = Result<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>>,
     C: Fn(Hash) -> CFut,
     CFut: core::future::Future<Output = ()>,
 {
     let request_id = request.request_id.clone();
+    let queue_plan_synced_expectation =
+        queue_plan_synced_acceptance_expectation(&request.request);
+    let queue_plan_synced = queue_plan_synced_expectation.is_some();
     let mut last_retryable: Option<Response> = None;
+    let mut queue_plan_synced_failure: Option<(u8, usize, Response)> = None;
     let mut inflight = FuturesUnordered::new();
     for (index, peer_id) in candidate_peers.into_iter().enumerate() {
         let launch_delay = if index == 0 {
@@ -29545,19 +29931,31 @@ where
                 tokio::time::sleep(launch_delay).await;
             }
             let response = response_fut.await;
-            (peer_id, response)
+            (index, peer_id, response)
         });
     }
 
-    while let Some((peer_id, outcome)) = inflight.next().await {
+    while let Some((candidate_index, peer_id, outcome)) = inflight.next().await {
         match outcome {
             Ok(snapshot) => {
-                let status =
-                    StatusCode::from_u16(snapshot.status_code).unwrap_or(StatusCode::BAD_GATEWAY);
-                let mut response = torii_proxy_snapshot_to_response(snapshot);
+                let mut response = match queue_plan_synced_expectation.as_ref() {
+                    Some(expected) => {
+                        queue_plan_synced_snapshot_to_response(snapshot, expected)
+                    }
+                    None => torii_proxy_snapshot_to_response(snapshot),
+                };
+                let status = response.status();
                 insert_route_transport_header(&mut response, peer_id.transport_label());
+                if queue_plan_synced && !status.is_success() {
+                    retain_strongest_queue_plan_synced_failure(
+                        &mut queue_plan_synced_failure,
+                        candidate_index,
+                        response,
+                    );
+                    continue;
+                }
                 if should_retry_torii_proxy_status(status) {
-                    last_retryable = Some(response);
+                    retain_strongest_retryable_response(&mut last_retryable, response);
                     continue;
                 }
                 complete_request(request_id.clone()).await;
@@ -29570,22 +29968,39 @@ where
                     %error,
                     "Torii ingress proxy attempt failed"
                 );
+                if error.may_have_reached_authority()
+                    && let Some(expected) = queue_plan_synced_expectation.as_ref()
+                {
+                    let mut response = queue_plan_outcome_unknown_response(
+                        expected.transaction_hash.clone(),
+                        error.to_string(),
+                    );
+                    insert_route_transport_header(&mut response, peer_id.transport_label());
+                    retain_strongest_queue_plan_synced_failure(
+                        &mut queue_plan_synced_failure,
+                        candidate_index,
+                        response,
+                    );
+                }
             }
         }
     }
 
     complete_request(request_id).await;
-    last_retryable.unwrap_or_else(|| {
-        torii_proxy_error_response(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "route_unavailable",
-            format!(
-                "no authoritative peers responded for lane {} dataspace {}",
-                routing_decision.lane_id.as_u32(),
-                routing_decision.dataspace_id.as_u64()
-            ),
-        )
-    })
+    queue_plan_synced_failure
+        .map(|(_, _, response)| response)
+        .or(last_retryable)
+        .unwrap_or_else(|| {
+            torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                format!(
+                    "no authoritative peers responded for lane {} dataspace {}",
+                    routing_decision.lane_id.as_u32(),
+                    routing_decision.dataspace_id.as_u64()
+                ),
+            )
+        })
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
@@ -29593,14 +30008,20 @@ async fn execute_torii_transaction_via_proxy(
     app: &SharedAppState,
     transaction: TransactionEntrypoint,
     routing_plan: RoutingPlan,
+    strict_durable: bool,
 ) -> Response {
     let routing_decision = routing_plan.coordinator_route();
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV1::SubmitTransaction {
+        ToriiProxyRequestKindV2::SubmitTransaction {
             transaction,
             expected_plan: ToriiRoutingPlanHintV1::from(routing_plan),
+            admission: if strict_durable {
+                ToriiProxyTransactionAdmissionV1::QueuePlanSynced
+            } else {
+                ToriiProxyTransactionAdmissionV1::Deferred
+            },
         },
     )
     .await
@@ -29616,7 +30037,7 @@ async fn execute_torii_query_via_proxy(
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV1::SignedQuery {
+        ToriiProxyRequestKindV2::SignedQuery {
             query_bytes,
             expected_route: ToriiRouteHintV1::from(routing_decision),
             response_format: torii_proxy_response_format(format),
@@ -31089,7 +31510,7 @@ async fn execute_torii_read_via_proxy(
     execute_torii_proxy_request_with_fallback(
         app,
         routing_decision,
-        ToriiProxyRequestKindV1::Read(request),
+        ToriiProxyRequestKindV2::Read(request),
     )
     .await
 }
@@ -32136,7 +32557,7 @@ async fn execute_torii_read_fanout_via_nexus(
     execute_torii_proxy_request_with_fallback(
         app,
         nexus_route,
-        ToriiProxyRequestKindV1::ReadFanout(request),
+        ToriiProxyRequestKindV2::ReadFanout(request),
     )
     .await
 }
@@ -32707,7 +33128,7 @@ async fn forward_incoming_torii_proxy_request_from_sender(
     app: &SharedAppState,
     immediate_sender_peer_id: Option<&PeerId>,
     routing_decision: RoutingDecision,
-    request: &ToriiProxyRequestV2,
+    request: &ToriiProxyRequestV3,
 ) -> Response {
     let Some(sender_peer_id) = immediate_sender_peer_id else {
         return torii_proxy_error_response(
@@ -32731,10 +33152,10 @@ fn app_api_required_torii_proxy_response(action: &'static str) -> Response {
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 async fn execute_incoming_torii_proxy_request(
     app: &SharedAppState,
-    proxy_request: ToriiProxyRequestV2,
+    proxy_request: ToriiProxyRequestV3,
     immediate_sender_peer_id: Option<PeerId>,
 ) -> Response {
-    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V2 {
+    if proxy_request.schema_version != TORII_PROXY_REQUEST_VERSION_V3 {
         return torii_proxy_error_response(
             StatusCode::BAD_REQUEST,
             "invalid_proxy_request",
@@ -32760,9 +33181,10 @@ async fn execute_incoming_torii_proxy_request(
 
     let proxy_request_context = proxy_request.clone();
     match proxy_request.request.clone() {
-        ToriiProxyRequestKindV1::SubmitTransaction {
+        ToriiProxyRequestKindV2::SubmitTransaction {
             transaction,
             expected_plan,
+            admission,
         } => {
             let entrypoint_hash = transaction.hash();
             let signed_transaction_hash = signed_transaction_hash_for_entrypoint(&transaction);
@@ -32802,12 +33224,25 @@ async fn execute_incoming_torii_proxy_request(
                                 )
                                 .await
                             } else {
-                                match routing::push_accepted_transaction_for_ingress_with_routing_plan(
-                                    app.queue.clone(),
-                                    app.state.clone(),
-                                    accepted_tx,
-                                    Some(routing_plan),
-                                ) {
+                                let push_result = match admission {
+                                    ToriiProxyTransactionAdmissionV1::QueuePlanSynced => {
+                                        routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+                                            app.queue.clone(),
+                                            app.state.clone(),
+                                            accepted_tx,
+                                            routing_plan,
+                                        )
+                                    }
+                                    ToriiProxyTransactionAdmissionV1::Deferred => {
+                                        routing::push_accepted_transaction_for_ingress_with_routing_plan(
+                                            app.queue.clone(),
+                                            app.state.clone(),
+                                            accepted_tx,
+                                            Some(routing_plan),
+                                        )
+                                    }
+                                };
+                                match push_result {
                                     Ok(_) => transaction_submission_response(
                                         app.as_ref(),
                                         entrypoint_hash,
@@ -32835,7 +33270,7 @@ async fn execute_incoming_torii_proxy_request(
                 Err(error) => error.into_response(),
             }
         }
-        ToriiProxyRequestKindV1::SignedQuery {
+        ToriiProxyRequestKindV2::SignedQuery {
             query_bytes,
             expected_route,
             response_format,
@@ -32899,7 +33334,7 @@ async fn execute_incoming_torii_proxy_request(
             }
             Err(response) => response,
         },
-        ToriiProxyRequestKindV1::SignedQueryRouteScan {
+        ToriiProxyRequestKindV2::SignedQueryRouteScan {
             query_bytes,
             expected_route,
             response_format,
@@ -32946,7 +33381,7 @@ async fn execute_incoming_torii_proxy_request(
             }
             Err(response) => response,
         },
-        ToriiProxyRequestKindV1::SignedQueryFanout {
+        ToriiProxyRequestKindV2::SignedQueryFanout {
             query_bytes,
             response_format,
         } => match torii_nexus_route(app.as_ref()) {
@@ -32975,7 +33410,7 @@ async fn execute_incoming_torii_proxy_request(
             Err(response) => response,
         },
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV1::Read(read_request) => {
+        ToriiProxyRequestKindV2::Read(read_request) => {
             let routing_decision: RoutingDecision = read_request.expected_route.into();
             let routing_decision =
                 match validate_incoming_read_proxy_route(app, routing_decision, "read") {
@@ -33000,7 +33435,7 @@ async fn execute_incoming_torii_proxy_request(
             }
         }
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV1::ReadFanout(read_request) => {
+        ToriiProxyRequestKindV2::ReadFanout(read_request) => {
             match torii_nexus_route(app.as_ref()) {
                 Ok(nexus_route) => {
                     if !should_execute_incoming_torii_proxy_request_locally(
@@ -33023,7 +33458,7 @@ async fn execute_incoming_torii_proxy_request(
             }
         }
         #[cfg(feature = "app_api")]
-        ToriiProxyRequestKindV1::HostedHttp(hosted_request) => {
+        ToriiProxyRequestKindV2::HostedHttp(hosted_request) => {
             let uri = match hosted_request.query_string.as_deref() {
                 Some(query) => format!("{}?{query}", hosted_request.request_path),
                 None => hosted_request.request_path.clone(),
@@ -33099,15 +33534,15 @@ async fn execute_incoming_torii_proxy_request(
             }
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::Read(_) => {
+        ToriiProxyRequestKindV2::Read(_) => {
             app_api_required_torii_proxy_response("Torii read proxying")
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::ReadFanout(_) => {
+        ToriiProxyRequestKindV2::ReadFanout(_) => {
             app_api_required_torii_proxy_response("Torii read fanout proxying")
         }
         #[cfg(not(feature = "app_api"))]
-        ToriiProxyRequestKindV1::HostedHttp(_) => {
+        ToriiProxyRequestKindV2::HostedHttp(_) => {
             app_api_required_torii_proxy_response("Torii hosted HTTP proxying")
         }
     }
@@ -33118,7 +33553,7 @@ async fn process_incoming_torii_proxy_request(
     app: SharedAppState,
     network: iroha_core::IrohaNetwork,
     peer: Peer,
-    proxy_request: ToriiProxyRequestV2,
+    proxy_request: ToriiProxyRequestV3,
 ) {
     let request_id = proxy_request.request_id.clone();
     let sender_peer_id = peer.id().clone();
@@ -34140,7 +34575,7 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         return None;
     };
 
-    let request_kind = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+    let request_kind = ToriiProxyRequestKindV2::HostedHttp(ToriiHostedHttpProxyRequestV1 {
         service_name: target.route_match.service_name.clone(),
         service_version: target.route_match.service_version.clone(),
         replica_slot: target.replica_slot,
@@ -34152,8 +34587,8 @@ async fn execute_hosted_http_proxy_request_with_fallback(
         remote_ip: remote_ip.map(|ip| ip.to_string()),
     });
     let request_id = next_torii_proxy_request_id(app.as_ref(), &request_kind);
-    let request = ToriiProxyRequestV2 {
-        schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+    let request = ToriiProxyRequestV3 {
+        schema_version: TORII_PROXY_REQUEST_VERSION_V3,
         request_id,
         hop_count: 1,
         max_hops: TORII_PROXY_DEFAULT_MAX_HOPS,
@@ -37317,9 +37752,14 @@ async fn handler_sumeragi_diagnostics(
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
     let nexus_enabled = app.state.nexus_snapshot().enabled;
-    routing::handle_v1_sumeragi_diagnostics(State(app.state.clone()), accept, nexus_enabled)
-        .await
-        .map(axum::response::IntoResponse::into_response)
+    routing::handle_v1_sumeragi_diagnostics(
+        State(app.state.clone()),
+        Some(Arc::clone(&app.queue)),
+        accept,
+        nexus_enabled,
+    )
+    .await
+    .map(axum::response::IntoResponse::into_response)
 }
 
 #[cfg(feature = "telemetry")]
@@ -40678,623 +41118,6 @@ async fn handler_post_sorafs_capacity_failure(
     }
 }
 
-#[cfg(feature = "app_api")]
-async fn enforce_sorafs_repair_auditor_rate_limit(
-    app: &SharedAppState,
-    auditor_account: &str,
-) -> Result<(), Error> {
-    let key = format!("sorafs-repair-auditor:{auditor_account}");
-    if app.sorafs_repair_auditor_rate_limiter.allow(&key).await {
-        return Ok(());
-    }
-    app.telemetry
-        .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-    )))
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_report(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(submission): NoritoJson<crate::routing::RepairReportSubmissionV1>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/report",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let (auditor_account, nonce) = submission.signed_nonce();
-    let signed_nonce = (auditor_account.to_owned(), nonce);
-    let report = submission.into_report()?;
-    enforce_sorafs_repair_auditor_rate_limit(&app, &signed_nonce.0).await?;
-    match crate::routing::handle_post_sorafs_repair_report(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        report,
-        signed_nonce,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_slash(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(submission): NoritoJson<crate::routing::RepairSlashSubmissionV1>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/slash",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    let (auditor_account, nonce) = submission.signed_nonce();
-    let signed_nonce = (auditor_account.to_owned(), nonce);
-    let proposal = submission.into_proposal()?;
-    enforce_sorafs_repair_auditor_rate_limit(&app, &signed_nonce.0).await?;
-    match crate::routing::handle_post_sorafs_repair_slash(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        proposal,
-        signed_nonce,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-fn enforce_sorafs_repair_worker_auth(
-    app: &SharedAppState,
-    ticket_id: &RepairTicketId,
-    manifest_digest_hex: &str,
-    worker_id: &str,
-    idempotency_key: &str,
-    action: RepairWorkerActionV1,
-    signature: &SignatureOf<RepairWorkerSignaturePayloadV1>,
-) -> Result<AccountId, Error> {
-    let record = app
-        .sorafs_node
-        .repair_task_record(ticket_id)
-        .map_err(crate::routing::repair_scheduler_error)?
-        .ok_or_else(|| conversion_error(format!("unknown repair ticket `{ticket_id}`")))?;
-    let manifest_digest = {
-        let trimmed = manifest_digest_hex.trim_start_matches("0x");
-        let bytes = hex::decode(trimmed).map_err(|err| {
-            conversion_error(format!(
-                "invalid manifest_digest_hex (expected 32 bytes): {err}"
-            ))
-        })?;
-        let len = bytes.len();
-        let digest: [u8; 32] = bytes.try_into().map_err(|_| {
-            conversion_error(format!("manifest_digest_hex must be 32 bytes (got {len})"))
-        })?;
-        digest
-    };
-    if manifest_digest != record.manifest_digest {
-        return Err(conversion_error(
-            "manifest_digest_hex does not match ticket record".to_string(),
-        ));
-    }
-    let payload = RepairWorkerSignaturePayloadV1 {
-        version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        ticket_id: ticket_id.clone(),
-        manifest_digest,
-        provider_id: record.provider_id,
-        worker_id: worker_id.to_string(),
-        idempotency_key: idempotency_key.to_string(),
-        action,
-    };
-    payload.validate().map_err(|err| {
-        conversion_error(format!("invalid repair worker signature payload: {err}"))
-    })?;
-
-    let account_id = crate::routing::parse_account_literal_with_state(
-        app.state.as_ref(),
-        worker_id,
-        &app.telemetry,
-        "/v1/sorafs/audit/repair#worker_id",
-    )
-    .map(|(account_id, _)| account_id)
-    .map_err(|err| conversion_error(format!("invalid worker_id `{worker_id}`: {err}")))?;
-    let permission = Permission::from(CanOperateSorafsRepair {
-        provider_id: ProviderId::new(record.provider_id),
-    });
-    let world = app.state.world_view();
-    let permitted = world
-        .account_permissions()
-        .get(&account_id)
-        .is_some_and(|perms| perms.contains(&permission));
-    if !permitted {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "repair worker lacks permission".to_string(),
-            ),
-        ));
-    }
-    let Some(signatory) = account_id.try_signatory() else {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "repair worker must use a signatory account id".to_string(),
-            ),
-        ));
-    };
-    match signatory.try_algorithm() {
-        Ok(iroha_crypto::Algorithm::Ed25519) => {
-            iroha_crypto::ed25519_parse_signature(signature.payload()).map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-                    "repair worker signature material malformed: {err}",
-                )))
-            })?;
-        }
-        Ok(iroha_crypto::Algorithm::MlDsa) => {
-            iroha_crypto::mldsa65_parse_signature(signature.payload()).map_err(|err| {
-                Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-                    "repair worker signature material malformed: {err}",
-                )))
-            })?;
-        }
-        _ => {}
-    }
-    signature.verify(signatory, &payload).map_err(|err| {
-        Error::Query(iroha_data_model::ValidationFail::NotPermitted(format!(
-            "repair worker signature invalid: {err}",
-        )))
-    })?;
-    Ok(account_id)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_claim(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerClaimDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let action = RepairWorkerActionV1::Claim {
-        claimed_at_unix: req.claimed_at_unix,
-    };
-    let worker_account = match enforce_sorafs_repair_worker_auth(
-        &app,
-        &req.ticket_id,
-        &req.manifest_digest_hex,
-        &req.worker_id,
-        &req.idempotency_key,
-        action,
-        &req.signature,
-    ) {
-        Ok(account_id) => account_id,
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(err);
-        }
-    };
-    req.worker_id = worker_account.to_string();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/claim",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_repair_claim(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        NoritoJson(req),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_heartbeat(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerHeartbeatDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let action = RepairWorkerActionV1::Heartbeat {
-        heartbeat_at_unix: req.heartbeat_at_unix,
-    };
-    let worker_account = match enforce_sorafs_repair_worker_auth(
-        &app,
-        &req.ticket_id,
-        &req.manifest_digest_hex,
-        &req.worker_id,
-        &req.idempotency_key,
-        action,
-        &req.signature,
-    ) {
-        Ok(account_id) => account_id,
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(err);
-        }
-    };
-    req.worker_id = worker_account.to_string();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/heartbeat",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_repair_heartbeat(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        NoritoJson(req),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_complete(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerCompleteDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let action = RepairWorkerActionV1::Complete {
-        completed_at_unix: req.completed_at_unix,
-        resolution_notes: req.resolution_notes.clone(),
-    };
-    let worker_account = match enforce_sorafs_repair_worker_auth(
-        &app,
-        &req.ticket_id,
-        &req.manifest_digest_hex,
-        &req.worker_id,
-        &req.idempotency_key,
-        action,
-        &req.signature,
-    ) {
-        Ok(account_id) => account_id,
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(err);
-        }
-    };
-    req.worker_id = worker_account.to_string();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/complete",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_repair_complete(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        NoritoJson(req),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_sorafs_repair_fail(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    NoritoJson(mut req): NoritoJson<crate::routing::RepairWorkerFailDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let action = RepairWorkerActionV1::Fail {
-        failed_at_unix: req.failed_at_unix,
-        reason: req.reason.clone(),
-    };
-    let worker_account = match enforce_sorafs_repair_worker_auth(
-        &app,
-        &req.ticket_id,
-        &req.manifest_digest_hex,
-        &req.worker_id,
-        &req.idempotency_key,
-        action,
-        &req.signature,
-    ) {
-        Ok(account_id) => account_id,
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            return Err(err);
-        }
-    };
-    req.worker_id = worker_account.to_string();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/fail",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_sorafs_repair_fail(
-        app.telemetry.clone(),
-        app.sorafs_node.clone(),
-        NoritoJson(req),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_sorafs_repair_status(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    axum::extract::Path(manifest_hex): axum::extract::Path<String>,
-    AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/status",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_get_sorafs_repair_status(
-        app.sorafs_node.clone(),
-        axum::extract::Path(manifest_hex),
-        AxQuery(query),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_sorafs_repair_status_all(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxQuery(query): AxQuery<crate::routing::RepairStatusQueryDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/status",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_get_sorafs_repair_status_all(
-        app.sorafs_node.clone(),
-        AxQuery(query),
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("sorafs"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_sorafs_repair_events(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    raw_query: axum::extract::RawQuery,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/events",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    Ok(crate::sorafs::api::handle_get_sorafs_repair_events(State(app), headers, raw_query).await)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_sorafs_repair_events_stream(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    raw_query: axum::extract::RawQuery,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/events/stream",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    Ok(crate::sorafs::api::handle_get_sorafs_repair_events_stream(State(app), raw_query).await)
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_get_sorafs_repair_events_ws(
-    State(app): State<SharedAppState>,
-    preauth_guard: Option<Extension<PreAuthGuardHandoff>>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    raw_query: axum::extract::RawQuery,
-    ws: axum::extract::ws::WebSocketUpgrade,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/sorafs/audit/repair/events/ws",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("sorafs"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    Ok(crate::sorafs::api::handle_get_sorafs_repair_events_ws(
-        State(app),
-        preauth_guard,
-        raw_query,
-        ws,
-    )
-    .await)
-}
-
 async fn handler_iso_pacs008(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -43055,7 +42878,51 @@ async fn handler_post_transaction(
     crate::utils::extractors::JsonOrNoritoVersioned(transaction): crate::utils::extractors::JsonOrNoritoVersioned<
         SignedTransaction,
     >,
-) -> Result<impl IntoResponse, Error> {
+) -> Result<Response, Error> {
+    submit_signed_transaction_for_ingress(app, headers, accept, transaction).await
+}
+
+/// Admit one already-decoded caller-signed transaction through the canonical
+/// Torii transaction path.
+///
+/// Dedicated API families use this hook only after validating that the signed
+/// executable contains exactly the native instruction allowed by that route.
+/// The transaction is never rebuilt or re-signed: its caller authority,
+/// signature-bound payload, and stable hash remain the standard ingress
+/// idempotency identity.
+pub(crate) async fn submit_signed_transaction_for_ingress(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    transaction: SignedTransaction,
+) -> Result<Response, Error> {
+    submit_signed_transaction_for_ingress_with_durability(app, headers, accept, transaction, false)
+        .await
+}
+
+/// Admit a caller-signed transaction only after its exact queue plan is durable.
+///
+/// This is intentionally narrower than the standard transaction endpoint: a
+/// dedicated native-command adapter uses it after validating the one-ISI
+/// contract and must never return `202 Accepted` for a deferred or unavailable
+/// queue journal.
+pub(crate) async fn submit_signed_transaction_for_ingress_strict_durable(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    transaction: SignedTransaction,
+) -> Result<Response, Error> {
+    submit_signed_transaction_for_ingress_with_durability(app, headers, accept, transaction, true)
+        .await
+}
+
+async fn submit_signed_transaction_for_ingress_with_durability(
+    app: SharedAppState,
+    headers: axum::http::HeaderMap,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    transaction: SignedTransaction,
+    strict_durable: bool,
+) -> Result<Response, Error> {
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(resp) => return Ok(resp),
@@ -43084,6 +42951,7 @@ async fn handler_post_transaction(
             )));
         }
     }
+    let submitted_signed_transaction_hash = transaction.hash();
     let transaction_bytes =
         <SignedTransaction as iroha_version::codec::EncodeVersioned>::encode_versioned(
             &transaction,
@@ -43093,8 +42961,15 @@ async fn handler_post_transaction(
             code: "invalid_transaction_payload",
             message: format!("transaction payload could not be decoded: {error}"),
         })?;
+    if transaction.hash() != submitted_signed_transaction_hash {
+        return Err(Error::AppServiceUnavailable {
+            code: "transaction_identity_changed",
+            message: "canonical transaction decoding changed the signed transaction hash"
+                .to_owned(),
+        });
+    }
     let entrypoint_hash = transaction.hash_as_entrypoint();
-    let signed_transaction_hash = Some(transaction.hash());
+    let signed_transaction_hash = Some(submitted_signed_transaction_hash.clone());
     let accepted_tx = {
         let chain_id = app.chain_id.clone();
         let state = app.state.clone();
@@ -43113,6 +42988,15 @@ async fn handler_post_transaction(
             message: error.to_string(),
         })??
     };
+    if accepted_tx.external().map(SignedTransaction::hash)
+        != Some(submitted_signed_transaction_hash)
+    {
+        return Err(Error::AppServiceUnavailable {
+            code: "transaction_identity_changed",
+            message: "transaction admission changed the caller-signed transaction identity"
+                .to_owned(),
+        });
+    }
     #[allow(unused_variables)]
     let routing_plan = app
         .queue
@@ -43125,15 +43009,25 @@ async fn handler_post_transaction(
             &app,
             accepted_tx.entrypoint().clone(),
             routing_plan,
+            strict_durable,
         )
         .await);
     }
-    let routing_decision = routing::push_accepted_transaction_for_ingress_with_routing_plan(
-        app.queue.clone(),
-        app.state.clone(),
-        accepted_tx,
-        Some(routing_plan),
-    )?;
+    let routing_decision = if strict_durable {
+        routing::push_accepted_transaction_for_ingress_with_routing_plan_strict_durable(
+            app.queue.clone(),
+            app.state.clone(),
+            accepted_tx,
+            routing_plan,
+        )?
+    } else {
+        routing::push_accepted_transaction_for_ingress_with_routing_plan(
+            app.queue.clone(),
+            app.state.clone(),
+            accepted_tx,
+            Some(routing_plan),
+        )?
+    };
     let response = transaction_submission_response(
         app.as_ref(),
         entrypoint_hash,
@@ -43212,6 +43106,7 @@ async fn handler_post_transaction_entrypoint(
             &app,
             accepted_tx.entrypoint().clone(),
             routing_plan,
+            false,
         )
         .await);
     }
@@ -49674,6 +49569,52 @@ impl SoraFsAppealSettlementSubmitter {
     }
 }
 
+/// Runtime-only signer used by the durable SoraFS proof-outcome forwarder.
+///
+/// Implementations may delegate to PKCS#11/HSM infrastructure. The signer is
+/// intentionally given only a fully constructed payload and no transaction
+/// queue capability, which makes an interrupted signing claim safe to replay.
+/// Before claiming an outbox entry, the worker checks finalized state for the
+/// exact provider-scoped `CanRecordSorafsProofOutcome` permission on
+/// [`Self::authority`], including permissions inherited through roles.
+#[cfg(feature = "app_api")]
+pub trait SoraFsProofOutcomeTransactionSigner: Send + Sync {
+    /// Account expected to hold the exact provider-scoped recording permission.
+    fn authority(&self) -> AccountId;
+
+    /// Sign the exact fee-quoted transaction payload.
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError>;
+}
+
+/// Payload-free proof-outcome signing failure classification.
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoraFsProofOutcomeSigningError {
+    /// The runtime signer or backing HSM is temporarily unavailable.
+    Unavailable,
+    /// The signer refused or could not sign the supplied payload.
+    Refused,
+}
+
+#[cfg(feature = "app_api")]
+impl SoraFsProofOutcomeTransactionSigner for KeyPair {
+    fn authority(&self) -> AccountId {
+        AccountId::new(self.public_key().clone())
+    }
+
+    fn sign(
+        &self,
+        payload: TransactionPayload,
+    ) -> Result<SignedTransaction, SoraFsProofOutcomeSigningError> {
+        iroha_data_model::transaction::TransactionBuilder::from_payload(payload)
+            .and_then(|builder| builder.try_sign(self.private_key()))
+            .map_err(|_| SoraFsProofOutcomeSigningError::Refused)
+    }
+}
+
 /// Main network handler and the only entrypoint of the Iroha.
 pub struct Torii {
     chain_id: Arc<ChainId>,
@@ -49732,7 +49673,6 @@ pub struct Torii {
     pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
-    sorafs_repair_auditor_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
     proof_egress_limiter: limits::RateLimiter,
     soracloud_public_rate_limiter: limits::RateLimiter,
@@ -49798,6 +49738,13 @@ pub struct Torii {
     #[cfg(feature = "app_api")]
     sorafs_node: sorafs_node::NodeHandle,
     #[cfg(feature = "app_api")]
+    sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
     sorafs_limits: Arc<sorafs::SorafsQuotaEnforcer>,
     #[cfg(feature = "app_api")]
     por_coordinator: Arc<sorafs::PorCoordinator>,
@@ -49847,6 +49794,23 @@ pub struct ToriiRuntimeDeps {
     soracloud_runtime: Option<SharedSoracloudRuntime>,
     soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
+    #[cfg(feature = "app_api")]
+    sorafs_proof_outcome_signer: Option<Arc<dyn SoraFsProofOutcomeTransactionSigner>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_orchestrator:
+        Option<Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_pop_credentials: Option<Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_moderation_quarantine_key_wrapper:
+        Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
+    #[cfg(feature = "app_api")]
+    sorafs_privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+    #[cfg(feature = "app_api")]
+    sorafs_gateway_acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
+    #[cfg(feature = "app_api")]
+    sorafs_gateway_compliance_feed_transport:
+        Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     torii_proxy_bridge_signer: Option<KeyPair>,
@@ -49861,6 +49825,20 @@ impl ToriiRuntimeDeps {
             soracloud_runtime: None,
             soracloud_hf_config: None,
             sorafs_node: None,
+            #[cfg(feature = "app_api")]
+            sorafs_proof_outcome_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: None,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_quarantine_key_wrapper: None,
+            #[cfg(feature = "app_api")]
+            sorafs_privacy_cycle_prf_provider: None,
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_acme_client: None,
+            #[cfg(feature = "app_api")]
+            sorafs_gateway_compliance_feed_transport: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
             torii_proxy_bridge_signer: None,
@@ -49888,6 +49866,87 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_sorafs_node(mut self, sorafs_node: sorafs_node::NodeHandle) -> Self {
         self.sorafs_node = Some(sorafs_node);
+        self
+    }
+
+    /// Attach the runtime-only signer used for authoritative SoraFS proof outcomes.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_proof_outcome_signer(
+        mut self,
+        signer: Arc<dyn SoraFsProofOutcomeTransactionSigner>,
+    ) -> Self {
+        self.sorafs_proof_outcome_signer = Some(signer);
+        self
+    }
+
+    /// Attach the finalized-chain SoraFS moderation transaction orchestrator.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_orchestrator(
+        mut self,
+        runtime: Arc<sorafs_node::moderation_orchestrator::ModerationOrchestratorV1>,
+    ) -> Self {
+        self.sorafs_moderation_orchestrator = Some(runtime);
+        self
+    }
+
+    /// Attach the fully constructed runtime-only SoraFS PoP credential service.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_pop_credentials(
+        mut self,
+        runtime: Arc<sorafs::pop_api::PopCredentialToriiRuntimeV1>,
+    ) -> Self {
+        self.sorafs_pop_credentials = Some(runtime);
+        self
+    }
+
+    /// Attach the runtime-only PKCS#11/KMS wrapper used for SoraFS moderation
+    /// quarantine object data keys.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_moderation_quarantine_key_wrapper(
+        mut self,
+        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
+    ) -> Self {
+        self.sorafs_moderation_quarantine_key_wrapper = Some(key_wrapper);
+        self
+    }
+
+    /// Attach the runtime-only threshold-PRF provider used for SoraFS
+    /// differential-privacy publication cycles.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_privacy_cycle_prf_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+    ) -> Self {
+        self.sorafs_privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+
+    /// Attach the runtime-only audited ACME client used by SoraFS gateway TLS
+    /// automation. The client owns no configuration fallback.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_gateway_acme_client(
+        mut self,
+        client: Arc<dyn sorafs::gateway::AcmeClient>,
+    ) -> Self {
+        self.sorafs_gateway_acme_client = Some(client);
+        self
+    }
+
+    /// Attach the runtime-only authenticated DNS/HTTPS transport used to fetch
+    /// configured SoraFS gateway compliance feeds.
+    #[cfg(feature = "app_api")]
+    #[must_use]
+    pub fn with_sorafs_gateway_compliance_feed_transport(
+        mut self,
+        transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>,
+    ) -> Self {
+        self.sorafs_gateway_compliance_feed_transport = Some(transport);
         self
     }
 
@@ -51108,49 +51167,47 @@ impl Torii {
     );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_REPORT_POST,
-            catalog_post(handler_post_sorafs_repair_report),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_report),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_SLASH_POST,
-            catalog_post(handler_post_sorafs_repair_slash),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_slash),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_CLAIM_POST,
-            catalog_post(handler_post_sorafs_repair_claim),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_claim),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_HEARTBEAT_POST,
-            catalog_post(handler_post_sorafs_repair_heartbeat),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_heartbeat),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_COMPLETE_POST,
-            catalog_post(handler_post_sorafs_repair_complete),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_complete),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_FAIL_POST,
-            catalog_post(handler_post_sorafs_repair_fail),
+            catalog_post(sorafs::api::handle_post_sorafs_repair_fail),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_APPEAL_POST,
+            catalog_post(sorafs::api::handle_post_sorafs_repair_appeal),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_GET,
-            catalog_get(handler_get_sorafs_repair_status_all),
+            catalog_get(sorafs::api::handle_get_sorafs_repair_status),
         );
         builder.route(
-        &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_BY_MANIFEST_HEX_GET,
-        catalog_get(handler_get_sorafs_repair_status),
-    );
+            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_GET,
+            catalog_get(sorafs::api::handle_get_sorafs_repair_tasks),
+        );
+        builder.route(
+            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_BY_TICKET_ID_GET,
+            catalog_get(sorafs::api::handle_get_sorafs_repair_task),
+        );
         builder.route(
             &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_GET,
-            catalog_get(handler_get_sorafs_repair_events),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_STREAM_GET,
-            catalog_get(handler_get_sorafs_repair_events_stream)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
-        );
-        builder.route(
-            &route_catalog::contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_WS_GET,
-            catalog_get(handler_get_sorafs_repair_events_ws)
-                .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+            catalog_get(sorafs::api::handle_get_sorafs_repair_events),
         );
         builder.route(
             &route_catalog::contracts_and_verification_keys::ZK_VK_BY_BACKEND_BY_NAME_GET,
@@ -52480,7 +52537,123 @@ impl Torii {
             STORAGE_POR_SAMPLE,
             sorafs::api::handle_post_sorafs_storage_por_sample
         );
-        capacity_post!(PROOF_STREAM, sorafs::api::handle_post_sorafs_proof_stream);
+        let proof_stream_state = builder.state().clone();
+        builder.route(
+            &route_catalog::sorafs::PROOF_STREAM,
+            catalog_post(sorafs::api::handle_post_sorafs_proof_stream)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_CHALLENGE,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_challenge)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_NEXT,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_next)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_PROOF,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_proof)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_STATUS,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_status)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state.clone()),
+        );
+        builder.route(
+            &route_catalog::sorafs::PDP_EXPORT,
+            catalog_post(sorafs::api::handle_post_sorafs_pdp_export)
+                .layer(DefaultBodyLimit::max(sorafs_body_limit))
+                .authenticated_operator(proof_stream_state),
+        );
+        macro_rules! pop_post {
+            ($descriptor:ident, $handler:path, $limit:expr) => {
+                builder.route(
+                    &route_catalog::sorafs::$descriptor,
+                    catalog_post($handler)
+                        .layer(DefaultBodyLimit::max($limit))
+                        .authenticated_in_handler(HandlerAuthentication::ProtocolHandshake),
+                );
+            };
+        }
+        pop_post!(
+            POP_ENROLLMENT,
+            sorafs::pop_api::handle_post_pop_enrollment,
+            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_ENROLLMENT_STATUS,
+            sorafs::pop_api::handle_post_pop_enrollment_status,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_APPROVAL,
+            sorafs::pop_api::handle_post_pop_approval,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_ISSUE,
+            sorafs::pop_api::handle_post_pop_issue,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REVOCATION,
+            sorafs::pop_api::handle_post_pop_revocation,
+            sorafs::pop_api::POP_ENROLLMENT_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_SUBMIT,
+            sorafs::pop_api::handle_post_pop_registry_submit,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_RECONCILE,
+            sorafs::pop_api::handle_post_pop_registry_reconcile,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_REGISTRY_PROJECTION,
+            sorafs::pop_api::handle_post_pop_registry_projection,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_DELIVERY,
+            sorafs::pop_api::handle_post_pop_wallet_delivery,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_IMPORT,
+            sorafs::pop_api::handle_post_pop_wallet_import,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_ACKNOWLEDGE,
+            sorafs::pop_api::handle_post_pop_wallet_acknowledge,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_SYNCHRONIZE,
+            sorafs::pop_api::handle_post_pop_wallet_synchronize,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_WALLET_PROVE,
+            sorafs::pop_api::handle_post_pop_wallet_prove,
+            sorafs::pop_api::POP_CONTROL_REQUEST_MAX_BYTES_V1
+        );
+        pop_post!(
+            POP_VERIFY,
+            sorafs::pop_api::handle_post_pop_verify,
+            sorafs::pop_api::POP_PROOF_REQUEST_MAX_BYTES_V1
+        );
         let app_state = builder.state().clone();
         builder.route(
             &route_catalog::sorafs::DEAL_USAGE,
@@ -52867,6 +53040,26 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         #[cfg(feature = "app_api")]
+        let shared_sorafs_proof_outcome_signer = runtime_deps.sorafs_proof_outcome_signer.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_orchestrator =
+            runtime_deps.sorafs_moderation_orchestrator.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_pop_credentials = runtime_deps.sorafs_pop_credentials.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_moderation_quarantine_key_wrapper = runtime_deps
+            .sorafs_moderation_quarantine_key_wrapper
+            .clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_privacy_cycle_prf_provider =
+            runtime_deps.sorafs_privacy_cycle_prf_provider.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_gateway_acme_client = runtime_deps.sorafs_gateway_acme_client.clone();
+        #[cfg(feature = "app_api")]
+        let shared_sorafs_gateway_compliance_feed_transport = runtime_deps
+            .sorafs_gateway_compliance_feed_transport
+            .clone();
+        #[cfg(feature = "app_api")]
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         #[cfg(feature = "app_api")]
         let sorafs_gateway = config.sorafs_gateway.clone();
@@ -52993,16 +53186,6 @@ impl Torii {
                 .map(std::num::NonZeroU32::get),
             config
                 .deploy_burst_per_origin
-                .map(std::num::NonZeroU32::get),
-        );
-        let sorafs_repair_auditor_rate_limiter = limits::RateLimiter::new(
-            config
-                .sorafs_repair
-                .auditor_rate_per_sec
-                .map(std::num::NonZeroU32::get),
-            config
-                .sorafs_repair
-                .auditor_burst
                 .map(std::num::NonZeroU32::get),
         );
         let mcp_rate_per_sec = config.mcp.rate_per_minute.map(|rate| {
@@ -53223,16 +53406,158 @@ impl Torii {
         let sorafs_cache =
             shared_sorafs_cache.or_else(|| build_sorafs_cache(&config, sorafs_admission.clone()));
         #[cfg(feature = "app_api")]
-        let sorafs_node = shared_sorafs_node.unwrap_or_else(|| {
-            sorafs_node::NodeHandle::new_with_policies(
-                sorafs_node::config::StorageConfig::from(&config.sorafs_storage),
-                sorafs_node::config::RepairConfig::from_repair_and_policy(
-                    &config.sorafs_repair,
-                    &state.gov.sorafs_repair_escalation,
-                ),
-                sorafs_node::config::GcConfig::from(&config.sorafs_gc),
-            )
-        });
+        let sorafs_node = {
+            let storage_config = sorafs_node::config::StorageConfig::from(&config.sorafs_storage);
+            let repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
+                &config.sorafs_repair,
+                &state.gov.sorafs_repair_escalation,
+            );
+            let gc_config = sorafs_node::config::GcConfig::from(&config.sorafs_gc);
+            let privacy_cycle_prf_required = storage_config.privacy_aggregate_schedule().is_some()
+                && storage_config.privacy_aggregate_policy().is_some_and(
+                    sorafs_node::config::PrivacyAggregatePolicyConfig::requires_cycle_prf,
+                );
+            match shared_sorafs_node {
+                Some(node) => {
+                    assert_eq!(
+                        node.moderation_screening_enabled(),
+                        storage_config.moderation_screening_enabled(),
+                        "injected SoraFS node moderation-screening enablement does not match torii.sorafs.storage"
+                    );
+                    assert_eq!(
+                        node.moderation_screening_authority_bundle_digest(),
+                        storage_config.moderation_screening_authority_bundle_digest(),
+                        "injected SoraFS node moderation-screening authority digest does not match torii.sorafs.storage"
+                    );
+                    assert_eq!(
+                        node.privacy_cycle_prf_required(),
+                        privacy_cycle_prf_required,
+                        "injected SoraFS node privacy-cycle PRF requirement does not match torii.sorafs.storage"
+                    );
+                    if storage_config.moderation_screening_enabled()
+                        && shared_sorafs_moderation_quarantine_key_wrapper.is_none()
+                    {
+                        panic!(
+                            "torii.sorafs.storage moderation screening is enabled but its runtime-only PKCS#11/KMS quarantine key wrapper was not injected"
+                        );
+                    }
+                    if let Some(key_wrapper) =
+                        shared_sorafs_moderation_quarantine_key_wrapper.as_ref()
+                    {
+                        assert!(
+                            node.uses_moderation_quarantine_key_wrapper(key_wrapper),
+                            "injected SoraFS node does not retain the exact Torii quarantine key wrapper runtime dependency"
+                        );
+                        assert_eq!(
+                            node.moderation_quarantine_key_id(),
+                            Some(key_wrapper.active_key_id()),
+                            "injected SoraFS node quarantine key wrapper does not match the Torii runtime dependency"
+                        );
+                    }
+                    if privacy_cycle_prf_required
+                        && shared_sorafs_privacy_cycle_prf_provider.is_none()
+                    {
+                        panic!(
+                            "torii.sorafs.storage differential-privacy aggregates are enabled but their runtime-only threshold PRF provider was not injected"
+                        );
+                    }
+                    if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider.as_ref() {
+                        assert!(
+                            node.uses_privacy_cycle_prf_provider(provider),
+                            "injected SoraFS node does not retain the exact Torii privacy-cycle PRF runtime dependency"
+                        );
+                    }
+                    node
+                }
+                None => {
+                    let node_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
+                    let node_runtime_deps = if let Some(key_wrapper) =
+                        shared_sorafs_moderation_quarantine_key_wrapper
+                    {
+                        node_runtime_deps.with_moderation_quarantine_key_wrapper(key_wrapper)
+                    } else {
+                        node_runtime_deps
+                    };
+                    let node_runtime_deps =
+                        if let Some(provider) = shared_sorafs_privacy_cycle_prf_provider {
+                            node_runtime_deps.with_privacy_cycle_prf_provider(provider)
+                        } else {
+                            node_runtime_deps
+                        };
+                    sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+                        storage_config,
+                        repair_config,
+                        gc_config,
+                        node_runtime_deps,
+                    )
+                    .unwrap_or_else(|err| {
+                        panic!("failed to initialise embedded SoraFS runtime: {err}")
+                    })
+                }
+            }
+        };
+        #[cfg(feature = "app_api")]
+        let sorafs_moderation_orchestrator = match (
+            config.sorafs_storage.moderation_orchestrator.as_ref(),
+            shared_sorafs_moderation_orchestrator,
+        ) {
+            (None, None) => None,
+            (Some(config), Some(runtime)) => {
+                let expected =
+                    sorafs_node::moderation_orchestrator::ModerationOrchestratorConfigV1 {
+                        checkpoint_path: config.checkpoint_path.clone(),
+                        max_cases: config.max_cases,
+                        max_events: config.max_events,
+                        max_outbox_entries: config.max_outbox_entries,
+                        max_idempotency_records: config.max_idempotency_records,
+                        max_handoffs: config.max_handoffs,
+                        max_submit_attempts: config.max_submit_attempts,
+                        checkpoint_max_bytes: config.checkpoint_max_bytes.0,
+                    };
+                assert_eq!(
+                    runtime.config(),
+                    &expected,
+                    "injected SoraFS moderation orchestrator does not match torii.sorafs.storage.moderation_orchestrator"
+                );
+                Some(runtime)
+            }
+            (Some(_), None) => {
+                panic!(
+                    "torii.sorafs.storage.moderation_orchestrator is enabled but runtime-only transaction, finalized-reader, and terminal-sink dependencies were not injected"
+                )
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "a SoraFS moderation orchestrator was injected without enabling torii.sorafs.storage.moderation_orchestrator"
+                )
+            }
+        };
+        #[cfg(feature = "app_api")]
+        let sorafs_pop_credentials = match (
+            config.sorafs_storage.pop_credentials.as_ref(),
+            shared_sorafs_pop_credentials,
+        ) {
+            (None, None) => None,
+            (Some(config), Some(runtime)) => {
+                let expected = sorafs::pop_api::PopCredentialRuntimeConfigV1::from(config);
+                assert_eq!(
+                    runtime.config(),
+                    &expected,
+                    "injected SoraFS PoP runtime does not match torii.sorafs.storage.pop_credentials"
+                );
+                Some(runtime)
+            }
+            (Some(_), None) => {
+                panic!(
+                    "torii.sorafs.storage.pop_credentials is enabled but runtime-only enrollment/HSM/KMS/authentication dependencies were not injected"
+                )
+            }
+            (None, Some(_)) => {
+                panic!(
+                    "a SoraFS PoP runtime was injected without enabling torii.sorafs.storage.pop_credentials"
+                )
+            }
+        };
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::from_config(
             &build_sorafs_quota_config(&config.sorafs_quota),
@@ -53244,10 +53569,23 @@ impl Torii {
         #[cfg(feature = "app_api")]
         let sorafs_publish_discovery = config.sorafs_discovery.publish.clone();
         #[cfg(feature = "app_api")]
+        if !sorafs_node.is_enabled()
+            && (config.sorafs_gateway.acme.enabled
+                || config.sorafs_gateway.compliance.is_some()
+                || shared_sorafs_gateway_acme_client.is_some()
+                || shared_sorafs_gateway_compliance_feed_transport.is_some())
+        {
+            panic!(
+                "SoraFS gateway ACME/compliance runtime dependencies require torii.sorafs.storage.enabled"
+            );
+        }
+        #[cfg(feature = "app_api")]
         let sorafs_gateway_security = if sorafs_node.is_enabled() {
             Some(build_sorafs_gateway_security(
                 &config.sorafs_gateway,
                 sorafs_admission.clone(),
+                shared_sorafs_gateway_acme_client,
+                shared_sorafs_gateway_compliance_feed_transport,
             ))
         } else {
             None
@@ -53439,7 +53777,6 @@ impl Torii {
             pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
-            sorafs_repair_auditor_rate_limiter,
             proof_rate_limiter,
             proof_egress_limiter,
             soracloud_public_rate_limiter,
@@ -53509,6 +53846,12 @@ impl Torii {
             sorafs_cache,
             #[cfg(feature = "app_api")]
             sorafs_node,
+            #[cfg(feature = "app_api")]
+            sorafs_proof_outcome_signer: shared_sorafs_proof_outcome_signer,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials,
             #[cfg(feature = "app_api")]
             sorafs_limits,
             #[cfg(feature = "app_api")]
@@ -53838,7 +54181,6 @@ impl Torii {
             pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
-            sorafs_repair_auditor_rate_limiter: self.sorafs_repair_auditor_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
             proof_egress_limiter: self.proof_egress_limiter.clone(),
             proof_body_inflight,
@@ -53933,7 +54275,17 @@ impl Torii {
             #[cfg(feature = "app_api")]
             sorafs_cache: self.sorafs_cache.clone(),
             #[cfg(feature = "app_api")]
+            sorafs_routing_authority_cache: Arc::new(
+                sorafs::delegated_routing::RoutingAuthorityCache::default(),
+            ),
+            #[cfg(feature = "app_api")]
             sorafs_node: self.sorafs_node.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_proof_outcome_signer: self.sorafs_proof_outcome_signer.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: self.sorafs_moderation_orchestrator.clone(),
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: self.sorafs_pop_credentials.clone(),
             #[cfg(feature = "app_api")]
             sorafs_limits: self.sorafs_limits.clone(),
             #[cfg(feature = "app_api")]
@@ -54470,6 +54822,11 @@ impl Torii {
         }
 
         #[cfg(feature = "app_api")]
+        if let Some(runtime) = &self.sorafs_pop_credentials {
+            runtime.clone().spawn(shutdown_signal.clone());
+        }
+
+        #[cfg(feature = "app_api")]
         if let Some(runtime) = &self.repair_runtime {
             runtime.clone().spawn(shutdown_signal.clone());
         }
@@ -54495,6 +54852,10 @@ impl Torii {
         let (api_router, app_state) = self.create_api_router_with_state();
         #[cfg(feature = "app_api")]
         {
+            sorafs::api::spawn_sorafs_proof_outcome_forwarder_worker(
+                app_state.clone(),
+                shutdown_signal.clone(),
+            );
             sorafs::api::spawn_sorafs_appeal_finance_settlement_worker(
                 app_state.clone(),
                 shutdown_signal.clone(),
@@ -54755,17 +55116,106 @@ struct GatewaySecurityComponents {
     denylist_catalog: Option<Arc<GatewayDenylistCatalogSnapshot>>,
     tls_state: Arc<RwLock<sorafs::gateway::TlsStateSnapshot>>,
     tls_automation: Option<Arc<sorafs::gateway::TlsAutomationHandle>>,
+    compliance_controller: Option<Arc<sorafs::gateway::GatewayComplianceController>>,
+    compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
     blinded_resolver: Option<Arc<sorafs::BlindedCidResolver>>,
+}
+
+#[cfg(feature = "app_api")]
+fn gateway_acme_config(
+    config: &iroha_config::parameters::actual::SorafsGatewayAcme,
+) -> sorafs::gateway::AcmeConfig {
+    sorafs::gateway::AcmeConfig {
+        enabled: config.enabled,
+        account_email: config.account_email.clone(),
+        directory_url: config.directory_url.clone(),
+        hostnames: config.hostnames.clone(),
+        dns_provider_id: config.dns_provider_id.clone(),
+        renewal_window: config.renewal_window,
+        retry_backoff: config.retry_backoff,
+        retry_jitter: config.retry_jitter,
+        challenge: sorafs::gateway::ChallengeProfile {
+            dns01: config.challenges.dns01,
+            tls_alpn_01: config.challenges.tls_alpn_01,
+        },
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn gateway_compliance_controller_config(
+    config: &iroha_config::parameters::actual::SorafsGatewayCompliance,
+) -> sorafs::gateway::GatewayComplianceControllerConfig {
+    use sorafs::gateway::{
+        GatewayComplianceFeedHostPolicy, GatewayComplianceFeedPolicy, GatewayComplianceFetchLimits,
+        GatewayComplianceTrustPolicyV1, GatewayComplianceTrustedSignerV1,
+    };
+
+    let convert_signer =
+        |signer: &iroha_config::parameters::actual::SorafsGatewayComplianceSigner| {
+            GatewayComplianceTrustedSignerV1 {
+                signer_id: signer.signer_id.clone(),
+                public_key: signer.public_key,
+            }
+        };
+    let trust_policy = GatewayComplianceTrustPolicyV1 {
+        policy_id: config.policy_id,
+        catalog_threshold: config.catalog_threshold,
+        catalog_signers: config.catalog_signers.iter().map(convert_signer).collect(),
+        revoked_catalog_signer_ids: config.revoked_catalog_signer_ids.clone(),
+        gateway_ack_threshold: config.gateway_ack_threshold,
+        gateway_signers: config.gateway_signers.iter().map(convert_signer).collect(),
+        revoked_gateway_signer_ids: config.revoked_gateway_signer_ids.clone(),
+    };
+    let feeds = config
+        .feeds
+        .iter()
+        .map(|feed| GatewayComplianceFeedPolicy {
+            feed_id: feed.feed_id.clone(),
+            url: feed.url.clone(),
+            required: feed.required,
+            hosts: feed
+                .hosts
+                .iter()
+                .map(|host| GatewayComplianceFeedHostPolicy {
+                    hostname: host.hostname.clone(),
+                    accepted_spki_sha256: host.accepted_spki_sha256.iter().copied().collect(),
+                })
+                .collect(),
+        })
+        .collect();
+    sorafs::gateway::GatewayComplianceControllerConfig {
+        trust_policy,
+        feeds,
+        fetch_limits: GatewayComplianceFetchLimits {
+            max_encoded_bytes: usize::try_from(config.max_encoded_bytes.0).unwrap_or_else(|_| {
+                panic!("torii.sorafs.gateway.compliance.max_encoded_bytes exceeds platform usize")
+            }),
+            max_decoded_bytes: usize::try_from(config.max_decoded_bytes.0).unwrap_or_else(|_| {
+                panic!("torii.sorafs.gateway.compliance.max_decoded_bytes exceeds platform usize")
+            }),
+            max_redirects: config.max_redirects,
+            max_dns_addresses: config.max_dns_addresses,
+            connect_timeout: config.connect_timeout,
+            total_timeout: config.total_timeout,
+        },
+        max_clock_skew_secs: config.max_clock_skew.as_secs(),
+        max_feed_age_secs: config.max_feed_age.as_secs(),
+        max_catalog_validity_secs: config.max_catalog_validity.as_secs(),
+        max_history_entries: config.max_history_entries,
+    }
 }
 
 #[cfg(feature = "app_api")]
 fn build_sorafs_gateway_security(
     config: &iroha_config::parameters::actual::SorafsGateway,
     admission: Option<Arc<sorafs::AdmissionRegistry>>,
+    acme_client: Option<Arc<dyn sorafs::gateway::AcmeClient>>,
+    compliance_feed_transport: Option<Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport>>,
 ) -> GatewaySecurityComponents {
     use sorafs::gateway::{
-        AcmeConfig, ChallengeProfile, GatewayDenylist, GatewayPolicy, GatewayPolicyConfig,
-        GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle, TlsStateSnapshot,
+        FileGatewayComplianceStore, GatewayComplianceController, GatewayDenylist, GatewayPolicy,
+        GatewayPolicyConfig, GatewayRateLimitConfig, GatewayRateLimiter, TlsAutomationHandle,
+        TlsStateSnapshot,
     };
 
     let denylist = Arc::new(GatewayDenylist::new());
@@ -54791,35 +55241,52 @@ fn build_sorafs_gateway_security(
     ));
     let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(config.acme.ech_enabled)));
 
-    let tls_automation = if config.acme.enabled {
-        if config.acme.hostnames.is_empty() {
-            iroha_logger::warn!(
-                "SoraFS TLS automation enabled but no hostnames configured; automation skipped"
-            );
-            None
-        } else {
-            let automation_config = AcmeConfig {
-                enabled: config.acme.enabled,
-                account_email: config.acme.account_email.clone(),
-                directory_url: config.acme.directory_url.clone(),
-                hostnames: config.acme.hostnames.clone(),
-                dns_provider_id: config.acme.dns_provider_id.clone(),
-                renewal_window: config.acme.renewal_window,
-                retry_backoff: config.acme.retry_backoff,
-                retry_jitter: config.acme.retry_jitter,
-                challenge: ChallengeProfile {
-                    dns01: config.acme.challenges.dns01,
-                    tls_alpn_01: config.acme.challenges.tls_alpn_01,
-                },
-            };
-
-            Some(Arc::new(TlsAutomationHandle::new(
-                automation_config,
-                Arc::clone(&tls_state),
-            )))
+    let tls_automation = match (config.acme.enabled, acme_client) {
+        (true, Some(client)) => Some(Arc::new(TlsAutomationHandle::new(
+            gateway_acme_config(&config.acme),
+            client,
+            Arc::clone(&tls_state),
+        ))),
+        (true, None) => {
+            panic!("torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected")
         }
-    } else {
-        None
+        (false, Some(_)) => {
+            panic!(
+                "a SoraFS gateway ACME client was injected without enabling torii.sorafs.gateway.acme"
+            )
+        }
+        (false, None) => None,
+    };
+
+    let (compliance_controller, compliance_feed_transport) = match (
+        config.compliance.as_ref(),
+        compliance_feed_transport,
+    ) {
+        (Some(config), Some(transport)) => {
+            let store = FileGatewayComplianceStore::new(config.checkpoint_path.clone())
+                .unwrap_or_else(|err| {
+                    panic!("invalid torii.sorafs.gateway.compliance checkpoint storage: {err}")
+                });
+            let controller = GatewayComplianceController::new(
+                gateway_compliance_controller_config(config),
+                Arc::new(store),
+            )
+            .unwrap_or_else(|err| {
+                panic!("invalid torii.sorafs.gateway.compliance policy/checkpoint: {err}")
+            });
+            (Some(Arc::new(controller)), Some(transport))
+        }
+        (Some(_), None) => {
+            panic!(
+                "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
+            )
+        }
+        (None, Some(_)) => {
+            panic!(
+                "a SoraFS gateway compliance feed transport was injected without enabling torii.sorafs.gateway.compliance"
+            )
+        }
+        (None, None) => (None, None),
     };
 
     let blinded_resolver = config.salt_schedule_dir.as_ref().map_or_else(
@@ -54845,7 +55312,333 @@ fn build_sorafs_gateway_security(
         denylist_catalog,
         tls_state,
         tls_automation,
+        compliance_controller,
+        compliance_feed_transport,
         blinded_resolver,
+    }
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod gateway_runtime_config_tests {
+    use ed25519_dalek::SigningKey;
+
+    use super::*;
+
+    #[derive(Debug)]
+    struct TestAcmeClient;
+
+    impl sorafs::gateway::AcmeClient for TestAcmeClient {
+        fn order_certificate(
+            &self,
+            _order: &sorafs::gateway::CertificateOrder,
+        ) -> Result<sorafs::gateway::CertificateBundle, sorafs::gateway::AcmeClientError> {
+            Err(sorafs::gateway::AcmeClientError::Rejected {
+                reason: "test client must not be invoked".into(),
+            })
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestComplianceFeedTransport;
+
+    impl sorafs::gateway::GatewayComplianceFeedTransport for TestComplianceFeedTransport {
+        fn resolve(
+            &self,
+            _hostname: &str,
+            _timeout: Duration,
+        ) -> Result<Vec<IpAddr>, sorafs::gateway::GatewayComplianceError> {
+            Err(sorafs::gateway::GatewayComplianceError::InvalidFeed(
+                "test transport must not be invoked".into(),
+            ))
+        }
+
+        fn fetch(
+            &self,
+            _request: &sorafs::gateway::GatewayComplianceFetchRequest,
+        ) -> Result<
+            sorafs::gateway::GatewayComplianceFetchResponse,
+            sorafs::gateway::GatewayComplianceError,
+        > {
+            Err(sorafs::gateway::GatewayComplianceError::InvalidFeed(
+                "test transport must not be invoked".into(),
+            ))
+        }
+    }
+
+    fn compliance_signer(
+        signer_id: &str,
+        signing_key_byte: u8,
+    ) -> iroha_config::parameters::actual::SorafsGatewayComplianceSigner {
+        let signing_key = SigningKey::from_bytes(&[signing_key_byte; 32]);
+        iroha_config::parameters::actual::SorafsGatewayComplianceSigner {
+            signer_id: signer_id.into(),
+            public_key: signing_key.verifying_key().to_bytes(),
+        }
+    }
+
+    fn compliance_config(
+        checkpoint_path: PathBuf,
+    ) -> iroha_config::parameters::actual::SorafsGatewayCompliance {
+        iroha_config::parameters::actual::SorafsGatewayCompliance {
+            checkpoint_path,
+            policy_id: [0xA5; 32],
+            catalog_threshold: 2,
+            catalog_signers: vec![
+                compliance_signer("catalog-a", 0x11),
+                compliance_signer("catalog-b", 0x22),
+                compliance_signer("catalog-c", 0x33),
+            ],
+            revoked_catalog_signer_ids: vec!["catalog-c".into()],
+            gateway_ack_threshold: 2,
+            gateway_signers: vec![
+                compliance_signer("gateway-apac", 0x44),
+                compliance_signer("gateway-emea", 0x55),
+                compliance_signer("gateway-na", 0x66),
+            ],
+            revoked_gateway_signer_ids: vec!["gateway-na".into()],
+            feeds: vec![
+                iroha_config::parameters::actual::SorafsGatewayComplianceFeed {
+                    feed_id: "governed-baseline".into(),
+                    url: "https://feed.example.test/catalog".into(),
+                    required: true,
+                    hosts: vec![
+                        iroha_config::parameters::actual::SorafsGatewayComplianceFeedHost {
+                            hostname: "feed.example.test".into(),
+                            accepted_spki_sha256: vec![[0x71; 32], [0x72; 32]],
+                        },
+                    ],
+                },
+            ],
+            max_encoded_bytes: iroha_config::base::util::Bytes(4_096),
+            max_decoded_bytes: iroha_config::base::util::Bytes(8_192),
+            max_redirects: 4,
+            max_dns_addresses: 6,
+            connect_timeout: Duration::from_secs(7),
+            total_timeout: Duration::from_secs(23),
+            max_clock_skew: Duration::from_secs(301),
+            max_feed_age: Duration::from_secs(3_601),
+            max_catalog_validity: Duration::from_secs(7_201),
+            max_history_entries: 37,
+        }
+    }
+
+    #[test]
+    fn acme_runtime_mapping_preserves_every_resolved_field() {
+        let source = iroha_config::parameters::actual::SorafsGatewayAcme {
+            enabled: true,
+            account_email: Some("gateway-ops@example.test".into()),
+            directory_url: "https://acme.example.test/directory".into(),
+            hostnames: vec![
+                "gateway-a.example.test".into(),
+                "gateway-b.example.test".into(),
+            ],
+            dns_provider_id: Some("runtime-dns-provider".into()),
+            renewal_window: Duration::from_secs(91),
+            retry_backoff: Duration::from_secs(92),
+            retry_jitter: Duration::from_secs(93),
+            challenges: iroha_config::parameters::actual::SorafsGatewayAcmeChallenges {
+                dns01: true,
+                tls_alpn_01: false,
+            },
+            ech_enabled: true,
+        };
+
+        let mapped = gateway_acme_config(&source);
+
+        assert_eq!(mapped.enabled, source.enabled);
+        assert_eq!(mapped.account_email, source.account_email);
+        assert_eq!(mapped.directory_url, source.directory_url);
+        assert_eq!(mapped.hostnames, source.hostnames);
+        assert_eq!(mapped.dns_provider_id, source.dns_provider_id);
+        assert_eq!(mapped.renewal_window, source.renewal_window);
+        assert_eq!(mapped.retry_backoff, source.retry_backoff);
+        assert_eq!(mapped.retry_jitter, source.retry_jitter);
+        assert_eq!(mapped.challenge.dns01, source.challenges.dns01);
+        assert_eq!(mapped.challenge.tls_alpn_01, source.challenges.tls_alpn_01);
+    }
+
+    #[test]
+    fn compliance_runtime_mapping_preserves_every_resolved_field() {
+        let source = compliance_config(PathBuf::from(
+            "/var/lib/iroha/sorafs/compliance-checkpoint.norito",
+        ));
+
+        let mapped = gateway_compliance_controller_config(&source);
+
+        assert_eq!(mapped.trust_policy.policy_id, source.policy_id);
+        assert_eq!(
+            mapped.trust_policy.catalog_threshold,
+            source.catalog_threshold
+        );
+        assert_eq!(
+            mapped
+                .trust_policy
+                .catalog_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>(),
+            source
+                .catalog_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mapped.trust_policy.revoked_catalog_signer_ids,
+            source.revoked_catalog_signer_ids
+        );
+        assert_eq!(
+            mapped.trust_policy.gateway_ack_threshold,
+            source.gateway_ack_threshold
+        );
+        assert_eq!(
+            mapped
+                .trust_policy
+                .gateway_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>(),
+            source
+                .gateway_signers
+                .iter()
+                .map(|signer| (&signer.signer_id, signer.public_key))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            mapped.trust_policy.revoked_gateway_signer_ids,
+            source.revoked_gateway_signer_ids
+        );
+        assert_eq!(mapped.feeds.len(), 1);
+        assert_eq!(mapped.feeds[0].feed_id, source.feeds[0].feed_id);
+        assert_eq!(mapped.feeds[0].url, source.feeds[0].url);
+        assert_eq!(mapped.feeds[0].required, source.feeds[0].required);
+        assert_eq!(mapped.feeds[0].hosts.len(), 1);
+        assert_eq!(
+            mapped.feeds[0].hosts[0].hostname,
+            source.feeds[0].hosts[0].hostname
+        );
+        assert_eq!(
+            mapped.feeds[0].hosts[0].accepted_spki_sha256,
+            source.feeds[0].hosts[0]
+                .accepted_spki_sha256
+                .iter()
+                .copied()
+                .collect::<BTreeSet<_>>()
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_encoded_bytes,
+            usize::try_from(source.max_encoded_bytes.0).expect("test value fits usize")
+        );
+        assert_eq!(
+            mapped.fetch_limits.max_decoded_bytes,
+            usize::try_from(source.max_decoded_bytes.0).expect("test value fits usize")
+        );
+        assert_eq!(mapped.fetch_limits.max_redirects, source.max_redirects);
+        assert_eq!(
+            mapped.fetch_limits.max_dns_addresses,
+            source.max_dns_addresses
+        );
+        assert_eq!(mapped.fetch_limits.connect_timeout, source.connect_timeout);
+        assert_eq!(mapped.fetch_limits.total_timeout, source.total_timeout);
+        assert_eq!(mapped.max_clock_skew_secs, source.max_clock_skew.as_secs());
+        assert_eq!(mapped.max_feed_age_secs, source.max_feed_age.as_secs());
+        assert_eq!(
+            mapped.max_catalog_validity_secs,
+            source.max_catalog_validity.as_secs()
+        );
+        assert_eq!(mapped.max_history_entries, source.max_history_entries);
+        mapped.validate().expect("mapped policy must remain valid");
+    }
+
+    #[test]
+    fn runtime_dependency_builders_retain_injected_instances() {
+        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
+        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
+            Arc::new(TestComplianceFeedTransport);
+
+        let dependencies = ToriiRuntimeDeps::new(routing::MaybeTelemetry::disabled())
+            .with_sorafs_gateway_acme_client(Arc::clone(&acme_client))
+            .with_sorafs_gateway_compliance_feed_transport(Arc::clone(&compliance_transport));
+
+        assert!(Arc::ptr_eq(
+            dependencies
+                .sorafs_gateway_acme_client
+                .as_ref()
+                .expect("ACME client retained"),
+            &acme_client
+        ));
+        assert!(Arc::ptr_eq(
+            dependencies
+                .sorafs_gateway_compliance_feed_transport
+                .as_ref()
+                .expect("compliance transport retained"),
+            &compliance_transport
+        ));
+    }
+
+    #[test]
+    fn gateway_security_builds_only_from_resolved_config_and_runtime_dependencies() {
+        let checkpoint_dir = tempfile::tempdir().expect("temporary checkpoint directory");
+        let checkpoint_dir = checkpoint_dir
+            .path()
+            .canonicalize()
+            .expect("canonical temporary checkpoint directory");
+        let acme_client: Arc<dyn sorafs::gateway::AcmeClient> = Arc::new(TestAcmeClient);
+        let compliance_transport: Arc<dyn sorafs::gateway::GatewayComplianceFeedTransport> =
+            Arc::new(TestComplianceFeedTransport);
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+        config.acme.ech_enabled = true;
+        config.compliance = Some(compliance_config(checkpoint_dir.join("checkpoint.norito")));
+
+        let components = build_sorafs_gateway_security(
+            &config,
+            None,
+            Some(acme_client),
+            Some(Arc::clone(&compliance_transport)),
+        );
+
+        assert!(components.tls_automation.is_some());
+        assert!(
+            components
+                .tls_state
+                .try_read()
+                .expect("TLS state lock")
+                .header_value()
+                .starts_with("ech-enabled")
+        );
+        assert!(components.compliance_controller.is_some());
+        assert!(Arc::ptr_eq(
+            components
+                .compliance_feed_transport
+                .as_ref()
+                .expect("compliance transport retained"),
+            &compliance_transport
+        ));
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "torii.sorafs.gateway.acme is enabled but no runtime ACME client was injected"
+    )]
+    fn acme_enabled_without_runtime_client_fails_closed() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.acme.enabled = true;
+
+        let _ = build_sorafs_gateway_security(&config, None, None, None);
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "torii.sorafs.gateway.compliance is enabled but no runtime authenticated feed transport was injected"
+    )]
+    fn compliance_enabled_without_runtime_transport_fails_closed() {
+        let mut config = iroha_config::parameters::actual::SorafsGateway::default();
+        config.compliance = Some(compliance_config(
+            std::env::temp_dir().join("unused-compliance-checkpoint.norito"),
+        ));
+
+        let _ = build_sorafs_gateway_security(&config, None, None, None);
     }
 }
 
@@ -58262,8 +59055,13 @@ pub(crate) mod tests_runtime_handlers {
         #[cfg(feature = "app_api")]
         let sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>> = None;
         #[cfg(feature = "app_api")]
-        let sorafs_node =
-            sorafs_node::NodeHandle::new(sorafs_node::config::StorageConfig::default());
+        // Test fixtures opt into an isolated storage directory explicitly. Never
+        // let a unit-test helper inherit the production data path.
+        let sorafs_node = sorafs_node::NodeHandle::new(
+            sorafs_node::config::StorageConfig::builder()
+                .enabled(false)
+                .build(),
+        );
         #[cfg(feature = "app_api")]
         let sorafs_limits = Arc::new(sorafs::SorafsQuotaEnforcer::unlimited());
         #[cfg(feature = "app_api")]
@@ -58413,7 +59211,6 @@ pub(crate) mod tests_runtime_handlers {
             pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
-            sorafs_repair_auditor_rate_limiter: limits::RateLimiter::new(None, None),
             proof_rate_limiter: limits::RateLimiter::new(None, None),
             proof_egress_limiter: limits::RateLimiter::new_u64(None, None),
             proof_body_inflight,
@@ -58512,7 +59309,15 @@ pub(crate) mod tests_runtime_handlers {
             #[cfg(feature = "app_api")]
             sorafs_cache,
             #[cfg(feature = "app_api")]
+            sorafs_routing_authority_cache: Arc::new(
+                sorafs::delegated_routing::RoutingAuthorityCache::default(),
+            ),
+            #[cfg(feature = "app_api")]
             sorafs_node,
+            #[cfg(feature = "app_api")]
+            sorafs_proof_outcome_signer: None,
+            #[cfg(feature = "app_api")]
+            sorafs_moderation_orchestrator: None,
             #[cfg(feature = "app_api")]
             sorafs_limits,
             #[cfg(feature = "app_api")]
@@ -58529,6 +59334,8 @@ pub(crate) mod tests_runtime_handlers {
             sorafs_alias_enforcement,
             #[cfg(feature = "app_api")]
             sorafs_admission: None,
+            #[cfg(feature = "app_api")]
+            sorafs_pop_credentials: None,
             #[cfg(feature = "app_api")]
             sorafs_publish_discovery,
             #[cfg(feature = "app_api")]
@@ -61256,7 +62063,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[test]
     fn nexus_fanout_proxy_variants_use_route_budget() {
-        let query_request = ToriiProxyRequestKindV1::SignedQueryFanout {
+        let query_request = ToriiProxyRequestKindV2::SignedQueryFanout {
             query_bytes: Vec::new(),
             response_format: ToriiProxyResponseFormatV1::Norito,
         };
@@ -61269,7 +62076,7 @@ pub(crate) mod tests_runtime_handlers {
             "signed_query_fanout"
         );
 
-        let read_request = ToriiProxyRequestKindV1::ReadFanout(super::torii_read_fanout_request(
+        let read_request = ToriiProxyRequestKindV2::ReadFanout(super::torii_read_fanout_request(
             ToriiReadEndpointV1::AccountGet,
             ToriiFanoutRouteScopeV1::AllDataspaces,
             ToriiReadFanoutMergeV1::Account,
@@ -61295,7 +62102,7 @@ pub(crate) mod tests_runtime_handlers {
     #[test]
     fn http_route_timeout_covers_read_fanout_proxy_budget() {
         let fanout_budget = super::torii_proxy_attempt_timeout(
-            &ToriiProxyRequestKindV1::ReadFanout(super::torii_read_fanout_request(
+            &ToriiProxyRequestKindV2::ReadFanout(super::torii_read_fanout_request(
                 ToriiReadEndpointV1::AccountPermissionsGet,
                 ToriiFanoutRouteScopeV1::AllDataspaces,
                 ToriiReadFanoutMergeV1::List,
@@ -62167,7 +62974,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("unique app state")
             .soracloud_public_max_response_bytes = 0;
         let route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
-        let hosted_request = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+        let hosted_request = ToriiProxyRequestKindV2::HostedHttp(ToriiHostedHttpProxyRequestV1 {
             service_name: "svc".to_owned(),
             service_version: "v1".to_owned(),
             replica_slot: 1,
@@ -62178,7 +62985,7 @@ pub(crate) mod tests_runtime_handlers {
             body: Vec::new(),
             remote_ip: None,
         });
-        let query_request = ToriiProxyRequestKindV1::SignedQueryRouteScan {
+        let query_request = ToriiProxyRequestKindV2::SignedQueryRouteScan {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
             response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62219,7 +63026,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[test]
     fn torii_proxy_hosted_http_request_kind_uses_route_timeout() {
-        let hosted_request = ToriiProxyRequestKindV1::HostedHttp(ToriiHostedHttpProxyRequestV1 {
+        let hosted_request = ToriiProxyRequestKindV2::HostedHttp(ToriiHostedHttpProxyRequestV1 {
             service_name: "svc".to_owned(),
             service_version: "v1".to_owned(),
             replica_slot: 1,
@@ -62245,7 +63052,7 @@ pub(crate) mod tests_runtime_handlers {
     #[test]
     fn torii_proxy_attempt_timeout_uses_route_budget_for_queries() {
         let route = RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12));
-        let query_request = ToriiProxyRequestKindV1::SignedQueryRouteScan {
+        let query_request = ToriiProxyRequestKindV2::SignedQueryRouteScan {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
             response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62270,17 +63077,231 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .sign(keypair.private_key());
-        let submit_request = ToriiProxyRequestKindV1::SubmitTransaction {
-            transaction: iroha_data_model::transaction::TransactionEntrypoint::External(tx),
-            expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
+        let transaction = iroha_data_model::transaction::TransactionEntrypoint::External(tx);
+        let expected_plan = ToriiRoutingPlanHintV1::from(RoutingPlan::single(route));
+        let submit_request = ToriiProxyRequestKindV2::SubmitTransaction {
+            transaction: transaction.clone(),
+            expected_plan: expected_plan.clone(),
+            admission: ToriiProxyTransactionAdmissionV1::Deferred,
+        };
+        let synced_submit_request = ToriiProxyRequestKindV2::SubmitTransaction {
+            transaction,
+            expected_plan,
+            admission: ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
         };
         assert_eq!(
             super::torii_proxy_attempt_timeout(&submit_request),
             Duration::from_secs(10)
         );
         assert_eq!(
+            super::torii_proxy_attempt_timeout(&synced_submit_request),
+            Duration::from_secs(10)
+        );
+        assert_eq!(
             super::torii_proxy_request_kind_name(&submit_request),
             "submit_transaction"
+        );
+        assert_ne!(
+            super::torii_proxy_request_id_for_sequence(7, &submit_request),
+            super::torii_proxy_request_id_for_sequence(7, &synced_submit_request),
+            "deferred and queue-plan-synced admissions must not alias in proxy request identity"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn torii_proxy_v3_roundtrip_and_forwarding_preserve_transaction_admission() {
+        let keypair =
+            checked_torii_test_ed25519_keypair(0xfd, "derive proxy V3 admission fixture key");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let transaction = iroha_data_model::transaction::TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                "torii-proxy-v3-admission-test"
+                    .parse::<ChainId>()
+                    .expect("chain id"),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .sign(keypair.private_key()),
+        );
+        let expected_plan = ToriiRoutingPlanHintV1::from(RoutingPlan::single(
+            RoutingDecision::new(LaneId::new(9), DataSpaceId::new(12)),
+        ));
+        let forwarding_peer = PeerId::from(keypair.public_key().clone());
+
+        for admission in [
+            ToriiProxyTransactionAdmissionV1::Deferred,
+            ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+        ] {
+            let request = ToriiProxyRequestV3 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+                request_id: Hash::new(norito::to_bytes(&admission).expect("encode admission")),
+                hop_count: 1,
+                max_hops: 3,
+                visited_peer_ids: Vec::new(),
+                request: ToriiProxyRequestKindV2::SubmitTransaction {
+                    transaction: transaction.clone(),
+                    expected_plan: expected_plan.clone(),
+                    admission,
+                },
+            };
+            let encoded = norito::to_bytes(&request).expect("encode V3 proxy admission request");
+            let decoded = norito::decode_from_bytes::<ToriiProxyRequestV3>(&encoded)
+                .expect("decode V3 proxy admission request");
+            assert_eq!(decoded, request);
+
+            let forwarded = super::forwarded_torii_proxy_request(&request, &forwarding_peer);
+            assert_eq!(forwarded.schema_version, TORII_PROXY_REQUEST_VERSION_V3);
+            assert_eq!(forwarded.request_id, request.request_id);
+            assert_eq!(forwarded.request, request.request);
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    fn incoming_proxy_submit_fixture(
+        seed: u8,
+        admission: ToriiProxyTransactionAdmissionV1,
+    ) -> (SharedAppState, ToriiProxyRequestV3) {
+        let keypair =
+            checked_torii_test_ed25519_keypair(seed, "derive incoming proxy Submit fixture key");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let transaction = TransactionEntrypoint::External(
+            TransactionBuilder::new(
+                (*app.chain_id).clone(),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([Log::new(
+                Level::INFO,
+                format!("incoming-proxy-submit-{seed:02x}"),
+            )])
+            .sign(keypair.private_key()),
+        );
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+            request_id: Hash::new(
+                norito::to_bytes(&(seed, admission)).expect("encode proxy Submit request id"),
+            ),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV2::SubmitTransaction {
+                transaction,
+                expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(route)),
+                admission,
+            },
+        };
+
+        (app, request)
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    fn accepted_queue_hash_for_proxy_submit(
+        app: &SharedAppState,
+        request: &ToriiProxyRequestV3,
+    ) -> HashOf<SignedTransaction> {
+        let ToriiProxyRequestKindV2::SubmitTransaction { transaction, .. } = &request.request
+        else {
+            panic!("proxy Submit fixture must contain a transaction");
+        };
+        let parameters = app.state.world.view().parameters().clone();
+        AcceptedTransaction::accept_entrypoint(
+            transaction.clone(),
+            app.chain_id.as_ref(),
+            parameters.sumeragi().max_clock_drift(),
+            parameters.transaction(),
+            app.state.crypto().as_ref(),
+        )
+        .expect("proxy Submit fixture must pass canonical transaction admission")
+        .hash()
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[test]
+    fn queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity() {
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xe0, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let accepted_queue_hash = accepted_queue_hash_for_proxy_submit(&app, &request);
+        let reconciliation_hash = super::queue_plan_synced_transaction_hash(&request.request)
+            .expect("QueuePlanSynced Submit must expose its queue identity");
+        assert_eq!(reconciliation_hash, accepted_queue_hash);
+
+        let ToriiProxyRequestKindV2::SubmitTransaction { transaction, .. } = &request.request
+        else {
+            unreachable!("fixture shape checked above");
+        };
+        let entrypoint_hash = transaction.hash();
+        assert_eq!(
+            Hash::from(reconciliation_hash),
+            Hash::from(entrypoint_hash),
+            "the signed-hash compatibility identity must cover the canonical entrypoint bytes"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn incoming_submit_deferred_reaches_ordinary_queue_without_plan_journal() {
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xe1, ToriiProxyTransactionAdmissionV1::Deferred);
+
+        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(
+            app.queue.active_len(),
+            1,
+            "Deferred admission must reach the ordinary queue even when no plan journal is installed"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable() {
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xe2, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+
+        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            app.queue.active_len(),
+            0,
+            "failed QueuePlanSynced admission must roll back ordinary queue ownership"
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read QueuePlanSynced rejection body");
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("decode QueuePlanSynced rejection envelope");
+        assert_eq!(envelope.code(), "queue_plan_journal_unavailable");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn incoming_submit_queue_plan_synced_succeeds_with_installed_journal() {
+        let journal_dir = tempfile::tempdir().expect("create proxy Submit journal directory");
+        let journal_path = journal_dir.path().join("queue_plan_journal.norito");
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xe3, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        assert_eq!(
+            app.queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install queue plan journal"),
+            0
+        );
+
+        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        assert_eq!(app.queue.active_len(), 1);
+        assert!(
+            std::fs::metadata(&journal_path)
+                .expect("queue plan journal metadata")
+                .len()
+                > 0,
+            "QueuePlanSynced acknowledgement must leave a durable plan record"
         );
     }
 
@@ -62526,13 +63547,13 @@ pub(crate) mod tests_runtime_handlers {
                 .clone(),
         );
         let route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"torii-proxy-retry"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62608,13 +63629,13 @@ pub(crate) mod tests_runtime_handlers {
                 .clone(),
         );
         let route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"torii-proxy-hedged-success"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62643,7 +63664,9 @@ pub(crate) mod tests_runtime_handlers {
                         .push(peer_id.clone());
                     if peer_id == first_peer_id {
                         tokio::time::sleep(Duration::from_millis(80)).await;
-                        return Err("first peer timed out".to_owned());
+                        return Err(ToriiProxyAttemptError::before_dispatch(
+                            "first peer timed out",
+                        ));
                     }
                     Ok(ToriiProxyHttpResponseV1 {
                         status_code: StatusCode::OK.as_u16(),
@@ -62690,13 +63713,13 @@ pub(crate) mod tests_runtime_handlers {
             .clone(),
         );
         let route = RoutingDecision::new(LaneId::new(3), DataSpaceId::new(3));
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"torii-proxy-retryable-then-success"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62751,13 +63774,13 @@ pub(crate) mod tests_runtime_handlers {
      {
         let route = RoutingDecision::new(LaneId::new(4), DataSpaceId::new(5));
         let request_id = Hash::new(b"torii-proxy-no-candidates");
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: request_id.clone(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62772,8 +63795,10 @@ pub(crate) mod tests_runtime_handlers {
             request,
             Duration::from_millis(20),
             |_candidate, _request| async move {
-                Err::<ToriiProxyHttpResponseV1, String>(
-                    "execute should not be called without candidates".to_owned(),
+                Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
+                    ToriiProxyAttemptError::before_dispatch(
+                        "execute should not be called without candidates",
+                    ),
                 )
             },
             move |completed_request_id| {
@@ -62817,13 +63842,13 @@ pub(crate) mod tests_runtime_handlers {
             .clone(),
         );
         let route = RoutingDecision::new(LaneId::new(6), DataSpaceId::new(7));
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"torii-proxy-last-retryable"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62865,6 +63890,486 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
+    async fn queue_plan_outcome_unknown_survives_both_retryable_completion_orders() {
+        let expected_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+            b"outcome-unknown-retryable-order",
+        ));
+        let expected_hash_literal = expected_hash.to_string();
+
+        for unknown_arrives_first in [true, false] {
+            let mut strongest = None;
+            let unknown = super::queue_plan_outcome_unknown_response(
+                expected_hash.clone(),
+                "authoritative cleanup sync outcome is unknown",
+            );
+            let retryable = super::torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "definitely not admitted by this candidate",
+            );
+
+            if unknown_arrives_first {
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, retryable);
+            } else {
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, retryable);
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
+            }
+
+            let response = strongest.expect("one reducer candidate must remain").2;
+
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
+                "ordinary retryable failures must never overwrite an indeterminate admission"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read preserved outcome-unknown response");
+            let envelope: ErrorEnvelope =
+                norito::decode_from_bytes(&body).expect("decode outcome-unknown error envelope");
+            assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+            assert_eq!(
+                envelope
+                    .details
+                    .expect("outcome-unknown details")
+                    .tx_hash
+                    .as_deref(),
+                Some(expected_hash_literal.as_str())
+            );
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_completion_orders() {
+        let expected_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+            b"outcome-unknown-nonretryable-order",
+        ));
+        let expected_hash_literal = expected_hash.to_string();
+
+        for unknown_arrives_first in [true, false] {
+            let mut strongest = None;
+            let unknown = super::queue_plan_outcome_unknown_response(
+                expected_hash.clone(),
+                "authority may have durably admitted before response loss",
+            );
+            let nonretryable = super::torii_proxy_error_response(
+                StatusCode::CONFLICT,
+                "routing_plan_mismatch",
+                "stale authority route view",
+            );
+
+            if unknown_arrives_first {
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, nonretryable);
+            } else {
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 0, nonretryable);
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, unknown);
+            }
+
+            let response = strongest.expect("one reducer candidate must remain").2;
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN"),
+                "a definite failure from one authority cannot mask another dispatched authority"
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read strict proxy outcome-unknown response");
+            let envelope: ErrorEnvelope =
+                norito::decode_from_bytes(&body).expect("decode outcome-unknown envelope");
+            assert_eq!(
+                envelope
+                    .details
+                    .expect("outcome-unknown details")
+                    .tx_hash
+                    .as_deref(),
+                Some(expected_hash_literal.as_str())
+            );
+        }
+
+        for candidate_zero_arrives_first in [true, false] {
+            let mut strongest = None;
+            let candidate_zero = super::torii_proxy_error_response(
+                StatusCode::CONFLICT,
+                "candidate_zero",
+                "candidate zero failure",
+            );
+            let candidate_one = super::torii_proxy_error_response(
+                StatusCode::CONFLICT,
+                "candidate_one",
+                "candidate one failure",
+            );
+
+            if candidate_zero_arrives_first {
+                super::retain_strongest_queue_plan_synced_failure(
+                    &mut strongest,
+                    0,
+                    candidate_zero,
+                );
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, candidate_one);
+            } else {
+                super::retain_strongest_queue_plan_synced_failure(&mut strongest, 1, candidate_one);
+                super::retain_strongest_queue_plan_synced_failure(
+                    &mut strongest,
+                    0,
+                    candidate_zero,
+                );
+            }
+
+            let (priority, candidate_index, response) =
+                strongest.expect("equal-priority reducer candidate must remain");
+            assert_eq!(priority, 1);
+            assert_eq!(candidate_index, 0);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("candidate_zero"),
+                "candidate index must break equal-priority ties independent of arrival order"
+            );
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_outcome_unknown_rejects_forged_reconciliation_hash() {
+        let peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xac,
+                "derive forged outcome-unknown proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xad, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let expected_hash = accepted_queue_hash_for_proxy_submit(&app, &request);
+        let forged_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(
+            b"forged-outcome-unknown-reconciliation-hash",
+        ));
+        assert_ne!(forged_hash, expected_hash);
+        let forged_snapshot = super::response_to_torii_proxy_snapshot(
+            super::queue_plan_outcome_unknown_response(
+                forged_hash,
+                "forged authoritative reconciliation identity",
+            ),
+            usize::MAX,
+        )
+        .await;
+
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![ToriiProxyCandidate::P2p(peer_id)],
+            route,
+            request,
+            Duration::ZERO,
+            move |_candidate, _request| {
+                let forged_snapshot = forged_snapshot.clone();
+                async move { Ok(forged_snapshot) }
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("invalid_proxy_response")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read invalid proxy response");
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("decode invalid proxy response envelope");
+        assert_eq!(envelope.code(), "invalid_proxy_response");
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport() {
+        let p2p_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xa5,
+                "derive post-dispatch P2P proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let http_peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xa6,
+                "derive post-dispatch HTTP proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        for (seed, candidate, expected_transport) in [
+            (0xa7, ToriiProxyCandidate::P2p(p2p_peer_id), "p2p_proxy"),
+            (
+                0xa8,
+                ToriiProxyCandidate::HttpBridge {
+                    peer_id: http_peer_id,
+                    torii_url: "https://authority.invalid".to_owned(),
+                },
+                "http_bridge",
+            ),
+        ] {
+            let (_app, request) = incoming_proxy_submit_fixture(
+                seed,
+                ToriiProxyTransactionAdmissionV1::QueuePlanSynced,
+            );
+            let expected_hash = accepted_queue_hash_for_proxy_submit(&_app, &request);
+            let expected_hash_literal = expected_hash.to_string();
+            let response = super::execute_torii_proxy_request_across_candidates(
+                vec![candidate],
+                route,
+                request,
+                Duration::ZERO,
+                |_candidate, _request| async move {
+                    Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
+                        ToriiProxyAttemptError::after_dispatch(
+                            "authenticated authority response was lost after dispatch",
+                        ),
+                    )
+                },
+                |_request_id| async move {},
+            )
+            .await;
+
+            assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-reject-code")
+                    .and_then(|value| value.to_str().ok()),
+                Some("PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN")
+            );
+            assert_eq!(
+                response
+                    .headers()
+                    .get("x-iroha-route-transport")
+                    .and_then(|value| value.to_str().ok()),
+                Some(expected_transport)
+            );
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("read post-dispatch outcome-unknown response");
+            let envelope: ErrorEnvelope = norito::decode_from_bytes(&body)
+                .expect("decode post-dispatch outcome-unknown envelope");
+            assert_eq!(envelope.code(), "queue_plan_journal_outcome_unknown");
+            assert_eq!(
+                envelope
+                    .details
+                    .expect("post-dispatch details")
+                    .tx_hash
+                    .as_deref(),
+                Some(expected_hash_literal.as_str())
+            );
+        }
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_p2p_missing_network_is_pre_dispatch() {
+        let (app, request) =
+            incoming_proxy_submit_fixture(0xc1, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xc2,
+                "derive missing-network proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, request)
+            .await
+            .expect_err("missing P2P network must fail before dispatch");
+        assert!(matches!(
+            error,
+            ToriiProxyAttemptError::DefinitelyNotDispatched(_)
+        ));
+        assert!(!error.may_have_reached_authority());
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_p2p_post_dispatch_channel_loss_is_indeterminate() {
+        let (mut app, request) =
+            incoming_proxy_submit_fixture(0xc3, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        Arc::get_mut(&mut app)
+            .expect("fixture app must be uniquely owned")
+            .p2p = Some(iroha_core::IrohaNetwork::closed_for_tests());
+        let peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xc4,
+                "derive closed-channel proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let pending_key = (request.request_id.clone(), peer_id.clone());
+        let after_network_post =
+            super::register_torii_proxy_after_network_post_observer(pending_key.clone());
+        let app_for_close = app.clone();
+        let close_task = tokio::spawn(async move {
+            after_network_post.notified().await;
+            assert!(
+                app_for_close
+                    .torii_proxy_pending
+                    .lock()
+                    .await
+                    .remove(&pending_key)
+                    .is_some(),
+                "the pending response channel must exist immediately after network.post"
+            );
+        });
+
+        let error = super::execute_torii_proxy_request_via_peer(&app, peer_id, request)
+            .await
+            .expect_err("lost response channel after network post must be indeterminate");
+        close_task
+            .await
+            .expect("pending-channel closer must finish");
+        assert!(matches!(
+            error,
+            ToriiProxyAttemptError::DispatchedWithoutResponse(_)
+        ));
+        assert!(error.may_have_reached_authority());
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_post_dispatch() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (app, send_request) =
+            incoming_proxy_submit_fixture(0xc5, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(0xc6, "derive HTTP-loss proxy peer fixture key")
+                .public_key()
+                .clone(),
+        );
+
+        let send_error = super::execute_torii_proxy_request_via_http_bridge(
+            &app,
+            peer_id.clone(),
+            "http://127.0.0.1:0/".to_owned(),
+            send_request,
+        )
+        .await
+        .expect_err("port-zero connect failure must occur before dispatch");
+        assert!(matches!(
+            send_error,
+            ToriiProxyAttemptError::DefinitelyNotDispatched(_)
+        ));
+        assert!(!send_error.may_have_reached_authority());
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind truncated-body HTTP server");
+        let address = listener.local_addr().expect("truncated-body address");
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept proxy HTTP request");
+            let mut request_bytes = vec![0_u8; 4096];
+            let _ = socket
+                .read(&mut request_bytes)
+                .await
+                .expect("read proxy HTTP request");
+            socket
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 32\r\nConnection: close\r\n\r\nshort",
+                )
+                .await
+                .expect("write deliberately truncated response");
+            socket.shutdown().await.expect("close truncated response");
+        });
+        let (_other_app, body_request) =
+            incoming_proxy_submit_fixture(0xc7, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let body_error = super::execute_torii_proxy_request_via_http_bridge(
+            &app,
+            peer_id,
+            format!("http://{address}/"),
+            body_request,
+        )
+        .await
+        .expect_err("truncated response body must be indeterminate");
+        server.await.expect("truncated-body server must finish");
+        assert!(matches!(
+            body_error,
+            ToriiProxyAttemptError::DispatchedWithoutResponse(_)
+        ));
+        assert!(body_error.may_have_reached_authority());
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
+    async fn queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable() {
+        let peer_id = PeerId::from(
+            checked_torii_test_ed25519_keypair(
+                0xb5,
+                "derive pre-dispatch strict proxy peer fixture key",
+            )
+            .public_key()
+            .clone(),
+        );
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let (_app, request) =
+            incoming_proxy_submit_fixture(0xb6, ToriiProxyTransactionAdmissionV1::QueuePlanSynced);
+        let response = super::execute_torii_proxy_request_across_candidates(
+            vec![ToriiProxyCandidate::P2p(peer_id)],
+            route,
+            request,
+            Duration::ZERO,
+            |_candidate, _request| async move {
+                Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
+                    ToriiProxyAttemptError::before_dispatch(
+                        "request encoding failed before network ownership",
+                    ),
+                )
+            },
+            |_request_id| async move {},
+        )
+        .await;
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read definite pre-dispatch failure");
+        let envelope: ErrorEnvelope =
+            norito::decode_from_bytes(&body).expect("decode route-unavailable envelope");
+        assert_eq!(envelope.code(), "route_unavailable");
+        assert!(
+            envelope
+                .details
+                .is_none_or(|details| details.tx_hash.is_none()),
+            "definitely undispatched failures must not publish an indeterminate queue identity"
+        );
+    }
+
+    #[cfg(any(feature = "p2p_ws", feature = "connect"))]
+    #[tokio::test]
     async fn execute_torii_proxy_request_across_candidates_returns_route_unavailable_after_transport_errors()
      {
         let peer_id = PeerId::from(
@@ -62877,13 +64382,13 @@ pub(crate) mod tests_runtime_handlers {
         );
         let route = RoutingDecision::new(LaneId::new(8), DataSpaceId::new(9));
         let request_id = Hash::new(b"torii-proxy-all-transport-errors");
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: request_id.clone(),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -62898,7 +64403,9 @@ pub(crate) mod tests_runtime_handlers {
             request,
             Duration::from_millis(20),
             |_candidate, _request| async move {
-                Err::<ToriiProxyHttpResponseV1, String>("transport unavailable".to_owned())
+                Err::<ToriiProxyHttpResponseV1, ToriiProxyAttemptError>(
+                    ToriiProxyAttemptError::before_dispatch("transport unavailable"),
+                )
             },
             move |completed_request_id| {
                 let completed = completed_ref.clone();
@@ -72526,12 +74033,12 @@ pub(crate) mod tests_runtime_handlers {
             "test requires a route the receiver would otherwise re-forward"
         );
 
-        let verified_query = ToriiProxyRequestKindV1::SignedQueryRouteScan {
+        let verified_query = ToriiProxyRequestKindV2::SignedQueryRouteScan {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
             response_format: ToriiProxyResponseFormatV1::Norito,
         };
-        let read_request = ToriiProxyRequestKindV1::Read(super::torii_read_request(
+        let read_request = ToriiProxyRequestKindV2::Read(super::torii_read_request(
             ToriiReadEndpointV1::AccountGet,
             route,
             vec![
@@ -72544,7 +74051,7 @@ pub(crate) mod tests_runtime_handlers {
             None,
             Vec::new(),
         ));
-        let signed_query = ToriiProxyRequestKindV1::SignedQuery {
+        let signed_query = ToriiProxyRequestKindV2::SignedQuery {
             query_bytes: Vec::new(),
             expected_route: ToriiRouteHintV1::from(route),
             response_format: ToriiProxyResponseFormatV1::Norito,
@@ -72581,13 +74088,13 @@ pub(crate) mod tests_runtime_handlers {
         app: SharedAppState,
         route: RoutingDecision,
     ) -> Response {
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"incoming-read-proxy-stale-route"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+            request: ToriiProxyRequestKindV2::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
                 route,
                 vec![
@@ -72617,13 +74124,13 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::query::QueryRequest::Start(build_find_triggers_query_for_test())
                 .with_authority(authority)
                 .sign(&key_pair);
-        let request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"incoming-verified-query-proxy-stale-route"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: iroha_version::codec::EncodeVersioned::encode_versioned(&signed_query),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -73192,7 +74699,7 @@ pub(crate) mod tests_runtime_handlers {
         let response = super::execute_torii_proxy_request_with_fallback(
             &app,
             route,
-            ToriiProxyRequestKindV1::SignedQueryRouteScan {
+            ToriiProxyRequestKindV2::SignedQueryRouteScan {
                 query_bytes: Vec::new(),
                 expected_route: ToriiRouteHintV1::from(route),
                 response_format: ToriiProxyResponseFormatV1::Norito,
@@ -73440,6 +74947,32 @@ pub(crate) mod tests_runtime_handlers {
 
     #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
     #[tokio::test]
+    async fn incoming_torii_proxy_rejects_v2_schema_before_dispatch() {
+        const LEGACY_TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
+
+        let app = mk_app_state_for_tests_with_world(world_with_account(&ALICE_ID));
+        let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
+        let request = ToriiProxyRequestV3 {
+            schema_version: LEGACY_TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"reject-v2-torii-proxy-request"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV2::Read(super::torii_read_request(
+                ToriiReadEndpointV1::AccountGet,
+                route,
+                vec![ALICE_ID.to_string()],
+                None,
+                Vec::new(),
+            )),
+        };
+
+        let response = super::execute_incoming_torii_proxy_request(&app, request, None).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(all(feature = "app_api", any(feature = "p2p_ws", feature = "connect")))]
+    #[tokio::test]
     async fn internal_torii_proxy_route_accepts_node_signed_requests() {
         use tower::ServiceExt as _;
 
@@ -73461,13 +74994,13 @@ pub(crate) mod tests_runtime_handlers {
             .local_peer_id = Some(local_peer_id.clone());
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL);
-        let proxy_request = ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let proxy_request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"internal-torii-proxy-read"),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: vec![local_peer_id],
-            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+            request: ToriiProxyRequestKindV2::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
                 route,
                 vec![ALICE_ID.to_string()],
@@ -73546,8 +75079,8 @@ pub(crate) mod tests_runtime_handlers {
                 axum::routing::post(handler_internal_torii_proxy_request).layer(operator_layer),
             )
             .with_state(app.clone());
-        let body = norito::to_bytes(&ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let body = norito::to_bytes(&ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::new(b"internal-torii-proxy-read-unsigned"),
             hop_count: 1,
             max_hops: 3,
@@ -73559,7 +75092,7 @@ pub(crate) mod tests_runtime_handlers {
                 .public_key()
                 .clone(),
             )],
-            request: ToriiProxyRequestKindV1::Read(super::torii_read_request(
+            request: ToriiProxyRequestKindV2::Read(super::torii_read_request(
                 ToriiReadEndpointV1::AccountGet,
                 RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
                 vec![ALICE_ID.to_string()],
@@ -73704,13 +75237,13 @@ pub(crate) mod tests_runtime_handlers {
             &app,
             &sender_peer_id,
             route,
-            &ToriiProxyRequestV2 {
-                schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            &ToriiProxyRequestV3 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V3,
                 request_id: Hash::new(b"torii-proxy-hop-exhausted"),
                 hop_count: 1,
                 max_hops: 1,
                 visited_peer_ids: vec![sender_peer_id.clone()],
-                request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+                request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                     query_bytes: Vec::new(),
                     expected_route: ToriiRouteHintV1::from(route),
                     response_format: ToriiProxyResponseFormatV1::Norito,
@@ -73857,13 +75390,13 @@ pub(crate) mod tests_runtime_handlers {
             &app,
             &sender_peer_id,
             route,
-            &ToriiProxyRequestV2 {
-                schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+            &ToriiProxyRequestV3 {
+                schema_version: TORII_PROXY_REQUEST_VERSION_V3,
                 request_id,
                 hop_count: 1,
                 max_hops: 3,
                 visited_peer_ids: vec![sender_peer_id.clone()],
-                request: ToriiProxyRequestKindV1::SignedQueryRouteScan {
+                request: ToriiProxyRequestKindV2::SignedQueryRouteScan {
                     query_bytes: Vec::new(),
                     expected_route: ToriiRouteHintV1::from(route),
                     response_format: ToriiProxyResponseFormatV1::Norito,
@@ -77997,6 +79530,43 @@ mod tests_queue_metadata {
             assert_eq!(detail, expected_detail);
         }
     }
+
+    #[test]
+    fn queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash() {
+        let transaction_hash =
+            HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::new(b"outcome-unknown"));
+        let error = queue::Error::PlanJournalDurabilityIndeterminate {
+            transaction_hash,
+            reason: "cleanup sync failed".to_owned(),
+        };
+
+        assert_eq!(
+            super::Error::queue_error_summary(&error),
+            (
+                "queue_plan_journal_outcome_unknown",
+                "transaction admission outcome is unknown; reconcile by exact transaction hash before retrying",
+            )
+        );
+        let (code, detail) = queue_rejection_metadata(&error);
+        assert_eq!(code, "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN");
+        assert!(detail.contains(&transaction_hash.to_string()));
+        assert!(detail.contains("reconcile that exact signed hash before retrying"));
+        assert_eq!(
+            super::Error::status_code_for_queue_error(&error),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+        let envelope =
+            super::Error::queue_error_envelope(&error, queue::BackpressureState::default());
+        let details = envelope.details.expect("outcome-unknown details");
+        let expected_hash = transaction_hash.to_string();
+        assert_eq!(details.tx_hash.as_deref(), Some(expected_hash.as_str()));
+        assert!(
+            details
+                .hint
+                .as_deref()
+                .is_some_and(|hint| hint.contains("byte-identical signed bytes"))
+        );
+    }
 }
 
 #[cfg(all(test, feature = "app_api"))]
@@ -78205,6 +79775,10 @@ impl Error {
             queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             queue::Error::ConfidentialPolicyAdmissionRejected { .. } => StatusCode::FORBIDDEN,
             queue::Error::NexusFeeAdmissionConfigInvalid { .. } => StatusCode::SERVICE_UNAVAILABLE,
+            queue::Error::PlanJournalDurabilityRejected { .. }
+            | queue::Error::PlanJournalDurabilityIndeterminate { .. } => {
+                StatusCode::SERVICE_UNAVAILABLE
+            }
         }
     }
 
@@ -78263,6 +79837,14 @@ impl Error {
                 "queue_nexus_fee_config_invalid",
                 "node Nexus fee configuration is invalid",
             ),
+            queue::Error::PlanJournalDurabilityRejected { .. } => (
+                "queue_plan_journal_unavailable",
+                "transaction queue could not establish the required durability boundary",
+            ),
+            queue::Error::PlanJournalDurabilityIndeterminate { .. } => (
+                "queue_plan_journal_outcome_unknown",
+                "transaction admission outcome is unknown; reconcile by exact transaction hash before retrying",
+            ),
         }
     }
 
@@ -78289,6 +79871,25 @@ impl Error {
             }),
             _ => None,
         };
+        let (tx_hash, hint) = match err {
+            queue::Error::PlanJournalDurabilityIndeterminate {
+                transaction_hash, ..
+            } => (
+                Some(transaction_hash.to_string()),
+                Some(
+                    "Query status by this exact signed transaction hash or resubmit byte-identical signed bytes; do not create a replacement transaction until the outcome is known."
+                        .to_owned(),
+                ),
+            ),
+            queue::Error::PlanJournalDurabilityRejected { .. } => (
+                None,
+                Some(
+                    "The transaction was not admitted; restore queue-plan journal health before retrying."
+                        .to_owned(),
+                ),
+            ),
+            _ => (None, None),
+        };
         ErrorEnvelope::new(code, message).with_details(ErrorDetails {
             reject_code: Some(reject_code.to_owned()),
             queue: Some(QueueErrorSnapshot {
@@ -78303,6 +79904,8 @@ impl Error {
             }),
             retry_after_seconds,
             fee,
+            tx_hash,
+            hint,
             ..Default::default()
         })
     }
@@ -78399,6 +80002,19 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
                 code.as_str()
             ),
         ),
+        queue::Error::PlanJournalDurabilityRejected { reason } => (
+            "PRTRY:QUEUE_PLAN_JOURNAL_UNAVAILABLE",
+            format!("transaction queue did not durably admit the transaction: {reason}"),
+        ),
+        queue::Error::PlanJournalDurabilityIndeterminate {
+            transaction_hash,
+            reason,
+        } => (
+            "PRTRY:QUEUE_PLAN_JOURNAL_OUTCOME_UNKNOWN",
+            format!(
+                "transaction admission outcome is unknown for {transaction_hash}; reconcile that exact signed hash before retrying: {reason}"
+            ),
+        ),
     }
 }
 
@@ -78477,22 +80093,13 @@ mod tests {
             signed::{TransactionBuilder, TransactionResultInner},
         },
     };
-    use iroha_executor_data_model::{
-        permission::account::{
-            AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
-        },
-        permission::sorafs::CanOperateSorafsRepair,
+    use iroha_executor_data_model::permission::account::{
+        AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
     };
     use iroha_test_samples::ALICE_ID;
     #[cfg(feature = "app_api")]
     use jsonwebtoken::EncodingKey;
     use nonzero_ext::nonzero;
-    use sorafs_manifest::repair::{
-        REPAIR_EVIDENCE_VERSION_V1, REPAIR_REPORT_VERSION_V1, REPAIR_WORKER_SIGNATURE_VERSION_V1,
-        RepairCauseV1, RepairEvidenceV1, RepairManualCauseV1, RepairReportV1, RepairTicketId,
-        RepairWorkerActionV1, RepairWorkerSignaturePayloadV1,
-    };
-
     use super::*;
 
     fn proof_json_headers() -> HeaderMap {
@@ -79529,66 +81136,6 @@ mod tests {
                 .expect("set latest block height commit should succeed");
             current_height = next_height;
         }
-    }
-
-    #[cfg(feature = "app_api")]
-    fn repair_report(
-        ticket: &str,
-        manifest_digest: [u8; 32],
-        provider_id: [u8; 32],
-        submitted_at_unix: u64,
-    ) -> RepairReportV1 {
-        RepairReportV1 {
-            version: REPAIR_REPORT_VERSION_V1,
-            ticket_id: RepairTicketId(ticket.to_string()),
-            auditor_account: "sorauﾛ1Npﾃﾕヱﾇq11pｳﾘ2ｱ5ﾇｦiCJKjRﾔzｷNMNﾆｹﾕPCｳﾙFvｵE9LBLB".into(),
-            submitted_at_unix,
-            evidence: RepairEvidenceV1 {
-                version: REPAIR_EVIDENCE_VERSION_V1,
-                manifest_digest,
-                provider_id,
-                por_history_id: None,
-                cause: RepairCauseV1::Manual(RepairManualCauseV1 {
-                    reason: "test".into(),
-                }),
-                evidence_json: None,
-                notes: None,
-            },
-            notes: None,
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    fn grant_repair_worker_permission(
-        app: &SharedAppState,
-        account_id: &AccountId,
-        provider_id: [u8; 32],
-    ) {
-        let height = next_block_height(app);
-        let header = BlockHeader::new(
-            NonZeroU64::new(height).expect("height>0"),
-            None,
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut block = app.state.block(header);
-        let mut stx = block.transaction();
-        stx.world_mut_for_testing().add_account_permission(
-            account_id,
-            Permission::from(CanOperateSorafsRepair {
-                provider_id: ProviderId::new(provider_id),
-            }),
-        );
-        stx.apply();
-        block.transactions.insert_block(
-            HashSet::new(),
-            NonZeroUsize::new(height as usize).expect("block count should be non-zero"),
-        );
-        block
-            .commit()
-            .expect("commit should persist repair worker permission");
     }
 
     fn grant_alias_resolve_permissions(
@@ -81968,376 +83515,6 @@ mod tests {
         .expect("reverse lookup must use an independent route bucket")
         .into_response();
         assert_eq!(lookup.status(), StatusCode::OK);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_accepts_signed_worker() {
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-900", [0x11; 32], [0x22; 32], 1_701_000_000);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = checked_torii_test_ed25519_keypair(
-            0x85,
-            "derive Sorafs signed repair worker fixture key",
-        );
-        let worker_id = AccountId::new(worker_key.public_key().clone());
-        let worker_id_literal = worker_id.to_string();
-        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-
-        let claimed_at = report.submitted_at_unix + 10;
-        let idempotency_key = "claim-900";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: worker_id_literal.clone(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker claim fixture");
-
-        let auth = enforce_sorafs_repair_worker_auth(
-            &app,
-            &report.ticket_id,
-            &hex::encode(report.evidence.manifest_digest),
-            &worker_id_literal,
-            idempotency_key,
-            RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-            &signature,
-        );
-        assert_eq!(auth.expect("signed worker should be accepted"), worker_id);
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_rejects_malformed_ed25519_signature_r() {
-        const SMALL_ORDER_ED25519_SIGNATURE_R: [u8; 32] = [
-            0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0x00, 0x00,
-        ];
-
-        const NONCANONICAL_ED25519_SIGNATURE_R: [u8; 32] = [
-            0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-            0xff, 0xff, 0xff, 0x7f,
-        ];
-
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-900B", [0x12; 32], [0x23; 32], 1_701_000_020);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = checked_torii_test_ed25519_keypair(
-            0x8a,
-            "derive Sorafs malformed-signature repair worker fixture key",
-        );
-        let worker_id = AccountId::new(worker_key.public_key().clone());
-        let worker_id_literal = worker_id.to_string();
-        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-
-        let claimed_at = report.submitted_at_unix + 10;
-        let idempotency_key = "claim-900b";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: worker_id_literal.clone(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker malformed-signature fixture");
-
-        for (label, replacement_r) in [
-            ("small-order", SMALL_ORDER_ED25519_SIGNATURE_R),
-            ("noncanonical", NONCANONICAL_ED25519_SIGNATURE_R),
-        ] {
-            let mut signature_payload = signature.payload().to_vec();
-            signature_payload[..replacement_r.len()].copy_from_slice(&replacement_r);
-            let malformed_signature = SignatureOf::from_signature(
-                iroha_crypto::Signature::from_bytes(&signature_payload),
-            );
-
-            let auth = enforce_sorafs_repair_worker_auth(
-                &app,
-                &report.ticket_id,
-                &hex::encode(report.evidence.manifest_digest),
-                &worker_id_literal,
-                idempotency_key,
-                RepairWorkerActionV1::Claim {
-                    claimed_at_unix: claimed_at,
-                },
-                &malformed_signature,
-            );
-            match auth {
-                Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
-                    assert!(
-                        reason.contains("signature material malformed"),
-                        "{label} repair worker signature R produced unexpected rejection reason: {reason}"
-                    );
-                }
-                other => panic!("unexpected repair worker auth result: {other:?}"),
-            }
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_rejects_malformed_mldsa_signature_lengths() {
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-900C", [0x13; 32], [0x24; 32], 1_701_000_040);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = KeyPair::try_from_seed(vec![0x8b; 32], Algorithm::MlDsa)
-            .expect("derive Sorafs malformed ML-DSA repair worker fixture key");
-        let worker_id = AccountId::new(worker_key.public_key().clone());
-        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-        let worker_id_literal = "repair-mldsa@universal";
-        bind_account_alias_for_test(&app, &worker_id, worker_id_literal);
-
-        let claimed_at = report.submitted_at_unix + 10;
-        let idempotency_key = "claim-900c";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: worker_id_literal.to_string(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker malformed ML-DSA signature fixture");
-
-        let mut extended = signature.payload().to_vec();
-        extended.push(0);
-        for (label, signature_payload) in [
-            (
-                "truncated",
-                signature.payload()[..signature.payload().len() - 1].to_vec(),
-            ),
-            ("extended", extended),
-        ] {
-            let malformed_signature = SignatureOf::from_signature(
-                iroha_crypto::Signature::from_bytes(&signature_payload),
-            );
-
-            let auth = enforce_sorafs_repair_worker_auth(
-                &app,
-                &report.ticket_id,
-                &hex::encode(report.evidence.manifest_digest),
-                worker_id_literal,
-                idempotency_key,
-                RepairWorkerActionV1::Claim {
-                    claimed_at_unix: claimed_at,
-                },
-                &malformed_signature,
-            );
-            match auth {
-                Err(Error::Query(ValidationFail::NotPermitted(reason))) => {
-                    assert!(
-                        reason.contains("signature material malformed"),
-                        "{label} repair worker ML-DSA signature length produced unexpected rejection reason: {reason}"
-                    );
-                }
-                other => panic!("unexpected repair worker auth result: {other:?}"),
-            }
-        }
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_auditor_rate_limit_keys_by_auditor_account() {
-        let mut app = mk_app_state_for_tests();
-        Arc::get_mut(&mut app)
-            .expect("unique app state")
-            .sorafs_repair_auditor_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
-
-        enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-a")
-            .await
-            .expect("first auditor-a request allowed");
-        let second = enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-a").await;
-        assert!(matches!(
-            second,
-            Err(Error::Query(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-            )))
-        ));
-
-        enforce_sorafs_repair_auditor_rate_limit(&app, "auditor-b")
-            .await
-            .expect("distinct auditor has independent budget");
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_accepts_alias_worker() {
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-900A", [0x21; 32], [0x32; 32], 1_701_000_050);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = checked_torii_test_ed25519_keypair(
-            0x86,
-            "derive Sorafs alias repair worker fixture key",
-        );
-        let worker_id = AccountId::new(worker_key.public_key().clone());
-        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-        bind_account_alias_for_test(&app, &worker_id, "repair@universal");
-
-        let claimed_at = report.submitted_at_unix + 10;
-        let idempotency_key = "claim-900a";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: "repair@universal".to_string(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker alias claim fixture");
-
-        let auth = enforce_sorafs_repair_worker_auth(
-            &app,
-            &report.ticket_id,
-            &hex::encode(report.evidence.manifest_digest),
-            "repair@universal",
-            idempotency_key,
-            RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-            &signature,
-        );
-        assert_eq!(
-            auth.expect("signed alias worker should be accepted"),
-            worker_id
-        );
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_rejects_missing_permission() {
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-901", [0x33; 32], [0x44; 32], 1_701_000_100);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = checked_torii_test_ed25519_keypair(
-            0x87,
-            "derive Sorafs missing-permission repair worker fixture key",
-        );
-        let worker_id = AccountId::of(worker_key.public_key().clone());
-        let worker_id_literal = worker_id.to_string();
-
-        let failed_at = report.submitted_at_unix + 20;
-        let idempotency_key = "fail-901";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: worker_id_literal.clone(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Fail {
-                failed_at_unix: failed_at,
-                reason: "no-permission".into(),
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker fail fixture");
-
-        let auth = enforce_sorafs_repair_worker_auth(
-            &app,
-            &report.ticket_id,
-            &hex::encode(report.evidence.manifest_digest),
-            &worker_id_literal,
-            idempotency_key,
-            RepairWorkerActionV1::Fail {
-                failed_at_unix: failed_at,
-                reason: "no-permission".into(),
-            },
-            &signature,
-        );
-        assert!(matches!(
-            auth,
-            Err(Error::Query(ValidationFail::NotPermitted(_)))
-        ));
-    }
-
-    #[cfg(feature = "app_api")]
-    #[tokio::test]
-    async fn sorafs_repair_worker_auth_rejects_manifest_digest_mismatch() {
-        let app = mk_app_state_for_tests();
-        let report = repair_report("REP-902", [0x55; 32], [0x66; 32], 1_701_000_200);
-        app.sorafs_node
-            .enqueue_repair_report(&report)
-            .expect("enqueue report");
-
-        let worker_key = checked_torii_test_ed25519_keypair(
-            0x88,
-            "derive Sorafs digest-mismatch repair worker fixture key",
-        );
-        let worker_id = AccountId::of(worker_key.public_key().clone());
-        let worker_id_literal = worker_id.to_string();
-        grant_repair_worker_permission(&app, &worker_id, report.evidence.provider_id);
-
-        let claimed_at = report.submitted_at_unix + 10;
-        let idempotency_key = "claim-902";
-        let payload = RepairWorkerSignaturePayloadV1 {
-            version: REPAIR_WORKER_SIGNATURE_VERSION_V1,
-            ticket_id: report.ticket_id.clone(),
-            manifest_digest: report.evidence.manifest_digest,
-            provider_id: report.evidence.provider_id,
-            worker_id: worker_id_literal.clone(),
-            idempotency_key: idempotency_key.to_string(),
-            action: RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-        };
-        let signature = SignatureOf::try_new(worker_key.private_key(), &payload)
-            .expect("sign repair worker digest-mismatch fixture");
-
-        let auth = enforce_sorafs_repair_worker_auth(
-            &app,
-            &report.ticket_id,
-            &hex::encode([0x77u8; 32]),
-            &worker_id_literal,
-            idempotency_key,
-            RepairWorkerActionV1::Claim {
-                claimed_at_unix: claimed_at,
-            },
-            &signature,
-        );
-        assert!(matches!(
-            auth,
-            Err(Error::Query(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(_)
-            )))
-        ));
     }
 
     #[tokio::test]

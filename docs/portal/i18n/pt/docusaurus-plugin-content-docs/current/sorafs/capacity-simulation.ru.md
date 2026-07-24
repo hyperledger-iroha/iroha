@@ -19,7 +19,7 @@ description: Simulando a simulação do SF-2c com a física desejada, o transpor
 Esta página está configurada para `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Faça uma cópia da sincronização, mas o Sphinx não será atualizado.
 :::
 
-Este é um problema que permite que você execute o simulador SF-2c e visualize a métrica de desempenho. Para testar o desempenho do seu computador, execute o failover e remedie o corte de ponta a ponta, use as configurações de definição `docs/examples/sorafs_capacity_simulation/`. Cargas úteis enviadas por meio de `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` para exibir o manifesto/CAR.
+Este é um problema que permite que você execute o simulador SF-2c e visualize a métrica de desempenho. Para testar o desempenho do seu computador, execute o failover e remedie o corte de ponta a ponta, use as configurações de definição `docs/examples/sorafs_capacity_simulation/`. Cargas úteis enviadas por meio de `sorafs_manifest_builder capacity`; use `iroha app sorafs toolkit pack` para exibir o manifesto/CAR.
 
 ## 1. Gerenciador de arquivos CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` оборачивает `sorafs_manifest_stub capacity`, чтобы выпускать Norito payloads, base64-блоб, тела запросов Torii и JSON para:
+`run_cli.sh` оборачивает `sorafs_manifest_builder capacity`, чтобы выпускать Norito payloads, base64-блоб, тела запросов Torii и JSON para:
 
 - Três declarações demonstrativas que você pode usar no cenário para passar pelo carro.
 - Одного распоряжения о репликации, распределяющего staged-манифест между провайдерами.

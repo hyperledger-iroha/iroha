@@ -17,7 +17,7 @@ translator: machine-google-reviewed
 ::: ማስታወሻ ቀኖናዊ ምንጭ
 ::
 
-ይህ Runbook የ SF-2c አቅም የገበያ ቦታ ማስመሰያ ኪት እንዴት እንደሚሰራ ያብራራል እና የተገኙትን መለኪያዎች በዓይነ ሕሊናዎ ይሳሉ። በ`docs/examples/sorafs_capacity_simulation/` ውስጥ ያሉትን የመወሰኛ ዕቃዎች በመጠቀም የኮታ ድርድርን፣ ያልተሳካ አያያዝን እና የማስተካከያ ከጫፍ እስከ ጫፍ መቁረጥን ያረጋግጣል። የአቅም መጫዎቻዎች አሁንም `sorafs_manifest_stub capacity` ይጠቀማሉ; ለማንፀባረቅ/CAR ማሸጊያ ፍሰቶች `iroha app sorafs toolkit pack` ይጠቀሙ።
+ይህ Runbook የ SF-2c አቅም የገበያ ቦታ ማስመሰያ ኪት እንዴት እንደሚሰራ ያብራራል እና የተገኙትን መለኪያዎች በዓይነ ሕሊናዎ ይሳሉ። በ`docs/examples/sorafs_capacity_simulation/` ውስጥ ያሉትን የመወሰኛ ዕቃዎች በመጠቀም የኮታ ድርድርን፣ ያልተሳካ አያያዝን እና የማስተካከያ ከጫፍ እስከ ጫፍ መቁረጥን ያረጋግጣል። የአቅም መጫዎቻዎች አሁንም `sorafs_manifest_builder capacity` ይጠቀማሉ; ለማንፀባረቅ/CAR ማሸጊያ ፍሰቶች `iroha app sorafs toolkit pack` ይጠቀሙ።
 
 ## 1. CLI ቅርሶችን መፍጠር
 
@@ -26,7 +26,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` `sorafs_manifest_stub capacity` ይጠቀልላል Norito ክፍያ ጭነቶች፣ base64 blobs፣ Torii የጥያቄ አካላት እና JSON ማጠቃለያዎች ለ፡
+`run_cli.sh` `sorafs_manifest_builder capacity` ይጠቀልላል Norito ክፍያ ጭነቶች፣ base64 blobs፣ Torii የጥያቄ አካላት እና JSON ማጠቃለያዎች ለ፡
 
 - በኮታ ድርድር ሁኔታ ውስጥ የሚሳተፉ ሶስት የአቅራቢዎች መግለጫዎች።
 - የማባዛት ትእዛዝ በነዚያ አቅራቢዎች ላይ የተዘጋጀውን አንጸባራቂ የሚመደብ።

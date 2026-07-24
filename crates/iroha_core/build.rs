@@ -1,11 +1,17 @@
-//! Embeds the current git commit hash into `iroha_core` so RBC persistence can
-//! verify snapshots belong to the running binary.
+//! Embeds source identity into `iroha_core` binaries.
+//!
+//! Ordinary builds retain the lightweight Git-commit marker used by RBC. The
+//! opt-in Kagemusha candidate-build feature additionally requires and verifies
+//! an exact clean full-source-tree seal supplied by the dedicated build helper.
 
-use std::{env, process::Command};
+use std::{env, path::Path, process::Command};
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=IROHA_GIT_COMMIT_HASH");
+    println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_SOURCE_COMMIT");
+    println!("cargo:rerun-if-env-changed=KAGEMUSHA_BUILD_SOURCE_TREE_SHA256");
+    println!("cargo:rerun-if-env-changed=KAGEMUSHA_SOURCE_SEAL_PYTHON");
     if let Some(commit) = env_commit_hash().or_else(git_commit_hash) {
         println!("cargo:rustc-env=GIT_COMMIT_HASH={commit}");
     } else {
@@ -14,6 +20,86 @@ fn main() {
              persisted RBC sessions will be discarded across restarts"
         );
     }
+    if env::var_os("CARGO_FEATURE_KAGEMUSHA_CANDIDATE_SOURCE_SEAL").is_some() {
+        embed_exact_kagemusha_source_seal();
+    }
+}
+
+fn embed_exact_kagemusha_source_seal() {
+    let expected_commit = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_COMMIT", 40);
+    let expected_tree = required_lower_hex_env("KAGEMUSHA_BUILD_SOURCE_TREE_SHA256", 64);
+    let manifest_dir = env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| panic!("CARGO_MANIFEST_DIR is required for a sealed candidate build"));
+    let repository_root = Path::new(&manifest_dir).join("../..");
+    let seal_script = repository_root.join("scripts/kagemusha_source_tree_seal.py");
+    let python = env::var("KAGEMUSHA_SOURCE_SEAL_PYTHON").unwrap_or_else(|_| "python3".to_owned());
+
+    let first_tree = command_text(
+        Command::new(&python)
+            .arg("-I")
+            .arg(&seal_script)
+            .arg("fingerprint")
+            .arg("--root")
+            .arg(&repository_root),
+        "Kagemusha full-source-tree seal",
+    );
+    let actual_commit = command_text(
+        Command::new("git").arg("-C").arg(&repository_root).args([
+            "rev-parse",
+            "--verify",
+            "HEAD^{commit}",
+        ]),
+        "Kagemusha source commit",
+    );
+    let second_tree = command_text(
+        Command::new(&python)
+            .arg("-I")
+            .arg(&seal_script)
+            .arg("fingerprint")
+            .arg("--root")
+            .arg(&repository_root),
+        "Kagemusha full-source-tree seal recheck",
+    );
+    if actual_commit != expected_commit
+        || first_tree != expected_tree
+        || second_tree != expected_tree
+    {
+        panic!(
+            "sealed Kagemusha candidate build source changed or differs from the requested identity"
+        );
+    }
+    println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_COMMIT={expected_commit}");
+    println!("cargo:rustc-env=KAGEMUSHA_BUILD_SOURCE_TREE_SHA256={expected_tree}");
+}
+
+fn required_lower_hex_env(name: &str, expected_len: usize) -> String {
+    let value = env::var(name)
+        .unwrap_or_else(|_| panic!("{name} is required for a sealed Kagemusha candidate build"));
+    if value.len() != expected_len
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        panic!("{name} is not canonical lower-case hexadecimal");
+    }
+    value
+}
+
+fn command_text(command: &mut Command, description: &str) -> String {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run {description}: {error}"));
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        panic!("{description} failed: {detail}");
+    }
+    let value = String::from_utf8(output.stdout)
+        .unwrap_or_else(|_| panic!("{description} output is not UTF-8"));
+    let trimmed = value.trim_end_matches(['\r', '\n']);
+    if trimmed.is_empty() || trimmed.contains(char::is_whitespace) {
+        panic!("{description} output is not one canonical value");
+    }
+    trimmed.to_owned()
 }
 
 fn env_commit_hash() -> Option<String> {

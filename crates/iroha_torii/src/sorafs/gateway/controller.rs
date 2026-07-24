@@ -5,8 +5,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
-use blake3::Hasher;
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_logger::prelude::*;
 use tokio::{
@@ -18,10 +16,7 @@ use tokio::{
 #[cfg(feature = "telemetry")]
 use super::telemetry::record_renewal_metrics;
 use super::{
-    acme::{
-        AcmeAutomation, AcmeAutomationError, AcmeClient, AcmeClientError, AcmeConfig,
-        CertificateBundle, CertificateOrder,
-    },
+    acme::{AcmeAutomation, AcmeClient, AcmeConfig, CertificateBundle},
     telemetry::{TlsRenewalResult, TlsStateSnapshot},
 };
 use crate::routing::MaybeTelemetry;
@@ -31,7 +26,7 @@ const DEFAULT_POLL_INTERVAL: Duration = Duration::from_mins(1);
 
 /// Handle that manages TLS automation and updates gateway telemetry state.
 pub struct TlsAutomationHandle {
-    automation: Mutex<AcmeAutomation<SelfSignedAcmeClient>>,
+    automation: Mutex<AcmeAutomation<Arc<dyn AcmeClient>>>,
     tls_state: Arc<RwLock<TlsStateSnapshot>>,
     hostnames: Vec<String>,
     poll_interval: Duration,
@@ -40,9 +35,13 @@ pub struct TlsAutomationHandle {
 impl TlsAutomationHandle {
     /// Construct a new automation handle for the given configuration.
     #[must_use]
-    pub fn new(config: AcmeConfig, tls_state: Arc<RwLock<TlsStateSnapshot>>) -> Self {
+    pub fn new(
+        config: AcmeConfig,
+        client: Arc<dyn AcmeClient>,
+        tls_state: Arc<RwLock<TlsStateSnapshot>>,
+    ) -> Self {
         let hostnames = config.hostnames.clone();
-        let automation = AcmeAutomation::new(config, SelfSignedAcmeClient);
+        let automation = AcmeAutomation::new(config, client);
         Self {
             automation: Mutex::new(automation),
             tls_state,
@@ -169,80 +168,38 @@ impl TlsAutomationHandle {
     }
 }
 
-/// Deterministic client that issues self-signed certificates for configured hostnames.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct SelfSignedAcmeClient;
-
-impl AcmeClient for SelfSignedAcmeClient {
-    fn order_certificate(
-        &self,
-        order: &CertificateOrder,
-    ) -> Result<CertificateBundle, AcmeClientError> {
-        if order.hostnames.is_empty() {
-            return Err(AcmeClientError::Rejected {
-                reason: "hostnames list may not be empty".to_string(),
-            });
-        }
-        if order.hostnames.iter().any(|h| h.trim().is_empty()) {
-            return Err(AcmeClientError::Rejected {
-                reason: "hostname entries may not be blank".to_string(),
-            });
-        }
-
-        let validity = Duration::from_hours(90 * 24);
-        let not_after = now_plus(validity)?;
-
-        let mut hasher = Hasher::new();
-        for host in &order.hostnames {
-            hasher.update(host.as_bytes());
-        }
-        if let Some(email) = &order.account_email {
-            hasher.update(email.as_bytes());
-        }
-        hasher.update(order.directory_url.as_bytes());
-        let fingerprint = hasher.finalize();
-        let fingerprint_hex = hex::encode(fingerprint.as_bytes());
-
-        let expiry_secs = not_after
-            .duration_since(SystemTime::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let cert_body = format!(
-            "sorafs-gateway-cert\nversion=1\nhosts={}\nnot_after={}\nfp={}",
-            order.hostnames.join(","),
-            expiry_secs,
-            fingerprint_hex
-        );
-        let certificate_pem = format!(
-            "-----BEGIN CERTIFICATE-----\n{}\n-----END CERTIFICATE-----\n",
-            BASE64_STANDARD.encode(cert_body.as_bytes())
-        );
-        let private_key_pem = format!(
-            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
-            BASE64_STANDARD.encode(fingerprint.as_bytes())
-        );
-
-        Ok(CertificateBundle {
-            certificate_pem,
-            private_key_pem,
-            ech_config: None,
-            not_after,
-        })
-    }
-}
-
-fn now_plus(delta: Duration) -> Result<SystemTime, AcmeClientError> {
-    SystemTime::now()
-        .checked_add(delta)
-        .ok_or_else(|| AcmeClientError::Transport {
-            reason: "renewal window overflow".into(),
-        })
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::acme::{AcmeClientError, CertificateOrder};
     use super::*;
     use crate::sorafs::gateway::ChallengeProfile;
+
+    /// Test-only fake. Production constructors require a runtime-owned client.
+    #[derive(Debug, Default)]
+    struct SelfSignedAcmeClient;
+
+    impl AcmeClient for SelfSignedAcmeClient {
+        fn order_certificate(
+            &self,
+            order: &CertificateOrder,
+        ) -> Result<CertificateBundle, AcmeClientError> {
+            if order
+                .hostnames
+                .iter()
+                .any(|hostname| hostname.trim().is_empty())
+            {
+                return Err(AcmeClientError::Rejected {
+                    reason: "hostname entries may not be blank".to_string(),
+                });
+            }
+            Ok(CertificateBundle {
+                certificate_pem: "TEST CERTIFICATE".to_string(),
+                private_key_pem: "TEST PRIVATE KEY".to_string(),
+                ech_config: None,
+                not_after: SystemTime::now() + Duration::from_hours(90 * 24),
+            })
+        }
+    }
 
     fn sample_config() -> AcmeConfig {
         AcmeConfig {
@@ -266,6 +223,7 @@ mod tests {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
         let handle = Arc::new(TlsAutomationHandle::new(
             sample_config(),
+            Arc::new(SelfSignedAcmeClient),
             Arc::clone(&tls_state),
         ));
         handle.poll_once_for_tests().await;
@@ -280,7 +238,11 @@ mod tests {
         let tls_state = Arc::new(RwLock::new(TlsStateSnapshot::new(false)));
         let mut config = sample_config();
         config.hostnames = vec![String::new()];
-        let handle = Arc::new(TlsAutomationHandle::new(config, Arc::clone(&tls_state)));
+        let handle = Arc::new(TlsAutomationHandle::new(
+            config,
+            Arc::new(SelfSignedAcmeClient),
+            Arc::clone(&tls_state),
+        ));
         handle.poll_once_for_tests().await;
 
         let snapshot = tls_state.read().await.clone();

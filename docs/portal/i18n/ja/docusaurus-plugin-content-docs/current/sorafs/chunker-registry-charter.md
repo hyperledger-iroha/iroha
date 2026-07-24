@@ -49,7 +49,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - fixtures、提案、決定性レポート、レジストリ更新を含む PR を提出します。
@@ -85,12 +85,12 @@ generator: docs/portal/scripts/sync-i18n.mjs
 
 ## ツーリングに求めること
 
-- `sorafs_manifest_chunk_store` と `sorafs_manifest_stub` は以下を提供します:
+- `sorafs_manifest_chunk_store` と `sorafs_manifest_builder` は以下を提供します:
   - レジストリの検査に使う `--list-profiles`。
   - プロファイル昇格時に使用する正規メタデータブロックを生成する `--promote-profile=<handle>`。
   - レポートを stdout にストリームし、再現可能なレビュー・ログを作る `--json-out=-`。
 - `ensure_charter_compliance()` は関連バイナリの起動時に呼び出されます
-  (`manifest_chunk_store`, `provider_advert_stub`)。新しいエントリがチャーターに違反した場合、CI テストは失敗する必要があります。
+  (`manifest_chunk_store`, `sorafs_provider_advert`)。新しいエントリがチャーターに違反した場合、CI テストは失敗する必要があります。
 
 ## 記録管理
 

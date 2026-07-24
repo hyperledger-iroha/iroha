@@ -79,7 +79,7 @@ Informações:
 |--------|--------|------------------|
 | Modelo Torii | كشف `/v1/sorafs/pin` (enviar), `/v1/sorafs/pin/{cid}` (pesquisa), `/v1/sorafs/aliases` (listar/vincular), `/v1/sorafs/replication` (pedidos/recebimentos). توفير ترقيم + ترشيح. | Rede TL / Core Infra |
 | الاتستاشن | تضمين ارتفاع/هاش registro no site Use Norito para configurar SDKs. | Infra principal |
-| CLI | `sorafs_manifest_stub` e CLI são `sorafs_pin` como `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Ferramentaria |
+| CLI | `sorafs_manifest_builder` e CLI são `sorafs_pin` como `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Ferramentaria |
 | SDK | Ligações de segurança para (Rust/Go/TS) com Norito; Faça isso com cuidado. | Equipes SDK |
 
 العمليات:

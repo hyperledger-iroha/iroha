@@ -38,7 +38,7 @@ translator: machine-google-reviewed
 
 ## 3. 提出爭議
 
-1. 為 `sorafs_manifest_stub capacity dispute` 創建規範 JSON：
+1. 為 `sorafs_manifest_builder capacity dispute` 創建規範 JSON：
 
    ```json
    {
@@ -61,7 +61,7 @@ translator: machine-google-reviewed
 2. 運行 CLI：
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ translator: machine-google-reviewed
 
 1. **寬限期：**通知提供商即將撤銷；在策略允許的情況下允許撤出固定數據。
 2. **生成`ProviderAdmissionRevocationV1`：**
-   - 使用 `sorafs_manifest_stub provider-admission revoke` 並提供批准的理由。
+   - 使用 `sorafs_manifest_builder provider-admission revoke` 並提供批准的理由。
    - 驗證簽名和撤銷摘要。
 3. **發布撤銷：**
    - 向 Torii 提交撤銷請求。
@@ -93,7 +93,7 @@ translator: machine-google-reviewed
 
 ## 6. 參考資料
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md`（爭議部分）
 - `docs/source/sorafs/provider_admission_policy.md`（撤銷工作流程）
 - 可觀測性儀表板：`SoraFS / Capacity Providers`

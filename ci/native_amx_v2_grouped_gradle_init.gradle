@@ -1,0 +1,16 @@
+// Relocate every main and included-build output outside the read-only release
+// source tree. The parity harness supplies a fresh absolute root.
+gradle.beforeProject { project ->
+    def outputRoot = System.getenv("IROHA_NATIVE_AMX_V2_GROUPED_GRADLE_BUILD_ROOT")
+    if (outputRoot == null || outputRoot.isEmpty()) {
+        throw new GradleException(
+            "IROHA_NATIVE_AMX_V2_GROUPED_GRADLE_BUILD_ROOT is required"
+        )
+    }
+    def buildIdentity = project.rootDir.name
+    def projectIdentity =
+        project.path == ":" ? "_root" : project.path.substring(1).replace(":", "/")
+    project.layout.buildDirectory.set(
+        new File(outputRoot, buildIdentity + "/" + projectIdentity)
+    )
+}

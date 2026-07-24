@@ -71,8 +71,8 @@ path = "src/bin/sorafs_fetch.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "sorafs_manifest_stub"
-path = "src/bin/sorafs_manifest_stub.rs"
+name = "sorafs_manifest_builder"
+path = "src/bin/sorafs_manifest_builder.rs"
 required-features = ["cli"]
 
 [[bin]]
@@ -86,8 +86,8 @@ path = "src/bin/sorafs_manifest_chunk_store.rs"
 required-features = ["cli"]
 
 [[bin]]
-name = "sorafs_provider_advert_stub"
-path = "src/bin/sorafs_provider_advert_stub.rs"
+name = "sorafs_provider_advert"
+path = "src/bin/sorafs_provider_advert.rs"
 required-features = ["cli"]
 
 [[bin]]

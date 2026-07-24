@@ -78,7 +78,7 @@ Rust Norito እቅዶች እና የማረጋገጫ ረዳቶች እነዚህን 
 |--------|------|------|
 | Torii አገልግሎት | `/v1/sorafs/pin` (አስገባ)፣ `/v1/sorafs/pin/{cid}` (መፈለግ)፣ `/v1/sorafs/aliases` (ዝርዝር/ማሰር)፣ `/v1/sorafs/replication` (ትዕዛዞች/ደረሰኞች) አጋልጥ። ፔጅኔሽን + ማጣሪያ ያቅርቡ። | አውታረ መረብ TL / ኮር ኢንፍራ |
 | ምስክርነት | በምላሾች ውስጥ የመመዝገቢያ ቁመት / hash ያካትቱ; በኤስዲኬዎች የሚበላ የNorito ማረጋገጫ መዋቅር ያክሉ። | ኮር ኢንፍራ |
-| CLI | `sorafs_manifest_stub` ወይም አዲስ I18NI0000079X CLI በ I18NI0000080X፣ `alias bind`፣ `order issue`፣ `registry export` ያራዝም። | Tooling WG |
+| CLI | `sorafs_manifest_builder` ወይም አዲስ I18NI0000079X CLI በ I18NI0000080X፣ `alias bind`፣ `order issue`፣ `registry export` ያራዝም። | Tooling WG |
 | ኤስዲኬ | የደንበኛ ማሰሪያዎችን (Rust/Go/TS) ከ Norito schema መፍጠር; የውህደት ሙከራዎችን ይጨምሩ. | የኤስዲኬ ቡድኖች |
 
 ተግባራት፡-

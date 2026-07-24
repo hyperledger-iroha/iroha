@@ -56,11 +56,11 @@ const VERIFIER_IDENTITIES = Object.freeze({
   }),
   active_recursive_step_eq_verifier: Object.freeze({
     name: "kagemusha_recursive_step_eq_v4_verifier_record",
-    circuit: "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+    circuit: "kagemusha-recursive-spend-step-eq-compact-layout-v5",
   }),
   active_recursive_step_ep_verifier: Object.freeze({
     name: "kagemusha_recursive_step_ep_v4_verifier_record",
-    circuit: "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+    circuit: "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
   }),
 });
 

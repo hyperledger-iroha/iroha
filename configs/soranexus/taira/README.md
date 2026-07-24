@@ -96,7 +96,7 @@ config rather than wrapper-local defaults:
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
-  `iroha` / `sorafs_manifest_stub` / `sorafs_tx_stdin_builder` build plus the
+  `iroha` / `sorafs_manifest_builder` / `sorafs_tx_stdin_builder` build plus the
   checked-in Taira config bundle into one timestamped
   rollout artifact, building `irohad` with
   `--features embedded-soracloud-runtime`, running the focused SoraSwap

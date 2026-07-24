@@ -113,7 +113,7 @@ groups:
    - قم بتشغيل `iroha app sorafs providers list` وتحقق من أن السعات المعلنة تفي بمتطلبات النسخ المتماثل.
    - قم بمراجعة المقاييس `torii_sorafs_capacity_*` لتأكيد توفير GiB ونجاح PoR.
 3. ** إعادة تصميم النسخة المتماثلة **
-   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عند ملء القائمة المتراكمة (`stat="avg"`) لمدة 5 سنوات (تغليف البيان/CAR باستخدام `iroha app sorafs toolkit pack`).
+   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عند ملء القائمة المتراكمة (`stat="avg"`) لمدة 5 سنوات (تغليف البيان/CAR باستخدام `iroha app sorafs toolkit pack`).
    - إشعار للتحكم في ما إذا كانت الأسماء المستعارة تحتوي على روابط بيانات النشاط (الرؤوس غير المكتملة من `torii_sorafs_registry_aliases_total`).
 4. ** نتيجة توثيقية **
    - قم بتسجيل ملاحظات الحادث في سجل عمليات SoraFS مع الطوابع الزمنية وملخصات البيان المؤثر.

@@ -75,7 +75,7 @@ Sidebar_label: خطة تسجيل الرقم السري
 |--------|--------|-----------------|
 | خدمة Torii | كشف `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). توفير ترقيم + ترشيح. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | الاتستاشن | تضمين ارتفاع/هاش التسجيل في الاستجابات؛ إضافة بناء Norito للاتستاشن تستهلكها SDKs. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | النهائي `sorafs_manifest_stub` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
+| سطر الأوامر | النهائي `sorafs_manifest_builder` او CLI جديد `sorafs_pin` مع `pin submit`, `alias bind`, `order issue`, `registry export`. | الأدوات مجموعة العمل |
 | SDK | توليد الارتباطات من أجل (Rust/Go/TS) من مخطط Norito؛ إضافة إلى تكامل. | فرق SDK |
 
 العمليات:

@@ -69,10 +69,12 @@ PLAN_FIELDS = frozenset(
         "steps",
     }
 )
-PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"})
+PLAN_REQUIRED_THRESHOLD_FIELDS = frozenset(
+    {"max_summary_artifact_age_secs", "now_unix"}
+)
 PLAN_POSITIVE_THRESHOLD_FIELDS = frozenset({"now_unix"})
 PLAN_NON_NEGATIVE_THRESHOLD_FIELDS = frozenset({"max_summary_artifact_age_secs"})
-PLAN_THRESHOLD_FIELDS_LABEL = "max_summary_artifact_age_secs and optional now_unix"
+PLAN_THRESHOLD_FIELDS_LABEL = "max_summary_artifact_age_secs and now_unix"
 PLAN_DEPLOYMENT_CONTEXT_FIELDS = frozenset({"deployment_id", "environment"})
 COMMAND_PATH_FLAGS = frozenset({"--evidence", "--summary-out"})
 PLAN_FOUNDATIONAL_PREREQUISITE_FIELDS = frozenset(
@@ -211,7 +213,7 @@ def validate_inputs(args: argparse.Namespace) -> list[str]:
             "secret-looking, control-character, parent, current, or "
             "platform-specific components"
         )
-    require_runner_positive_int(args, "now_unix", errors, allow_none=True)
+    require_runner_positive_int(args, "now_unix", errors)
     require_runner_non_negative_int(args, "max_summary_artifact_age_secs", errors)
     if args.deployment_id is None or args.environment is None:
         errors.append(
@@ -308,8 +310,7 @@ def build_command_plan(args: argparse.Namespace) -> list[CommandPlan]:
             str(args.max_summary_artifact_age_secs),
         ]
     )
-    if args.now_unix is not None:
-        verifier_command.extend(["--now-unix", str(args.now_unix)])
+    verifier_command.extend(["--now-unix", str(args.now_unix)])
     if args.deployment_id is not None:
         verifier_command.extend(["--deployment-id", args.deployment_id])
     if args.environment is not None:
@@ -374,8 +375,7 @@ def plan_json(plan: Sequence[CommandPlan], args: argparse.Namespace) -> dict[str
     thresholds: dict[str, int] = {
         "max_summary_artifact_age_secs": args.max_summary_artifact_age_secs,
     }
-    if args.now_unix is not None:
-        thresholds["now_unix"] = args.now_unix
+    thresholds["now_unix"] = args.now_unix
 
     deployment_context: dict[str, str] = {}
     if args.deployment_id is not None:
@@ -457,8 +457,7 @@ def validate_plan_json(
     expected_thresholds: dict[str, int] = {
         "max_summary_artifact_age_secs": args.max_summary_artifact_age_secs,
     }
-    if args.now_unix is not None:
-        expected_thresholds["now_unix"] = args.now_unix
+    expected_thresholds["now_unix"] = args.now_unix
 
     expected_deployment_context = {
         "deployment_id": args.deployment_id,

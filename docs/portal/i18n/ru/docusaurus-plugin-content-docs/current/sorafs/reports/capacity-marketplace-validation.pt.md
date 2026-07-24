@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Операторы должны регенерировать полезные данные запроса на регистрацию/диспута с помощью `sorafs_manifest_stub capacity {declaration,dispute}` и архивировать байты JSON/Norito, полученные в результате объединения с билетом управления.
+Операторы должны регенерировать полезные данные запроса на регистрацию/диспута с помощью `sorafs_manifest_builder capacity {declaration,dispute}` и архивировать байты JSON/Norito, полученные в результате объединения с билетом управления.
 
 ## Артефатос де апровакао
 

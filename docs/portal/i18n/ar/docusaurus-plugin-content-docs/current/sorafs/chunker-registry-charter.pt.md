@@ -63,7 +63,7 @@ Sidebar_label: بطاقة تسجيل القطع
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - قم بإرسال تركيبات وعروض وعلاقات تحديد العلاقات العامة المتنافسة
@@ -97,14 +97,14 @@ Sidebar_label: بطاقة تسجيل القطع
 
 ## توقعات الأدوات
 
-- `sorafs_manifest_chunk_store` و`sorafs_manifest_stub` المعرض:
+- `sorafs_manifest_chunk_store` و`sorafs_manifest_builder` المعرض:
   - `--list-profiles` لفحص التسجيل.
   - `--promote-profile=<handle>` لإنشاء كتلة التعريفات الكنسي المستخدمة
     ao promover um perfil.
   - `--json-out=-` لإرسال علاقات القياس وتأهيل سجلات المراجعة
     reproduziveis.
 - `ensure_charter_compliance()` واستدعاء تهيئة الثنائيات ذات الصلة
-  (`manifest_chunk_store`، `provider_advert_stub`). الخصيتين في CI يجب أن تفشلا
+  (`manifest_chunk_store`، `sorafs_provider_advert`). الخصيتين في CI يجب أن تفشلا
   novas entradas violarem a carta.
 
 ## التسجيل

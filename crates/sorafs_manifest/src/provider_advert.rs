@@ -9,11 +9,13 @@ use core::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use ed25519_dalek::{PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use iroha_crypto::{Algorithm, PublicKey};
 use norito::{
     core::{DecodeFromSlice, decode_field_canonical},
     derive::{JsonSerialize, NoritoDeserialize, NoritoSerialize},
     json::{FastJsonWrite, JsonSerialize as NoritoJsonSerialize},
 };
+use soranet_pq::MlDsaSuite;
 use thiserror::Error;
 
 use crate::{chunker_registry, deal::XorQuantity};
@@ -238,8 +240,46 @@ pub enum CapabilityType {
     ChunkRangeFetch = 0x0004,
     /// Provider advertises hybrid SoraNet PQ support (stage flags).
     SoraNetHybridPq = 0x0005,
+    /// Provider advertises the council-governed ML-DSA-65 key used for PoTR receipts.
+    PotrMlDsa = 0x0006,
     /// Custom capability encoded via payload.
     VendorReserved = 0xFF00,
+}
+
+/// Errors raised while validating a governed PoTR ML-DSA capability.
+#[derive(Debug, Error, Clone, Copy, PartialEq, Eq)]
+pub enum PotrMldsaCapabilityError {
+    /// The key does not have the exact ML-DSA-65 public-key length.
+    #[error("PoTR ML-DSA capability has invalid public-key length {found}; expected {expected}")]
+    InvalidLength {
+        /// Observed public-key length.
+        found: usize,
+        /// Required ML-DSA-65 public-key length.
+        expected: usize,
+    },
+    /// The capability contains inert all-zero key material.
+    #[error("PoTR ML-DSA capability public key must not be all zero")]
+    InertKey,
+    /// The bytes do not parse as a canonical ML-DSA-65 public key.
+    #[error("PoTR ML-DSA capability public key is invalid")]
+    InvalidKey,
+}
+
+/// Validate the raw ML-DSA-65 public key carried by a governed PoTR capability.
+pub fn validate_potr_mldsa_capability(public_key: &[u8]) -> Result<(), PotrMldsaCapabilityError> {
+    let expected = MlDsaSuite::MlDsa65.public_key_len();
+    if public_key.len() != expected {
+        return Err(PotrMldsaCapabilityError::InvalidLength {
+            found: public_key.len(),
+            expected,
+        });
+    }
+    if crate::inert_bytes(public_key) {
+        return Err(PotrMldsaCapabilityError::InertKey);
+    }
+    PublicKey::from_bytes(Algorithm::MlDsa, public_key)
+        .map_err(|_| PotrMldsaCapabilityError::InvalidKey)?;
+    Ok(())
 }
 
 /// Payload describing range-fetch capability metadata.
@@ -1052,6 +1092,10 @@ pub enum AdvertValidationError {
     InvalidRangeCapability(RangeCapabilityError),
     #[error("duplicate range capability TLV detected")]
     DuplicateRangeCapability,
+    #[error("duplicate PoTR ML-DSA capability TLV detected")]
+    DuplicatePotrMldsaCapability,
+    #[error("PoTR ML-DSA capability invalid: {0}")]
+    InvalidPotrMldsaCapability(#[source] PotrMldsaCapabilityError),
     #[error("stream budget or transport hints require chunk_range_fetch capability")]
     RangeMetadataWithoutCapability,
     #[error("stream budget invalid: {0}")]
@@ -1106,6 +1150,7 @@ impl ProviderAdvertBodyV1 {
         }
 
         let mut seen_range_capability = false;
+        let mut seen_potr_mldsa_capability = false;
         for capability in &self.capabilities {
             if capability.cap_type == CapabilityType::ChunkRangeFetch {
                 if seen_range_capability {
@@ -1117,6 +1162,15 @@ impl ProviderAdvertBodyV1 {
                     .validate()
                     .map_err(AdvertValidationError::InvalidRangeCapability)?;
                 seen_range_capability = true;
+                continue;
+            }
+            if capability.cap_type == CapabilityType::PotrMlDsa {
+                if seen_potr_mldsa_capability {
+                    return Err(AdvertValidationError::DuplicatePotrMldsaCapability);
+                }
+                validate_potr_mldsa_capability(&capability.payload)
+                    .map_err(AdvertValidationError::InvalidPotrMldsaCapability)?;
+                seen_potr_mldsa_capability = true;
             }
         }
 
@@ -1289,6 +1343,7 @@ fn unix_time_now() -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use ed25519_dalek::{Signer, SigningKey};
+    use iroha_crypto::{Algorithm, KeyPair};
     use norito::{decode_from_bytes, to_bytes};
 
     use super::*;
@@ -1873,6 +1928,27 @@ mod tests {
         };
         let err = invalid_strict.to_bytes().unwrap_err();
         assert_eq!(err, PqCapabilityError::StrictWithoutMajority);
+    }
+
+    #[test]
+    fn potr_mldsa_capability_requires_a_canonical_mldsa65_key() {
+        assert!(matches!(
+            validate_potr_mldsa_capability(&[1; 32]),
+            Err(PotrMldsaCapabilityError::InvalidLength { .. })
+        ));
+        let key_len = MlDsaSuite::MlDsa65.public_key_len();
+        assert_eq!(
+            validate_potr_mldsa_capability(&vec![0; key_len]),
+            Err(PotrMldsaCapabilityError::InertKey)
+        );
+        let key_pair = KeyPair::try_from_seed(vec![0x5A; 32], Algorithm::MlDsa)
+            .expect("derive deterministic ML-DSA-65 capability key");
+        let (algorithm, public_key) = key_pair
+            .public_key()
+            .try_to_bytes()
+            .expect("encode ML-DSA-65 capability key");
+        assert_eq!(algorithm, Algorithm::MlDsa);
+        validate_potr_mldsa_capability(&public_key).expect("canonical ML-DSA-65 capability key");
     }
 
     #[test]

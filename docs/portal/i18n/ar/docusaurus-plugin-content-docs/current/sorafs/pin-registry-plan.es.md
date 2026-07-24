@@ -74,7 +74,7 @@ Sidebar_label: خطة التسجيل Pin
 |-----------|-------|----------------|
 | خدمة Torii | Exponer `/v1/sorafs/pin` (إرسال)، `/v1/sorafs/pin/{cid}` (بحث)، `/v1/sorafs/aliases` (قائمة/ربط)، `/v1/sorafs/replication` (الطلبات/الإيصالات). إثبات الصفحة + الفلترة. | الشبكات TL / الأشعة تحت الحمراء الأساسية |
 | أستاسيون | تضمين ارتفاع/تجزئة التسجيل في الاستجابة؛ تجميع بنية الشهادة Norito المستهلكة لمجموعات SDK. | الأشعة تحت الحمراء الأساسية |
-| سطر الأوامر | الموسع `sorafs_manifest_stub` أو CLI جديد `sorafs_pin` مع `pin submit`، `alias bind`، `order issue`، `registry export`. | الأدوات مجموعة العمل |
+| سطر الأوامر | الموسع `sorafs_manifest_builder` أو CLI جديد `sorafs_pin` مع `pin submit`، `alias bind`، `order issue`، `registry export`. | الأدوات مجموعة العمل |
 | SDK | إنشاء روابط العميل (Rust/Go/TS) من المستوي Norito; Agregar اختبارات التكامل. | فرق SDK |
 
 العمليات:

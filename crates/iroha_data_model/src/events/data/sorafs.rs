@@ -8,6 +8,8 @@ use super::*;
 
 #[model]
 mod model {
+    use getset::Getters;
+
     use super::*;
 
     /// Events emitted by the `SoraFS` gateway compliance surface.
@@ -33,6 +35,14 @@ mod model {
         DealSettlement(SorafsDealSettlement),
         /// The runtime recorded a PDP/PoTR proof-health violation.
         ProofHealth(SorafsProofHealthAlert),
+        /// Consensus committed a repair-task lifecycle transition.
+        RepairLedger(SorafsRepairLedgerEvent),
+        /// Consensus committed a moderation-ledger lifecycle transition.
+        ModerationLedger(SorafsModerationLedgerEvent),
+        /// Consensus committed an authoritative orderbook transition.
+        OrderbookLedger(SorafsOrderbookLedgerEvent),
+        /// Consensus committed an authoritative reserve-ledger transition.
+        ReserveLedger(SorafsReserveLedgerEvent),
     }
 
     /// High-level policy classification for a GAR violation.
@@ -259,6 +269,316 @@ mod model {
         /// Whether the alert was suppressed due to a cooldown window.
         pub cooldown_active: bool,
     }
+
+    /// Stable chain-authoritative repair transition category.
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    pub enum SorafsRepairLedgerEventKind {
+        /// A source-identity-bound repair report was admitted.
+        TaskSubmitted,
+        /// A worker acquired an absent or expired lease.
+        LeaseClaimed,
+        /// The current worker extended its unexpired lease.
+        LeaseRenewed,
+        /// The task committed its successful terminal outcome.
+        Completed,
+        /// The task committed its unsuccessful terminal outcome.
+        Failed,
+        /// The task committed an escalated terminal outcome and slash proposal.
+        Escalated,
+        /// The provider owner committed the slash appeal.
+        Appealed,
+    }
+
+    /// Typed event emitted by a finalized repair-ledger mutation.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsRepairLedgerEvent {
+        /// Transition category.
+        pub kind: SorafsRepairLedgerEventKind,
+        /// Canonical ticket identifier.
+        pub ticket_id: String,
+        /// Immutable task identity.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub task_id: [u8; 32],
+        /// Affected provider.
+        pub provider_id: crate::sorafs::capacity::ProviderId,
+        /// Affected manifest.
+        pub manifest_digest: crate::sorafs::pin_registry::ManifestDigest,
+        /// Resulting task revision.
+        pub revision: u64,
+        /// Transaction authority that committed the transition.
+        pub authority: crate::account::AccountId,
+        /// Committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+
+    /// Stable chain-authoritative moderation transition category.
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    pub enum SorafsModerationLedgerEventKind {
+        /// A policy revision was activated.
+        PolicyActivated,
+        /// An appeal intake was admitted.
+        AppealSubmitted,
+        /// A juror eligibility proof was accepted.
+        EligibilityRegistered,
+        /// Deterministic sortition completed.
+        SortitionFinalized,
+        /// Sortition closed without enough eligible jurors.
+        SortitionFailed,
+        /// A selected juror accepted assignment.
+        AssignmentAccepted,
+        /// The case entered its commit/reveal lifecycle.
+        CaseActivated,
+        /// Assignment failover exhausted before a case could activate.
+        CaseActivationFailed,
+        /// A commitment was accepted.
+        CommitAccepted,
+        /// A challenge was raised.
+        ChallengeRaised,
+        /// A challenge was resolved.
+        ChallengeResolved,
+        /// A reveal was accepted.
+        RevealAccepted,
+        /// The single terminal outcome was committed.
+        CaseFinalized,
+    }
+
+    /// Typed event emitted by a finalized moderation-ledger mutation.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsModerationLedgerEvent {
+        /// Transition category.
+        pub kind: SorafsModerationLedgerEventKind,
+        /// Case identifier, absent only for policy activation.
+        pub case_id: Option<String>,
+        /// Round identifier, absent only for policy activation.
+        pub round_id: Option<String>,
+        /// Transaction authority that committed the transition.
+        pub authority: crate::account::AccountId,
+        /// Committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+
+    /// Stable chain-authoritative orderbook transition category.
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    pub enum SorafsOrderbookLedgerEventKind {
+        /// A policy revision was activated.
+        PolicyActivated,
+        /// A signed order was admitted.
+        OrderAdmitted,
+        /// A signed owner or governance cancellation was committed.
+        OrderCancelled,
+        /// Deterministic matching committed a trade and funded channel.
+        TradeMatched,
+        /// Maintenance expired an unfilled or partially filled order.
+        OrderExpired,
+        /// Maintenance expired an unsettled channel and refunded custody.
+        ChannelExpired,
+        /// A provider-signed settlement receipt was committed.
+        ReceiptRecorded,
+    }
+
+    /// Typed event emitted by a finalized authoritative orderbook mutation.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsOrderbookLedgerEvent {
+        /// Transition category.
+        pub kind: SorafsOrderbookLedgerEventKind,
+        /// Affected order, when the transition is order-specific.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub order_id: Option<[u8; 32]>,
+        /// Affected trade, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub trade_id: Option<[u8; 32]>,
+        /// Affected settlement channel, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub channel_id: Option<[u8; 32]>,
+        /// Affected settlement receipt, when present.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub receipt_id: Option<[u8; 32]>,
+        /// Affected provider, when known.
+        pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
+        /// Resulting authoritative book revision.
+        pub book_revision: u64,
+        /// Transaction authority that committed the transition.
+        pub authority: crate::account::AccountId,
+        /// Committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+
+    /// Stable chain-authoritative reserve transition category.
+    #[derive(
+        Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
+    pub enum SorafsReserveLedgerEventKind {
+        /// A policy revision was activated.
+        PolicyActivated,
+        /// A provider reserve partition was registered.
+        ProviderRegistered,
+        /// A provider requested a custody movement.
+        MovementRequested,
+        /// Governance approved and applied a custody movement.
+        MovementApproved,
+        /// Governance rejected a custody movement.
+        MovementRejected,
+        /// Deterministic rent was charged.
+        RentCharged,
+        /// A provider lifecycle projection was advanced.
+        LifecycleAdvanced,
+        /// Protocol credit was drawn into reserve custody.
+        CreditDrawn,
+        /// Provider credit debt was repaid.
+        CreditRepaid,
+        /// A provider lifecycle appeal was submitted.
+        AppealSubmitted,
+        /// Governance accepted a provider lifecycle appeal.
+        AppealAccepted,
+        /// Governance rejected a provider lifecycle appeal.
+        AppealRejected,
+    }
+
+    /// Typed event emitted by a finalized authoritative reserve mutation.
+    #[derive(
+        Debug,
+        Clone,
+        PartialEq,
+        Eq,
+        PartialOrd,
+        Ord,
+        Getters,
+        Decode,
+        Encode,
+        iroha_schema::IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[getset(get = "pub")]
+    pub struct SorafsReserveLedgerEvent {
+        /// Transition category.
+        pub kind: SorafsReserveLedgerEventKind,
+        /// Provider affected by the transition, absent for policy activation.
+        pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
+        /// Movement or appeal identifier, when the transition has one.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
+        pub operation_id: Option<[u8; 32]>,
+        /// Active policy digest used by the transition.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+        pub policy_digest: [u8; 32],
+        /// Resulting provider revision, or zero for policy activation.
+        pub provider_revision: u64,
+        /// Transaction authority that committed the transition.
+        pub authority: crate::account::AccountId,
+        /// Committing block timestamp.
+        pub occurred_at_unix_ms: u64,
+    }
+}
+
+impl SorafsModerationLedgerEvent {
+    /// Construct a typed finalized moderation-ledger event.
+    #[must_use]
+    pub fn new(
+        kind: SorafsModerationLedgerEventKind,
+        case_id: Option<String>,
+        round_id: Option<String>,
+        authority: crate::account::AccountId,
+        occurred_at_unix_ms: u64,
+    ) -> Self {
+        Self {
+            kind,
+            case_id,
+            round_id,
+            authority,
+            occurred_at_unix_ms,
+        }
+    }
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for SorafsGarPolicy {
@@ -359,6 +679,9 @@ mod json_support {
 pub mod prelude {
     pub use super::{
         SorafsGarPolicy, SorafsGarPolicyDetail, SorafsGarViolation, SorafsGatewayEvent,
-        SorafsGatewayEventSet, SorafsProofHealthAlert,
+        SorafsGatewayEventSet, SorafsModerationLedgerEvent, SorafsModerationLedgerEventKind,
+        SorafsOrderbookLedgerEvent, SorafsOrderbookLedgerEventKind, SorafsProofHealthAlert,
+        SorafsRepairLedgerEvent, SorafsRepairLedgerEventKind, SorafsReserveLedgerEvent,
+        SorafsReserveLedgerEventKind,
     };
 }

@@ -39,7 +39,7 @@ translation_last_reviewed: 2026-02-07
 | اختتامی نقطہ سرٹیفیکیشن | ہر مشتہر اختتامی نقطہ کو ایم ٹی ایل ایس یا کوئیک سرٹیفکیٹ رپورٹ کے ذریعہ تعاون کرنا چاہئے۔ | پے لوڈ Norito `EndpointAttestationV1` کی وضاحت کریں اور اسے داخلہ بنڈل میں فی اختتامی نقطہ اسٹور کریں۔ |
 
 ## داخلہ ورک فلو1. ** تجویز تخلیق **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + تصدیقی بنڈل تیار کرنا۔
    - توثیق: `profile_id` میں مطلوبہ فیلڈز ، اسٹیک> 0 ، کیننیکل چنکر ہینڈل کو یقینی بنائیں۔
 2. ** گورننس کی توثیق **
@@ -60,13 +60,13 @@ translation_last_reviewed: 2026-02-07
 | ڈومین | ٹاسک | مالک (زبانیں) | حیثیت |
 | -------- | ------ | ---------- | -------- |
 | اسکیما | `ProviderAdmissionEnvelopeV1` ، `EndpointAttestationV1` (Norito) `crates/sorafs_manifest/src/provider_admission.rs` کے تحت سیٹ کریں۔ توثیق کے مددگاروں کے ساتھ `sorafs_manifest::provider_admission` میں نافذ کیا گیا ہے اسٹوریج / گورننس | ✅ کیا ہوا |
-| سی ایل آئی ٹولنگ | `sorafs_manifest_stub` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ |
+| سی ایل آئی ٹولنگ | `sorafs_manifest_builder` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ |
 
 سی ایل آئی فلو اب انٹرمیڈیٹ سرٹیفکیٹ بنڈل (`--endpoint-attestation-intermediate`) ، جاری کردہ تجویز/لفافہ کیننیکل بائٹس کو قبول کرتا ہے ، اور `sign`/`verify` کے دوران بورڈ کے دستخطوں کی توثیق کرتا ہے۔ آپریٹرز براہ راست اشتہاری اداروں کو فراہم کرسکتے ہیں ، یا دستخط شدہ اشتہارات کو دوبارہ استعمال کرسکتے ہیں ، اور آٹومیشن کی سہولت کے ل i `--council-signature-file` کے ساتھ `--council-signature-public-key` کو ملا کر دستخطی فائلیں فراہم کی جاسکتی ہیں۔
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ چلائیں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -102,7 +102,7 @@ translation_last_reviewed: 2026-02-07
     منسوخی ڈائجسٹ ، `--revocation-out` کے ذریعے پے لوڈ Norito لکھتا ہے ، اور JSON رپورٹ پرنٹ کرتا ہے
     ڈائجسٹ اور دستخطوں کی تعداد کے ساتھ۔
 | توثیق | Torii ، گیٹ ویز اور `sorafs-node` کے ذریعہ استعمال شدہ مشترکہ چیکر کو نافذ کریں۔ یونٹ ٹیسٹنگ + سی ایل آئی انضمام فراہم کریں نیٹ ورکنگ TL / اسٹوریج | ✅ کیا ہوا || انضمام Torii | چیکر کو Torii اشتہار میں انجیکشن لگائیں ، پالیسی سے باہر کی اشتہارات کو مسترد کریں ، ٹیلی میٹری جاری کریں۔ | نیٹ ورکنگ TL | ✅ کیا ہوا | Torii اب گورننس لفافے (`torii.sorafs.admission_envelopes_dir`) لوڈ کرتا ہے ، چیک ہضم/دستخطی میچوں کے دوران اور ٹیلی میٹری کو بے نقاب کرتا ہے 【F: کریٹس/اروہہ_ٹوری/ایس آر سی/سرفس/داخلہ
-| تجدید | تجدید/منسوخی اسکیما + سی ایل آئی مددگار شامل کریں ، دستاویزات میں لائف سائیکل گائیڈ پوسٹ کریں (نیچے رن بک دیکھیں اور سی ایل آئی کمانڈز دیکھیں۔ `provider-admission renewal`/`revoke`). 【کریٹس/sorafs_car/src/sorafs_manifest_stub/فراہم کنندہ_ایڈیشن.رس#l477 】【 دستاویزات/ماخذ/sorafs/فراہم کنندہ_ایڈیشن_پولیسی.مڈی: 120】 | اسٹوریج / گورننس | ✅ کیا ہوا |
+| تجدید | تجدید/منسوخی اسکیما + سی ایل آئی مددگار شامل کریں ، دستاویزات میں لائف سائیکل گائیڈ پوسٹ کریں (نیچے رن بک دیکھیں اور سی ایل آئی کمانڈز دیکھیں۔ `provider-admission renewal`/`revoke`). 【کریٹس/sorafs_car/src/sorafs_manifest_builder/فراہم کنندہ_ایڈیشن.رس#l477 】【 دستاویزات/ماخذ/sorafs/فراہم کنندہ_ایڈیشن_پولیسی.مڈی: 120】 | اسٹوریج / گورننس | ✅ کیا ہوا |
 | ٹیلی میٹری | ڈیش بورڈز/الرٹس `provider_admission` کی وضاحت کریں (تجدید کی تجدید ، لفافے کی میعاد ختم)۔ | مشاہدہ | 🟠 ترقی میں | کاؤنٹر `torii_sorafs_admission_total{result,reason}` موجود ہے ؛ زیر التواء ڈیش بورڈز/الرٹس
 
 ### تجدید اور منسوخ کرنے والی رن بک
@@ -111,7 +111,7 @@ translation_last_reviewed: 2026-02-07
 1. `provider-admission proposal` اور `provider-admission sign` کے ساتھ جانشین کی تجویز/اشتہار کی جوڑی بنائیں ، `--retention-epoch` میں اضافہ اور ضرورت کے مطابق اسٹیک/اختتامی مقامات کو اپ ڈیٹ کریں۔
 2. چلائیں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -121,7 +121,7 @@ translation_last_reviewed: 2026-02-07
    ```
    کمانڈ غیر تبدیل شدہ صلاحیت/پروفائل فیلڈز کے ذریعے توثیق کرتا ہے
    `AdmissionRecord::apply_renewal` ، `ProviderAdmissionRenewalV1` کو جاری کرتا ہے ، اور ہضموں کو پرنٹ کرتا ہے
-   گورننس لاگ۔ 【کریٹس/sorafs_car/src/sorafs_manifest_stub/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/provider_admission.rs#l422】
+   گورننس لاگ۔ 【کریٹس/sorafs_car/src/sorafs_manifest_builder/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/provider_admission.rs#l422】
 3. `torii.sorafs.admission_envelopes_dir` میں پچھلے لفافے کو تبدیل کریں ، تجدید Norito/JSON کو گورننس ریپوزٹری میں مرتب کریں ، اور `docs/source/sorafs/migration_ledger.md` میں تجدید ہیش + برقرار رکھنے کے دور کو شامل کریں۔
 4. آپریٹرز کو مطلع کریں کہ نیا لفافہ فعال ہے اور `torii_sorafs_admission_total{result="accepted",reason="stored"}` کی نگرانی کے لئے `torii_sorafs_admission_total{result="accepted",reason="stored"}` کی نگرانی کریں۔
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` کے ذریعے کیننیکل فکسچر کو دوبارہ تخلیق کریں اور ان کا ارتکاب کریں۔ CI (`ci/check_sorafs_fixtures.sh`) توثیق کرتا ہے کہ Norito آؤٹ پٹ مستحکم رہتے ہیں۔
@@ -129,7 +129,7 @@ translation_last_reviewed: 2026-02-07
 #### ہنگامی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخیاں جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -140,7 +140,7 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` پر دستخط کرتا ہے ، تمام دستخطوں کی تصدیق کرتا ہے
-   `verify_revocation_signatures` ، اور منسوخی ڈائجسٹ کی اطلاع دیتا ہے۔ 【کریٹس/sorafs_car/src/sorafs_manifest_stub/provider_admission.rs#l593 】【 f: creats/sorafs_manifest/src/proper_admission.rs#l486】
+   `verify_revocation_signatures` ، اور منسوخی ڈائجسٹ کی اطلاع دیتا ہے۔ 【کریٹس/sorafs_car/src/sorafs_manifest_builder/provider_admission.rs#l593 】【 f: creats/sorafs_manifest/src/proper_admission.rs#l486】
 2. `torii.sorafs.admission_envelopes_dir` سے ریپر کو ہٹا دیں ، منسوخی Norito/JSON کو داخلہ کیچوں میں تقسیم کریں ، اور گورننس کے منٹوں میں وجہ ہیش کو ریکارڈ کریں۔
 3. مانیٹر `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` اس بات کی تصدیق کرنے کے لئے کہ کیچز منسوخ شدہ اشتہار کو چھوڑ رہے ہیں۔ واقعے کے پسپائیوں میں منسوخی کے نمونے برقرار رکھیں۔
 

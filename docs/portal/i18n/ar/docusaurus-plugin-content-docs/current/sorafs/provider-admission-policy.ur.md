@@ -29,7 +29,7 @@ translation_last_reviewed: 2026-02-07
 | نقطة النهاية توثیق | إن الإعلان عن نقطة نهاية لـ mTLS أو تقرير سريع للرياضة أمر ضروري. | Norito الحمولة `EndpointAttestationV1` هي تسعيرة البطاقة وحزمة القبول الخاصة بها هي نقطة النهاية للاندرويد. |
 
 ## قبولیت کا وک فلو1. **منتجات البروبوزل**
-   - سطر الأوامر: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - سطر الأوامر: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      تتضمن الحزمة `ProviderAdmissionProposalV1` + الحزمة الصحية.
    - ويليمي: القطع الأساسي، الحصة > 0، و`profile_id` هو مقبض القطع الكنسي الذي يستخدم.
 2. **الإمساك بالطعام**
@@ -48,12 +48,12 @@ translation_last_reviewed: 2026-02-07
 | علاقة | كام | المالك (المالكون) | حالة |
 |-------|-----|----------|------|
 | اسكيمہ | `crates/sorafs_manifest/src/provider_admission.rs` تحت `ProviderAdmissionProposalV1`، `ProviderAdmissionEnvelopeV1`، `EndpointAttestationV1` (Norito) هي بأسعار معقولة. `sorafs_manifest::provider_admission` مساعدون ويليونيون ينفذون هذه المهمة.[F:crates/sorafs_manifest/src/provider_admission.rs#L1] | التخزين / الحوكمة | ✅ مكمل |
-| CLI ٹولنگ | `sorafs_manifest_stub` کومانڈز کامنز توسیع دیں: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | الأدوات مجموعة العمل | ✅ مكمل |CLI فلو اب درمیانی سرٹیفکیٹ حزم (`--endpoint-attestation-intermediate`) قبول کرتا ہے،
+| CLI ٹولنگ | `sorafs_manifest_builder` کومانڈز کامنز توسیع دیں: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | الأدوات مجموعة العمل | ✅ مكمل |CLI فلو اب درمیانی سرٹیفکیٹ حزم (`--endpoint-attestation-intermediate`) قبول کرتا ہے،
 بايتات الاقتراح/المغلف المتعارف عليها جارى كرتا ہے، و `sign`/`verify` کے دوران توقيعات الكونسل کو یری فائی كرتا ہے. تستخدم الهيئات الإعلانية لتوضيح الإعلانات الموقعة أو الإعلانات الموقعة مرة أخرى، وملفات التوقيع التي `--council-signature-public-key` والتي تنتهي بـ `--council-signature-file`. هناك أتمتة سهلة.
 
 ### حوالة CLI
 
-لقد تم التحكم به من خلال `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.-`proposal`
+لقد تم التحكم به من خلال `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - دركار فليغز: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وأكمل من `--endpoint=<kind:host>`.
@@ -81,7 +81,7 @@ translation_last_reviewed: 2026-02-07
     `--revoked-at`/`--notes` مختلف. ملخص إلغاء سطر الأوامر (CLI) التوقيع/التحقق من البطاقة، حمولة Norito
     `--revocation-out` تم تسجيله، وعدد الملخصات والتوقيعات التي تم تسجيلها في تقرير JSON.
 | ویریفیکیشن | Torii، والبوابات، و`sorafs-node` هي أداة تحقق فعالة. وحدة + اختبارات التكامل CLI. الشبكات TL / التخزين | ✅ مكمل || Torii الأغاني | يتيح المدقق Torii استيعاب الإعلانات بشكل شامل وشامل للإعلانات والقياس عن بعد. | الشبكات TL | ✅ مكمل | Torii مغلفات الإدارة (`torii.sorafs.admission_envelopes_dir`) تسجيل الدخول، استيعاب الملخص/تطابق التوقيع، تسجيل الدخول، وقياس القبول عن بعد ہے.[F:crates/iroha_torii/src/sorafs/admission.rs#L1][F:crates/iroha_torii/src/sorafs/discovery.rs#L1][F:crates/iroha_torii/src/sorafs/api.rs#L1] |
-| تجدید | تجد/تجد/منسوخة الاسكيم + مساعدات CLI تتضمن القراءة ودليل دورة الحياة للمستندات الشائعة (جديد runbook و`provider-admission renewal`/`revoke` CLI) دیکھیں).[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477] 【docs/source/sorafs/provider_admission_policy.md:120】 | التخزين / الحوكمة | ✅ مكمل |
+| تجدید | تجد/تجد/منسوخة الاسكيم + مساعدات CLI تتضمن القراءة ودليل دورة الحياة للمستندات الشائعة (جديد runbook و`provider-admission renewal`/`revoke` CLI) دیکھیں).[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477] 【docs/source/sorafs/provider_admission_policy.md:120】 | التخزين / الحوكمة | ✅ مكمل |
 | ٹيليميٹری | `provider_admission` لوحات المعلومات والتنبيهات ذات الأسعار المعقولة (تجديدها، انتهاء صلاحية المغلف). | إمكانية الملاحظة | 🟠 جاری | كاؤنٹر `torii_sorafs_admission_total{result,reason}` موجود؛ لوحات المعلومات/التنبيهات زر التوا ہیں.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### تجدید ومنسوخی کا رن بک#### شيول شيلد (الحصة/الطوبولوجيا)
@@ -89,7 +89,7 @@ translation_last_reviewed: 2026-02-07
    تتميز `--retention-epoch` بالقدرة والضرورة التي تتوافق مع حصة/نقاط النهاية.
 2. البهجة
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -98,7 +98,7 @@ translation_last_reviewed: 2026-02-07
      --notes="stake top-up 2025-03"
    ```
    تم تشغيل `AdmissionRecord::apply_renewal` من خلال القدرة/الملف الشخصي الذي تم تغييره مرة أخرى،
-   `ProviderAdmissionRenewalV1` بطاقة يومية، ومواصلة هضم بطاقة الطفل ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   `ProviderAdmissionRenewalV1` بطاقة يومية، ومواصلة هضم بطاقة الطفل ہے۔【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir` يحتوي على مغلف بديل للبطاقة، ويتم تجديد Norito/JSON مع الالتزام بالنشر،
    وتجزئة التجديد + عصر الاحتفاظ الذي يشمل `docs/source/sorafs/migration_ledger.md`.
 4. قم بتخزين مغلف جديد وتنشيطه واستيعاب النقرات
@@ -107,7 +107,7 @@ translation_last_reviewed: 2026-02-07
    CI (`ci/check_sorafs_fixtures.sh`) Norito هناك المزيد من الاستقرار.#### ہنگامی منسوخی
 1. مظروف متعدد الاستخدامات للبطاقات الائتمانية والإلكترونية:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -118,7 +118,7 @@ translation_last_reviewed: 2026-02-07
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` خط كتابة البطاقة، `verify_revocation_signatures` توقيع التوقيعات السريعة،
-   وملخص الإلغاء رپورٹ کرتا ہے.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   وملخص الإلغاء رپورٹ کرتا ہے.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. `torii.sorafs.admission_envelopes_dir` مغلف، إلغاء Norito/JSON وذاكرة التخزين المؤقت للقبول مقيد،
    وهناك أيضًا تجزئة للمحتوى.
 3.`torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` لم يتم إبطال مسح ذاكرة التخزين المؤقت للإعلان وإسقاطه؛

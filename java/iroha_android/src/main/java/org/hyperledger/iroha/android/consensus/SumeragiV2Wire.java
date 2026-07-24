@@ -25,6 +25,13 @@ public final class SumeragiV2Wire {
   public static final long MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK = 16;
   private static final byte[] KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN =
       "iroha:kagemusha:v2:post-state-root".getBytes(StandardCharsets.UTF_8);
+  /** Canonical Native AMX application-manifest wire version. */
+  public static final int NATIVE_AMX_APPLICATION_MANIFEST_VERSION = 1;
+  /** Maximum participant route/incarnation leaves committed by one global block. */
+  public static final long MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES = 1_024;
+  private static final byte[] NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN =
+      "iroha:sumeragi:v2:native-amx-application-manifest:v1:empty"
+          .getBytes(StandardCharsets.UTF_8);
 
   private SumeragiV2Wire() {}
 
@@ -244,6 +251,9 @@ public final class SumeragiV2Wire {
     public final Hash32 ordinaryWritesRoot;
     public final Hash32 topupAnchorRoot;
     public final long topupAnchorCount;
+    public final int nativeAmxApplicationManifestVersion;
+    public final Hash32 nativeAmxApplicationManifestRoot;
+    public final long nativeAmxApplicationManifestCount;
     public final Hash32 executedBlockWireHash;
 
     public ExecutionCommitment(
@@ -252,6 +262,9 @@ public final class SumeragiV2Wire {
         Hash32 ordinaryWritesRoot,
         Hash32 topupAnchorRoot,
         long topupAnchorCount,
+        int nativeAmxApplicationManifestVersion,
+        Hash32 nativeAmxApplicationManifestRoot,
+        long nativeAmxApplicationManifestCount,
         Hash32 executedBlockWireHash) {
       this.parentStateRoot = nonNull(parentStateRoot, "parentStateRoot");
       this.postStateRoot = nonNull(postStateRoot, "postStateRoot");
@@ -259,6 +272,11 @@ public final class SumeragiV2Wire {
       requireU32(topupAnchorCount, "topupAnchorCount");
       this.topupAnchorRoot = topupAnchorRoot;
       this.topupAnchorCount = topupAnchorCount;
+      this.nativeAmxApplicationManifestVersion = nativeAmxApplicationManifestVersion;
+      this.nativeAmxApplicationManifestRoot =
+          nonNull(nativeAmxApplicationManifestRoot, "nativeAmxApplicationManifestRoot");
+      requireU32(nativeAmxApplicationManifestCount, "nativeAmxApplicationManifestCount");
+      this.nativeAmxApplicationManifestCount = nativeAmxApplicationManifestCount;
       this.executedBlockWireHash = nonNull(executedBlockWireHash, "executedBlockWireHash");
       if (topupAnchorCount == 0) {
         require(topupAnchorRoot == null, "zero top-up count must not carry an anchor root");
@@ -272,6 +290,17 @@ public final class SumeragiV2Wire {
                 topupPostStateRoot(topupAnchorCount, ordinaryWritesRoot, topupAnchorRoot)),
             "post-state root does not bind the top-up anchor projection");
       }
+      require(
+          nativeAmxApplicationManifestVersion == NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+          "unsupported Native AMX application-manifest version");
+      require(
+          nativeAmxApplicationManifestCount <= MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES,
+          "Native AMX application-manifest leaf count exceeds the consensus bound");
+      Hash32 emptyManifestRoot = nativeAmxApplicationManifestEmptyRoot();
+      require(
+          (nativeAmxApplicationManifestCount == 0)
+              == nativeAmxApplicationManifestRoot.equals(emptyManifestRoot),
+          "Native AMX application-manifest count/root projection is not canonical");
     }
 
     /** Construct an execution commitment for a block with no Kagemusha top-ups. */
@@ -281,7 +310,20 @@ public final class SumeragiV2Wire {
         Hash32 ordinaryWritesRoot,
         Hash32 executedBlockWireHash) {
       return new ExecutionCommitment(
-          parentStateRoot, postStateRoot, ordinaryWritesRoot, null, 0, executedBlockWireHash);
+          parentStateRoot,
+          postStateRoot,
+          ordinaryWritesRoot,
+          null,
+          0,
+          NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+          nativeAmxApplicationManifestEmptyRoot(),
+          0,
+          executedBlockWireHash);
+    }
+
+    /** Canonical root for a global block with no separate Native AMX applications. */
+    public static Hash32 nativeAmxApplicationManifestEmptyRoot() {
+      return new Hash32(IrohaHash.prehash(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN));
     }
 
     /** Derive the canonical post-state root for a non-empty top-up tree. */
@@ -310,6 +352,9 @@ public final class SumeragiV2Wire {
           ordinaryWritesRoot.bytes(),
           option(topupAnchorRoot == null ? null : topupAnchorRoot.bytes()),
           u32(topupAnchorCount),
+          u16(nativeAmxApplicationManifestVersion),
+          nativeAmxApplicationManifestRoot.bytes(),
+          u32(nativeAmxApplicationManifestCount),
           executedBlockWireHash.bytes());
     }
 
@@ -324,6 +369,16 @@ public final class SumeragiV2Wire {
                   "execution top-up root",
                   payload -> decodeOption(payload, data -> new Hash32(decodeHash(data)))),
               reader.field("execution top-up count", SumeragiV2Wire::decodeU32),
+              reader.field(
+                  "execution Native AMX application manifest version",
+                  SumeragiV2Wire::decodeU16),
+              new Hash32(
+                  reader.field(
+                      "execution Native AMX application manifest root",
+                      SumeragiV2Wire::decodeHash)),
+              reader.field(
+                  "execution Native AMX application manifest count",
+                  SumeragiV2Wire::decodeU32),
               new Hash32(
                   reader.field("execution executed block wire hash", SumeragiV2Wire::decodeHash)));
       reader.finish("execution commitment");

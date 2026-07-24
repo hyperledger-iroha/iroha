@@ -37,7 +37,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## Процесс допуска
 
 1. **Создание предложения**
-   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`,
+   - CLI: добавить `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`,
      формирующий `ProviderAdmissionProposalV1` + бандл аттестации.
    - Валидация: убедиться в наличии обязательных полей, stake > 0, канонического chunker handle в `profile_id`.
 2. **Одобрение governance**
@@ -57,7 +57,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | Область | Задача | Owner(s) | Статус |
 |---------|--------|----------|--------|
 | Схема | Определить `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) в `crates/sorafs_manifest/src/provider_admission.rs`. Реализовано в `sorafs_manifest::provider_admission` с помощниками валидации.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Завершено |
-| Инструменты CLI | Расширить `sorafs_manifest_stub` подкомандами: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ Завершено |
+| Инструменты CLI | Расширить `sorafs_manifest_builder` подкомандами: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ Завершено |
 
 CLI поток теперь принимает промежуточные бандлы сертификатов (`--endpoint-attestation-intermediate`),
 выдает канонические байты предложения/envelope и проверяет подписи совета во время `sign`/`verify`. Операторы могут
@@ -66,7 +66,7 @@ CLI поток теперь принимает промежуточные бан
 
 ### Справочник CLI
 
-Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.
+Запускайте каждую команду через `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.
 
 - `proposal`
   - Обязательные флаги: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -104,7 +104,7 @@ CLI поток теперь принимает промежуточные бан
     `--revocation-out` и печатает JSON-отчет с digest и числом подписей.
 | Проверка | Реализовать общий валидатор, используемый Torii, шлюзами и `sorafs-node`. Предоставить unit + CLI интеграционные тесты.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Завершено |
 | Интеграция Torii | Подключить валидатор к приему adverts в Torii, отклонять adverts вне политики и публиковать телеметрию. | Networking TL | ✅ Завершено | Torii теперь загружает governance envelopes (`torii.sorafs.admission_envelopes_dir`), проверяет совпадение digest/подписи при приеме и публикует телеметрию допуска.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Обновление | Добавить схемы обновления/отзыва + CLI помощники, опубликовать жизненный цикл в документации (см. runbook ниже и команды CLI в `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Завершено |
+| Обновление | Добавить схемы обновления/отзыва + CLI помощники, опубликовать жизненный цикл в документации (см. runbook ниже и команды CLI в `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Завершено |
 | Телеметрия | Определить dashboards/alerts `provider_admission` (пропущенное обновление, срок действия envelope). | Observability | 🟠 В процессе | Счетчик `torii_sorafs_admission_total{result,reason}` существует; dashboards/alerts в работе.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### Runbook обновления и отзыва
@@ -114,7 +114,7 @@ CLI поток теперь принимает промежуточные бан
    увеличив `--retention-epoch` и обновив stake/эндпоинты по необходимости.
 2. Выполните
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -124,7 +124,7 @@ CLI поток теперь принимает промежуточные бан
    ```
    Команда проверяет неизменность полей capability/profile через
    `AdmissionRecord::apply_renewal`, выпускает `ProviderAdmissionRenewalV1` и печатает digests для
-   журнала governance.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   журнала governance.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Замените предыдущий envelope в `torii.sorafs.admission_envelopes_dir`, закоммитьте Norito/JSON обновления
    в репозиторий governance и добавьте hash обновления + retention epoch в `docs/source/sorafs/migration_ledger.md`.
 4. Сообщите операторам, что новый envelope активен, и отслеживайте
@@ -135,7 +135,7 @@ CLI поток теперь принимает промежуточные бан
 #### Аварийный отзыв
 1. Определите компрометированный envelope и выпустите отзыв:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI поток теперь принимает промежуточные бан
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI подписывает `ProviderAdmissionRevocationV1`, проверяет набор подписей через
-   `verify_revocation_signatures` и сообщает digest отзыва.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   `verify_revocation_signatures` и сообщает digest отзыва.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. Удалите envelope из `torii.sorafs.admission_envelopes_dir`, распространите Norito/JSON отзыва в admission-кеши
    и зафиксируйте hash причины в протоколе governance.
 3. Отслеживайте `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`, чтобы подтвердить,

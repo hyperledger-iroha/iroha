@@ -35,7 +35,7 @@ use snark_verifier::{
 ///
 /// V4 is intentionally a distinct wire.  A V1 value can never be accepted by
 /// a V4 parser merely because the authenticated degree happens to be 12.
-pub const KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4: u16 = 4;
+pub const KAGEMUSHA_IPA_ACCUMULATION_WIRE_VERSION_V4: u16 = 5;
 
 /// Return the exact V4 public-instance limb count for one authenticated IPA
 /// round count.
@@ -43,16 +43,11 @@ pub fn kagemusha_ipa_accumulator_instance_limbs_v4(round_count: u32) -> Result<u
     if round_count == 0 {
         return Err("Kagemusha V4 IPA round count must be non-zero".to_owned());
     }
-    let scalar_and_point_count = round_count
-        .checked_add(1)
-        .ok_or_else(|| "Kagemusha V4 IPA round count overflows".to_owned())?;
-    let encoded_values = scalar_and_point_count
-        .checked_mul(8)
-        .ok_or_else(|| "Kagemusha V4 IPA accumulator limb count overflows".to_owned())?;
     usize::try_from(
-        encoded_values
-            .checked_add(2)
-            .ok_or_else(|| "Kagemusha V4 IPA accumulator limb count overflows".to_owned())?,
+        round_count
+            .checked_mul(2)
+            .and_then(|value| value.checked_add(4))
+            .ok_or_else(|| "Kagemusha V4 IPA accumulator chunk count overflows".to_owned())?,
     )
     .map_err(|_| "Kagemusha V4 IPA accumulator limb count does not fit usize".to_owned())
 }
@@ -229,19 +224,19 @@ impl KagemushaIpaAccumulatorWireV4 {
     }
 
     /// Encode this accumulator as the exact dynamic V4 public-instance vector.
-    pub fn instance_limbs(&self, authenticated_round_count: u32) -> Result<Vec<u32>, String> {
+    pub fn instance_limbs(&self, authenticated_round_count: u32) -> Result<Vec<u128>, String> {
         self.validate_shape(authenticated_round_count)?;
         let expected = kagemusha_ipa_accumulator_instance_limbs_v4(authenticated_round_count)?;
         let mut limbs = Vec::with_capacity(expected);
-        limbs.push(u32::from(self.version));
-        limbs.push(self.round_count);
+        limbs.push(u128::from(self.version));
+        limbs.push(u128::from(self.round_count));
         for bytes in self
             .round_challenges
             .iter()
             .chain(std::iter::once(&self.folded_generator))
         {
-            limbs.extend(bytes.chunks_exact(4).map(|chunk| {
-                u32::from_le_bytes(chunk.try_into().expect("32-byte value has exact limbs"))
+            limbs.extend(bytes.chunks_exact(16).map(|chunk| {
+                u128::from_le_bytes(chunk.try_into().expect("32-byte value has exact chunks"))
             }));
         }
         if limbs.len() != expected {
@@ -720,6 +715,37 @@ mod tests {
 
     fn key_construction_counts() -> [usize; 4] {
         KEY_CONSTRUCTION_COUNTS.with(std::cell::Cell::get)
+    }
+
+    #[test]
+    fn parity_key_builders_construct_consistent_requested_keys() {
+        const K: u32 = 4;
+
+        let eq_params = ParamsIPA::<EqAffine>::new(K);
+        let eq_proving_key = eq_proving_key(&eq_params);
+        assert_eq!(eq_proving_key.domain.k, K as usize);
+        assert_eq!(eq_proving_key.g.as_slice(), eq_params.get_g());
+        let eq_proving_svk = eq_proving_key.svk();
+        drop(eq_proving_key);
+        let eq_deciding_key = eq_deciding_key(&eq_params);
+        let eq_deciding_svk = eq_deciding_key.as_ref();
+        assert_eq!(eq_deciding_svk.domain.k, eq_proving_svk.domain.k);
+        assert_eq!(eq_deciding_svk.g, eq_proving_svk.g);
+        assert_eq!(eq_deciding_svk.h, eq_proving_svk.h);
+        assert_eq!(eq_deciding_svk.s, eq_proving_svk.s);
+
+        let ep_params = ParamsIPA::<EpAffine>::new(K);
+        let ep_proving_key = ep_proving_key(&ep_params);
+        assert_eq!(ep_proving_key.domain.k, K as usize);
+        assert_eq!(ep_proving_key.g.as_slice(), ep_params.get_g());
+        let ep_proving_svk = ep_proving_key.svk();
+        drop(ep_proving_key);
+        let ep_deciding_key = ep_deciding_key(&ep_params);
+        let ep_deciding_svk = ep_deciding_key.as_ref();
+        assert_eq!(ep_deciding_svk.domain.k, ep_proving_svk.domain.k);
+        assert_eq!(ep_deciding_svk.g, ep_proving_svk.g);
+        assert_eq!(ep_deciding_svk.h, ep_proving_svk.h);
+        assert_eq!(ep_deciding_svk.s, ep_proving_svk.s);
     }
 
     #[test]

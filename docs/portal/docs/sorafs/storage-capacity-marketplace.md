@@ -31,7 +31,7 @@ rollout checks required before hosted production settlement.
 
 | Concept | Description | Implemented / Tracked Surface |
 |---------|-------------|-------------------------------|
-| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema, validator, fixtures, and CLI helpers in `sorafs_manifest::capacity` / `sorafs_manifest_stub capacity declaration`. |
+| `CapacityDeclarationV1` | Norito payload describing provider ID, chunker profile support, committed GiB, lane-specific limits, pricing hints, staking commitment, and expiry. | Schema, validator, fixtures, and CLI helpers in `sorafs_manifest::capacity` / `sorafs_manifest_builder capacity declaration`. |
 | `ReplicationOrder` | Governance-issued instruction assigning a manifest CID to one or more providers, including redundancy level and SLA metrics. | `ReplicationOrderV1` schema, fixture generator, Torii scheduling endpoint, and node reservation hooks. |
 | `CapacityLedger` | On-chain/off-chain registry tracking active capacity declarations, replication orders, performance metrics, and fee accrual. | `/v1/sorafs/capacity/state`, fee/credit ledger export, dispute records, and reconciliation tooling. |
 | `MarketplacePolicy` | Governance policy defining minimum stake, audit requirements, and penalty curves. | Policy defaults, telemetry penalty hooks, dispute/slash runbook, and governance archive evidence. |
@@ -57,7 +57,7 @@ rollout checks required before hosted production settlement.
 - Shared helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, lane/assignment/SLA validators) provide deterministic key validation and error reporting that CI and downstream tooling can reuse.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` now surfaces the on-chain snapshot via `/v1/sorafs/capacity/state`, combining provider declarations and fee ledger entries behind deterministic Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Validation coverage exercises canonical handle enforcement, duplicate detection, per-lane bounds, replication assignment guards, and telemetry range checks so regressions surface immediately in CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
+- Operator tooling: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` converts human-readable specs into canonical Norito payloads, base64 blobs, and JSON summaries so operators can stage `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, and replication order fixtures with local validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures live in `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) and are generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
 ### 2. Smart Contract / Control Plane
 
@@ -74,7 +74,7 @@ rollout checks required before hosted production settlement.
 |------|----------|-------|
 | Torii: ingest `CapacityDeclarationV1` and expose via discovery API. | Networking TL | Align with existing provider advert flows. |
 | `sorafs-node`: persist replication assignments, schedule downloads, enforce per-provider quotas. | Storage Team | Build on top of multi-source fetch orchestrator. |
-| CLI updates: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}`, `sorafs_fetch --capacity-plan`. | Tooling WG | Provide JSON reports for operators. |
+| CLI updates: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}`, `sorafs_fetch --capacity-plan`. | Tooling WG | Provide JSON reports for operators. |
 | Telemetry: publish `capacity_commitment_bytes`, `capacity_utilisation_percent`, `replication_order_backlog`. | Observability | Feed dashboards + alerts. |
 
 - Torii app API now accepts capacity registry submissions via dedicated endpoints:
@@ -126,17 +126,17 @@ rollout checks required before hosted production settlement.
   state response bounds declarations, fee-ledger entries, credit-ledger entries, and disputes with
   `limit` (default 50, max 500) while preserving full totals plus returned-count and truncation
   metadata.【crates/iroha_torii/src/sorafs/api.rs:520】【crates/iroha_torii/src/routing.rs:4889】【docs/source/sorafs/dispute_revocation_runbook.md:45】
-- `sorafs_manifest_stub capacity dispute` accepts a declarative spec when filing governance disputes.
+- `sorafs_manifest_builder capacity dispute` accepts a declarative spec when filing governance disputes.
   Required fields: `provider_id_hex`, `complainant_id_hex`, `kind` (`replication_shortfall`, `uptime_breach`,
   `proof_failure`, `fee_dispute`, or `other`), `submitted_epoch`, `description`, and an `evidence` object with
   `digest_hex` (BLAKE3-256). Optional fields include `replication_order_id_hex`, `requested_remedy`, `evidence.media_type`,
   `evidence.uri`, and `evidence.size_bytes`. The CLI emits canonical Norito bytes, base64 payloads, and a Torii-ready
   request body so operators can lodge disputes or archive evidence deterministically. See
-  `docs/source/sorafs/dispute_revocation_runbook.md` for the end-to-end governance playbook.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:35】
-- `sorafs_manifest_stub capacity {declaration, telemetry, replication-order, complete}` gained `--request-out`
+  `docs/source/sorafs/dispute_revocation_runbook.md` for the end-to-end governance playbook.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:35】
+- `sorafs_manifest_builder capacity {declaration, telemetry, replication-order, complete}` gained `--request-out`
   helpers (with `--authority`/`--private-key` for declarations and telemetry) so operators can emit
   ready-to-post JSON payloads for the Torii endpoints without hand-assembling request
-  bodies.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:20】
+  bodies.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:20】
 
 ### 4. Metering & Fee Distribution
 
@@ -231,7 +231,7 @@ in-sync with the implementation.
 ### Dispute & slashing evidence
 
 1. Generate dispute payloads with the CLI harness
-   (`sorafs_manifest_stub capacity dispute` and
+   (`sorafs_manifest_builder capacity dispute` and
    `cargo test -p sorafs_car --test capacity_cli`) so every `CapacityDisputeV1` bundle has
    canonical JSON/Norito artefacts.
 2. Exercise the deterministic ledger hooks by running
@@ -247,7 +247,7 @@ in-sync with the implementation.
 
 ### Provider onboarding & exit smoke tests
 
-1. Stage declarations with `sorafs_manifest_stub capacity declaration --spec <file>` and
+1. Stage declarations with `sorafs_manifest_builder capacity declaration --spec <file>` and
    replay the CLI regression (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)
    before handing submissions to Torii. The helper emits Norito `.to`, JSON, and Base64
    outputs plus the chunk-plan metadata described earlier in this guide.
@@ -259,7 +259,7 @@ in-sync with the implementation.
    - Drain pending assignments by replaying `iroha app sorafs replication list --status pending`
      (filters live in `crates/iroha/src/client.rs:294`) and queuing reassignment ballots for
      any manifest digests that still reference the retiring provider.
-   - Use `sorafs_manifest_stub capacity telemetry` to publish the final telemetry snapshot
+   - Use `sorafs_manifest_builder capacity telemetry` to publish the final telemetry snapshot
      and confirm Torii marks the provider inactive.
    - Capture the operator checklist (access revocation, manifest cache cleanup, treasury
      sign-off) in `docs/source/sorafs/runbooks/sorafs_node_ops.md` and update the validation

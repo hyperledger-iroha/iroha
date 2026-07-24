@@ -86,8 +86,8 @@ CARv1 + SHA-256 バージョン (`Accept-Chunker` + `Accept-Digest`)。
 |ああ、ああ |重要 |
 |----------|--------|----------|
 | `sorafs_manifest_chunk_store` | ✅ और देखें يتحقق من المقبض المعتمد + البدائل، ويبث التقارير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`。 |
-| `sorafs_manifest_stub` | ⚠️ और देखेंマニフェスト マニフェスト`iroha app sorafs toolkit pack` CAR/マニフェスト `--plan=-` を確認してください。 |
-| `sorafs_provider_advert_stub` | ⚠️ और देखेंオフラインで使用できます。プロバイダーの広告は、`/v1/sorafs/providers` です。 |
+| `sorafs_manifest_builder` | ⚠️ और देखेंマニフェスト マニフェスト`iroha app sorafs toolkit pack` CAR/マニフェスト `--plan=-` を確認してください。 |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (開発者オーケストレーター) | ✅ और देखें CARv2 は `chunk_fetch_specs` 、`range` は CARv2 です。 |
 |フィクスチャ SDK (Rust/Go/TS) | ✅ और देखें يُعاد توليدها عبر `export_vectors`؛あなたのことを忘れないでください。 |
 |ゲートウェイ Torii | 重要なゲートウェイ✅ और देखेंブリッジ CARv1 は、`Accept-Chunker` をダウングレードします。 |
@@ -140,12 +140,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ Cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     「プロファイルID」: 1、
@@ -208,4 +208,4 @@ CARv1+SHA-2:
   `fixtures/sorafs_chunker` 認証済み
   `fuzz/sorafs_chunker`。 Rust وGo وNode を開発してください。
 * تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.
-* は、`iroha app sorafs toolkit pack` と `sorafs_manifest_stub` を表します。
+* は、`iroha app sorafs toolkit pack` と `sorafs_manifest_builder` を表します。

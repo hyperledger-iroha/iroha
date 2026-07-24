@@ -58,7 +58,7 @@ Sidebar_label: سوق القدرات
 - `CapacityTelemetryV1` تجربة اللقطات حسب العصر (GiB déclarés vs utilisés، حاسبات النسخ، نسب وقت التشغيل/PoR) التي تغذي توزيع الرسوم. تحافظ الحمولة على الاستخدام في الإعلانات والنسب المئوية من 0 إلى 100%. 【crates/sorafs_manifest/src/capacity.rs:476】
 - توفر المساعدون المشاركون (`CapacityMetadataEntry`، `PricingScheduleV1`، مسار التحقق/المهمة/SLA) التحقق من صحة تحديد المفاتيح والإبلاغ عن الأخطاء التي يمكن إعادة استخدامها بواسطة CI والأدوات النهائية.- يكشف `PinProviderRegistry` عن خلل في اللقطة على السلسلة عبر `/v1/sorafs/capacity/state`، مع تصريحات مجمعة لمقدمي الخدمات وإدخال رسوم دفتر الأستاذ بعد Norito JSON تحديد.[crates/iroha_torii/src/sorafs/registry.rs:17]】[crates/iroha_torii/src/sorafs/api.rs:64]
 - غطاء التحقق من الصحة يمارس تطبيق المقابض التقليدية، والكشف عن المضاعفة، والمحمول على طول المسار، وحرس تعيين النسخ، وعمليات التحقق من الوصول عن بعد لظهور التراجعات فورًا في CI.[صناديق/سوراف_مانيفست/src/capacity.rs:792]
-- مشغل الأدوات: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` يقوم بتحويل المواصفات المسموح بها في الحمولات Norito canoniques وblobs base64 واستئنافات JSON حتى يتمكن المشغلون من إعداد التركيبات `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` et des أوامر النسخ المتماثل مع التحقق من صحة اللغة. 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 التركيبات المرجعية حية في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم إنشاؤها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- مشغل الأدوات: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` يقوم بتحويل المواصفات المسموح بها في الحمولات Norito canoniques وblobs base64 واستئنافات JSON حتى يتمكن المشغلون من إعداد التركيبات `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` et des أوامر النسخ المتماثل مع التحقق من صحة اللغة. 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 التركيبات المرجعية حية في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم إنشاؤها عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. تكامل خطة التحكم| تاش | المالك (المالكون) | ملاحظات |
 |------|----------|-------|
@@ -134,13 +134,13 @@ ci-dessous لحماية معايير القبول المتوافقة مع الت
 - أرشفة السيرة الذاتية JSON والتجزئات الموجودة في `docs/examples/sorafs_capacity_marketplace_validation/` مع حزم الإدارة.
 
 ### منع النزاع والتقطيع
-- المودع للنزاعات عبر `sorafs_manifest_stub capacity dispute` (الاختبارات :
+- المودع للنزاعات عبر `sorafs_manifest_builder capacity dispute` (الاختبارات :
   `cargo test -p sorafs_car --test capacity_cli`) لحماية الحمولات الأساسية.
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ومجموعات العقوبات (`record_capacity_telemetry_penalises_persistent_under_delivery`) لإثبات أن النزاعات والقطع المائلة تتجدد بطريقة التحديد.
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` لالتقاط التقدم والتسلق ; تعتمد الموافقات على تقرير المصادقة.
 
 ### تأهيل مقدمي الخدمة واختبارات الدخان للطلعات
-- قم بإعادة إنشاء عناصر الإعلان/القياس عن بعد باستخدام `sorafs_manifest_stub capacity ...` واستعادة اختبارات CLI قبل التسليم (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- قم بإعادة إنشاء عناصر الإعلان/القياس عن بعد باستخدام `sorafs_manifest_builder capacity ...` واستعادة اختبارات CLI قبل التسليم (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Soumettre via Torii (`/v1/sorafs/capacity/declare`) ثم الالتقاط `/v1/sorafs/capacity/state` والتقاط Grafana. متابعة التدفق في `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشفة القطع الأثرية ومخرجات التسوية في
   `docs/examples/sorafs_capacity_marketplace_validation/`.## التبعيات والتسلسل

@@ -63,7 +63,7 @@ SDK). Ela impoe os invariantes de alias e handle verificados por
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Envie um PR contendo fixtures, proposta, relatorio de determinismo e
@@ -97,14 +97,14 @@ SDK). Ela impoe os invariantes de alias e handle verificados por
 
 ## Expectativas de herramientas
 
-- Expoema `sorafs_manifest_chunk_store` e `sorafs_manifest_stub`:
+- Expoema `sorafs_manifest_chunk_store` e `sorafs_manifest_builder`:
   - `--list-profiles` para inspeccionar el registro.
   - `--promote-profile=<handle>` para gerar o bloque de metadados canónico usado
     También promover un perfil.
   - `--json-out=-` para transmitir relatos para stdout, habilitando registros de revisión
     reproducimos.
 - `ensure_charter_compliance()` e invocado na inicializacao dos binarios relevantes
-  (`manifest_chunk_store`, `provider_advert_stub`). Los testículos de CI devem falhar se
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Los testículos de CI devem falhar se
   nuevas entradas violarem a carta.
 
 ##Registro

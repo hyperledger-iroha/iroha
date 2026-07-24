@@ -63,7 +63,7 @@ SF-2c საგზაო რუკის პუნქტი წარმოგ�
 - საზიარო დამხმარეები (`CapacityMetadataEntry`, `PricingScheduleV1`, ზოლის/დავალებების/SLA ვალიდატორები) უზრუნველყოფენ გასაღების განმსაზღვრელ ვალიდაციას და შეცდომის მოხსენებას, რომ CI და ქვედა დინების ინსტრუმენტები შეიძლება ხელახლა გამოიყენონ.【crates/sorafs_manifest/src/capacity.rs:230
 - `PinProviderRegistry` ახლა ასახავს ჯაჭვურ სურათს `/v1/sorafs/capacity/state`-ის მეშვეობით, რომელიც აერთიანებს პროვაიდერის დეკლარაციებს და საკომისიოს წიგნის ჩანაწერებს დეტერმინისტული Norito-ის უკან JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - ვალიდაციის გაშუქება ახორციელებს კანონიკური სახელურის აღსრულებას, დუბლიკატების გამოვლენას, თითო ზოლის საზღვრებს, რეპლიკაციის მინიჭების დაცვას და ტელემეტრიის დიაპაზონის შემოწმებას, რათა რეგრესიები დაუყოვნებლივ აღმოჩნდეს CI-ში.【crates/sorafs_manifest/src/capacity.rs:792】
-- ოპერატორის ხელსაწყოები: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` გარდაქმნის ადამიანის მიერ წაკითხვადი სპეციფიკაციებს კანონიკურ Norito დატვირთვებად, base64 blobs და JSON შეჯამებებად, რათა ოპერატორებმა შეძლონ `/v1/sorafs/capacity/declare`, I18NI0000000049X, I18NI000000000000048X, I18NI00000000000049-ის დადგმა. ვალიდაცია.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 საცნობარო მოწყობილობები ცხოვრობს `fixtures/sorafs_manifest/replication_order/`-ში (`order_v1.json`, `order_v1.to`) და გენერირდება vi00.
+- ოპერატორის ხელსაწყოები: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` გარდაქმნის ადამიანის მიერ წაკითხვადი სპეციფიკაციებს კანონიკურ Norito დატვირთვებად, base64 blobs და JSON შეჯამებებად, რათა ოპერატორებმა შეძლონ `/v1/sorafs/capacity/declare`, I18NI0000000049X, I18NI000000000000048X, I18NI00000000000049-ის დადგმა. ვალიდაცია.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 საცნობარო მოწყობილობები ცხოვრობს `fixtures/sorafs_manifest/replication_order/`-ში (`order_v1.json`, `order_v1.to`) და გენერირდება vi00.
 
 ### 2. საკონტროლო სიბრტყის ინტეგრაცია
 
@@ -155,7 +155,7 @@ SF-2c საგზაო რუკის პუნქტი წარმოგ�
   მმართველობის პაკეტებთან ერთად.
 
 ### დავა და მტკიცებულებების შემცირება
-- დააფიქსირეთ დავები `sorafs_manifest_stub capacity dispute`-ის მეშვეობით (ტესტები:
+- დააფიქსირეთ დავები `sorafs_manifest_builder capacity dispute`-ის მეშვეობით (ტესტები:
   `cargo test -p sorafs_car --test capacity_cli`) ასე რომ, ტვირთამწეობა კანონიკური რჩება.
 - გაუშვით `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` და ჯარიმა
   ლუქსი (`record_capacity_telemetry_penalises_persistent_under_delivery`) დავების დასამტკიცებლად და
@@ -164,7 +164,7 @@ SF-2c საგზაო რუკის პუნქტი წარმოგ�
   დააბრუნეთ გაფრთხილების დადასტურებები ვალიდაციის ანგარიშში.
 
 ### პროვაიდერის ჩართვა და კვამლის ტესტები
-- განაახლეთ დეკლარაციის/ტელემეტრიის არტეფაქტები `sorafs_manifest_stub capacity ...`-ით და ხელახლა დაკვრა
+- განაახლეთ დეკლარაციის/ტელემეტრიის არტეფაქტები `sorafs_manifest_builder capacity ...`-ით და ხელახლა დაკვრა
   CLI ტესტები გაგზავნამდე (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - გაგზავნეთ Torii (`/v1/sorafs/capacity/declare`) მეშვეობით, შემდეგ გადაიღეთ `/v1/sorafs/capacity/state` plus
   Grafana ეკრანის ანაბეჭდები. მიჰყევით გასასვლელ ნაკადს `docs/source/sorafs/capacity_onboarding_runbook.md`-ში.

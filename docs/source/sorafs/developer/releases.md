@@ -22,9 +22,10 @@ artefacts:
   approvers from Security Engineering and the Tooling Working Group.
 - Verify that the remediation checklist in the memo is closed; unresolved items block the release.
 - Prepare to upload parity harness logs (`cargo test -p sorafs_orchestrator --test sorafs_cli proof_stream_consumes_ndjson_and_reports_metrics -- --nocapture`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+  alongside the aggregate release-manifest verification receipt.
+- Confirm the protected signing job has an external Ed25519/HSM adapter, the
+  governed raw public key and reviewed fingerprint, and the exact
+  `sorafs-validate` path plus reviewed SHA256.
 
 Include these artefacts when notifying governance and publishing the release.
 
@@ -46,8 +47,8 @@ The script performs the following assertions:
 
 If any step fails, fix the regression before tagging. Release builds must be
 continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+also exercises the raw-Ed25519 release helper and rejects missing fingerprints,
+unpinned native verifiers, malformed keys/signatures, and unsafe paths.
 
 ## 2. Apply the versioning policy
 
@@ -89,53 +90,63 @@ them alongside deterministically generated artefacts.
 
 ## 4. Execute release hooks
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+Run `scripts/release_sorafs_cli.sh` on the canonical aggregate release manifest.
+The wrapper invokes the reviewed external signer and immediately verifies the
+raw 64-byte signature and raw 32-byte public key through a SHA256-pinned
+`sorafs-validate release-manifest` binary:
 
 ```bash
 scripts/release_sorafs_cli.sh \
-  --manifest artifacts/site.manifest.to \
-  --chunk-plan artifacts/site.chunk_plan.json \
-  --chunk-summary artifacts/site.car.json \
-  --bundle-out artifacts/release/manifest.bundle.json \
-  --signature-out artifacts/release/manifest.sig \
-  --identity-token-provider=github-actions \
-  --identity-token-audience=sorafs-release \
-  --expect-token-hash "$(cat .release/token.hash)"
+  --manifest artifacts/release/release_manifest.json \
+  --external-signer /run/sorafs-release/ed25519-sign \
+  --signing-public-key /run/sorafs-release/release.ed25519.pub \
+  --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
 Tips:
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
+- Keep the canonical release manifest and public verification artifacts in the
+  evidence packet. Private keys, HSM credentials, and signer sessions remain
+  runtime-only.
 - Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
+  release gate and deterministic candidate packaging, then publishes the
+  run-bound unsigned foundational manifest. Download and sign those exact bytes
+  outside GitHub with the governed Ed25519 HSM. Provision only the raw signature,
+  raw public key, reviewed signer fingerprint, pinned native verifier path, and
+  reviewed verifier SHA256 on the protected `sorafs-release-auth` runner; approve
+  the `sorafs-release-authentication` environment only after that handoff. The
+  workflow verifies and archives the public tuple and receipt before provenance
+  or the promoted artifact can run. No private key or HSM signing operation
+  enters GitHub Actions.
+
+The protected environment must define
+`SORAFS_RELEASE_SIGNATURE_PATH`, `SORAFS_RELEASE_PUBLIC_KEY_PATH`,
+`SORAFS_RELEASE_MANIFEST_VERIFIER_PATH`,
+`SORAFS_TRUSTED_RELEASE_SIGNING_FINGERPRINT`, and
+`SORAFS_TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256` as environment variables.
+The three paths must be absolute, outside `GITHUB_WORKSPACE`, and pre-provisioned
+on the protected runner. The signature is exactly 64 raw bytes and the public key
+is exactly 32 raw bytes; both trust anchors are reviewed lowercase SHA-256.
+- OIDC/cosign attestations are provenance evidence. They do not replace the
+  governed Ed25519 release-manifest signature.
 - When the release updates canonical fixtures, copy the refreshed manifest,
   chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
   `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
+  Downstream operators use those content-only fixtures for deterministic
+  preparation tests; they are not release-authenticity evidence.
 - Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
   release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
 
 Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+gateway rollout. Its config must provide the same release manifest, raw
+signature, raw public key, trusted signer fingerprint, and pinned native
+verifier tuple:
 
 ```bash
-scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
-  --manifest artifacts/site.manifest.to \
-  --manifest-bundle artifacts/release/manifest.bundle.json
+scripts/sorafs_gateway_self_cert.sh \
+  --config /run/sorafs-release/gateway-self-cert.conf
 ```
 
 ## 5. Tag and publish
@@ -144,11 +155,9 @@ After the checks pass and hooks complete:
 
 1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
    report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
+2. Prepare the non-secret release configuration in the deployment repository.
+   Supply signer/verifier paths and reviewed digests explicitly at runtime;
+   never commit signer credentials or private keys.
 3. Create a signed tag (preferred) or annotated tag:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
@@ -160,7 +169,7 @@ After the checks pass and hooks complete:
    minted new fixtures, push them to the shared fixture repo or object store so
    audit automation can diff the published bundle against source control.
 5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
+   release-manifest/signature/public-key hashes, the native verification receipt,
    and any attestation envelopes. Include the CI job URL (or log archive) that
    ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
    the governance ticket so auditors can trace approvals to artefacts; when the

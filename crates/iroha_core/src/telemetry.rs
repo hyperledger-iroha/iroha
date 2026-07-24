@@ -6715,6 +6715,13 @@ impl Telemetry {
         }
     }
 
+    /// Increment the committed routing-authority cache outcome counter.
+    pub fn inc_sorafs_routing_authority_cache(&self, outcome: &str) {
+        if self.enabled.load(Ordering::Relaxed) {
+            self.metrics.inc_sorafs_routing_authority_cache(outcome);
+        }
+    }
+
     /// Increment the range fetch throttle counter for `reason`.
     pub fn inc_sorafs_range_fetch_throttle(&self, reason: &str) {
         if self.enabled.load(Ordering::Relaxed) {

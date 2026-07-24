@@ -86,16 +86,16 @@ pub fn is_reserved_validation_fee_parameter_id(id: &CustomParameterId) -> bool {
         || id.to_string() == RETIRED_VALIDATION_FEE_POLICY_PARAMETER_ID
 }
 
-/// Signed fee designation carried inside a multisig proposal's instruction list.
+/// Transaction-bound fee designation carried inside a multisig proposal's instruction list.
 ///
 /// The marker is encoded as a canonical `TRACE` [`Log`] instruction. Because it is part of the
 /// proposal instruction list, both the proposal hash and every approval bind the active policy and
 /// exact fee coordinate, including an optional batch-entry coordinate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct ValidationFeeMultisigMarkerV1 {
-    /// Active signed validation-fee policy version.
+    /// Active Parliament-enacted validation-fee policy version.
     pub policy_version: u64,
-    /// Active signed validation-fee policy hash.
+    /// Active Parliament-enacted validation-fee policy hash.
     pub policy_hash: [u8; 32],
     /// Fee transfer instruction index within this proposal execution context.
     pub instruction_index: u64,
@@ -507,9 +507,7 @@ impl ValidationFeeParliamentAuthorizationV1 {
             return Some("validation-fee finalization height is outside the referendum window");
         }
         if self.enacted_at_height <= self.finalization.finalized_at_height {
-            return Some(
-                "validation-fee enactment height must be after referendum finalization",
-            );
+            return Some("validation-fee enactment height must be after referendum finalization");
         }
         if self.finalization.mode != ValidationFeeGovernanceVotingModeV1::Plain {
             return Some("validation-fee governance supports plain referendum voting only");
@@ -1051,10 +1049,10 @@ pub struct ValidationFeeTreasuryPayoutRecipientV1 {
     pub share: Numeric,
 }
 
-/// Signed binding for the only opaque treasury payout admitted by the policy.
+/// Parliament-enacted binding for the only opaque treasury payout admitted by the policy.
 ///
 /// The binding names one immutable contract image and entrypoint plus the complete
-/// six-transfer effect plan. It is part of policy hashing, signatures, registry
+/// six-transfer effect plan. It is part of policy hashing, authorization, registry
 /// validation, and Norito/JSON serialization.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -1793,8 +1791,7 @@ mod parliament_tests {
         );
 
         let mut equal_finalization = valid;
-        equal_finalization.enacted_at_height =
-            equal_finalization.finalization.finalized_at_height;
+        equal_finalization.enacted_at_height = equal_finalization.finalization.finalized_at_height;
         assert_eq!(
             equal_finalization.invariant_error(),
             Some("validation-fee enactment height must be after referendum finalization")

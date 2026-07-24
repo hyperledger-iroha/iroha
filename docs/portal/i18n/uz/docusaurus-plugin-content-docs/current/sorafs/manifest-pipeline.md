@@ -55,7 +55,7 @@ JSONni yozib olish uchun `--por-proof-out` yoki `--por-sample-out` bayroqlari.
 - Kengash imzolari va ixtiyoriy metama'lumotlar (masalan, qurish identifikatorlari).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

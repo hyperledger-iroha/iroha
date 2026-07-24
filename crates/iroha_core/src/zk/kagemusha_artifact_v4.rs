@@ -10,7 +10,6 @@ use std::{
     collections::BTreeSet,
     fs::{self, DirBuilder, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    mem::size_of,
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -29,8 +28,6 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_NATIVE_BRIDGE_ABI_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_BACKEND_V4,
     KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_TRANSCRIPT_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4,
-    KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_BOOTSTRAP_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PARAMS_IPA_FILE_NAME_V4,
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EP_PROVING_KEY_FILE_NAME_V4,
@@ -41,8 +38,7 @@ use iroha_data_model::offline::{
     KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_VERIFYING_KEY_FILE_NAME_V4, KagemushaAuthenticatedReleaseV4,
     KagemushaPastaCycleArtifactKindV4, KagemushaPastaCycleArtifactV4,
     KagemushaPastaCycleFramedArtifactHeaderV4, KagemushaPastaCycleParityV1,
-    KagemushaPastaCycleProofProfileV4, KagemushaPastaCycleProvingKeyHeaderV4,
-    KagemushaRecursiveSpendArtifactManifestV4, KagemushaStepCircuitParamsV4,
+    KagemushaPastaCycleProofProfileV4, KagemushaRecursiveSpendArtifactManifestV4,
 };
 use sha2::{Digest as _, Sha256};
 
@@ -61,304 +57,6 @@ pub type KagemushaRecursiveSpendPastaCycleArtifactHeaderV4 =
     KagemushaPastaCycleFramedArtifactHeaderV4;
 
 static NEXT_EXPORT_TEMP_ID_V4: AtomicU64 = AtomicU64::new(0);
-
-/// Canonically decoded breakpoint header plus a borrowed processed proving key.
-///
-/// The proving-key bytes borrow the authenticated payload rather than being
-/// copied into the Norito header. Streaming runtimes can instead parse the same
-/// suffix directly from a bounded reader using the offset returned by
-/// [`KagemushaAuthenticatedArtifactInspectionV4`].
-#[derive(Debug, PartialEq, Eq)]
-pub struct KagemushaValidatedProvingKeyPayloadV4<'a> {
-    header: KagemushaPastaCycleProvingKeyHeaderV4,
-    processed_proving_key: &'a [u8],
-}
-
-impl<'a> KagemushaValidatedProvingKeyPayloadV4<'a> {
-    /// Return the profile-bound, keygen-derived row breakpoints.
-    #[must_use]
-    pub fn header(&self) -> &KagemushaPastaCycleProvingKeyHeaderV4 {
-        &self.header
-    }
-
-    /// Return the raw `SerdeFormat::Processed` proving-key suffix.
-    #[must_use]
-    pub fn processed_proving_key(&self) -> &'a [u8] {
-        self.processed_proving_key
-    }
-}
-
-/// Validated layout of the breakpoint header and raw processed-key suffix
-/// inside one authenticated proving-key payload.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct KagemushaProvingKeyPayloadInspectionV4 {
-    header: KagemushaPastaCycleProvingKeyHeaderV4,
-    processed_proving_key_offset: u64,
-    processed_proving_key_size_bytes: u64,
-}
-
-/// Infallible append-only writer for one canonical inner proving-key payload.
-///
-/// Halo2's processed-key serializer assumes its writer cannot fail in several
-/// nested polynomial encoders. Keeping the final framed `Vec` private makes
-/// every `write` append infallible; [`Self::finish`] applies the authenticated
-/// size and non-empty-suffix checks after serialization. This lets callers
-/// stream `ProvingKey::write` directly into its final KPKBPV4 payload without
-/// first materializing and then copying a raw processed-key `Vec`.
-#[must_use]
-pub struct KagemushaProvingKeyPayloadWriterV4 {
-    bytes: Vec<u8>,
-    processed_proving_key_offset: usize,
-}
-
-impl Write for KagemushaProvingKeyPayloadWriterV4 {
-    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        self.bytes.extend_from_slice(bytes);
-        Ok(bytes.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-impl KagemushaProvingKeyPayloadWriterV4 {
-    /// Finish the framed payload and return its exact canonical bytes.
-    pub fn finish(self) -> Result<Vec<u8>, String> {
-        if self.bytes.len() <= self.processed_proving_key_offset {
-            return Err("Kagemusha V4 processed proving key is empty".to_owned());
-        }
-        if u64::try_from(self.bytes.len())
-            .ok()
-            .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
-        {
-            return Err("Kagemusha V4 proving-key payload exceeds its bound".to_owned());
-        }
-        Ok(self.bytes)
-    }
-}
-
-impl KagemushaProvingKeyPayloadInspectionV4 {
-    /// Return the profile-bound, keygen-derived row breakpoints.
-    #[must_use]
-    pub fn header(&self) -> &KagemushaPastaCycleProvingKeyHeaderV4 {
-        &self.header
-    }
-
-    /// Return the processed-key offset relative to the outer payload.
-    #[must_use]
-    pub const fn processed_proving_key_offset(&self) -> u64 {
-        self.processed_proving_key_offset
-    }
-
-    /// Return the exact remaining processed-key byte length.
-    #[must_use]
-    pub const fn processed_proving_key_size_bytes(&self) -> u64 {
-        self.processed_proving_key_size_bytes
-    }
-}
-
-/// Read and validate the bounded inner proving-key prefix, leaving `reader`
-/// positioned at the first raw processed-key byte.
-pub fn read_kagemusha_pasta_cycle_proving_key_prefix_v4<R: Read>(
-    reader: &mut R,
-    payload_size_bytes: u64,
-    expected_parity: KagemushaPastaCycleParityV1,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-) -> Result<KagemushaProvingKeyPayloadInspectionV4, String> {
-    if payload_size_bytes == 0
-        || payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
-    {
-        return Err("Kagemusha V4 proving-key payload length is invalid".to_owned());
-    }
-    let mut magic = [0_u8; KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4.len()];
-    reader
-        .read_exact(&mut magic)
-        .map_err(|error| format!("failed to read Kagemusha V4 proving-key magic: {error}"))?;
-    if &magic != KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4 {
-        return Err("Kagemusha V4 proving-key payload magic mismatch".to_owned());
-    }
-    let mut header_len_bytes = [0_u8; 4];
-    reader.read_exact(&mut header_len_bytes).map_err(|error| {
-        format!("failed to read Kagemusha V4 proving-key header length: {error}")
-    })?;
-    let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))
-        .map_err(|_| "Kagemusha V4 proving-key header length does not fit usize".to_owned())?;
-    let maximum_header = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V4 proving-key header bound does not fit usize".to_owned())?;
-    let prefix_len = magic
-        .len()
-        .checked_add(header_len_bytes.len())
-        .and_then(|len| len.checked_add(header_len))
-        .ok_or_else(|| "Kagemusha V4 proving-key prefix length overflow".to_owned())?;
-    let prefix_len_u64 = u64::try_from(prefix_len)
-        .map_err(|_| "Kagemusha V4 proving-key prefix length does not fit u64".to_owned())?;
-    if header_len == 0 || header_len > maximum_header || prefix_len_u64 >= payload_size_bytes {
-        return Err("Kagemusha V4 proving-key header length is invalid".to_owned());
-    }
-    let mut header_bytes = vec![0_u8; header_len];
-    reader
-        .read_exact(&mut header_bytes)
-        .map_err(|error| format!("failed to read Kagemusha V4 proving-key header: {error}"))?;
-    let decode_limits = norito::core::DecodeLimits::new(
-        1024,
-        maximum_header,
-        1024,
-        maximum_header.saturating_mul(4),
-        8,
-    );
-    let header: KagemushaPastaCycleProvingKeyHeaderV4 =
-        norito::decode_from_bytes_with_limits(&header_bytes, decode_limits)
-            .map_err(|_| "Kagemusha V4 proving-key header is malformed".to_owned())?;
-    header
-        .validate(expected_parity, circuit_params)
-        .map_err(|error| error.to_string())?;
-    if norito::to_bytes(&header)
-        .map_err(|error| format!("failed to re-encode Kagemusha V4 proving-key header: {error}"))?
-        != header_bytes
-    {
-        return Err("Kagemusha V4 proving-key header is not canonical".to_owned());
-    }
-    Ok(KagemushaProvingKeyPayloadInspectionV4 {
-        header,
-        processed_proving_key_offset: prefix_len_u64,
-        processed_proving_key_size_bytes: payload_size_bytes - prefix_len_u64,
-    })
-}
-
-/// Begin one canonical KPKBPV4 payload and return an append-only writer
-/// positioned exactly at the processed proving-key suffix.
-pub fn begin_kagemusha_pasta_cycle_proving_key_payload_v4(
-    header: &KagemushaPastaCycleProvingKeyHeaderV4,
-    expected_parity: KagemushaPastaCycleParityV1,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-) -> Result<KagemushaProvingKeyPayloadWriterV4, String> {
-    header
-        .validate(expected_parity, circuit_params)
-        .map_err(|error| error.to_string())?;
-    let header_bytes = norito::to_bytes(header)
-        .map_err(|error| format!("failed to encode Kagemusha V4 proving-key header: {error}"))?;
-    let maximum_header = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V4 proving-key header bound does not fit usize".to_owned())?;
-    if header_bytes.is_empty() || header_bytes.len() > maximum_header {
-        return Err("Kagemusha V4 proving-key header length is invalid".to_owned());
-    }
-    let header_len = u32::try_from(header_bytes.len())
-        .map_err(|_| "Kagemusha V4 proving-key header length does not fit u32".to_owned())?;
-    let prefix_len = KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4
-        .len()
-        .checked_add(size_of::<u32>())
-        .and_then(|len| len.checked_add(header_bytes.len()))
-        .ok_or_else(|| "Kagemusha V4 proving-key prefix length overflow".to_owned())?;
-    let mut bytes = Vec::with_capacity(prefix_len);
-    bytes.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4);
-    bytes.extend_from_slice(&header_len.to_le_bytes());
-    bytes.extend_from_slice(&header_bytes);
-    Ok(KagemushaProvingKeyPayloadWriterV4 {
-        bytes,
-        processed_proving_key_offset: prefix_len,
-    })
-}
-
-/// Encode one canonical inner proving-key payload without embedding the large
-/// processed key in a Norito collection.
-pub fn encode_kagemusha_pasta_cycle_proving_key_payload_v4(
-    header: &KagemushaPastaCycleProvingKeyHeaderV4,
-    expected_parity: KagemushaPastaCycleParityV1,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-    processed_proving_key: &[u8],
-) -> Result<Vec<u8>, String> {
-    if processed_proving_key.is_empty() {
-        return Err("Kagemusha V4 processed proving key is empty".to_owned());
-    }
-    let mut payload = begin_kagemusha_pasta_cycle_proving_key_payload_v4(
-        header,
-        expected_parity,
-        circuit_params,
-    )?;
-    let total_len = payload
-        .processed_proving_key_offset
-        .checked_add(processed_proving_key.len())
-        .ok_or_else(|| "Kagemusha V4 proving-key payload length overflow".to_owned())?;
-    if u64::try_from(total_len)
-        .ok()
-        .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
-    {
-        return Err("Kagemusha V4 proving-key payload exceeds its bound".to_owned());
-    }
-    payload
-        .bytes
-        .try_reserve_exact(processed_proving_key.len())
-        .map_err(|_| "failed to reserve Kagemusha V4 proving-key payload".to_owned())?;
-    payload
-        .write_all(processed_proving_key)
-        .map_err(|error| format!("failed to write Kagemusha V4 proving-key payload: {error}"))?;
-    payload.finish()
-}
-
-/// Decode and canonically validate one inner proving-key payload.
-///
-/// Legacy raw processed-key payloads have no magic prefix and are rejected;
-/// there is intentionally no compatibility fallback.
-pub fn decode_kagemusha_pasta_cycle_proving_key_payload_v4<'a>(
-    bytes: &'a [u8],
-    expected_parity: KagemushaPastaCycleParityV1,
-    circuit_params: &KagemushaStepCircuitParamsV4,
-) -> Result<KagemushaValidatedProvingKeyPayloadV4<'a>, String> {
-    if bytes.is_empty()
-        || u64::try_from(bytes.len())
-            .ok()
-            .is_none_or(|len| len > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4)
-    {
-        return Err("Kagemusha V4 proving-key payload length is invalid".to_owned());
-    }
-    let magic_len = KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4.len();
-    let length_end = magic_len
-        .checked_add(size_of::<u32>())
-        .ok_or_else(|| "Kagemusha V4 proving-key prefix length overflow".to_owned())?;
-    if bytes.len() <= length_end
-        || bytes.get(..magic_len) != Some(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4)
-    {
-        return Err("Kagemusha V4 proving-key payload magic mismatch".to_owned());
-    }
-    let header_len_bytes: [u8; 4] = bytes[magic_len..length_end]
-        .try_into()
-        .map_err(|_| "Kagemusha V4 proving-key header length is truncated".to_owned())?;
-    let header_len = usize::try_from(u32::from_le_bytes(header_len_bytes))
-        .map_err(|_| "Kagemusha V4 proving-key header length does not fit usize".to_owned())?;
-    let maximum_header = usize::try_from(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4)
-        .map_err(|_| "Kagemusha V4 proving-key header bound does not fit usize".to_owned())?;
-    let header_end = length_end
-        .checked_add(header_len)
-        .ok_or_else(|| "Kagemusha V4 proving-key header length overflow".to_owned())?;
-    if header_len == 0 || header_len > maximum_header || header_end >= bytes.len() {
-        return Err("Kagemusha V4 proving-key header length is invalid".to_owned());
-    }
-    let header_bytes = &bytes[length_end..header_end];
-    let decode_limits = norito::core::DecodeLimits::new(
-        1024,
-        maximum_header,
-        1024,
-        maximum_header.saturating_mul(4),
-        8,
-    );
-    let header: KagemushaPastaCycleProvingKeyHeaderV4 =
-        norito::decode_from_bytes_with_limits(header_bytes, decode_limits)
-            .map_err(|_| "Kagemusha V4 proving-key header is malformed".to_owned())?;
-    header
-        .validate(expected_parity, circuit_params)
-        .map_err(|error| error.to_string())?;
-    if norito::to_bytes(&header)
-        .map_err(|error| format!("failed to re-encode Kagemusha V4 proving-key header: {error}"))?
-        != header_bytes
-    {
-        return Err("Kagemusha V4 proving-key header is not canonical".to_owned());
-    }
-    Ok(KagemushaValidatedProvingKeyPayloadV4 {
-        header,
-        processed_proving_key: &bytes[header_end..],
-    })
-}
 
 /// Return the canonical file name for one of the eight V4 artifact roles.
 #[must_use]
@@ -412,7 +110,7 @@ fn validate_header_against_manifest_v4(
         .map_err(|error| error.to_string())
 }
 
-fn export_header_identity_v4(
+fn export_header_from_identity_v4(
     generation: &str,
     profile: &KagemushaPastaCycleProofProfileV4,
     kind: KagemushaPastaCycleArtifactKindV4,
@@ -428,6 +126,7 @@ fn export_header_identity_v4(
         || profile.step_proof_size_bytes != profile.circuit_params.max_parent_proof_bytes
         || payload_size_bytes == 0
         || payload_size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+        || payload_sha256 == [0; 32]
     {
         return Err("Kagemusha V4 export profile or payload is invalid".to_owned());
     }
@@ -462,7 +161,7 @@ fn export_header_v4(
     kind: KagemushaPastaCycleArtifactKindV4,
     payload: &[u8],
 ) -> Result<KagemushaRecursiveSpendPastaCycleArtifactHeaderV4, String> {
-    export_header_identity_v4(
+    export_header_from_identity_v4(
         generation,
         profile,
         kind,
@@ -569,7 +268,7 @@ where
     W: Write,
     F: FnOnce(&mut dyn Write) -> Result<(), String>,
 {
-    let header = export_header_identity_v4(
+    let header = export_header_from_identity_v4(
         generation,
         profile,
         kind,
@@ -639,6 +338,108 @@ where
         sha256: framed_sha256,
         payload_size_bytes: header.payload_size_bytes,
         payload_sha256: header.payload_sha256,
+    };
+    descriptor.validate().map_err(|error| error.to_string())?;
+    Ok(descriptor)
+}
+
+/// Stream a pre-authenticated payload into one canonical KRV4 package.
+///
+/// The declared identity must come from the same bounded writer that produced
+/// `payload`. This routine rereads in 1 MiB chunks, rejects early EOF and
+/// trailing bytes, and independently verifies the digest while framing, so a
+/// release-sized proving key never needs a second in-memory byte vector.
+pub fn write_kagemusha_pasta_cycle_artifact_from_reader_v4<W: Write, R: Read>(
+    writer: &mut W,
+    generation: &str,
+    profile: &KagemushaPastaCycleProofProfileV4,
+    kind: KagemushaPastaCycleArtifactKindV4,
+    payload: &mut R,
+    payload_size_bytes: u64,
+    payload_sha256: [u8; 32],
+) -> Result<KagemushaPastaCycleArtifactV4, String> {
+    let header = export_header_from_identity_v4(
+        generation,
+        profile,
+        kind,
+        payload_size_bytes,
+        payload_sha256,
+    )?;
+    let header_bytes = norito::to_bytes(&header)
+        .map_err(|error| format!("failed to encode Kagemusha V4 artifact header: {error}"))?;
+    if header_bytes.is_empty()
+        || header_bytes.len() > KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_MAX_HEADER_BYTES_V4
+    {
+        return Err("Kagemusha V4 encoded header exceeds its bound".to_owned());
+    }
+    let header_len = u32::try_from(header_bytes.len())
+        .map_err(|_| "Kagemusha V4 header length does not fit u32".to_owned())?;
+    let header_len_bytes = header_len.to_le_bytes();
+    let size_bytes = u64::try_from(KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.len())
+        .ok()
+        .and_then(|size| size.checked_add(u64::try_from(header_len_bytes.len()).ok()?))
+        .and_then(|size| size.checked_add(u64::from(header_len)))
+        .and_then(|size| size.checked_add(payload_size_bytes))
+        .ok_or_else(|| "Kagemusha V4 framed artifact size overflow".to_owned())?;
+    if size_bytes > KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4 {
+        return Err(format!(
+            "Kagemusha V4 framed artifact size {size_bytes} exceeds explicit ceiling {}",
+            KAGEMUSHA_RECURSIVE_SPEND_ARTIFACT_MAX_FILE_BYTES_V4
+        ));
+    }
+
+    let mut framed_hasher = Sha256::new();
+    for bytes in [
+        KAGEMUSHA_RECURSIVE_SPEND_PASTA_CYCLE_ARTIFACT_MAGIC_V4.as_slice(),
+        header_len_bytes.as_slice(),
+        header_bytes.as_slice(),
+    ] {
+        writer
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
+        framed_hasher.update(bytes);
+    }
+
+    let mut payload_hasher = Sha256::new();
+    let mut remaining = payload_size_bytes;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    while remaining > 0 {
+        let requested = usize::try_from(remaining.min(buffer.len() as u64))
+            .map_err(|_| "Kagemusha V4 payload chunk length does not fit usize".to_owned())?;
+        let read = payload
+            .read(&mut buffer[..requested])
+            .map_err(|error| format!("failed to read Kagemusha V4 payload: {error}"))?;
+        if read == 0 {
+            return Err("Kagemusha V4 payload ended before its declared length".to_owned());
+        }
+        let bytes = &buffer[..read];
+        writer
+            .write_all(bytes)
+            .map_err(|error| format!("failed to write Kagemusha V4 artifact: {error}"))?;
+        payload_hasher.update(bytes);
+        framed_hasher.update(bytes);
+        remaining -= u64::try_from(read)
+            .map_err(|_| "Kagemusha V4 payload read length does not fit u64".to_owned())?;
+    }
+    let mut trailing = [0_u8; 1];
+    if payload
+        .read(&mut trailing)
+        .map_err(|error| format!("failed to check Kagemusha V4 payload boundary: {error}"))?
+        != 0
+    {
+        return Err("Kagemusha V4 payload exceeds its declared length".to_owned());
+    }
+    if <[u8; 32]>::from(payload_hasher.finalize()) != payload_sha256 {
+        return Err("Kagemusha V4 payload digest changed while framing".to_owned());
+    }
+
+    let descriptor = KagemushaPastaCycleArtifactV4 {
+        kind,
+        file_name: kagemusha_artifact_file_name_v4(profile.parity, kind).to_owned(),
+        size_bytes,
+        sha256: framed_hasher.finalize().into(),
+        payload_size_bytes,
+        payload_sha256,
     };
     descriptor.validate().map_err(|error| error.to_string())?;
     Ok(descriptor)
@@ -1606,18 +1407,6 @@ impl KagemushaPastaCycleVerifierArtifactsV4 {
         self.binding.manifest().max_proof_bytes
     }
 
-    /// Authenticated Eq profile selecting circuit parameters and measured cap.
-    #[must_use]
-    pub(crate) fn step_eq_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.binding.manifest().profiles[0]
-    }
-
-    /// Authenticated Ep profile selecting circuit parameters and measured cap.
-    #[must_use]
-    pub(crate) fn step_ep_profile(&self) -> &KagemushaPastaCycleProofProfileV4 {
-        &self.binding.manifest().profiles[1]
-    }
-
     pub(crate) fn step_eq_parameters(&self) -> &[u8] {
         self.step_eq_parameters.payload()
     }
@@ -1786,25 +1575,18 @@ impl KagemushaPastaCycleProverArtifactsV4 {
     pub(crate) fn verifier(&self) -> &KagemushaPastaCycleVerifierArtifactsV4 {
         &self.verifier
     }
-
-    pub(crate) fn step_eq_proving_key(&self) -> &[u8] {
-        self.step_eq_proving_key.payload()
-    }
-
-    pub(crate) fn step_ep_proving_key(&self) -> &[u8] {
-        self.step_ep_proving_key.payload()
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Read as _, Write as _};
+    use std::io::Cursor;
 
     use iroha_data_model::offline::{
-        KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4,
-        KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_VERSION_V4,
         KAGEMUSHA_RECURSIVE_SPEND_STEP_EQ_CIRCUIT_ID_V4, KAGEMUSHA_STEP_CIRCUIT_MINIMUM_K_V4,
-        KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4, KagemushaPastaPublicLayoutV4,
+        KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4, KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
+        KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4,
+        KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4, KagemushaPastaPublicLayoutV4,
+        KagemushaStepCircuitParamsV4,
     };
     use sha2::Digest as _;
 
@@ -1817,13 +1599,13 @@ mod tests {
         KagemushaStepCircuitParamsV4 {
             version: KAGEMUSHA_STEP_CIRCUIT_PARAMS_VERSION_V4,
             k,
-            num_advice_per_phase: vec![2],
-            num_lookup_advice_per_phase: vec![1],
+            num_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_ADVICE_COLUMNS_V4.to_vec(),
+            num_lookup_advice_per_phase: KAGEMUSHA_STEP_CIRCUIT_RELEASE_LOOKUP_COLUMNS_V4.to_vec(),
             num_fixed: 1,
             lookup_bits: k - 1,
             num_instance_columns: 1,
             public_input_limbs: layout.instance_column_limbs,
-            minimum_unusable_rows: 9,
+            minimum_unusable_rows: KAGEMUSHA_STEP_CIRCUIT_MINIMUM_UNUSABLE_ROWS_V4,
             max_parent_proof_bytes: 4096,
         }
     }
@@ -1840,164 +1622,6 @@ mod tests {
             circuit_params,
             artifacts: Vec::new(),
         }
-    }
-
-    fn proving_key_header() -> KagemushaPastaCycleProvingKeyHeaderV4 {
-        let params = circuit_params();
-        let usable_rows = (1_u32 << params.k) - params.minimum_unusable_rows;
-        KagemushaPastaCycleProvingKeyHeaderV4 {
-            version: KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_VERSION_V4,
-            parity: KagemushaPastaCycleParityV1::StepEq,
-            circuit_params_sha256: params.sha256().expect("test circuit-parameter digest"),
-            break_points: vec![vec![usable_rows - 1]],
-        }
-    }
-
-    #[test]
-    fn proving_key_payload_round_trips_without_copying_the_key_suffix() {
-        let params = circuit_params();
-        let header = proving_key_header();
-        let processed_key = b"canonical processed proving key fixture";
-        let encoded = encode_kagemusha_pasta_cycle_proving_key_payload_v4(
-            &header,
-            KagemushaPastaCycleParityV1::StepEq,
-            &params,
-            processed_key,
-        )
-        .expect("encode proving-key payload");
-        let mut writer = begin_kagemusha_pasta_cycle_proving_key_payload_v4(
-            &header,
-            KagemushaPastaCycleParityV1::StepEq,
-            &params,
-        )
-        .expect("begin streamed proving-key payload");
-        for chunk in processed_key.chunks(3) {
-            writer
-                .write_all(chunk)
-                .expect("append processed proving-key chunk");
-        }
-        assert_eq!(
-            writer.finish().expect("finish streamed payload"),
-            encoded,
-            "writer framing must remain byte-identical to the slice API"
-        );
-        assert!(
-            begin_kagemusha_pasta_cycle_proving_key_payload_v4(
-                &header,
-                KagemushaPastaCycleParityV1::StepEq,
-                &params,
-            )
-            .expect("begin empty streamed payload")
-            .finish()
-            .is_err(),
-            "a streamed payload without a processed-key suffix must fail"
-        );
-        let decoded = decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-            &encoded,
-            KagemushaPastaCycleParityV1::StepEq,
-            &params,
-        )
-        .expect("decode proving-key payload");
-        assert_eq!(decoded.header(), &header);
-        assert_eq!(decoded.processed_proving_key(), processed_key);
-        let payload_start = encoded.as_ptr() as usize;
-        let payload_end = payload_start + encoded.len();
-        let key_start = decoded.processed_proving_key().as_ptr() as usize;
-        assert!((payload_start..payload_end).contains(&key_start));
-
-        let mut cursor = Cursor::new(encoded.as_slice());
-        let inspection = read_kagemusha_pasta_cycle_proving_key_prefix_v4(
-            &mut cursor,
-            u64::try_from(encoded.len()).expect("small fixture"),
-            KagemushaPastaCycleParityV1::StepEq,
-            &params,
-        )
-        .expect("stream proving-key prefix");
-        assert_eq!(inspection.header(), &header);
-        assert_eq!(
-            inspection.processed_proving_key_size_bytes(),
-            u64::try_from(processed_key.len()).expect("small fixture")
-        );
-        let mut streamed_key = Vec::new();
-        cursor
-            .read_to_end(&mut streamed_key)
-            .expect("read processed key suffix");
-        assert_eq!(streamed_key, processed_key);
-    }
-
-    #[test]
-    fn proving_key_payload_rejects_legacy_noncanonical_and_bounded_headers() {
-        let params = circuit_params();
-        let header = proving_key_header();
-        let encoded = encode_kagemusha_pasta_cycle_proving_key_payload_v4(
-            &header,
-            KagemushaPastaCycleParityV1::StepEq,
-            &params,
-            b"pk",
-        )
-        .expect("encode proving-key payload");
-
-        assert!(
-            decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-                b"legacy raw processed proving key",
-                KagemushaPastaCycleParityV1::StepEq,
-                &params,
-            )
-            .is_err()
-        );
-
-        let mut zero_header = encoded.clone();
-        zero_header[8..12].copy_from_slice(&0_u32.to_le_bytes());
-        assert!(
-            decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-                &zero_header,
-                KagemushaPastaCycleParityV1::StepEq,
-                &params,
-            )
-            .is_err()
-        );
-
-        let mut oversized_header = encoded.clone();
-        oversized_header[8..12].copy_from_slice(
-            &(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_HEADER_MAX_BYTES_V4 + 1).to_le_bytes(),
-        );
-        assert!(
-            decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-                &oversized_header,
-                KagemushaPastaCycleParityV1::StepEq,
-                &params,
-            )
-            .is_err()
-        );
-
-        let canonical_header = norito::to_bytes(&header).expect("encode header fixture");
-        let mut noncanonical = Vec::new();
-        noncanonical.extend_from_slice(KAGEMUSHA_RECURSIVE_SPEND_PROVING_KEY_PAYLOAD_MAGIC_V4);
-        noncanonical.extend_from_slice(
-            &u32::try_from(canonical_header.len() + 1)
-                .expect("small header")
-                .to_le_bytes(),
-        );
-        noncanonical.extend_from_slice(&canonical_header);
-        noncanonical.push(0);
-        noncanonical.extend_from_slice(b"pk");
-        assert!(
-            decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-                &noncanonical,
-                KagemushaPastaCycleParityV1::StepEq,
-                &params,
-            )
-            .is_err()
-        );
-
-        assert!(
-            decode_kagemusha_pasta_cycle_proving_key_payload_v4(
-                &encoded,
-                KagemushaPastaCycleParityV1::StepEp,
-                &params,
-            )
-            .is_err()
-        );
     }
 
     fn framed_fixture(payload: &[u8]) -> (Vec<u8>, KagemushaPastaCycleArtifactV4) {

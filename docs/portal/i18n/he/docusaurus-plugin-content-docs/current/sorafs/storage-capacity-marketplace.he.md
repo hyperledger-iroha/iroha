@@ -64,7 +64,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - helpers משותפים (`CapacityMetadataEntry`, `PricingScheduleV1`, ולידטורי lane/assignment/SLA) מספקים ולידציה דטרמיניסטית למפתחות ודיווחי שגיאות שניתנים לשימוש חוזר ב-CI וב-downstream tooling.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` מציג כעת snapshot on-chain דרך `/v1/sorafs/capacity/state`, תוך שילוב הצהרות providers ורשומות fee ledger מאחורי Norito JSON דטרמיניסטי.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - כיסוי הולידציה בודק אכיפת handles קנוניים, זיהוי כפילויות, גבולות לכל lane, guards של הקצאות replication ובדיקות טווח לטלמטריה כדי שרגרסיות יבלטו מיד ב-CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- tooling למפעילים: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` ממיר specs קריאים לאדם ל-Norito payloads קנוניים, base64 blobs וסיכומי JSON כך שמפעילים יוכלו להכין fixtures עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` ו-replication order fixtures עם ולידציה מקומית.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures נמצאים ב-`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ונוצרים באמצעות `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- tooling למפעילים: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` ממיר specs קריאים לאדם ל-Norito payloads קנוניים, base64 blobs וסיכומי JSON כך שמפעילים יוכלו להכין fixtures עבור `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` ו-replication order fixtures עם ולידציה מקומית.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures נמצאים ב-`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ונוצרים באמצעות `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. אינטגרציית control plane
 
@@ -155,7 +155,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   לצד governance packets.
 
 ### Dispute & slashing evidence
-- הגישו disputes דרך `sorafs_manifest_stub capacity dispute` (tests:
+- הגישו disputes דרך `sorafs_manifest_builder capacity dispute` (tests:
   `cargo test -p sorafs_car --test capacity_cli`) כדי שה-payloads יישארו קנוניים.
 - הריצו `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ומבחני הענישה
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) כדי להוכיח ש-disputes ו-slashes משוחזרים דטרמיניסטית.
@@ -163,7 +163,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   קישרו אישורי strike חזרה לדוח ה-validation.
 
 ### Provider onboarding & exit smoke tests
-- צרו מחדש artefacts של declaration/telemetry עם `sorafs_manifest_stub capacity ...` והריצו CLI tests לפני ההגשה (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- צרו מחדש artefacts של declaration/telemetry עם `sorafs_manifest_builder capacity ...` והריצו CLI tests לפני ההגשה (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - הגישו דרך Torii (`/v1/sorafs/capacity/declare`) ואז תעדו `/v1/sorafs/capacity/state` לצד צילומי Grafana. עקבו אחרי ה-exit flow ב-`docs/source/sorafs/capacity_onboarding_runbook.md`.
 - ארכבו artefacts חתומים ו-reconciliation outputs בתוך `docs/examples/sorafs_capacity_marketplace_validation/`.
 

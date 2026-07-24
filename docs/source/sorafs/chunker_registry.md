@@ -46,10 +46,10 @@ cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- ./docs.tar \
   --profile=sorafs.sf2@1.0.0 --json-out=-
 ```
 
-The manifest stub exposes the same registry data for pipeline scripts:
+The manifest builder exposes the same registry data for pipeline scripts:
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 ```
 
 Use `--promote-profile=<handle>` to emit the metadata block that reviewers paste
@@ -113,7 +113,7 @@ chunk layout without relying only on HTTP negotiation.
   non-empty aliases.
 - `chunker_registry::lookup_by_profile` maps CDC parameters plus multihash code
   back to a descriptor and guards accidental divergence.
-- `sorafs_manifest_stub` and `sorafs_manifest_chunk_store` include the registry
+- `sorafs_manifest_builder` and `sorafs_manifest_chunk_store` include the registry
   metadata in their JSON output so release and governance scripts can compare
   descriptors without hard-coded numeric IDs.
 - Public fixture parity for the registered profiles is maintained under

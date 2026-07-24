@@ -65,7 +65,7 @@ SDK). Удаление неизменяемых псевдонимов и обр
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Отправка PR-материалов о предстоящих событиях, публикациях, репортажах о детерминизме и
@@ -101,14 +101,14 @@ SDK). Удаление неизменяемых псевдонимов и обр
 
 ## Ожидания от инструментов
 
-- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub` показаны:
+- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder` показаны:
   - `--list-profiles` для проверки реестра.
   - `--promote-profile=<handle>` для создания блока метаданных используемого канона.
     Аль-промоутер ип-перфил.
   - `--json-out=-` для передачи сообщает о стандартном выводе, привычном журнале изменений
     воспроизводимые.
 - `ensure_charter_compliance()` вызывается в соответствующих бинарных файлах.
-  (`manifest_chunk_store`, `provider_advert_stub`). Las Pruebas CI deben Fallar Si
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Las Pruebas CI deben Fallar Si
   Nuevas Entradas Violan La Carta.
 
 ## Регистр

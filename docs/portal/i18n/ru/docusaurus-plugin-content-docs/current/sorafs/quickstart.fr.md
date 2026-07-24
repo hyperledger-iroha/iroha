@@ -67,12 +67,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Создайте и подпишите манифест
 
 Конвертируйте план фрагментов, псевдонимы и подписи управления в ООН.
-манифест через `sorafs-manifest-stub`. La Commande Ci-dessous иллюстрирует полезную нагрузку
+манифест через `sorafs-manifest-builder`. La Commande Ci-dessous иллюстрирует полезную нагрузку
 Фишер уникальный; passez un chemin de répertoire pour empaqueter un arbre (la CLI le
 паркур в лексикографическом порядке).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

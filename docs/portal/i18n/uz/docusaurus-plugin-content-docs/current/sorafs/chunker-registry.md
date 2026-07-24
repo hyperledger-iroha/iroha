@@ -118,10 +118,10 @@ and will transparently truncate when the request exceeds the available leaves:
 $ yuk tashish -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-Manifest stub bir xil ma'lumotlarni aks ettiradi, bu quvur liniyalarida `--chunker-profile-id` tanlovini skript qilishda qulaydir. Ikkala do'kon CLI ham kanonik tutqich shaklini (`--profile=sorafs.sf1@1.0.0`) qabul qiladi, shuning uchun yaratish skriptlari qattiq kodlangan raqamli identifikatorlardan qochishi mumkin:
+Manifest builder bir xil ma'lumotlarni aks ettiradi, bu quvur liniyalarida `--chunker-profile-id` tanlovini skript qilishda qulaydir. Ikkala do'kon CLI ham kanonik tutqich shaklini (`--profile=sorafs.sf1@1.0.0`) qabul qiladi, shuning uchun yaratish skriptlari qattiq kodlangan raqamli identifikatorlardan qochishi mumkin:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -179,4 +179,4 @@ HTTP muzokaralariga tayanmasdan.
   taqdim etilgan testlar orqali.
 * `chunker_registry::lookup_by_profile` ta'kidlaydiki, deskriptor parametrlari
   tasodifiy ajralishdan himoya qilish uchun `ChunkProfile::DEFAULT` bilan moslang.
-* `iroha app sorafs toolkit pack` va `sorafs_manifest_stub` tomonidan ishlab chiqarilgan manifestlar registr metamaʼlumotlarini oʻz ichiga oladi.
+* `iroha app sorafs toolkit pack` va `sorafs_manifest_builder` tomonidan ishlab chiqarilgan manifestlar registr metamaʼlumotlarini oʻz ichiga oladi.

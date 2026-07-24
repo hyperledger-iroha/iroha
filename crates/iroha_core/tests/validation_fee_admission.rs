@@ -730,7 +730,10 @@ fn install_validation_fee_policy(
         assert!(proposal.finalization_evidence.is_none());
         let derived_effect_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::asset::CanTransferAsset {
-                asset: AssetId::new(policy.ds_asset_id.clone(), policy.treasury_account_id.clone()),
+                asset: AssetId::new(
+                    policy.ds_asset_id.clone(),
+                    policy.treasury_account_id.clone(),
+                ),
             }
             .into();
         assert!(
@@ -803,7 +806,10 @@ fn install_validation_fee_policy(
         );
         let derived_effect_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::asset::CanTransferAsset {
-                asset: AssetId::new(policy.ds_asset_id.clone(), policy.treasury_account_id.clone()),
+                asset: AssetId::new(
+                    policy.ds_asset_id.clone(),
+                    policy.treasury_account_id.clone(),
+                ),
             }
             .into();
         let direct_holders = view
@@ -818,11 +824,13 @@ fn install_validation_fee_policy(
             .collect::<Vec<_>>();
         assert_eq!(
             direct_holders,
-            vec![&policy
-                .treasury_payout_binding
-                .as_ref()
-                .expect("payout binding")
-                .pool_vault_account_id],
+            vec![
+                &policy
+                    .treasury_payout_binding
+                    .as_ref()
+                    .expect("payout binding")
+                    .pool_vault_account_id
+            ],
             "protected lifecycle enactment must atomically derive the sole pool effect grant"
         );
         assert!(
@@ -1427,7 +1435,9 @@ fn enacted_lifecycle_pins_exact_wrapper_pool_and_asset_effect_permissions() {
     ] {
         let grant_error = Grant::account_permission(permission.clone(), recipient.clone())
             .execute(&user, &mut stx)
-            .expect_err("payout runtime permission must not be delegated after lifecycle enactment");
+            .expect_err(
+                "payout runtime permission must not be delegated after lifecycle enactment",
+            );
         assert!(
             grant_error
                 .to_string()

@@ -66,11 +66,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. ایک منشور کی تعمیر اور دستخط کریں
 
 ٹکڑوں ، عرفی ناموں اور گورننس کے دستخطوں کو ایک منشور میں استعمال کرتے ہوئے ...
-`sorafs-manifest-stub`۔ نیچے دیئے گئے کمانڈ میں ایک فائل کے لئے پے لوڈ کو ظاہر کیا گیا ہے۔ پیکیجوں تک ڈائریکٹری کا راستہ پاس کریں
+`sorafs-manifest-builder`۔ نیچے دیئے گئے کمانڈ میں ایک فائل کے لئے پے لوڈ کو ظاہر کیا گیا ہے۔ پیکیجوں تک ڈائریکٹری کا راستہ پاس کریں
 درخت (سی ایل آئی لغت میں چلتا ہے)۔
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

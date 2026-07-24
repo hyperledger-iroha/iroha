@@ -117,7 +117,7 @@ groups:
    - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
    - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
 3. **Reassign replication**
-   - Issue new orders via `sorafs_manifest_stub capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
+   - Issue new orders via `sorafs_manifest_builder capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
    - Notify governance if aliases lack active manifest bindings (`torii_sorafs_registry_aliases_total` drops unexpectedly).
 4. **Document outcome**
    - Record incident notes in the SoraFS operations log with timestamps and affected manifest digests.

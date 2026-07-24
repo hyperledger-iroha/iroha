@@ -231,6 +231,17 @@ def test_help_marks_final_deployment_context_required(capsys) -> None:
     assert "Optional expected environment" not in help_text
 
 
+def test_now_unix_is_required_for_freshness_validation(
+    tmp_path: Path,
+    capsys,
+) -> None:
+    exit_code = MODULE.main(["--out-dir", str(tmp_path / "out")])
+
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert "--now-unix must be positive" in captured.err
+
+
 def test_malformed_integer_arguments_fail_before_validation(capsys) -> None:
     cases = [
         ("--now-unix", "private-key-01", "must be an integer"),
@@ -519,7 +530,7 @@ def test_plan_json_thresholds_shape_is_validated(tmp_path: Path) -> None:
         in diagnostics
     )
     assert (
-        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs and optional now_unix"
+        "production readiness runner plan thresholds must contain only max_summary_artifact_age_secs and now_unix"
         in diagnostics
     )
     assert (
@@ -692,6 +703,8 @@ def test_plan_json_summary_contract_shape_is_validated(tmp_path: Path) -> None:
             str(tmp_path / "out"),
             "--verifier",
             str(CHECKER_PATH),
+            "--now-unix",
+            "1800800000",
             "--gateway-load-summary",
             str(gateway_summary),
             "--require-gate",

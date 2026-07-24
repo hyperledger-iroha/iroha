@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-يتعين على المشغلين إعادة إنشاء حمولات طلب الإعداد/الخلاف باستخدام `sorafs_manifest_stub capacity {declaration,dispute}` وحفظ وحدات البايت JSON/Norito الناتجة جنبًا إلى جنب مع بطاقة الإدارة.
+يتعين على المشغلين إعادة إنشاء حمولات طلب الإعداد/الخلاف باستخدام `sorafs_manifest_builder capacity {declaration,dispute}` وحفظ وحدات البايت JSON/Norito الناتجة جنبًا إلى جنب مع بطاقة الإدارة.
 
 ## تحف فنية| قطعة أثرية | روتا | بليك2ب-256 |
 |----------|------|-------------|

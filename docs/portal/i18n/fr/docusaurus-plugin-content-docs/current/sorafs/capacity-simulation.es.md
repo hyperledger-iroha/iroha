@@ -19,7 +19,7 @@ description : Exécuter la boîte à outils de simulation du marché de capacit
 Cette page reflète `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Il s'agit de copies synchronisées jusqu'à ce que le ensemble de documents hérités de Sphinx ait été migré complètement.
 :::
 
-Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les valeurs résultantes. Validez la négociation de comptes, la procédure de basculement et la correction des coupures de l'extrême à l'extrême en utilisant les luminaires déterminés en `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité utilisent `sorafs_manifest_stub capacity` ; usa `iroha app sorafs toolkit pack` pour les flujos de empaquetado de manifest/CAR.
+Ce runbook explique comment exécuter le kit de simulation du marché de capacité SF-2c et visualiser les valeurs résultantes. Validez la négociation de comptes, la procédure de basculement et la correction des coupures de l'extrême à l'extrême en utilisant les luminaires déterminés en `docs/examples/sorafs_capacity_simulation/`. Les charges utiles de capacité utilisent `sorafs_manifest_builder capacity` ; usa `iroha app sorafs toolkit pack` pour les flujos de empaquetado de manifest/CAR.
 
 ## 1. Générer des artefacts de CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` envoie `sorafs_manifest_stub capacity` pour émettre des charges utiles Norito, des blobs base64, des services de sollicitation pour Torii et des résumés JSON pour :- Trois déclarations des fournisseurs qui participent au scénario de négociation de comptes.
+`run_cli.sh` envoie `sorafs_manifest_builder capacity` pour émettre des charges utiles Norito, des blobs base64, des services de sollicitation pour Torii et des résumés JSON pour :- Trois déclarations des fournisseurs qui participent au scénario de négociation de comptes.
 - Un ordre de réplication qui assigne le manifeste à la mise en scène entre ces fournisseurs.
 - Instantanés de télémétrie pour la ligne de base précédente au démarrage, l'intervalle de démarrage et la récupération lors du basculement.
 - Une charge utile de litige sollicitée pour couper la caisse simulée.

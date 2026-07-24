@@ -371,6 +371,23 @@ private func nativeAmxDiagnosticsPayload(
         "lane_governance_sealed_total": 0,
         "lane_governance_sealed_aliases": [],
         "lane_governance": [],
+        "native_amx_participant_applications": [[
+            "lane_id": 9,
+            "dataspace_id": 13,
+            "lane_incarnation": nativeAmxTestHash(0xB8),
+            "participant_height": 8,
+            "participant_view": 9,
+            "predecessor_height": 7,
+            "predecessor_descriptor_hash": nativeAmxTestHash(0x5D),
+            "descriptor_hash": nativeAmxTestHash(0x9E),
+            "proposal_hash": nativeAmxTestHash(0x60),
+            "settlement_hash": nativeAmxTestHash(0x62),
+            "source_count": 2,
+            "application_block_height": 42,
+            "application_block_hash": nativeAmxTestHash(0xA2),
+            "state": "durably_applied",
+        ]],
+        "autonomous_lane_executions": [],
     ])
 }
 
@@ -1467,7 +1484,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_eq_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_eq_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-eq-compact-layout-v5",
           "commitment": "4444444444444444444444444444444444444444444444444444444444444444",
           "public_inputs_schema_hash": "4545454545454545454545454545454545454545454545454545454545454545",
           "max_proof_bytes": 4096,
@@ -1477,7 +1494,7 @@ final class ToriiClientTests: XCTestCase {
         "active_recursive_step_ep_verifier": {
           "id": {"backend": "halo2/ipa", "name": "kagemusha_recursive_step_ep_v4_verifier_record"},
           "version": 1,
-          "circuit_id": "kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+          "circuit_id": "kagemusha-recursive-spend-step-ep-compact-lineage-v5",
           "commitment": "5555555555555555555555555555555555555555555555555555555555555555",
           "public_inputs_schema_hash": "5656565656565656565656565656565656565656565656565656565656565656",
           "max_proof_bytes": 4096,
@@ -11954,7 +11971,7 @@ final class ToriiClientTests: XCTestCase {
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
-                changingArtifact { $0["max_proof_bytes"] = 16 * 1_024 * 1_024 + 1 },
+                changingArtifact { $0["max_proof_bytes"] = 21_765 },
                 "max_proof_bytes must be within the ABI-21 V4 absolute proof limit"
             ),
             (
@@ -17070,6 +17087,12 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             "post_state_root": nativeAmxTestHash(0xC3),
             "ordinary_writes_root": nativeAmxTestHash(0xC5),
             "topup_anchor_count": 0,
+            "native_amx_application_manifest_version":
+                ToriiSumeragiV2ExecutionCommitment
+                    .canonicalNativeAmxApplicationManifestVersion,
+            "native_amx_application_manifest_root":
+                ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot,
+            "native_amx_application_manifest_count": 0,
             "executed_block_wire_hash": nativeAmxTestHash(0xC7),
         ]
         let prepareQC: [String: Any] = [
@@ -17146,6 +17169,11 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
             nativeAmxTestHash(0xC7)
         )
         XCTAssertEqual(
+            snapshot.highestPrepareQC?.executionCommitment
+                .nativeAmxApplicationManifestRoot,
+            ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
+        )
+        XCTAssertEqual(
             snapshot.lastTimeoutCertificate?.highestPrepareQC?.subject.blockHash,
             blockHash
         )
@@ -17153,6 +17181,50 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(snapshot.pendingPersistenceID, 17)
         XCTAssertEqual(snapshot.lastCommittedHeight, 14)
         XCTAssertEqual(snapshot.lastCommittedSubject?.payloadHash, payloadHash)
+    }
+
+    func testSumeragiExecutionCommitmentRejectsNoncanonicalNativeAmxManifest() throws {
+        let emptyRoot =
+            ToriiSumeragiV2ExecutionCommitment.nativeAmxApplicationManifestEmptyRoot
+        let base: [String: Any] = [
+            "parent_state_root": nativeAmxTestHash(0xC1),
+            "post_state_root": nativeAmxTestHash(0xC3),
+            "ordinary_writes_root": nativeAmxTestHash(0xC5),
+            "topup_anchor_count": 0,
+            "native_amx_application_manifest_version":
+                ToriiSumeragiV2ExecutionCommitment
+                    .canonicalNativeAmxApplicationManifestVersion,
+            "native_amx_application_manifest_root": emptyRoot,
+            "native_amx_application_manifest_count": 0,
+            "executed_block_wire_hash": nativeAmxTestHash(0xC7),
+        ]
+        func decode(_ value: [String: Any]) throws {
+            _ = try JSONDecoder().decode(
+                ToriiSumeragiV2ExecutionCommitment.self,
+                from: JSONSerialization.data(withJSONObject: value)
+            )
+        }
+
+        try decode(base)
+        var wrongVersion = base
+        wrongVersion["native_amx_application_manifest_version"] = 2
+        XCTAssertThrowsError(try decode(wrongVersion))
+        var nonemptyRootAtZero = base
+        nonemptyRootAtZero["native_amx_application_manifest_root"] =
+            nativeAmxTestHash(0xD1)
+        XCTAssertThrowsError(try decode(nonemptyRootAtZero))
+        var emptyRootAtOne = base
+        emptyRootAtOne["native_amx_application_manifest_count"] = 1
+        XCTAssertThrowsError(try decode(emptyRootAtOne))
+        var oversized = base
+        oversized["native_amx_application_manifest_count"] =
+            ToriiSumeragiV2ExecutionCommitment
+                .maximumNativeAmxApplicationManifestLeafCount + 1
+        oversized["native_amx_application_manifest_root"] = nativeAmxTestHash(0xD1)
+        XCTAssertThrowsError(try decode(oversized))
+        var missingRoot = base
+        missingRoot.removeValue(forKey: "native_amx_application_manifest_root")
+        XCTAssertThrowsError(try decode(missingRoot))
     }
 
     func testSumeragiDiagnosticsPreservesNativeAmxV2AndNexusFeeReceipts() throws {
@@ -17191,6 +17263,102 @@ data: {"event":"Transaction","hash":"\(Self.pipelineHash)","status":"Applied","b
         XCTAssertEqual(
             snapshot.laneRelayEnvelopes.first?.settlementCommitment.nativeAmxReceipts,
             commitment.nativeAmxReceipts
+        )
+        let application = try XCTUnwrap(snapshot.nativeAmxParticipantApplications.first)
+        XCTAssertEqual(application.laneID, 9)
+        XCTAssertEqual(application.dataspaceID, 13)
+        XCTAssertEqual(application.participantHeight, 8)
+        XCTAssertEqual(application.predecessorHeight, 7)
+        XCTAssertEqual(application.sourceCount, 2)
+        XCTAssertEqual(application.applicationBlockHeight, 42)
+        XCTAssertEqual(application.state, .durablyApplied)
+    }
+
+    func testSumeragiDiagnosticsAutonomousExecutionStagesAndConflict() throws {
+        var row: [String: Any] = [
+            "lane_id": 9, "dataspace_id": 13,
+            "lane_incarnation": nativeAmxTestHash(0xB8),
+            "lane_block_height": 8, "lane_block_view": 1,
+            "proposal_height": 10, "proposal_view": 2,
+            "proposal_hash": nativeAmxTestHash(0x60),
+            "descriptor_hash": nativeAmxTestHash(0x9E),
+            "executable_payload_hash": nativeAmxTestHash(0x61),
+            "source_bundle_hash": nativeAmxTestHash(0x62),
+            "merge_entry_hash": nativeAmxTestHash(0x63),
+            "application_block_height": 42,
+            "application_block_hash": nativeAmxTestHash(0xA2),
+            "reservation_count": 2, "transaction_count": 2,
+            "highest_durable_stage": "kura_wsv_application_receipt_durable",
+            "stuck_reason": "queue_finalization_unverifiable",
+        ]
+        let data = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        let snapshot = try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: data)
+        XCTAssertEqual(snapshot.autonomousLaneExecutions.first?.mergeEntryHash,
+                       nativeAmxTestHash(0x63))
+
+        let duplicate = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row, row]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: duplicate)
+        )
+        row["reservation_count"] = 1
+        let mismatchedCounts = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self,
+                                     from: mismatchedCounts)
+        )
+        row["highest_durable_stage"] = "conflict"
+        row["stuck_reason"] = "evidence_conflict"
+        let conflict = try mutatedNativeAmxDiagnosticsPayload { root in
+            root["autonomous_lane_executions"] = [row]
+        }
+        XCTAssertNoThrow(
+            try JSONDecoder().decode(ToriiSumeragiDiagnosticsSnapshot.self, from: conflict)
+        )
+    }
+
+    func testSumeragiDiagnosticsRejectsMalformedNativeAmxApplicationRows() throws {
+        let duplicateRoute = try mutatedNativeAmxDiagnosticsPayload { root in
+            let applications =
+                root["native_amx_participant_applications"] as! [[String: Any]]
+            root["native_amx_participant_applications"] = applications + applications
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: duplicateRoute
+            )
+        )
+
+        let missingApplicationHash = try mutatedNativeAmxDiagnosticsPayload { root in
+            var applications =
+                root["native_amx_participant_applications"] as! [[String: Any]]
+            applications[0].removeValue(forKey: "application_block_hash")
+            root["native_amx_participant_applications"] = applications
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: missingApplicationHash
+            )
+        )
+
+        let sourceOverflow = try mutatedNativeAmxDiagnosticsPayload { root in
+            var applications =
+                root["native_amx_participant_applications"] as! [[String: Any]]
+            applications[0]["source_count"] = 4_097
+            root["native_amx_participant_applications"] = applications
+        }
+        XCTAssertThrowsError(
+            try JSONDecoder().decode(
+                ToriiSumeragiDiagnosticsSnapshot.self,
+                from: sourceOverflow
+            )
         )
     }
 

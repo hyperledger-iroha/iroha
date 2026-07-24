@@ -19,7 +19,7 @@ Sidebar_label: Добавить комментарий
 Был установлен `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Он был изображен в фильме "Сфинкс" и "Территория" в Сфинксе.
 :::
 
-В 1997 году он был отправлен на базу SF-2c в 1998 году. Это так. Он был показан во время аварийного переключения, а также резких движений в светильниках, проведенных в Сан-Франциско. Это относится к `docs/examples/sorafs_capacity_simulation/`. Полезные нагрузки السعة تستخدم `sorafs_manifest_stub capacity`; Создайте `iroha app sorafs toolkit pack` для манифеста/CAR.
+В 1997 году он был отправлен на базу SF-2c в 1998 году. Это так. Он был показан во время аварийного переключения, а также резких движений в светильниках, проведенных в Сан-Франциско. Это относится к `docs/examples/sorafs_capacity_simulation/`. Полезные нагрузки السعة تستخدم `sorafs_manifest_builder capacity`; Создайте `iroha app sorafs toolkit pack` для манифеста/CAR.
 
 ## 1. Просмотр артефактов в интерфейсе командной строки
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Для `run_cli.sh` для `sorafs_manifest_stub capacity` для Norito полезных данных и больших двоичных объектов в base64 и для Torii Формат JSON:
+Для `run_cli.sh` для `sorafs_manifest_builder capacity` для Norito полезных данных и больших двоичных объектов в base64 и для Torii Формат JSON:
 
 - Скарлетт Льюис Мейсон в Сан-Франциско в Нью-Йорке.
 - Он был убит в 1990-х годах в Вашингтоне.

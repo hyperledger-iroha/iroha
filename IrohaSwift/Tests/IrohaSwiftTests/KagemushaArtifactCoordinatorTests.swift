@@ -4,54 +4,71 @@ import XCTest
 @testable import IrohaSwift
 
 final class KagemushaArtifactCoordinatorTests: XCTestCase {
-    func testConcurrentIdenticalAcquireInstallsOnceAndReusesGeneration() throws {
-        let world = FakeArtifactWorld()
-        let coordinator = makeCoordinator(world: world)
-        let manifest = try makeManifest(0x11)
-        let binding = try makeBinding(0x11, manifest: manifest)
-        let streamCalls = LockedCounter()
-        let allStreams = try (0..<16).map { _ in
-            try makeStreams(seed: 0x11) { streamCalls.increment() }
-        }
+    func testProcessWidePermitRejectsContenderBeforeItReadsStreams() throws {
+        let worldA = FakeArtifactWorld()
+        let worldB = FakeArtifactWorld()
+        let coordinatorA = makeCoordinator(world: worldA)
+        let coordinatorB = makeCoordinator(world: worldB)
+        let manifestA = try makeManifest(0x11)
+        let bindingA = try makeBinding(0x11, manifest: manifestA)
+        let manifestB = try makeManifest(0x12)
+        let bindingB = try makeBinding(0x12, manifest: manifestB)
+        let enteredStream = DispatchSemaphore(value: 0)
+        let releaseStream = DispatchSemaphore(value: 0)
+        let finished = DispatchSemaphore(value: 0)
         let resultLock = NSLock()
-        var leases: [KagemushaRecursiveSpendInstalledArtifactLease] = []
-        var errors: [Error] = []
+        var primaryResult: Result<KagemushaRecursiveSpendInstalledArtifactLease, Error>?
+        var streamsA = try makeStreams(seed: 0x11)
+        let firstBytes = makeArtifactBytes(seed: 0x11)[0]
+        streamsA[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: .stepEqParamsIpa,
+            expectedSHA256: Data(SHA256.hash(data: firstBytes)),
+            byteCount: UInt64(firstBytes.count)
+        ) { consume in
+            enteredStream.signal()
+            releaseStream.wait()
+            try consume(0, firstBytes)
+        }
 
-        DispatchQueue.concurrentPerform(iterations: allStreams.count) { index in
-            do {
-                let lease = try coordinator.acquire(
-                    manifest: manifest,
-                    binding: binding,
-                    artifacts: allStreams[index]
+        DispatchQueue.global().async {
+            let result = Result {
+                try coordinatorA.acquire(
+                    manifest: manifestA,
+                    binding: bindingA,
+                    artifacts: streamsA
                 )
-                resultLock.lock()
-                leases.append(lease)
-                resultLock.unlock()
-            } catch {
-                resultLock.lock()
-                errors.append(error)
-                resultLock.unlock()
             }
+            resultLock.lock()
+            primaryResult = result
+            resultLock.unlock()
+            finished.signal()
         }
+        XCTAssertEqual(enteredStream.wait(timeout: .now() + 2), .success)
 
-        XCTAssertTrue(errors.isEmpty)
-        XCTAssertEqual(leases.count, allStreams.count)
-        XCTAssertEqual(world.sessionCount, 1)
-        XCTAssertEqual(world.installCount, 1)
-        XCTAssertEqual(
-            streamCalls.value,
-            KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
-        )
-        for lease in leases {
-            XCTAssertEqual(lease.binding, binding)
-            XCTAssertEqual(lease.manifestSHA256, manifest.sha256)
-            XCTAssertEqual(
-                lease.artifactSHA256s.count,
-                KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
-            )
-            let installedBinding = try lease.withInstalledArtifactSet(\.binding)
-            XCTAssertEqual(installedBinding, binding)
+        let contenderReads = LockedCounter()
+        XCTAssertThrowsError(try coordinatorB.acquire(
+            manifest: manifestB,
+            binding: bindingB,
+            artifacts: makeStreams(seed: 0x12) { contenderReads.increment() }
+        )) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofWorkerBusy)
         }
+        XCTAssertEqual(contenderReads.value, 0)
+        XCTAssertEqual(worldB.sessionCount, 0)
+
+        releaseStream.signal()
+        XCTAssertEqual(finished.wait(timeout: .now() + 2), .success)
+        resultLock.lock()
+        let completed = primaryResult
+        resultLock.unlock()
+        XCTAssertEqual(try XCTUnwrap(completed).get().binding, bindingA)
+
+        let leaseB = try coordinatorB.acquire(
+            manifest: manifestB,
+            binding: bindingB,
+            artifacts: makeStreams(seed: 0x12)
+        )
+        XCTAssertEqual(leaseB.binding, bindingB)
     }
 
     func testAcquireRejectsDigestLengthAndOffsetMismatches() throws {
@@ -305,6 +322,104 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         XCTAssertEqual(world.cancelCount, 1)
     }
 
+    func testBusyInstallRetriesFinalizedSessionWithoutRestreamOrCancellation() throws {
+        let world = FakeArtifactWorld()
+        let coordinator = makeCoordinator(world: world)
+        let manifest = try makeManifest(0x26)
+        let binding = try makeBinding(0x26, manifest: manifest)
+        let streamCalls = LockedCounter()
+        world.makeNextInstallBusy()
+
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifest,
+            binding: binding,
+            artifacts: makeStreams(seed: 0x26) { streamCalls.increment() }
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .proofWorkerBusy
+            )
+        }
+        XCTAssertEqual(
+            streamCalls.value,
+            KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
+        )
+        XCTAssertEqual(world.sessionCount, 1)
+        XCTAssertEqual(world.installAttemptCount, 1)
+        XCTAssertEqual(world.installCount, 0)
+        XCTAssertEqual(world.cancelCount, 0)
+
+        let lease = try coordinator.acquire(
+            manifest: manifest,
+            binding: binding,
+            artifacts: makeStreams(seed: 0x26) { streamCalls.increment() }
+        )
+        XCTAssertEqual(
+            streamCalls.value,
+            KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount
+        )
+        XCTAssertEqual(world.sessionCount, 1)
+        XCTAssertEqual(world.installAttemptCount, 2)
+        XCTAssertEqual(world.installCount, 1)
+        XCTAssertEqual(world.cancelCount, 0)
+        XCTAssertEqual(try lease.withInstalledArtifactSet(\.binding), binding)
+    }
+
+    func testDifferentAcquireCancelAndUninstallDiscardBusyPendingSession() throws {
+        let world = FakeArtifactWorld()
+        let coordinator = makeCoordinator(world: world)
+        let manifestA = try makeManifest(0x27)
+        let bindingA = try makeBinding(0x27, manifest: manifestA)
+        world.makeNextInstallBusy()
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifestA,
+            binding: bindingA,
+            artifacts: makeStreams(seed: 0x27)
+        )) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofWorkerBusy)
+        }
+
+        let manifestB = try makeManifest(0x28)
+        let bindingB = try makeBinding(0x28, manifest: manifestB)
+        let leaseB = try coordinator.acquire(
+            manifest: manifestB,
+            binding: bindingB,
+            artifacts: makeStreams(seed: 0x28)
+        )
+        XCTAssertEqual(world.cancelCount, 1)
+        XCTAssertEqual(world.activeBinding, bindingB)
+
+        let manifestC = try makeManifest(0x29)
+        let bindingC = try makeBinding(0x29, manifest: manifestC)
+        world.makeNextInstallBusy()
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifestC,
+            binding: bindingC,
+            artifacts: makeStreams(seed: 0x29)
+        )) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofWorkerBusy)
+        }
+        try coordinator.cancelPendingInstallation()
+        XCTAssertEqual(world.cancelCount, 2)
+        XCTAssertEqual(try leaseB.withInstalledArtifactSet(\.binding), bindingB)
+
+        let manifestD = try makeManifest(0x2A)
+        let bindingD = try makeBinding(0x2A, manifest: manifestD)
+        world.makeNextInstallBusy()
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifestD,
+            binding: bindingD,
+            artifacts: makeStreams(seed: 0x2A)
+        )) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofWorkerBusy)
+        }
+        try coordinator.uninstallCurrent()
+        XCTAssertEqual(world.cancelCount, 3)
+        XCTAssertEqual(world.uninstallCount, 1)
+        XCTAssertNil(world.activeBinding)
+        assertStale(leaseB)
+    }
+
     func testRotationRejectsStaleLeaseAndRollbackRestoresOldGeneration() throws {
         let world = FakeArtifactWorld()
         let coordinator = makeCoordinator(world: world)
@@ -398,7 +513,7 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         XCTAssertEqual(world.uninstallCount, 0)
     }
 
-    func testAcquireSerializesWithInstalledArtifactSetBody() throws {
+    func testAcquireReturnsBusyWhileInstalledArtifactSetBodyOwnsPermit() throws {
         let world = FakeArtifactWorld()
         let coordinator = makeCoordinator(world: world)
         let manifestA = try makeManifest(0x51)
@@ -415,11 +530,8 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         let bodyEntered = DispatchSemaphore(value: 0)
         let releaseBody = DispatchSemaphore(value: 0)
         let bodyFinished = DispatchSemaphore(value: 0)
-        let acquireAttempted = DispatchSemaphore(value: 0)
-        let acquireFinished = DispatchSemaphore(value: 0)
         let resultLock = NSLock()
         var bodyError: Error?
-        var acquireResult: Result<KagemushaRecursiveSpendInstalledArtifactLease, Error>?
 
         DispatchQueue.global().async {
             defer { bodyFinished.signal() }
@@ -436,35 +548,28 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
         }
         XCTAssertEqual(bodyEntered.wait(timeout: .now() + 2), .success)
 
-        DispatchQueue.global().async {
-            acquireAttempted.signal()
-            let result = Result {
-                try coordinator.acquire(
-                    manifest: manifestB,
-                    binding: bindingB,
-                    artifacts: streamsB
-                )
-            }
-            resultLock.lock()
-            acquireResult = result
-            resultLock.unlock()
-            acquireFinished.signal()
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifestB,
+            binding: bindingB,
+            artifacts: streamsB
+        )) { error in
+            XCTAssertEqual(error as? KagemushaRecursiveSpendError, .proofWorkerBusy)
         }
-        XCTAssertEqual(acquireAttempted.wait(timeout: .now() + 2), .success)
-        XCTAssertEqual(acquireFinished.wait(timeout: .now() + 0.1), .timedOut)
         XCTAssertEqual(world.sessionCount, 1)
         XCTAssertEqual(world.activeBinding, bindingA)
 
         releaseBody.signal()
         XCTAssertEqual(bodyFinished.wait(timeout: .now() + 2), .success)
-        XCTAssertEqual(acquireFinished.wait(timeout: .now() + 2), .success)
 
         resultLock.lock()
         let capturedBodyError = bodyError
-        let capturedAcquireResult = acquireResult
         resultLock.unlock()
         XCTAssertNil(capturedBodyError)
-        let leaseB = try XCTUnwrap(capturedAcquireResult).get()
+        let leaseB = try coordinator.acquire(
+            manifest: manifestB,
+            binding: bindingB,
+            artifacts: streamsB
+        )
         XCTAssertEqual(try leaseB.withInstalledArtifactSet(\.binding), bindingB)
         assertStale(leaseA)
     }
@@ -629,6 +734,38 @@ final class KagemushaArtifactCoordinatorTests: XCTestCase {
                 )
             }
         }
+    }
+
+    func testAcquireRejectsChunkLargerThanOneMiB() throws {
+        let world = FakeArtifactWorld()
+        let coordinator = makeCoordinator(world: world)
+        let manifest = try makeManifest(0x70)
+        let binding = try makeBinding(0x70, manifest: manifest)
+        var streams = try makeStreams(seed: 0x70)
+        let oversized = Data(
+            repeating: 0x70,
+            count: KagemushaRecursiveSpend.artifactMaximumChunkBytes + 1
+        )
+        streams[0] = try KagemushaRecursiveSpendArtifactStream(
+            role: .stepEqParamsIpa,
+            expectedSHA256: Data(SHA256.hash(data: oversized)),
+            byteCount: UInt64(oversized.count)
+        ) { consume in
+            try consume(0, oversized)
+        }
+
+        XCTAssertThrowsError(try coordinator.acquire(
+            manifest: manifest,
+            binding: binding,
+            artifacts: streams
+        )) { error in
+            XCTAssertEqual(
+                error as? KagemushaRecursiveSpendError,
+                .invalidField("artifact.chunk")
+            )
+        }
+        XCTAssertEqual(world.installCount, 0)
+        XCTAssertEqual(world.cancelCount, 1)
     }
 
     func testSameBindingCannotReuseDifferentDeclaredArtifactIdentity() throws {
@@ -826,13 +963,16 @@ private final class FakeArtifactWorld: @unchecked Sendable {
     private let lock = NSLock()
     private var sessions: [FakeArtifactSession] = []
     private weak var active: FakeArtifactSession?
+    private var installAttempts = 0
     private var installs = 0
     private var cancels = 0
     private var uninstalls = 0
     private var rejectedInstalls = 0
+    private var busyInstalls = 0
     private var nextInstalledSet: KagemushaRecursiveSpendInstalledArtifactSetV4?
 
     var sessionCount: Int { synchronized { sessions.count } }
+    var installAttemptCount: Int { synchronized { installAttempts } }
     var installCount: Int { synchronized { installs } }
     var cancelCount: Int { synchronized { cancels } }
     var uninstallCount: Int { synchronized { uninstalls } }
@@ -857,6 +997,12 @@ private final class FakeArtifactWorld: @unchecked Sendable {
 
     func install(_ session: FakeArtifactSession) throws {
         lock.lock()
+        installAttempts += 1
+        if busyInstalls > 0 {
+            busyInstalls -= 1
+            lock.unlock()
+            throw KagemushaRecursiveSpendError.proofWorkerBusy
+        }
         if rejectedInstalls > 0 {
             rejectedInstalls -= 1
             lock.unlock()
@@ -864,6 +1010,12 @@ private final class FakeArtifactWorld: @unchecked Sendable {
         }
         active = session
         installs += 1
+        lock.unlock()
+    }
+
+    func makeNextInstallBusy() {
+        lock.lock()
+        busyInstalls += 1
         lock.unlock()
     }
 
@@ -993,6 +1145,7 @@ private final class FakeArtifactSession:
     private var ingestions: [KagemushaRecursiveSpendArtifactRoleV4:
         (digest: Data, ingest: FakeArtifactIngest)] = [:]
     private var cancelled = false
+    private var installed = false
 
     init(
         manifest: KagemushaRecursiveSpendArtifactManifestArchive,
@@ -1009,7 +1162,7 @@ private final class FakeArtifactSession:
         expectedArtifactSHA256: Data
     ) throws
         -> any KagemushaRecursiveSpendArtifactIngestDriver {
-        guard !cancelled,
+        guard !cancelled, !installed,
               ingestions[role] == nil,
               !ingestions.values.contains(where: {
                   $0.digest == expectedArtifactSHA256
@@ -1022,28 +1175,35 @@ private final class FakeArtifactSession:
     }
 
     func install() throws -> KagemushaRecursiveSpendInstalledArtifactSetV4 {
-        guard ingestions.count
+        guard !cancelled, !installed,
+              ingestions.count
                 == KagemushaRecursiveSpendArtifactCoordinator.requiredArtifactCount,
               ingestions.values.allSatisfy({ $0.ingest.isFinalized }) else {
             throw KagemushaRecursiveSpendError.invalidField("fakeSession.install")
         }
         try world.install(self)
+        installed = true
         return try world.takeInstalledSet(
             fallbackBinding: binding,
             fallbackManifest: manifest
         )
     }
 
-    func isInstalled() throws -> Bool { world.isInstalled(self) }
+    func isInstalled() throws -> Bool { installed && world.isInstalled(self) }
 
-    func uninstall() throws { world.uninstall(self) }
+    func uninstall() throws {
+        guard installed else { return }
+        world.uninstall(self)
+        installed = false
+    }
 
     func cancel() throws {
-        guard !cancelled else { return }
+        guard !cancelled, !installed else { return }
         cancelled = true
         for ingest in ingestions.values {
             try ingest.ingest.cancel()
         }
+        ingestions.removeAll()
         world.cancel(self)
     }
 }
@@ -1070,6 +1230,7 @@ private final class FakeArtifactIngest:
 
     func cancel() throws {
         isCancelled = true
+        isFinalized = false
         bytes.removeAll()
     }
 }

@@ -38,7 +38,7 @@ translator: machine-google-reviewed
 
 ## 3. Дауды жіберіңіз
 
-1. `sorafs_manifest_stub capacity dispute` үшін арнайы JSON жасаңыз:
+1. `sorafs_manifest_builder capacity dispute` үшін арнайы JSON жасаңыз:
 
    ```json
    {
@@ -61,7 +61,7 @@ translator: machine-google-reviewed
 2. CLI іске қосыңыз:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -78,7 +78,7 @@ translator: machine-google-reviewed
 
 1. **Жеңілдік терезе:** провайдерге алдағы қайтарып алу туралы хабарлау; саясат рұқсат еткенде бекітілген деректерді эвакуациялауға мүмкіндік береді.
 2. **`ProviderAdmissionRevocationV1` жасау:**
-   - Бекітілген себеппен `sorafs_manifest_stub provider-admission revoke` пайдаланыңыз.
+   - Бекітілген себеппен `sorafs_manifest_builder provider-admission revoke` пайдаланыңыз.
    - Қолтаңбаларды және кері қайтарып алу дайджестін тексеріңіз.
 3. **Бас тартуды жариялау:**
    - Torii нөміріне қайтарып алу туралы өтінішті жіберіңіз.
@@ -93,7 +93,7 @@ translator: machine-google-reviewed
 
 №# 6. Анықтамалық материалдар
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (даулы бөлім)
 - `docs/source/sorafs/provider_admission_policy.md` (қайтарып алу жұмыс процесі)
 - Бақылаудың бақылау тақтасы: `SoraFS / Capacity Providers`

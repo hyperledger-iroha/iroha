@@ -504,17 +504,17 @@ The rollout evidence scripts have focused Python coverage in:
   command refuses to write the recovered mirror index if snapshot or CAR
   bindings fail.
 - Use `sorafs_cli governance dag mirror-build` and `mirror-query` for local
-  signed-snapshot lookup by head, block CID, or governance-node CID before the
-  runtime mirror service exists.
+  signed-snapshot lookup by head, block CID, or governance-node CID without
+  contacting the shipped runtime mirror service.
 - Use Torii `GET /v1/sorafs/governance/dag/dashboard`, `/head`,
   `/blocks/{block_cid_hex}`, and `/nodes/{node_cid_hex}` when an enabled SoraFS
   node has `sorafs.storage.governance_dag_dir` pointing at a local
   `mirror-index.json` and operators need a read-only dashboard/query surface
-  before the runtime mirror datastore and IPFS/IPNS publisher exist.
+  over the pre-publication local mirror.
 - Use `publish-index.json` in the configured governance directory as the
   runtime-local feed of filesystem-published governance artifacts. It is an
   operator handoff and dashboard source, not a public IPNS head or a replacement
-  for the planned RocksDB/IPLD mirror.
+  for the shipped bounded authenticated public mirror.
 - Use Torii `GET /v1/sorafs/governance/dag/publish-index?limit=N`,
   `/publish-index/digests/{encoded_blake3_hex}`, and
   `/publish-index/kinds/{payload_kind}` to query that runtime-local feed through
@@ -525,14 +525,14 @@ The rollout evidence scripts have focused Python coverage in:
   `/car-queue/digests/{encoded_blake3_hex}`,
   `/car-queue/kinds/{payload_kind}`, and
   `/car-queue/archives/{car_archive_blake3_hex}` to inspect assembled local CAR
-  segment queue state before public IPFS/IPNS publication exists. Digest/kind
+  segment queue state before the always-on service publishes it. Digest/kind
   lookup segment arrays are bounded by `limit` while total match counts remain
   visible.
 - Use Torii `GET /v1/sorafs/governance/dag/runtime`, `/runtime/head`,
   `/runtime/blocks/{block_cid_hex}`, `/runtime/nodes/{node_cid_hex}`,
   `/runtime/digests/{encoded_blake3_hex}`, and `/runtime/kinds/{payload_kind}`
-  to inspect the local signed runtime DAG index before a RocksDB/IPLD mirror or
-  public IPFS/IPNS head exists. Digest/kind lookup block arrays are bounded by
+  to inspect the local signed runtime DAG index independently of the public
+  IPFS/IPNS head. Digest/kind lookup block arrays are bounded by
   `limit` while total match counts remain visible.
 - Use `scripts/build_sorafs_governance_dag_canary.py` to turn reviewed SF-12
   deployment facts into payload-free canary JSON before running the rollout
@@ -550,15 +550,17 @@ The rollout evidence scripts have focused Python coverage in:
   generated artifact through the SF-12 checker, and writes atomically without
   following output symlinks.
 - Keep `configs/taikai_cache/` and `cargo xtask sorafs-taikai-cache-bundle` documented as Taikai cache governance bundle tooling, not as the full DAG publisher.
-- Add live-head, public checkpoint recovery, and dashboard runbooks only when
-  the IPFS/IPNS pipeline and metrics actually exist.
+- Package the shipped live-head, public checkpoint recovery, and dashboard
+  runbooks with the supervised deployment.
 
 ## Rollout Evidence Gate
 
 Use the rollout gate after the deployed ingest service, IPFS/IPNS publisher,
-RocksDB/IPLD mirror datastore, public checkpoint recovery workflow,
+bounded authenticated mirror datastore, public checkpoint recovery workflow,
 runtime/IPFS-backed dashboard API, live observability, IPFS/IPNS end-to-end
-tests, and governance packet have produced reviewed, payload-free JSON evidence:
+tests, and governance packet have produced reviewed, payload-free JSON evidence.
+RocksDB/IPLD is required only if the governed SF-12 capacity measurement rejects
+the shipped bounded JSON mirror:
 
 ```sh
 python3 scripts/check_sorafs_governance_dag_rollout_evidence.py \

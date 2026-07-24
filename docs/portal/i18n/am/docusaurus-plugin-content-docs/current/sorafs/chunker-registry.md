@@ -121,7 +121,7 @@ $ የካርጎ ሩጫ -p sorafs_manifest --ቢን sorafs_manifest_chunk_store --
 አንጸባራቂው ስቱብ ተመሳሳይ ውሂብን ያንጸባርቃል፣ ይህም `--chunker-profile-id` ምርጫን በቧንቧ ሲጽፉ ምቹ ነው። ሁለቱም የመደብር ማከማቻ CLIዎች ቀኖናዊውን መያዣ ቅጽ (`--profile=sorafs.sf1@1.0.0`) ይቀበላሉ ስለዚህ ስክሪፕቶችን ይገንቡ ጠንካራ ኮድ የቁጥር መታወቂያዎችን ያስወግዳሉ፡
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -179,4 +179,4 @@ Accept-Chunker: sorafs.sf1;version=1.0.0
   በቀረቡት ፈተናዎች በኩል.
 * `chunker_registry::lookup_by_profile` ገላጭ መለኪያዎችን ያረጋግጣል
   የአጋጣሚ ልዩነትን ለመጠበቅ `ChunkProfile::DEFAULT` ግጥሚያ።
-* በI18NI0000057X እና `sorafs_manifest_stub` የተሰሩ መግለጫዎች የመመዝገቢያ ሜታዳታ ያካትታሉ።
+* በI18NI0000057X እና `sorafs_manifest_builder` የተሰሩ መግለጫዎች የመመዝገቢያ ሜታዳታ ያካትታሉ።

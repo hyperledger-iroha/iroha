@@ -61,7 +61,7 @@ Sidebar_label: Хаartия еестра chunker
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - تنفيذ العلاقات العامة، والتركيبات المشتركة، والاقتراحات، وتجاهل التصميم و
@@ -97,14 +97,14 @@ Sidebar_label: Хаartия еестра chunker
 
 ## صيانة الأدوات
 
-- `sorafs_manifest_chunk_store` و `sorafs_manifest_stub` يقترحان:
+- `sorafs_manifest_chunk_store` و `sorafs_manifest_builder` يقترحان:
   - `--list-profiles` للفحص.
   - `--promote-profile=<handle>` للأجيال القادمة من الكتلة الأساسية،
     يتم استخدامه عند إنتاج الملف الشخصي.
   - `--json-out=-` لقص المنافذ في stdout، توصيل الطاقة
     سجل السجل.
 - يتم تسجيل `ensure_charter_compliance()` عند الانتهاء من الندوات ذات الصلة
-  (`manifest_chunk_store`، `provider_advert_stub`). يجب إجراء اختبارات CI، إذا
+  (`manifest_chunk_store`، `sorafs_provider_advert`). يجب إجراء اختبارات CI، إذا
   كتابة جديدة للبطاقة.## التوثيق
 
 - جميع نقاط التحديد في `docs/source/sorafs/reports/`.

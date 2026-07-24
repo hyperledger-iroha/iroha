@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS Manifest CLI Başdan-Uca Nümunə
 
 Bu misal istifadə edərək SoraFS-ə sənədləşmənin dərc edilməsini göstərir.
-`sorafs_manifest_stub` CLI deterministik parçalanma qurğuları ilə birlikdə
+`sorafs_manifest_builder` CLI deterministik parçalanma qurğuları ilə birlikdə
 SoraFS Arxitektura RFC-də təsvir edilmişdir. Axın açıq-aşkar nəsli əhatə edir,
 gözləntilərin yoxlanılması, planın təsdiqlənməsi və axtarışın sübutu üçün sınaq
 komandalar eyni addımları CI-də yerləşdirə bilər.
@@ -30,7 +30,7 @@ komandalar eyni addımları CI-də yerləşdirə bilər.
 ## Addım 1 — Manifest, CAR, imzalar yaradın və plan gətirin
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ Pin Qeydiyyatı yerləşdirildikdən sonra (miqrasiya yol xəritəsində Milesto
 CLI vasitəsilə manifest təqdim edin:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

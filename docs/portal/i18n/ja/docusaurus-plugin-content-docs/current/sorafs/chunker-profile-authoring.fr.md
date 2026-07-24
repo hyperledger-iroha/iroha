@@ -97,9 +97,9 @@ les métadonnées canoniques necessaires auxDiscussions de gouvernance。
   マニフェストのダイジェストと提案されたパラメータのチェックを行います。
 - `sorafs_manifest_chunk_store --json-out=-` — ストリーマー ル ラポール チャンク ストア バージョン
   自動比較の標準出力。
-- `sorafs_manifest_stub --chunker-profile=<handle>` — マニフェスト等の確認者
+- `sorafs_manifest_builder --chunker-profile=<handle>` — マニフェスト等の確認者
   CAR は、canonique および les エイリアスを処理することを計画しています。
-- `sorafs_manifest_stub --plan=-` — 注入器の `chunk_fetch_specs` 優先注入
+- `sorafs_manifest_builder --plan=-` — 注入器の `chunk_fetch_specs` 優先注入
   変更後のオフセット/ダイジェストを検証します。任務を遂行するための任務 (ダイジェスト、ラシーン PoR、マニフェストのハッシュ) を提案する
 レビュー担当者は、再生産を繰り返します。
 
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Générer manifest + CAR et capturer les chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Relancer avec le plan de fetch sauvegardé (évite les offsets obsolètes)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

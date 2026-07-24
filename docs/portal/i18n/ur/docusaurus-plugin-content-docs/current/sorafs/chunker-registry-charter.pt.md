@@ -65,7 +65,7 @@ SDKS)۔ یہ عرف کو نافذ کرتا ہے اور چیک شدہ حملہ آ
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - ایک PR بھیجیں جس میں فکسچر ، تجویز ، تعی .ن کی رپورٹ ہے اور
@@ -101,14 +101,14 @@ SDKS)۔ یہ عرف کو نافذ کرتا ہے اور چیک شدہ حملہ آ
 
 ## ٹولنگ کی توقعات
 
-- `sorafs_manifest_chunk_store` اور `sorafs_manifest_stub` بے نقاب:
+- `sorafs_manifest_chunk_store` اور `sorafs_manifest_builder` بے نقاب:
   - رجسٹری معائنہ کے لئے `--list-profiles`۔
   - `--promote-profile=<handle>` استعمال شدہ کیننیکل میٹا ڈیٹا بلاک پیدا کرنے کے لئے
     جب کسی پروفائل کو فروغ دیتے ہو۔
   - `--json-out=-` STDOUT کو رپورٹس کو اسٹریم کرنے کے لئے ، نظرثانی لاگز کو چالو کرنا
     تولیدی
 - متعلقہ بائنریز کو شروع کرتے وقت `ensure_charter_compliance()` کی درخواست کی جاتی ہے
-  (`manifest_chunk_store` ، `provider_advert_stub`)۔ CI ٹیسٹ اگر ناکام ہونا چاہئے
+  (`manifest_chunk_store` ، `sorafs_provider_advert`)۔ CI ٹیسٹ اگر ناکام ہونا چاہئے
   نئی اندراجات چارٹر کی خلاف ورزی کرتی ہیں۔
 
 ## رجسٹریشن

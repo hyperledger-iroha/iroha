@@ -113,7 +113,7 @@ groups:
    - قم بتنفيذ `iroha app sorafs providers list` وتحقق من أن القدرات المعلنة تتوافق مع متطلبات النسخ المتماثل.
    - التحقق من المقاييس `torii_sorafs_capacity_*` لتأكيد توفير GiB ونجاح PoR.
 3. ** رياتريبوير ريبلاكاو **
-   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عند إكمال العمل المتراكم (`stat="avg"`) بعد 5 حلقات (أو تعبئة البيان/CAR باستخدام `iroha app sorafs toolkit pack`).
+   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عند إكمال العمل المتراكم (`stat="avg"`) بعد 5 حلقات (أو تعبئة البيان/CAR باستخدام `iroha app sorafs toolkit pack`).
    - إعلام بالتحكم في الأسماء المستعارة التي تحتوي على روابط بيانية (quedas inesperadas em `torii_sorafs_registry_aliases_total`).
 4. ** نتيجة توثيقية **
    - قم بتسجيل ملاحظات الأحداث في سجل عمليات SoraFS مع الطوابع الزمنية وملخصات البيانات الصادرة.

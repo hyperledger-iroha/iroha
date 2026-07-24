@@ -1195,6 +1195,76 @@ pub mod sorafs {
         pub const PDP_SAMPLE_WINDOW_MAX: u16 = 500;
         /// Aggregate in-memory budget for canonical PDP tree indexes.
         pub const PDP_TREE_MEMORY_LIMIT_BYTES: Bytes<u64> = Bytes(512 * 1024 * 1024);
+        /// Authenticated AI-screening admission is opt-in until a governed
+        /// authority bundle and its reviewed digest are configured.
+        pub const MODERATION_SCREENING_ENABLED: bool = false;
+        /// Proof-of-personhood credential services require explicit governed
+        /// policy plus runtime-injected HSM/KMS/authentication dependencies.
+        pub mod pop_credentials {
+            use std::path::PathBuf;
+
+            /// PoP service routes and workers are disabled by default.
+            pub const ENABLED: bool = false;
+            /// Required dual-control quorum when the service is enabled.
+            pub const APPROVAL_QUORUM: u8 = 2;
+            /// Maximum pending encrypted enrollments.
+            pub const MAX_PENDING_ENROLLMENTS: u32 = 4_096;
+            /// Maximum durable ledger submission outbox entries.
+            pub const MAX_OUTBOX_ENTRIES: u32 = 4_096;
+            /// Maximum durable terminal dead letters.
+            pub const MAX_DEAD_LETTERS: u32 = 4_096;
+            /// Maximum consumed proof nullifiers retained for replay defense.
+            pub const MAX_SEEN_NULLIFIERS: u32 = 65_536;
+            /// Submission attempts before an unconfirmed operation is dead-lettered.
+            pub const MAX_SUBMISSION_ATTEMPTS: u16 = 8;
+            /// Registry submission/reconciliation worker cadence.
+            pub const WORKER_INTERVAL_MS: u64 = 1_000;
+            /// Maximum absolute skew between finalized and runtime clock time.
+            pub const MAX_FINALIZED_TIME_SKEW_SECS: u64 = 30;
+
+            /// Default issuer checkpoint directory.
+            pub fn issuer_state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/pop/issuer")
+            }
+
+            /// Default encrypted wallet-vault directory.
+            pub fn wallet_state_dir() -> PathBuf {
+                PathBuf::from("./storage/sorafs/pop/wallet")
+            }
+        }
+        /// Finalized-chain moderation orchestrator defaults.
+        pub mod moderation_orchestrator {
+            use std::path::PathBuf;
+
+            use iroha_config_base::util::Bytes;
+
+            /// Native moderation orchestration is disabled until every
+            /// runtime-only signer, reader, and terminal sink is injected.
+            pub const ENABLED: bool = false;
+            /// Maximum appeals and activated cases in one complete snapshot.
+            pub const MAX_CASES: u32 = 4_096;
+            /// Maximum finalized typed events retained in one snapshot.
+            pub const MAX_EVENTS: u32 = 65_536;
+            /// Maximum pending native transactions.
+            pub const MAX_OUTBOX_ENTRIES: u32 = 4_096;
+            /// Maximum durable operation identities and dead letters.
+            pub const MAX_IDEMPOTENCY_RECORDS: u32 = 65_536;
+            /// Maximum settlement/publication handoff identities.
+            pub const MAX_HANDOFFS: u32 = 65_536;
+            /// Safe attempts under one unchanged operation identity.
+            pub const MAX_SUBMIT_ATTEMPTS: u16 = 8;
+            /// Maximum canonical checkpoint size.
+            pub const CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(32 * 1024 * 1024);
+            /// Finalized reconciliation and deadline-maintenance cadence.
+            pub const WORKER_INTERVAL_MS: u64 = 1_000;
+            /// Maximum native maintenance actions emitted in one scan.
+            pub const MAINTENANCE_BATCH_LIMIT: u32 = 128;
+
+            /// Default checkpoint path used only while the service is disabled.
+            pub fn checkpoint_path() -> PathBuf {
+                PathBuf::from("./storage/sorafs/moderation/orchestrator.norito")
+            }
+        }
         /// Defaults for the durable admission-bound PDP provider protocol.
         pub mod pdp_provider {
             use iroha_config_base::util::Bytes;
@@ -1224,6 +1294,12 @@ pub mod sorafs {
         pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+        /// Finalized reconciliation cadence for durable proof-outcome delivery.
+        pub const RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS: std::num::NonZeroU64 =
+            nonzero_ext::nonzero!(1_000_u64);
+        /// Submission attempts allowed for one exact proof-outcome transaction.
+        pub const RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS: std::num::NonZeroU32 =
+            nonzero_ext::nonzero!(8_u32);
         /// Default telemetry alias advertised by the node.
         pub fn alias() -> Option<String> {
             None
@@ -1318,6 +1394,30 @@ pub mod sorafs {
             pub const CYCLE_SECONDS: u64 = 7 * 24 * 60 * 60;
             /// Default delay after a cycle closes before publication (seconds).
             pub const PUBLISH_DELAY_SECONDS: u64 = 60 * 60;
+            /// Public aggregate identifier prefix.
+            pub const AGGREGATE_ID_PREFIX: &str = "sfm4c-cycle";
+            /// Governed V1 privacy mode.
+            pub const PRIVACY_MODE: &str = "differential_privacy_with_suppression";
+            /// Reduced governed epsilon numerator.
+            pub const EPSILON_NUMERATOR: u64 = 4;
+            /// Reduced governed epsilon denominator.
+            pub const EPSILON_DENOMINATOR: u64 = 5;
+            /// Maximum contribution from one private subject to one metric.
+            pub const PER_SUBJECT_METRIC_CAP: u64 = 1;
+            /// Minimum distinct-subject count required for publication.
+            pub const SUPPRESSION_THRESHOLD: u64 = 25;
+            /// Reduced numerator of the durable composed-epsilon budget.
+            pub const COMPOSITION_BUDGET_EPSILON_NUMERATOR: u64 = 12;
+            /// Reduced denominator of the durable composed-epsilon budget.
+            pub const COMPOSITION_BUDGET_EPSILON_DENOMINATOR: u64 = 1;
+            /// Maximum publications retained under one composition-budget policy.
+            pub const COMPOSITION_BUDGET_MAX_PUBLICATIONS: u64 = 52;
+
+            /// Governed privacy-policy digest. Production enables the scheduler
+            /// only after setting this to a reviewed 32-byte lowercase hex value.
+            pub fn policy_digest_hex() -> Option<String> {
+                None
+            }
         }
 
         /// Evidence-viewer audit-report scheduler defaults.
@@ -1602,6 +1702,37 @@ pub mod sorafs {
             pub const TLS_ALPN_01: bool = true;
             /// Initial ECH enabled state reported via telemetry.
             pub const ECH_ENABLED: bool = false;
+        }
+
+        /// Governed compliance-controller defaults.
+        pub mod compliance {
+            use std::time::Duration;
+
+            use iroha_config_base::util::Bytes;
+
+            /// Keep the signed compliance controller disabled until governance
+            /// identities, feeds, storage, and a runtime transport are provisioned.
+            pub const ENABLED: bool = false;
+            /// Maximum encoded feed response.
+            pub const MAX_ENCODED_BYTES: Bytes<u64> = Bytes(4 * 1024 * 1024);
+            /// Maximum normalized/decompressed feed response.
+            pub const MAX_DECODED_BYTES: Bytes<u64> = Bytes(16 * 1024 * 1024);
+            /// Maximum admitted redirect count.
+            pub const MAX_REDIRECTS: u8 = 3;
+            /// Maximum distinct public DNS answers.
+            pub const MAX_DNS_ADDRESSES: usize = 8;
+            /// Per-connection feed timeout.
+            pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+            /// Total feed operation timeout.
+            pub const TOTAL_TIMEOUT: Duration = Duration::from_secs(20);
+            /// Maximum accepted timestamp skew.
+            pub const MAX_CLOCK_SKEW: Duration = Duration::from_secs(5 * 60);
+            /// Maximum age of one source feed at catalog construction.
+            pub const MAX_FEED_AGE: Duration = Duration::from_secs(60 * 60);
+            /// Maximum signed catalog validity interval.
+            pub const MAX_CATALOG_VALIDITY: Duration = Duration::from_secs(2 * 60 * 60);
+            /// Maximum durable promotion/rollback history.
+            pub const MAX_HISTORY_ENTRIES: usize = 256;
         }
     }
 }
@@ -2343,7 +2474,11 @@ pub mod torii {
 
     /// Default set of capability names recognised by Torii's discovery cache.
     pub fn sorafs_known_capabilities() -> Vec<String> {
-        vec!["torii_gateway".to_string(), "chunk_range_fetch".to_string()]
+        vec![
+            "torii_gateway".to_string(),
+            "chunk_range_fetch".to_string(),
+            "potr_mldsa".to_string(),
+        ]
     }
 }
 
@@ -3867,6 +4002,9 @@ pub mod settlement {
     /// Offline settlement defaults.
     pub mod offline {
         use std::path::PathBuf;
+
+        /// Maximum estimated decoded Kagemusha verifier bytes retained by one node.
+        pub const KAGEMUSHA_MAX_DECODED_BYTES: u64 = 256 * 1024 * 1024;
 
         /// No Kagemusha release policy is trusted unless an operator configures one.
         #[must_use]

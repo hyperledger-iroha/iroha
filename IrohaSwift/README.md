@@ -1034,9 +1034,9 @@ binds the authenticated generation, manifest, release-policy and
 release-attestation digests, issuance window, proof-pair bound, and asset scale
 to both exact recursive verifier records:
 `kagemusha_recursive_step_eq_v4_verifier_record` with
-`kagemusha-recursive-spend-step-eq-authenticated-layout-v4`, and
+`kagemusha-recursive-spend-step-eq-compact-layout-v5`, and
 `kagemusha_recursive_step_ep_v4_verifier_record` with
-`kagemusha-recursive-spend-step-ep-authenticated-layout-v4`. Authenticated
+`kagemusha-recursive-spend-step-ep-compact-lineage-v5`. Authenticated
 backend construction is not proof admission. A null artifact set requires both
 recursive records and backend construction to be unavailable with exactly one
 `recursive_v4_registry_unavailable` or `recursive_v4_registry_malformed`

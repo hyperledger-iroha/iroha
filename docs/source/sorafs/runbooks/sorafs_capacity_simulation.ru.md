@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 # Ранбук симуляции емкости SoraFS
 
-Этот ранбук объясняет, как упражнять набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Цель — проверить переговоры по квотам, обработку failover и ремедиацию slashing end-to-end с использованием воспроизводимых фикстур в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_stub capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
+Этот ранбук объясняет, как упражнять набор симуляции рынка емкости SF-2c и визуализировать полученные метрики. Цель — проверить переговоры по квотам, обработку failover и ремедиацию slashing end-to-end с использованием воспроизводимых фикстур в `docs/examples/sorafs_capacity_simulation/`. Payloads емкости по-прежнему используют `sorafs_manifest_builder capacity`; используйте `iroha app sorafs toolkit pack` для потоков упаковки manifest/CAR.
 
 ## 1. Сгенерировать CLI-артефакты
 
@@ -20,7 +20,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Скрипт вызывает `sorafs_manifest_stub capacity`, чтобы выпускать детерминированные Norito payloads, base64-кодирования, тела запросов Torii и JSON-сводки для:
+Скрипт вызывает `sorafs_manifest_builder capacity`, чтобы выпускать детерминированные Norito payloads, base64-кодирования, тела запросов Torii и JSON-сводки для:
 
 - Трех деклараций провайдеров, участвующих в сценарии переговоров по квотам.
 - Одного распоряжения о репликации, распределяющего staged‑манифест между провайдерами.

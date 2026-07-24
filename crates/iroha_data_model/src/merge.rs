@@ -17,6 +17,7 @@ use crate::{
             LaneBlockCommitment, LaneBlockProposalV1, LaneBlockQcV1, NativeAmxReceipt,
             ValidatorIndex,
         },
+        consensus_v2::finality::V2FinalityArtifact,
     },
     nexus::{DataSpaceId, LaneId, LaneRelayEnvelope},
     peer::PeerId,
@@ -28,6 +29,11 @@ const LANE_DRAIN_INTENT_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-intent:v1\
 const LANE_DRAIN_CERTIFICATE_HASH_DOMAIN: &[u8] = b"iroha:nexus:lane-drain-certificate:v1\0";
 const LANE_DRAIN_CERTIFICATE_SIGNATURE_DOMAIN: &[u8] =
     b"iroha:nexus:lane-drain-certificate-signature:v1\0";
+const LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN: &[u8] =
+    b"iroha:nexus:lane-drain:unresolved-evidence:empty:v1\0";
+
+/// Current-only first-release merge-ledger entry layout.
+pub const MERGE_LEDGER_ENTRY_VERSION_V1: u8 = 1;
 
 /// Maximum canonical framed size of one full merge-ledger entry.
 ///
@@ -73,6 +79,13 @@ pub const MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES: usize = 1024 * 1024;
 pub const MAX_MERGE_EXECUTION_AUTONOMOUS_SOURCE_BYTES: usize =
     MAX_MERGE_EXECUTION_SOURCE_BUNDLE_BYTES - MAX_MERGE_EXECUTION_CERTIFIED_SOURCE_BYTES;
 
+/// Current versioned merge-committee share layout.
+///
+/// Version two is the first layout that transports the leader's exact pre-QC
+/// candidate body. The preceding unversioned layout has no compatibility path
+/// and is intentionally not admitted by live consensus.
+pub const MERGE_COMMITTEE_SIGNATURE_VERSION_V2: u8 = 2;
+
 /// Return whether an exact canonical full-entry length is protocol-admissible.
 #[must_use]
 pub const fn merge_ledger_entry_size_within_limit(encoded_len: usize) -> bool {
@@ -98,6 +111,139 @@ pub struct MergeSignerProof {
     pub proof_of_possession: Vec<u8>,
 }
 
+/// Exact durable Native AMX application identity required by a drain frontier.
+///
+/// The hashes bind the independently persisted finality, manifest, receipt,
+/// and bounded latest-index artifacts. Runtime admission must re-read and
+/// fully revalidate those artifacts before treating this evidence as applied.
+/// This is control evidence only; economic effects were executed by the named
+/// canonical global application block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct LaneDrainNativeFrontierEvidenceV1 {
+    /// Exact evidence layout version. Only version one is valid.
+    pub version: u16,
+    /// Participant-local consensus view.
+    pub participant_view: u64,
+    /// Exact predecessor participant-local height.
+    pub predecessor_height: u64,
+    /// Exact predecessor descriptor, absent only at incarnation genesis.
+    pub predecessor_descriptor_hash: Option<Hash>,
+    /// Exact participant proposal identity.
+    pub participant_proposal_hash: Hash,
+    /// Exact zero-effect participant settlement identity.
+    pub participant_settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Number of unique grouped source transactions applied by the carrier.
+    pub source_count: u32,
+    /// Canonical global application height.
+    pub application_block_height: u64,
+    /// Canonical global application block identity.
+    pub application_block_hash: HashOf<BlockHeader>,
+    /// Hash of the canonical result-bearing global block wire.
+    pub executed_block_wire_hash: Hash,
+    /// Hash of the independently persisted and verified finality artifact.
+    pub finality_artifact_hash: HashOf<V2FinalityArtifact>,
+    /// Native application-manifest root authenticated by finality.
+    pub application_manifest_root: Hash,
+    /// Number of canonical route leaves authenticated by the manifest root.
+    pub application_manifest_leaf_count: u32,
+    /// Position of this route's leaf in canonical route order.
+    pub application_manifest_leaf_index: u32,
+    /// Hash of the exact durable per-route manifest leaf/proof artifact.
+    pub manifest_artifact_hash: Hash,
+    /// Hash of the exact durable participant application receipt artifact.
+    pub receipt_artifact_hash: Hash,
+    /// Hash of the exact bounded route/incarnation latest-index artifact.
+    pub latest_index_artifact_hash: Hash,
+}
+
+impl LaneDrainNativeFrontierEvidenceV1 {
+    /// Current exact first-release evidence layout version.
+    pub const VERSION: u16 = 1;
+}
+
+/// One evidence-aware lane frontier shared by every drain phase.
+///
+/// `native_application` is present only when the replicated WSV frontier was
+/// advanced by a separate Native AMX participant control. Same-route
+/// coordinator legs never create this evidence. `unresolved_evidence_root`
+/// must be the canonical empty root at every signing and retirement boundary;
+/// local blocker predicates still decide which work contributes to the root.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct LaneDrainFrontierV1 {
+    /// Exact frontier layout version. Only version one is valid.
+    pub version: u8,
+    /// Lane whose contiguous frontier is bound.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Contiguous lane-local height.
+    pub lane_block_height: u64,
+    /// Descriptor at `lane_block_height`, absent only for height zero.
+    pub lane_block_descriptor_hash: Option<Hash>,
+    /// Fully durable Native evidence when the frontier is Native-derived.
+    pub native_application: Option<LaneDrainNativeFrontierEvidenceV1>,
+    /// Canonical root of unresolved work/evidence. Drain admission requires the
+    /// protocol empty root.
+    pub unresolved_evidence_root: Hash,
+}
+
+impl LaneDrainFrontierV1 {
+    /// Current exact first-release layout version.
+    pub const VERSION: u8 = 1;
+
+    /// Build an ordinary (non-Native-derived) frontier.
+    #[must_use]
+    pub fn ordinary(
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+        lane_block_height: u64,
+        lane_block_descriptor_hash: Option<Hash>,
+    ) -> Self {
+        Self {
+            version: Self::VERSION,
+            lane_id,
+            dataspace_id,
+            lane_incarnation,
+            lane_block_height,
+            lane_block_descriptor_hash,
+            native_application: None,
+            unresolved_evidence_root: lane_drain_empty_unresolved_evidence_root(),
+        }
+    }
+
+    /// Return whether this frontier binds the supplied active route.
+    #[must_use]
+    pub fn matches_route(
+        &self,
+        lane_id: LaneId,
+        dataspace_id: DataSpaceId,
+        lane_incarnation: Hash,
+    ) -> bool {
+        self.lane_id == lane_id
+            && self.dataspace_id == dataspace_id
+            && self.lane_incarnation == lane_incarnation
+    }
+}
+
+/// Canonical root proving that no unresolved drain evidence was selected.
+#[must_use]
+pub fn lane_drain_empty_unresolved_evidence_root() -> Hash {
+    Hash::new(LANE_DRAIN_EMPTY_UNRESOLVED_EVIDENCE_ROOT_DOMAIN)
+}
+
 /// Canonical first phase of an automatic lane retirement.
 ///
 /// Committing an intent closes the named lane to new work after
@@ -109,6 +255,7 @@ pub struct MergeSignerProof {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneDrainIntentV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
@@ -122,12 +269,8 @@ pub struct LaneDrainIntentV1 {
     pub lane_incarnation: Hash,
     /// Global height after which new lane work is inadmissible.
     pub close_global_height: u64,
-    /// Last globally applied contiguous lane height when draining began.
-    pub initial_merged_lane_height: u64,
-    /// Descriptor hash at `initial_merged_lane_height`, or `None` for height zero.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub initial_merged_descriptor_hash: Option<Hash>,
+    /// Evidence-aware globally applied frontier when draining began.
+    pub initial_frontier: LaneDrainFrontierV1,
     /// Version of the canonical lane-committee hashing scheme.
     pub validator_set_hash_version: u16,
     /// Hash of the exact authoritative lane committee at the close boundary.
@@ -168,17 +311,14 @@ impl LaneDrainIntentV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneDrainCertificateBodyV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
     /// Exact committed drain intent authorized by this certificate.
     pub intent: LaneDrainIntentV1,
-    /// Final contiguous lane-local height certified by the committee.
-    pub final_lane_block_height: u64,
-    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub final_lane_block_descriptor_hash: Option<Hash>,
+    /// Final evidence-aware contiguous frontier certified by the committee.
+    pub final_frontier: LaneDrainFrontierV1,
 }
 
 impl LaneDrainCertificateBodyV1 {
@@ -235,19 +375,23 @@ impl LaneDrainCertificateV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneDrainCommitmentV1 {
+    /// Exact commitment layout version. Only version one is valid.
+    pub version: u8,
     /// Exact certificate accepted by the merge committee.
     pub certificate_hash: HashOf<LaneDrainCertificateV1>,
     /// Full merge entry that globally ordered the certificate.
     pub merge_entry_hash: HashOf<MergeLedgerEntry>,
     /// Canonical global block height that carried the merge entry.
     pub carrier_height: u64,
-    /// Final contiguous lane-local height certified by the lane committee.
-    pub final_lane_block_height: u64,
-    /// Descriptor hash at `final_lane_block_height`, or `None` for height zero.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
-    pub final_lane_block_descriptor_hash: Option<Hash>,
+    /// Exact signed evidence-aware frontier carried by the certificate.
+    pub frontier: LaneDrainFrontierV1,
+}
+
+impl LaneDrainCommitmentV1 {
+    /// Current exact first-release commitment layout version.
+    pub const VERSION: u8 = 1;
 }
 
 /// Consensus-persisted two-phase drain state embedded in an autoscale-managed
@@ -257,14 +401,13 @@ pub struct LaneDrainCommitmentV1 {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct LaneDrainStateV1 {
     /// Schema version. Only version one is valid.
     pub version: u8,
     /// Canonical close intent that made the lane reject new work.
     pub intent: LaneDrainIntentV1,
     /// Globally carried certificate commitment once the lane is fully drained.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
     pub commitment: Option<LaneDrainCommitmentV1>,
 }
 
@@ -372,7 +515,12 @@ impl MergeQuorumCertificate {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct MergeCommitteeSignature {
+    /// Current-only first-release wire layout version.
+    ///
+    /// Legacy unversioned shares are not accepted by live consensus.
+    pub version: u8,
     /// Merge-ledger entry epoch/height being signed.
     pub epoch_id: u64,
     /// Merge-committee view index aligned with lane tips for this entry.
@@ -383,6 +531,13 @@ pub struct MergeCommitteeSignature {
     pub message_digest: Hash,
     /// BLS signature payload for the merge entry digest.
     pub bls_sig: Vec<u8>,
+    /// Exact canonical pre-QC candidate body distributed by the round leader.
+    ///
+    /// The frozen round leader must include this body on every transmission;
+    /// every other signer must leave it absent. Runtime admission
+    /// canonical-decodes, fully revalidates, and durably persists these bytes
+    /// before emitting a follower share.
+    pub leader_candidate_body: Option<Vec<u8>>,
 }
 
 /// Canonical per-lane snapshot recorded inside a merge-ledger entry.
@@ -391,6 +546,7 @@ pub struct MergeCommitteeSignature {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct MergeLaneSnapshot {
     /// Numeric lane identifier.
     pub lane_id: LaneId,
@@ -414,11 +570,10 @@ pub struct MergeLaneSnapshot {
     pub settlement_hash: HashOf<LaneBlockCommitment>,
     /// Exact authenticated relay envelope from which every snapshot field was derived.
     ///
-    /// This is optional at the codec layer so malformed/missing-proof candidates can be decoded
-    /// and rejected deterministically. Production admission requires `Some` and never consults a
-    /// follower's opportunistic relay cache.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    /// An explicitly encoded `None` keeps malformed/missing-proof candidates
+    /// decodable for deterministic rejection. Omitting this field is not a
+    /// supported legacy layout. Production admission requires `Some` and never
+    /// consults a follower's opportunistic relay cache.
     pub relay_envelope: Option<LaneRelayEnvelope>,
 }
 
@@ -541,7 +696,10 @@ pub struct MergeExecutionBatch {
     feature = "json",
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
+#[norito(deny_unknown_fields)]
 pub struct MergeLedgerEntry {
+    /// Exact first-release entry layout. Only version one is supported.
+    pub version: u8,
     /// Epoch in which the entry was committed.
     pub epoch_id: u64,
     /// Canonical hash of the active lane catalog used for admission.
@@ -560,21 +718,26 @@ pub struct MergeLedgerEntry {
     pub merge_qc: MergeQuorumCertificate,
     /// Optional commit-certified autonomous lane execution batch.
     ///
-    /// This field is trailing so pre-feature persisted entries decode through
-    /// the Norito default without shifting legacy positional fields.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Option::is_none")]
+    /// `None` is encoded explicitly; layouts which omit this field fail closed.
     pub execution_batch: Option<MergeExecutionBatch>,
     /// Lane-committee drain certificates globally ordered by this entry.
     ///
     /// This trailing field lets a quiet network make retirement progress
     /// without inventing an executable lane payload. Runtime admission limits
     /// an entry to the single highest autoscale retirement candidate.
-    #[norito(default)]
     pub lane_drain_certificates: Vec<LaneDrainCertificateV1>,
 }
 
 impl MergeLedgerEntry {
+    /// Current supported entry layout.
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V1;
+
+    /// Return whether this entry advertises the current first-release layout.
+    #[must_use]
+    pub const fn has_current_version(&self) -> bool {
+        self.version == Self::VERSION
+    }
+
     /// Return the canonical framed Norito bytes used by hash-addressed entry sidecars.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -638,7 +801,20 @@ mod tests {
     use super::*;
 
     #[derive(Encode)]
+    struct UnversionedMergeLedgerEntry {
+        epoch_id: u64,
+        lane_catalog_hash: Hash,
+        active_lanes: Vec<MergeLaneBinding>,
+        incarnation_root: Hash,
+        activation_root: Hash,
+        lane_snapshots: Vec<MergeLaneSnapshot>,
+        global_state_root: Hash,
+        merge_qc: MergeQuorumCertificate,
+    }
+
+    #[derive(Encode)]
     struct LegacyMergeLedgerEntry {
+        version: u8,
         epoch_id: u64,
         lane_catalog_hash: Hash,
         active_lanes: Vec<MergeLaneBinding>,
@@ -651,6 +827,7 @@ mod tests {
 
     #[derive(Encode)]
     struct PreviousMergeLedgerEntry {
+        version: u8,
         epoch_id: u64,
         lane_catalog_hash: Hash,
         active_lanes: Vec<MergeLaneBinding>,
@@ -659,8 +836,6 @@ mod tests {
         lane_snapshots: Vec<MergeLaneSnapshot>,
         global_state_root: Hash,
         merge_qc: MergeQuorumCertificate,
-        #[norito(default)]
-        #[norito(skip_serializing_if = "Option::is_none")]
         execution_batch: Option<MergeExecutionBatch>,
     }
 
@@ -686,8 +861,13 @@ mod tests {
             dataspace_id: DataSpaceId::new(11),
             lane_incarnation: sample_hash(b"drain-incarnation"),
             close_global_height: 42,
-            initial_merged_lane_height: 9,
-            initial_merged_descriptor_hash: Some(sample_hash(b"initial-drain-tip")),
+            initial_frontier: LaneDrainFrontierV1::ordinary(
+                LaneId::new(7),
+                DataSpaceId::new(11),
+                sample_hash(b"drain-incarnation"),
+                9,
+                Some(sample_hash(b"initial-drain-tip")),
+            ),
             validator_set_hash_version: 1,
             validator_set_hash: HashOf::new(&validator_set),
             validator_set,
@@ -703,8 +883,13 @@ mod tests {
             body: LaneDrainCertificateBodyV1 {
                 version: 1,
                 intent,
-                final_lane_block_height: 12,
-                final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+                final_frontier: LaneDrainFrontierV1::ordinary(
+                    LaneId::new(7),
+                    DataSpaceId::new(11),
+                    sample_hash(b"drain-incarnation"),
+                    12,
+                    Some(sample_hash(b"final-drain-tip")),
+                ),
             },
             validator_set,
             signers_bitmap: Vec::new(),
@@ -715,13 +900,19 @@ mod tests {
 
     fn sample_lane_drain_commitment() -> LaneDrainCommitmentV1 {
         LaneDrainCommitmentV1 {
+            version: 1,
             certificate_hash: sample_lane_drain_certificate().canonical_hash(),
             merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(
                 b"drain-carrier-merge-entry",
             )),
             carrier_height: 57,
-            final_lane_block_height: 12,
-            final_lane_block_descriptor_hash: Some(sample_hash(b"final-drain-tip")),
+            frontier: LaneDrainFrontierV1::ordinary(
+                LaneId::new(7),
+                DataSpaceId::new(11),
+                sample_hash(b"drain-incarnation"),
+                12,
+                Some(sample_hash(b"final-drain-tip")),
+            ),
         }
     }
 
@@ -906,6 +1097,7 @@ mod tests {
             })
             .collect();
         let entry = MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 1,
             lane_catalog_hash: sample_hash(b"max-overhead-catalog"),
             active_lanes,
@@ -940,7 +1132,7 @@ mod tests {
     #[test]
     #[expect(
         clippy::too_many_lines,
-        reason = "one linear compatibility scenario compares current and both legacy wire layouts"
+        reason = "one linear clean-break scenario compares current and legacy wire layouts"
     )]
     fn merge_entry_roundtrip() {
         let qc = MergeQuorumCertificate::new(
@@ -958,6 +1150,7 @@ mod tests {
             sample_hash(b"qc-digest"),
         );
         let entry = MergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: 3,
             lane_catalog_hash: sample_hash(b"catalog"),
             active_lanes: vec![
@@ -1043,7 +1236,24 @@ mod tests {
             .expect("merge entry rounds trips through Norito");
         assert_eq!(decoded, entry);
 
+        let unversioned = UnversionedMergeLedgerEntry {
+            epoch_id: entry.epoch_id,
+            lane_catalog_hash: entry.lane_catalog_hash,
+            active_lanes: entry.active_lanes.clone(),
+            incarnation_root: entry.incarnation_root,
+            activation_root: entry.activation_root,
+            lane_snapshots: entry.lane_snapshots.clone(),
+            global_state_root: entry.global_state_root,
+            merge_qc: entry.merge_qc.clone(),
+        };
+        let unversioned_encoded = unversioned.encode();
+        assert!(
+            MergeLedgerEntry::decode(&mut unversioned_encoded.as_slice()).is_err(),
+            "the unversioned merge-entry layout must fail closed"
+        );
+
         let legacy = LegacyMergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: entry.epoch_id,
             lane_catalog_hash: entry.lane_catalog_hash,
             active_lanes: entry.active_lanes.clone(),
@@ -1054,17 +1264,14 @@ mod tests {
             merge_qc: entry.merge_qc.clone(),
         };
         let legacy_encoded = legacy.encode();
-        let mut legacy_slice = legacy_encoded.as_slice();
-        let decoded_legacy = MergeLedgerEntry::decode(&mut legacy_slice)
-            .expect("legacy merge entry must decode with a missing trailing batch");
-        assert!(legacy_slice.is_empty());
-        assert_eq!(decoded_legacy.execution_batch, None);
-        assert!(decoded_legacy.lane_drain_certificates.is_empty());
-        assert_eq!(decoded_legacy.epoch_id, entry.epoch_id);
-        assert_eq!(decoded_legacy.merge_qc, entry.merge_qc);
+        assert!(
+            MergeLedgerEntry::decode(&mut legacy_encoded.as_slice()).is_err(),
+            "the layout omitting execution and drain fields must fail closed"
+        );
 
         let previous_batch = sample_execution_batch();
         let previous = PreviousMergeLedgerEntry {
+            version: MergeLedgerEntry::VERSION,
             epoch_id: entry.epoch_id,
             lane_catalog_hash: entry.lane_catalog_hash,
             active_lanes: entry.active_lanes.clone(),
@@ -1076,14 +1283,134 @@ mod tests {
             execution_batch: Some(previous_batch.clone()),
         };
         let previous_encoded = previous.encode();
-        let mut previous_slice = previous_encoded.as_slice();
-        let decoded_previous = MergeLedgerEntry::decode(&mut previous_slice)
-            .expect("pre-drain merge entry must default its missing trailing certificates");
-        assert!(previous_slice.is_empty());
-        assert_eq!(decoded_previous.execution_batch, Some(previous_batch));
-        assert!(decoded_previous.lane_drain_certificates.is_empty());
-        assert_eq!(decoded_previous.epoch_id, entry.epoch_id);
-        assert_eq!(decoded_previous.merge_qc, entry.merge_qc);
+        assert!(
+            MergeLedgerEntry::decode(&mut previous_encoded.as_slice()).is_err(),
+            "the layout omitting drain certificates must fail closed"
+        );
+
+        let mut unsupported = entry;
+        unsupported.version = MergeLedgerEntry::VERSION.saturating_add(1);
+        assert!(!unsupported.has_current_version());
+    }
+
+    #[test]
+    fn multilane_optional_fields_require_explicit_option_discriminants() {
+        #[derive(Encode)]
+        struct LegacyLaneDrainIntentV1 {
+            version: u8,
+            chain_id_digest: Hash,
+            lane_id: LaneId,
+            dataspace_id: DataSpaceId,
+            lane_incarnation: Hash,
+            close_global_height: u64,
+            initial_merged_lane_height: u64,
+            initial_merged_descriptor_hash: Option<Hash>,
+            validator_set_hash_version: u16,
+            validator_set_hash: HashOf<Vec<PeerId>>,
+            validator_set: Vec<PeerId>,
+            validator_count: u32,
+            min_quorum: u32,
+        }
+
+        #[derive(Encode)]
+        struct LegacyLaneDrainCertificateBodyV1 {
+            version: u8,
+            intent: LaneDrainIntentV1,
+            final_lane_block_height: u64,
+            final_lane_block_descriptor_hash: Option<Hash>,
+        }
+
+        #[derive(Encode)]
+        struct LegacyLaneDrainCommitmentV1 {
+            certificate_hash: HashOf<LaneDrainCertificateV1>,
+            merge_entry_hash: HashOf<MergeLedgerEntry>,
+            carrier_height: u64,
+            final_lane_block_height: u64,
+            final_lane_block_descriptor_hash: Option<Hash>,
+        }
+
+        #[derive(Encode)]
+        struct LegacyLaneDrainStateV1 {
+            version: u8,
+            intent: LaneDrainIntentV1,
+        }
+
+        #[derive(Encode)]
+        struct LegacyMergeLaneSnapshot {
+            lane_id: LaneId,
+            lane_incarnation: Hash,
+            incarnation_activation_height: u64,
+            proposal_height: u64,
+            dataspace_id: DataSpaceId,
+            lane_block_height: u64,
+            tip_hash: HashOf<BlockHeader>,
+            merge_hint_root: Hash,
+            settlement_commitment: LaneBlockCommitment,
+            settlement_hash: HashOf<LaneBlockCommitment>,
+        }
+
+        let intent = sample_lane_drain_intent();
+        let legacy_intent = LegacyLaneDrainIntentV1 {
+            version: intent.version,
+            chain_id_digest: intent.chain_id_digest,
+            lane_id: intent.lane_id,
+            dataspace_id: intent.dataspace_id,
+            lane_incarnation: intent.lane_incarnation,
+            close_global_height: intent.close_global_height,
+            initial_merged_lane_height: intent.initial_frontier.lane_block_height,
+            initial_merged_descriptor_hash: intent.initial_frontier.lane_block_descriptor_hash,
+            validator_set_hash_version: intent.validator_set_hash_version,
+            validator_set_hash: intent.validator_set_hash,
+            validator_set: intent.validator_set.clone(),
+            validator_count: intent.validator_count,
+            min_quorum: intent.min_quorum,
+        }
+        .encode();
+        assert!(LaneDrainIntentV1::decode(&mut legacy_intent.as_slice()).is_err());
+
+        let legacy_body = LegacyLaneDrainCertificateBodyV1 {
+            version: 1,
+            intent: intent.clone(),
+            final_lane_block_height: 9,
+            final_lane_block_descriptor_hash: Some(sample_hash(b"legacy-final-frontier")),
+        }
+        .encode();
+        assert!(LaneDrainCertificateBodyV1::decode(&mut legacy_body.as_slice()).is_err());
+
+        let legacy_commitment = LegacyLaneDrainCommitmentV1 {
+            certificate_hash: sample_lane_drain_certificate().canonical_hash(),
+            merge_entry_hash: HashOf::from_untyped_unchecked(sample_hash(b"legacy-merge-entry")),
+            carrier_height: 12,
+            final_lane_block_height: 9,
+            final_lane_block_descriptor_hash: Some(sample_hash(b"legacy-final-frontier")),
+        }
+        .encode();
+        assert!(LaneDrainCommitmentV1::decode(&mut legacy_commitment.as_slice()).is_err());
+
+        let legacy_state = LegacyLaneDrainStateV1 { version: 1, intent }.encode();
+        assert!(LaneDrainStateV1::decode(&mut legacy_state.as_slice()).is_err());
+
+        let settlement = sample_settlement(
+            LaneId::new(3),
+            sample_hash(b"legacy-snapshot-incarnation"),
+            DataSpaceId::new(5),
+            7,
+        );
+        let legacy_snapshot = LegacyMergeLaneSnapshot {
+            lane_id: LaneId::new(3),
+            lane_incarnation: sample_hash(b"legacy-snapshot-incarnation"),
+            incarnation_activation_height: 1,
+            proposal_height: 8,
+            dataspace_id: DataSpaceId::new(5),
+            lane_block_height: 7,
+            tip_hash: sample_tip(b"legacy-snapshot-tip"),
+            merge_hint_root: sample_hash(b"legacy-snapshot-root"),
+            settlement_hash: crate::nexus::compute_settlement_hash(&settlement)
+                .expect("legacy snapshot settlement hashes"),
+            settlement_commitment: settlement,
+        }
+        .encode();
+        assert!(MergeLaneSnapshot::decode(&mut legacy_snapshot.as_slice()).is_err());
     }
 
     #[test]
@@ -1131,11 +1458,12 @@ mod tests {
         changed.close_global_height = changed.close_global_height.saturating_add(1);
         assert_ne!(changed.canonical_hash(), intent_hash);
         assert_intent_field_bound!(
-            |changed: &mut LaneDrainIntentV1| changed.initial_merged_lane_height += 1,
-            "initial_merged_lane_height"
+            |changed: &mut LaneDrainIntentV1| changed.initial_frontier.lane_block_height += 1,
+            "initial_frontier.lane_block_height"
         );
         changed = intent.clone();
-        changed.initial_merged_descriptor_hash = Some(sample_hash(b"different-initial-tip"));
+        changed.initial_frontier.lane_block_descriptor_hash =
+            Some(sample_hash(b"different-initial-tip"));
         assert_ne!(changed.canonical_hash(), intent_hash);
         assert_intent_field_bound!(
             |changed: &mut LaneDrainIntentV1| changed.validator_set_hash_version += 1,
@@ -1170,8 +1498,11 @@ mod tests {
         assert_eq!(decoded, certificate);
 
         let mut changed = certificate.clone();
-        changed.body.final_lane_block_height =
-            changed.body.final_lane_block_height.saturating_add(1);
+        changed.body.final_frontier.lane_block_height = changed
+            .body
+            .final_frontier
+            .lane_block_height
+            .saturating_add(1);
         assert_ne!(changed.body.signature_preimage(), signature_preimage);
         assert_ne!(changed.canonical_hash(), certificate_hash);
         changed = certificate.clone();
@@ -1186,6 +1517,11 @@ mod tests {
     #[test]
     fn lane_drain_commitment_canonical_wire_roundtrip_and_field_binding() {
         let commitment = sample_lane_drain_commitment();
+        assert_eq!(
+            commitment.frontier,
+            sample_lane_drain_certificate().body.final_frontier,
+            "global commitment must carry the exact committee-signed frontier unchanged"
+        );
         let canonical =
             norito::to_bytes(&commitment).expect("drain commitment has canonical bytes");
         let decoded: LaneDrainCommitmentV1 = norito::decode_from_bytes(&canonical)
@@ -1202,6 +1538,10 @@ mod tests {
         );
 
         let mut changed = commitment;
+        changed.version = changed.version.saturating_add(1);
+        assert_commitment_canonical_wire_changes(&commitment, &changed, "version");
+
+        changed = commitment;
         changed.certificate_hash =
             HashOf::from_untyped_unchecked(sample_hash(b"different-drain-certificate"));
         assert_commitment_canonical_wire_changes(&commitment, &changed, "certificate_hash");
@@ -1216,23 +1556,28 @@ mod tests {
         assert_commitment_canonical_wire_changes(&commitment, &changed, "carrier_height");
 
         changed = commitment;
-        changed.final_lane_block_height = changed.final_lane_block_height.saturating_add(1);
-        assert_commitment_canonical_wire_changes(&commitment, &changed, "final_lane_block_height");
-
-        changed = commitment;
-        changed.final_lane_block_descriptor_hash = Some(sample_hash(b"different-final-drain-tip"));
+        changed.frontier.lane_block_height = changed.frontier.lane_block_height.saturating_add(1);
         assert_commitment_canonical_wire_changes(
             &commitment,
             &changed,
-            "final_lane_block_descriptor_hash value",
+            "frontier.lane_block_height",
         );
 
         changed = commitment;
-        changed.final_lane_block_descriptor_hash = None;
+        changed.frontier.lane_block_descriptor_hash =
+            Some(sample_hash(b"different-final-drain-tip"));
         assert_commitment_canonical_wire_changes(
             &commitment,
             &changed,
-            "final_lane_block_descriptor_hash presence",
+            "frontier.lane_block_descriptor_hash value",
+        );
+
+        changed = commitment;
+        changed.frontier.lane_block_descriptor_hash = None;
+        assert_commitment_canonical_wire_changes(
+            &commitment,
+            &changed,
+            "frontier.lane_block_descriptor_hash presence",
         );
     }
 
@@ -1344,11 +1689,13 @@ mod tests {
     #[test]
     fn merge_committee_signature_roundtrip() {
         let signature = MergeCommitteeSignature {
+            version: MERGE_COMMITTEE_SIGNATURE_VERSION_V2,
             epoch_id: 9,
             view: 1,
             signer: 2,
             message_digest: sample_hash(b"merge-digest"),
             bls_sig: vec![0x10, 0x20, 0x30],
+            leader_candidate_body: Some(vec![0x40, 0x50]),
         };
         let encoded = Encode::encode(&signature);
         let decoded = MergeCommitteeSignature::decode(&mut &encoded[..])

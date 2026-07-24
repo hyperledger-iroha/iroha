@@ -118,6 +118,11 @@ def _canonical_hash(seed: int) -> str:
     return f"hash:{body}#{crc:04X}"
 
 
+_NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT = (
+    "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F"
+)
+
+
 def _sumeragi_v2_status_payload() -> Dict[str, Any]:
     subject = {
         "parent_block_hash": _canonical_hash(0x31),
@@ -129,6 +134,11 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
         "post_state_root": _canonical_hash(0x35),
         "ordinary_writes_root": _canonical_hash(0x36),
         "topup_anchor_count": 0,
+        "native_amx_application_manifest_version": 1,
+        "native_amx_application_manifest_root": (
+            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ),
+        "native_amx_application_manifest_count": 0,
         "executed_block_wire_hash": _canonical_hash(0x37),
     }
     return {
@@ -259,48 +269,52 @@ def _sumeragi_v2_status_payload() -> Dict[str, Any]:
                 }
             ],
         },
-        "safety_halt": {
-            "active": False,
-            "reason": None,
-            "height": 0,
-            "epoch": 0,
-            "first_block_hash": None,
-            "conflicting_block_hash": None,
-            "first_parent_state_root": None,
-            "first_post_state_root": None,
-            "conflicting_parent_state_root": None,
-            "conflicting_post_state_root": None,
+    }
+
+
+def _sumeragi_diagnostics_payload() -> Dict[str, Any]:
+    return {
+        "pipeline_execution": {
+            "tx_vertices_total": 1,
+            "tx_edges_total": 0,
+            "overlay_count_total": 1,
+            "overlay_instr_total": 2,
+            "overlay_bytes_total": 128,
+            "rbc_chunks_total": 1,
+            "rbc_bytes_total": 256,
+            "detached_prepared_total": 1,
+            "detached_merged_total": 1,
+            "detached_fallback_total": 0,
+            "detached_fallback_fee_postprocessing_total": 0,
+            "detached_fallback_user_executor_total": 0,
+            "detached_fallback_durable_state_total": 0,
+            "detached_fallback_unsupported_instruction_total": 0,
+            "detached_fallback_rejected_eval_total": 0,
+            "detached_fallback_overlay_error_total": 0,
+            "quarantine_executed_total": 0,
         },
+        "tx_queue_depth": 3,
+        "tx_queue_capacity": 32,
+        "tx_queue_retained_bytes": 4096,
+        "tx_queue_max_retained_bytes": 65536,
+        "tx_queue_saturated": False,
+        "tx_queue_saturated_by_count": False,
+        "tx_queue_saturated_by_bytes": False,
+        "tx_queue_saturated_by_age": False,
+        "tx_queue_oldest_queued_age_ms": 25,
+        "npos": None,
+        "lane_commitments": [],
+        "dataspace_commitments": [],
         "lane_settlement_commitments": [],
         "lane_relay_envelopes": [],
         "lane_payload_ownerships": [],
         "committed_lane_blocks": [],
         "lane_block_sessions": [],
-        "local_peer_removed": False,
-        "operator": {
-            "view_change_install_total": 7,
-            "busy_deferral_total": 3,
-            "adapter_queues": {
-                "ingress_keys": 2,
-                "ingress_capacity": 16,
-                "deferred_completion": 1,
-                "deferred_progress": 2,
-                "deferred_progress_capacity": 4,
-                "deferred_normal": 3,
-                "deferred_normal_capacity": 8,
-            },
-            "tx_queue": {
-                "tracked_transactions": 5,
-                "queued_transactions": 3,
-                "capacity": 32,
-                "retained_bytes": 4096,
-                "max_retained_bytes": 65536,
-                "oldest_queued_age_ms": 25,
-                "saturated_by_count": False,
-                "saturated_by_bytes": False,
-                "saturated_by_age": False,
-            },
-        },
+        "lane_governance_sealed_total": 0,
+        "lane_governance_sealed_aliases": [],
+        "lane_governance": [],
+        "native_amx_participant_applications": [],
+        "autonomous_lane_executions": [],
     }
 
 
@@ -359,9 +373,11 @@ def _nexus_fee_receipt_payload() -> Dict[str, Any]:
     }
 
 
-def _native_amx_receipt_payload() -> Dict[str, Any]:
-    transaction_hash = _canonical_hash(0x61)
-    source_id = "AB" * 32
+def _native_amx_receipt_payload(source_index: int = 0) -> Dict[str, Any]:
+    transaction_hashes = [_canonical_hash(0x61), _canonical_hash(0x74)]
+    source_ids = ["AB" * 32, "CD" * 32]
+    transaction_hash = transaction_hashes[source_index]
+    source_id = source_ids[source_index]
     previous_descriptor_hash = _canonical_hash(0x68)
     participant_proposal_hash = _canonical_hash(0x69)
     participant_settlement_hash = _canonical_hash(0x6B)
@@ -440,8 +456,8 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
                         "subject_hash": _canonical_hash(0x6D),
                         "payload_ownership_hash": _canonical_hash(0x6F),
                         "rbc_instance_hash": _canonical_hash(0x71),
-                        "accepted_candidate_indices": [0],
-                        "accepted_transaction_hashes": [transaction_hash],
+                        "accepted_candidate_indices": [0, 1],
+                        "accepted_transaction_hashes": transaction_hashes,
                         "validator_set_hash_version": 1,
                         "validator_set_hash": _canonical_hash(0x66),
                         "validator_set": [
@@ -470,7 +486,7 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
                     "swap_metadata": None,
                     "receipts": [
                         {
-                            "source_id": source_id,
+                            "source_id": source_ids[0],
                             "local_amount": "0",
                             "xor_due": "0",
                             "xor_after_haircut": "0",
@@ -497,10 +513,22 @@ def _native_amx_receipt_payload() -> Dict[str, Any]:
     }
 
 
+def _native_amx_receipt_group() -> List[Dict[str, Any]]:
+    return [_native_amx_receipt_payload(0), _native_amx_receipt_payload(1)]
+
+
 def _get_sumeragi_status(payload: Mapping[str, Any]) -> SumeragiV2Status:
     session = RecordingSession()
     session.queue(StubResponse(payload=payload))
     return ToriiClient("http://node.test", session=session).get_sumeragi_status()
+
+
+def _get_sumeragi_diagnostics(payload: Mapping[str, Any]) -> Any:
+    session = RecordingSession()
+    session.queue(StubResponse(payload=payload))
+    return ToriiClient(
+        "http://node.test", session=session
+    ).get_sumeragi_diagnostics()
 
 
 def _canonical_signature_base64_fixture() -> str:
@@ -3372,9 +3400,15 @@ def test_mock_server_seeds_sumeragi_status_snapshot() -> None:
         assert payload["leader"] == 1
         assert payload["height_context"]["validator_count"] == 4
         assert payload["liveness"]["generation"] == 2
-        assert payload["safety_halt"]["active"] is False
-        assert payload["operator"]["tx_queue"]["capacity"] == 32
-        assert payload["committed_lane_blocks"] == []
+        assert "lane_settlement_commitments" not in payload
+
+        diagnostics = requests.get(
+            f"{server.base_url.rstrip('/')}/v1/sumeragi/diagnostics", timeout=5.0
+        )
+        diagnostics.raise_for_status()
+        diagnostics_payload = diagnostics.json()
+        assert diagnostics_payload["tx_queue_capacity"] == 32
+        assert diagnostics_payload["committed_lane_blocks"] == []
     finally:
         server.stop()
 
@@ -3415,7 +3449,6 @@ def test_mock_server_allows_sumeragi_fixture_override() -> None:
 
 def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     payload = _sumeragi_v2_status_payload()
-    payload["lane_settlement_commitments"] = [_lane_settlement_payload()]
     status = _get_sumeragi_status(payload)
 
     assert status.protocol_version == 3
@@ -3427,6 +3460,11 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.last_commit_qc is not None
     assert status.last_commit_qc.certificate.round.height == 9
     assert status.last_commit_qc.certificate.proposal_round.view == 1
+    assert (
+        status.last_commit_qc.certificate.execution_commitment
+        .native_amx_application_manifest_root
+        == _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+    )
     assert status.last_commit_qc.signed_power == 3
     assert status.liveness.generation == 2
     assert status.liveness.work.validation == "complete"
@@ -3443,15 +3481,68 @@ def test_get_sumeragi_status_parses_authoritative_v2_snapshot() -> None:
     assert status.liveness.last_progress is not None
     assert status.liveness.last_progress.transition == "prepare_vote_admitted"
     assert status.liveness.blocker == "prepare_quorum_missing"
-    assert status.safety_halt.active is False
-    assert status.safety_halt.height == 0
-    assert status.operator.view_change_install_total == 7
-    assert status.operator.busy_deferral_total == 3
-    assert status.operator.tx_queue.queued_transactions == 3
-    assert status.lane_payload_ownerships == []
-    settlement = status.lane_settlement_commitments[0]
-    assert settlement["total_local_amount"] == "10"
-    assert settlement["swap_metadata"]["liquidity_profile"]["profile"] == "Tier1"
+    assert not hasattr(status, "lane_settlement_commitments")
+    assert not hasattr(status, "operator")
+
+
+def test_get_sumeragi_status_accepts_nonempty_native_manifest() -> None:
+    payload = _sumeragi_v2_status_payload()
+    commitment = payload["last_commit_qc"]["certificate"]["execution_commitment"]
+    commitment["native_amx_application_manifest_root"] = _canonical_hash(0x38)
+    commitment["native_amx_application_manifest_count"] = 1
+
+    status = _get_sumeragi_status(payload)
+
+    assert status.last_commit_qc is not None
+    assert (
+        status.last_commit_qc.certificate.execution_commitment
+        .native_amx_application_manifest_root
+        == _canonical_hash(0x38)
+    )
+    assert (
+        status.last_commit_qc.certificate.execution_commitment
+        .native_amx_application_manifest_count
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda commitment: commitment.update(
+                native_amx_application_manifest_version=2
+            ),
+            "native_amx_application_manifest_version must equal 1",
+        ),
+        (
+            lambda commitment: commitment.update(
+                native_amx_application_manifest_count=1025
+            ),
+            "native_amx_application_manifest_count",
+        ),
+        (
+            lambda commitment: commitment.update(
+                native_amx_application_manifest_root=_canonical_hash(0x38)
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+        (
+            lambda commitment: commitment.update(
+                native_amx_application_manifest_count=1
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+    ],
+)
+def test_get_sumeragi_status_rejects_invalid_native_manifest(
+    mutate, error: str
+) -> None:
+    payload = _sumeragi_v2_status_payload()
+    mutate(payload["last_commit_qc"]["certificate"]["execution_commitment"])
+
+    with pytest.raises(RuntimeError, match=error):
+        _get_sumeragi_status(payload)
 
 
 def test_get_sumeragi_status_preserves_carried_proposal_origins() -> None:
@@ -3680,46 +3771,23 @@ def test_get_sumeragi_status_accepts_all_ten_liveness_queue_kinds() -> None:
         _get_sumeragi_status(payload)
 
 
-def test_get_sumeragi_status_parses_and_validates_safety_halt() -> None:
+def test_get_sumeragi_status_rejects_operational_diagnostics_fields() -> None:
     payload = _sumeragi_v2_status_payload()
-    payload["safety_halt"] = {
-        "active": True,
-        "reason": "conflicting_commit_qc",
-        "height": 9,
-        "epoch": 1,
-        "first_block_hash": _canonical_hash(0x71),
-        "conflicting_block_hash": _canonical_hash(0x73),
-    }
-    safety_halt = _get_sumeragi_status(payload).safety_halt
-    assert safety_halt.active is True
-    assert safety_halt.reason == "conflicting_commit_qc"
-    assert safety_halt.first_block_hash == _canonical_hash(0x71)
-    assert safety_halt.conflicting_block_hash == _canonical_hash(0x73)
-
-    missing = _sumeragi_v2_status_payload()
-    del missing["safety_halt"]
-    with pytest.raises(RuntimeError, match="safety_halt must be a JSON object"):
-        _get_sumeragi_status(missing)
-
-    unknown = _sumeragi_v2_status_payload()
-    unknown["safety_halt"]["legacy_reason_code"] = 7
-    with pytest.raises(RuntimeError, match="safety_halt contains unknown field"):
-        _get_sumeragi_status(unknown)
-
-    malformed_hash = _sumeragi_v2_status_payload()
-    malformed_hash["safety_halt"]["first_block_hash"] = "not-a-canonical-hash"
-    with pytest.raises(RuntimeError, match="first_block_hash must be a canonical hash"):
-        _get_sumeragi_status(malformed_hash)
+    payload["lane_settlement_commitments"] = []
+    with pytest.raises(
+        RuntimeError, match="unknown field lane_settlement_commitments"
+    ):
+        _get_sumeragi_status(payload)
 
 
-def test_get_sumeragi_status_parses_exact_nested_fee_and_native_amx_receipts() -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_parses_exact_nested_fee_and_native_amx_receipts() -> None:
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     settlement["nexus_fee_receipts"] = [_nexus_fee_receipt_payload()]
-    settlement["native_amx_receipts"] = [_native_amx_receipt_payload()]
+    settlement["native_amx_receipts"] = _native_amx_receipt_group()
     payload["lane_settlement_commitments"] = [settlement]
 
-    parsed = _get_sumeragi_status(payload).lane_settlement_commitments[0]
+    parsed = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0]
 
     assert parsed["nexus_fee_receipts"][0]["schedule"]["per_byte_fee"] == "0.5"
     native = parsed["native_amx_receipts"][0]
@@ -3744,24 +3812,25 @@ def test_get_sumeragi_status_parses_exact_nested_fee_and_native_amx_receipts() -
     assert leg["prepare_qc"]["body"]["tx_entrypoint_hash"] == _canonical_hash(0x61)
 
 
-def test_get_sumeragi_status_accepts_first_native_amx_participant_block() -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_accepts_first_native_amx_participant_block() -> None:
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
-    leg = native["legs"][0]
-    for qc in (leg["prepare_qc"], leg["commit_qc"]):
-        qc["body"]["participant_previous_block_height"] = 0
-        qc["body"]["participant_previous_block_descriptor_hash"] = None
-        qc["body"]["participant_lane_block_height"] = 1
-    descriptor = leg["participant_proposal"]["descriptor"]
-    descriptor["previous_lane_block_height"] = 0
-    del descriptor["previous_lane_block_descriptor_hash"]
-    descriptor["lane_block_height"] = 1
-    leg["participant_settlement"]["block_height"] = 1
-    settlement["native_amx_receipts"] = [native]
+    native_group = _native_amx_receipt_group()
+    for native in native_group:
+        leg = native["legs"][0]
+        for qc in (leg["prepare_qc"], leg["commit_qc"]):
+            qc["body"]["participant_previous_block_height"] = 0
+            qc["body"]["participant_previous_block_descriptor_hash"] = None
+            qc["body"]["participant_lane_block_height"] = 1
+        descriptor = leg["participant_proposal"]["descriptor"]
+        descriptor["previous_lane_block_height"] = 0
+        del descriptor["previous_lane_block_descriptor_hash"]
+        descriptor["lane_block_height"] = 1
+        leg["participant_settlement"]["block_height"] = 1
+    settlement["native_amx_receipts"] = native_group
     payload["lane_settlement_commitments"] = [settlement]
 
-    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
+    parsed_leg = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0][
         "native_amx_receipts"
     ][0]["legs"][0]
 
@@ -3772,11 +3841,66 @@ def test_get_sumeragi_status_accepts_first_native_amx_participant_block() -> Non
     )
 
 
-def test_get_sumeragi_status_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_accepts_mixed_role_proposal_without_current_entrypoint() -> None:
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
-    native = _native_amx_receipt_payload()
+    native_group = _native_amx_receipt_group()
+    native = native_group[0]
     leg = native["legs"][0]
+    descriptor = leg["participant_proposal"]["descriptor"]
+    descriptor["accepted_candidate_indices"] = [1]
+    descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x74)]
+    settlement["native_amx_receipts"] = native_group
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed_leg = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0][
+        "native_amx_receipts"
+    ][0]["legs"][0]
+
+    assert parsed_leg["requires_mixed_role_anchor_validation"] is True
+
+
+def test_get_sumeragi_diagnostics_rejects_native_amx_group_shape_drift() -> None:
+    missing_outer_source = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native_group = _native_amx_receipt_group()
+    native_group.pop()
+    settlement["native_amx_receipts"] = native_group
+    missing_outer_source["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="exact ordered source group"):
+        _get_sumeragi_diagnostics(missing_outer_source)
+
+    unordered_outer_sources = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native_group = _native_amx_receipt_group()
+    native_group.reverse()
+    settlement["native_amx_receipts"] = native_group
+    unordered_outer_sources["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(unordered_outer_sources)
+
+    unordered_participant_sources = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native_group = _native_amx_receipt_group()
+    native_group[0]["legs"][0]["participant_settlement"]["receipts"].reverse()
+    settlement["native_amx_receipts"] = native_group
+    unordered_participant_sources["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(unordered_participant_sources)
+
+    oversized_outer_group = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    settlement["native_amx_receipts"] = [{}] * 4097
+    oversized_outer_group["lane_settlement_commitments"] = [settlement]
+    with pytest.raises(RuntimeError, match="native_amx_receipts exceeds"):
+        _get_sumeragi_diagnostics(oversized_outer_group)
+
+
+def test_get_sumeragi_diagnostics_rejects_same_route_native_identity_drift() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native_group = _native_amx_receipt_group()
+    leg = native_group[0]["legs"][0]
     leg["lane_id"] = 2
     leg["dataspace_id"] = 7
     for qc in (leg["prepare_qc"], leg["commit_qc"]):
@@ -3787,23 +3911,143 @@ def test_get_sumeragi_status_accepts_mixed_role_proposal_without_current_entrypo
     descriptor["lane_id"] = 2
     descriptor["dataspace_id"] = 7
     descriptor["lane_incarnation"] = _canonical_hash(0x51)
-    descriptor["accepted_transaction_hashes"] = [_canonical_hash(0x77)]
     leg["participant_settlement"]["lane_id"] = 2
     leg["participant_settlement"]["dataspace_id"] = 7
     leg["participant_settlement"]["lane_incarnation"] = _canonical_hash(0x51)
+    settlement["native_amx_receipts"] = native_group
+    payload["lane_settlement_commitments"] = [settlement]
+
+    with pytest.raises(RuntimeError, match="mismatched signed identities"):
+        _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_keeps_global_and_coordinator_views_independent() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native_group = _native_amx_receipt_group()
+    for native in native_group:
+        native["lane_block_view"] = 9
+        for qc in (native["legs"][0]["prepare_qc"], native["legs"][0]["commit_qc"]):
+            assert qc["body"]["round"]["view"] == 2
+            qc["body"]["coordinator_lane_block_view"] = 9
+    settlement["native_amx_receipts"] = native_group
+    payload["lane_settlement_commitments"] = [settlement]
+
+    parsed = _get_sumeragi_diagnostics(payload)
+
+    body = parsed.lane_settlement_commitments[0]["native_amx_receipts"][0][
+        "legs"
+    ][0]["prepare_qc"]["body"]
+    assert body["round"]["view"] == 2
+    assert body["coordinator_lane_block_view"] == 9
+
+
+def test_get_sumeragi_diagnostics_rejects_unordered_native_qc_validator_set() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    settlement = _lane_settlement_payload()
+    native = _native_amx_receipt_payload()
+    native["legs"][0]["prepare_qc"]["validator_set"][0:2] = [
+        "validator-b",
+        "validator-a",
+    ]
     settlement["native_amx_receipts"] = [native]
     payload["lane_settlement_commitments"] = [settlement]
 
-    parsed_leg = _get_sumeragi_status(payload).lane_settlement_commitments[0][
-        "native_amx_receipts"
-    ][0]["legs"][0]
-
-    assert parsed_leg["participant_proposal"]["descriptor"][
-        "accepted_transaction_hashes"
-    ] == [_canonical_hash(0x77)]
+    with pytest.raises(RuntimeError, match="strictly ordered by validator id"):
+        _get_sumeragi_diagnostics(payload)
 
 
-def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering() -> None:
+def test_get_sumeragi_diagnostics_parses_ordered_native_application_evidence() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    payload["native_amx_participant_applications"] = [
+        {
+            "lane_id": 3,
+            "dataspace_id": 8,
+            "lane_incarnation": _canonical_hash(0x65),
+            "participant_height": 8,
+            "participant_view": 1,
+            "predecessor_height": 7,
+            "predecessor_descriptor_hash": _canonical_hash(0x68),
+            "descriptor_hash": _canonical_hash(0x73),
+            "proposal_hash": _canonical_hash(0x69),
+            "settlement_hash": _canonical_hash(0x6B),
+            "source_count": 2,
+            "application_block_height": 10,
+            "application_block_hash": _canonical_hash(0x79),
+            "state": "durably_applied",
+        }
+    ]
+
+    applications = _get_sumeragi_diagnostics(
+        payload
+    ).native_amx_participant_applications
+
+    assert applications[0].participant_height == 8
+    assert applications[0].state == "durably_applied"
+
+
+def test_get_sumeragi_diagnostics_parses_autonomous_stage_and_conflict() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    row = {
+        "lane_id": 3, "dataspace_id": 8,
+        "lane_incarnation": _canonical_hash(0x65),
+        "lane_block_height": 8, "lane_block_view": 1,
+        "proposal_height": 10, "proposal_view": 2,
+        "proposal_hash": _canonical_hash(0x69),
+        "descriptor_hash": _canonical_hash(0x73),
+        "executable_payload_hash": _canonical_hash(0x74),
+        "source_bundle_hash": _canonical_hash(0x75),
+        "merge_entry_hash": _canonical_hash(0x76),
+        "application_block_height": 12,
+        "application_block_hash": _canonical_hash(0x77),
+        "reservation_count": 2, "transaction_count": 2,
+        "highest_durable_stage": "kura_wsv_application_receipt_durable",
+        "stuck_reason": "queue_finalization_unverifiable",
+    }
+    payload["autonomous_lane_executions"] = [row]
+    parsed = _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0]
+    assert parsed.merge_entry_hash == _canonical_hash(0x76)
+    assert parsed.application_block_height == 12
+
+    payload["autonomous_lane_executions"] = [row, dict(row)]
+    with pytest.raises(RuntimeError, match="strictly ordered"):
+        _get_sumeragi_diagnostics(payload)
+    payload["autonomous_lane_executions"] = [row]
+    row["reservation_count"] = 1
+    with pytest.raises(RuntimeError, match="reservation and transaction counts disagree"):
+        _get_sumeragi_diagnostics(payload)
+    row["highest_durable_stage"] = "conflict"
+    row["stuck_reason"] = "evidence_conflict"
+    assert _get_sumeragi_diagnostics(payload).autonomous_lane_executions[0].stuck_reason == (
+        "evidence_conflict"
+    )
+    row["stuck_reason"] = "awaiting_merge_selection"
+    with pytest.raises(RuntimeError, match="stage and stuck reason disagree"):
+        _get_sumeragi_diagnostics(payload)
+
+
+def test_get_sumeragi_diagnostics_parses_npos_windows_and_byte_seed() -> None:
+    payload = _sumeragi_diagnostics_payload()
+    payload["npos"] = {
+        "epoch_length_blocks": 100,
+        "vrf_commit_deadline_offset": 20,
+        "vrf_reveal_deadline_offset": 40,
+        "epoch_seed": [1] * 32,
+        "prf_height": 10,
+        "prf_view": 2,
+        "vrf_penalty_epoch": 1,
+        "vrf_committed_no_reveal_total": 0,
+        "vrf_no_participation_total": 0,
+        "vrf_late_reveals_total": 0,
+    }
+
+    npos = _get_sumeragi_diagnostics(payload).npos
+
+    assert npos is not None
+    assert npos.epoch_seed == (1,) * 32
+
+
+def test_get_sumeragi_diagnostics_rejects_native_amx_participant_finality_tampering() -> None:
     def extra_leg_field(leg: Dict[str, Any]) -> None:
         leg["future_leg_field"] = 1
 
@@ -3933,14 +4177,14 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
         recursive_settlement,
     )
     for mutate in mutations:
-        payload = _sumeragi_v2_status_payload()
+        payload = _sumeragi_diagnostics_payload()
         settlement = _lane_settlement_payload()
         native = _native_amx_receipt_payload()
         mutate(native["legs"][0])
         settlement["native_amx_receipts"] = [native]
         payload["lane_settlement_commitments"] = [settlement]
         with pytest.raises(RuntimeError, match="."):
-            _get_sumeragi_status(payload)
+            _get_sumeragi_diagnostics(payload)
 
 
 @pytest.mark.parametrize(
@@ -3959,8 +4203,8 @@ def test_get_sumeragi_status_rejects_native_amx_participant_finality_tampering()
         "1" * 156,
     ],
 )
-def test_get_sumeragi_status_rejects_noncanonical_quantity_json(invalid: Any) -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_rejects_noncanonical_quantity_json(invalid: Any) -> None:
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     settlement["total_local_amount"] = invalid
     payload["lane_settlement_commitments"] = [settlement]
@@ -3969,11 +4213,11 @@ def test_get_sumeragi_status_rejects_noncanonical_quantity_json(invalid: Any) ->
         RuntimeError,
         match="total_local_amount.*(?:quantity|canonical|length|512-bit)",
     ):
-        _get_sumeragi_status(payload)
+        _get_sumeragi_diagnostics(payload)
 
 
-def test_get_sumeragi_status_preserves_exact_quantity_boundaries() -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_preserves_exact_quantity_boundaries() -> None:
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     maximum = str((1 << 511) - 1)
     scale_28_maximum = f"{maximum[:126]}.{maximum[126:]}"
@@ -3992,7 +4236,7 @@ def test_get_sumeragi_status_preserves_exact_quantity_boundaries() -> None:
     )
     payload["lane_settlement_commitments"] = [settlement]
 
-    parsed = _get_sumeragi_status(payload).lane_settlement_commitments[0]
+    parsed = _get_sumeragi_diagnostics(payload).lane_settlement_commitments[0]
 
     assert parsed["total_local_amount"] == scale_28_maximum
     assert parsed["total_xor_due"] == "0.0000000000000000000000000001"
@@ -4008,16 +4252,16 @@ def test_get_sumeragi_status_preserves_exact_quantity_boundaries() -> None:
         "total_xor_variance_micro",
     ],
 )
-def test_get_sumeragi_status_rejects_retired_settlement_fields(
+def test_get_sumeragi_diagnostics_rejects_retired_settlement_fields(
     retired_field: str,
 ) -> None:
-    payload = _sumeragi_v2_status_payload()
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     settlement[retired_field] = "0"
     payload["lane_settlement_commitments"] = [settlement]
 
     with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
-        _get_sumeragi_status(payload)
+        _get_sumeragi_diagnostics(payload)
 
 
 @pytest.mark.parametrize(
@@ -4029,104 +4273,104 @@ def test_get_sumeragi_status_rejects_retired_settlement_fields(
         "xor_variance_micro",
     ],
 )
-def test_get_sumeragi_status_rejects_retired_settlement_receipt_fields(
+def test_get_sumeragi_diagnostics_rejects_retired_settlement_receipt_fields(
     retired_field: str,
 ) -> None:
-    payload = _sumeragi_v2_status_payload()
+    payload = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     settlement["receipts"][0][retired_field] = "0"
     payload["lane_settlement_commitments"] = [settlement]
 
     with pytest.raises(RuntimeError, match=f"unknown field {retired_field}"):
-        _get_sumeragi_status(payload)
+        _get_sumeragi_diagnostics(payload)
 
 
-def test_get_sumeragi_status_rejects_noncanonical_fixed_hex_and_nested_unknown_fields() -> None:
-    lowercase = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_rejects_noncanonical_fixed_hex_and_nested_unknown_fields() -> None:
+    lowercase = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     fee = _nexus_fee_receipt_payload()
     fee["source_id"] = "ab" * 32
     settlement["nexus_fee_receipts"] = [fee]
     lowercase["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="source_id.*uppercase"):
-        _get_sumeragi_status(lowercase)
+        _get_sumeragi_diagnostics(lowercase)
 
-    unknown_fee = _sumeragi_v2_status_payload()
+    unknown_fee = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     fee = _nexus_fee_receipt_payload()
     fee["schedule"]["legacy_rate"] = "1"
     settlement["nexus_fee_receipts"] = [fee]
     unknown_fee["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="schedule contains unknown field legacy_rate"):
-        _get_sumeragi_status(unknown_fee)
+        _get_sumeragi_diagnostics(unknown_fee)
 
-    unknown_amx = _sumeragi_v2_status_payload()
+    unknown_amx = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
     native["legs"][0]["prepare_qc"]["body"]["legacy_round"] = 1
     settlement["native_amx_receipts"] = [native]
     unknown_amx["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="body contains unknown field legacy_round"):
-        _get_sumeragi_status(unknown_amx)
+        _get_sumeragi_diagnostics(unknown_amx)
 
 
-def test_get_sumeragi_status_rejects_nested_receipt_coordinate_and_qc_tampering() -> None:
-    wrong_coordinate = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_rejects_nested_receipt_coordinate_and_qc_tampering() -> None:
+    wrong_coordinate = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     fee = _nexus_fee_receipt_payload()
     fee["block_height"] = 8
     settlement["nexus_fee_receipts"] = [fee]
     wrong_coordinate["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="receipt coordinates do not match"):
-        _get_sumeragi_status(wrong_coordinate)
+        _get_sumeragi_diagnostics(wrong_coordinate)
 
-    under_quorum = _sumeragi_v2_status_payload()
+    under_quorum = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
     native["legs"][0]["prepare_qc"]["signers_bitmap"] = [0x03]
     settlement["native_amx_receipts"] = [native]
     under_quorum["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="signers_bitmap does not meet quorum"):
-        _get_sumeragi_status(under_quorum)
+        _get_sumeragi_diagnostics(under_quorum)
 
-    malformed_pop = _sumeragi_v2_status_payload()
+    malformed_pop = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
     native["legs"][0]["commit_qc"]["validator_set_pops"][0] = [1] * 95
     settlement["native_amx_receipts"] = [native]
     malformed_pop["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match=r"validator_set_pops\[0\].*96"):
-        _get_sumeragi_status(malformed_pop)
+        _get_sumeragi_diagnostics(malformed_pop)
 
-    mismatched_phase_identity = _sumeragi_v2_status_payload()
+    mismatched_phase_identity = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
     native["legs"][0]["commit_qc"]["body"]["plan_digest"] = _canonical_hash(0x70)
     settlement["native_amx_receipts"] = [native]
     mismatched_phase_identity["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="prepare and commit identities differ"):
-        _get_sumeragi_status(mismatched_phase_identity)
+        _get_sumeragi_diagnostics(mismatched_phase_identity)
 
 
-def test_get_sumeragi_status_rejects_bounded_vector_overflow_before_nested_decode() -> None:
-    too_many_settlements = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_rejects_bounded_vector_overflow_before_nested_decode() -> None:
+    too_many_settlements = _sumeragi_diagnostics_payload()
     too_many_settlements["lane_settlement_commitments"] = [{}] * 129
     with pytest.raises(RuntimeError, match="lane_settlement_commitments exceeds"):
-        _get_sumeragi_status(too_many_settlements)
+        _get_sumeragi_diagnostics(too_many_settlements)
 
-    too_many_relays = _sumeragi_v2_status_payload()
+    too_many_relays = _sumeragi_diagnostics_payload()
     too_many_relays["lane_relay_envelopes"] = [{}] * 65
     with pytest.raises(RuntimeError, match="lane_relay_envelopes exceeds"):
-        _get_sumeragi_status(too_many_relays)
+        _get_sumeragi_diagnostics(too_many_relays)
 
-    too_many_legs = _sumeragi_v2_status_payload()
+    too_many_legs = _sumeragi_diagnostics_payload()
     settlement = _lane_settlement_payload()
     native = _native_amx_receipt_payload()
     native["legs"] = native["legs"] * 256
     settlement["native_amx_receipts"] = [native]
     too_many_legs["lane_settlement_commitments"] = [settlement]
     with pytest.raises(RuntimeError, match="legs exceeds"):
-        _get_sumeragi_status(too_many_legs)
+        _get_sumeragi_diagnostics(too_many_legs)
 
 
 def test_get_sumeragi_status_rejects_protocol_context_and_commit_tampering() -> None:
@@ -4216,21 +4460,16 @@ def test_get_sumeragi_status_allows_authenticated_bootstrap_without_commit_detai
     assert status.last_commit_qc is None
 
 
-def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
-    adapter_overflow = _sumeragi_v2_status_payload()
-    adapter_overflow["operator"]["adapter_queues"]["ingress_keys"] = 17
-    with pytest.raises(RuntimeError, match="adapter_queues occupancy exceeds capacity"):
-        _get_sumeragi_status(adapter_overflow)
+def test_get_sumeragi_diagnostics_rejects_impossible_queue_bounds() -> None:
+    depth_overflow = _sumeragi_diagnostics_payload()
+    depth_overflow["tx_queue_depth"] = 33
+    with pytest.raises(RuntimeError, match="queue depth exceeds capacity"):
+        _get_sumeragi_diagnostics(depth_overflow)
 
-    tx_overflow = _sumeragi_v2_status_payload()
-    tx_overflow["operator"]["tx_queue"]["queued_transactions"] = 6
-    with pytest.raises(RuntimeError, match="tx_queue occupancy exceeds capacity"):
-        _get_sumeragi_status(tx_overflow)
-
-    zero_capacity = _sumeragi_v2_status_payload()
-    zero_capacity["operator"]["tx_queue"]["max_retained_bytes"] = 0
-    with pytest.raises(RuntimeError, match="max_retained_bytes must be positive"):
-        _get_sumeragi_status(zero_capacity)
+    byte_overflow = _sumeragi_diagnostics_payload()
+    byte_overflow["tx_queue_retained_bytes"] = 65537
+    with pytest.raises(RuntimeError, match="retained queue bytes exceed"):
+        _get_sumeragi_diagnostics(byte_overflow)
 
 
 @pytest.mark.parametrize(
@@ -4243,12 +4482,14 @@ def test_get_sumeragi_status_rejects_impossible_queue_bounds() -> None:
         "lane_block_sessions",
     ],
 )
-def test_get_sumeragi_status_requires_all_canonical_lane_arrays(field: str) -> None:
-    payload = _sumeragi_v2_status_payload()
+def test_get_sumeragi_diagnostics_requires_all_canonical_lane_arrays(
+    field: str,
+) -> None:
+    payload = _sumeragi_diagnostics_payload()
     del payload[field]
 
-    with pytest.raises(RuntimeError, match=rf"{field} must be an array"):
-        _get_sumeragi_status(payload)
+    with pytest.raises(RuntimeError, match=rf"missing required field {field}"):
+        _get_sumeragi_diagnostics(payload)
 
 
 @pytest.mark.parametrize(
@@ -5914,7 +6155,7 @@ def _offline_active_recursive_step_eq_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_eq_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-eq-authenticated-layout-v4",
+        circuit_id="kagemusha-recursive-spend-step-eq-compact-layout-v5",
         commitment="99" * 32,
         public_inputs_schema_hash="9a" * 32,
         max_proof_bytes=2 * 1024 * 1024,
@@ -5931,7 +6172,7 @@ def _offline_active_recursive_step_ep_verifier(**overrides: Any) -> Dict[str, An
             "backend": "halo2/ipa",
             "name": "kagemusha_recursive_step_ep_v4_verifier_record",
         },
-        circuit_id="kagemusha-recursive-spend-step-ep-authenticated-layout-v4",
+        circuit_id="kagemusha-recursive-spend-step-ep-compact-lineage-v5",
         commitment="aa" * 32,
         public_inputs_schema_hash="ab" * 32,
         max_proof_bytes=2 * 1024 * 1024,
@@ -6177,6 +6418,11 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
         "post_state_root": _canonical_hash(0x92),
         "ordinary_writes_root": _canonical_hash(0x93),
         "topup_anchor_count": 0,
+        "native_amx_application_manifest_version": 1,
+        "native_amx_application_manifest_root": (
+            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ),
+        "native_amx_application_manifest_count": 0,
         "executed_block_wire_hash": _canonical_hash(0x94),
     }
     commitment = client_module._offline_top_up_finality_execution_commitment(
@@ -6186,8 +6432,73 @@ def test_offline_finality_execution_commitment_requires_executed_wire_hash() -> 
     )
     assert commitment.executed_block_wire_hash == payload["executed_block_wire_hash"]
 
+    payload["native_amx_application_manifest_root"] = _canonical_hash(0x95)
+    payload["native_amx_application_manifest_count"] = 1
+    nonempty_commitment = (
+        client_module._offline_top_up_finality_execution_commitment(
+            payload,
+            "test.execution_commitment",
+            require_topup=False,
+        )
+    )
+    assert nonempty_commitment.native_amx_application_manifest_count == 1
+
     del payload["executed_block_wire_hash"]
     with pytest.raises(RuntimeError, match="executed_block_wire_hash"):
+        client_module._offline_top_up_finality_execution_commitment(
+            payload,
+            "test.execution_commitment",
+            require_topup=False,
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "error"),
+    [
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_version=2
+            ),
+            "native_amx_application_manifest_version must equal 1",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_count=1025
+            ),
+            "native_amx_application_manifest_count",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_root=_canonical_hash(0x95)
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+        (
+            lambda payload: payload.update(
+                native_amx_application_manifest_count=1
+            ),
+            "must be zero exactly for the canonical empty root",
+        ),
+    ],
+)
+def test_offline_finality_execution_commitment_rejects_invalid_native_manifest(
+    mutate, error: str
+) -> None:
+    payload = {
+        "parent_state_root": _canonical_hash(0x91),
+        "post_state_root": _canonical_hash(0x92),
+        "ordinary_writes_root": _canonical_hash(0x93),
+        "topup_anchor_count": 0,
+        "native_amx_application_manifest_version": 1,
+        "native_amx_application_manifest_root": (
+            _NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT
+        ),
+        "native_amx_application_manifest_count": 0,
+        "executed_block_wire_hash": _canonical_hash(0x94),
+    }
+    mutate(payload)
+
+    with pytest.raises(RuntimeError, match=error):
         client_module._offline_top_up_finality_execution_commitment(
             payload,
             "test.execution_commitment",

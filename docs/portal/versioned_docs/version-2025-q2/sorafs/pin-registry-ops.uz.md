@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` ni ishga tushiring va reklama qilingan imkoniyatlar replikatsiya talablariga mos kelishini tekshiring.
    - Ta'minlangan GiB va PoR muvaffaqiyatini tasdiqlash uchun `torii_sorafs_capacity_*` o'lchagichlarini tekshiring.
 3. **Replikatsiyani qayta tayinlash**
-   - Kechikish sustligi (`stat="avg"`) 5 davrdan pastga tushganda (manifest/CAR qadoqlashda `iroha app sorafs toolkit pack` ishlatiladi) `sorafs_manifest_stub capacity replication-order` orqali yangi buyurtmalar bering.
+   - Kechikish sustligi (`stat="avg"`) 5 davrdan pastga tushganda (manifest/CAR qadoqlashda `iroha app sorafs toolkit pack` ishlatiladi) `sorafs_manifest_builder capacity replication-order` orqali yangi buyurtmalar bering.
    - Agar taxalluslarda faol manifest bog'lanishlari bo'lmasa, boshqaruvni xabardor qiling (`torii_sorafs_registry_aliases_total` kutilmaganda tushib ketadi).
 4. **Hujjat natijasi**
    - Voqea qaydlarini SoraFS operatsiyalar jurnaliga vaqt belgilari va ta'sirlangan manifest dayjestlari bilan yozib oling.

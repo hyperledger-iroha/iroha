@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 # SoraFS کپیسٹی سمیولیشن رَن بُک
 
-یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ مقصد یہ ہے کہ `docs/examples/sorafs_capacity_simulation/` کے reproducible fixtures کے ذریعے quota مذاکرات، failover ہینڈلنگ اور slashing remediation کو end‑to‑end ویلیڈیٹ کیا جائے۔ کپیسٹی payloads اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ مقصد یہ ہے کہ `docs/examples/sorafs_capacity_simulation/` کے reproducible fixtures کے ذریعے quota مذاکرات، failover ہینڈلنگ اور slashing remediation کو end‑to‑end ویلیڈیٹ کیا جائے۔ کپیسٹی payloads اب بھی `sorafs_manifest_builder capacity` استعمال کرتے ہیں؛ manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 
@@ -20,7 +20,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-یہ اسکرپٹ `sorafs_manifest_stub capacity` کو چلाकर deterministic Norito payloads، base64 encodings، Torii request bodies اور JSON summaries تیار کرتا ہے برائے:
+یہ اسکرپٹ `sorafs_manifest_builder capacity` کو چلाकर deterministic Norito payloads، base64 encodings، Torii request bodies اور JSON summaries تیار کرتا ہے برائے:
 
 - quota مذاکرات والے منظرنامے میں شریک تین providers کی declarations۔
 - ایک replication order جو staged manifest کو providers میں تقسیم کرتا ہے۔

@@ -63,7 +63,7 @@ translation_last_reviewed: 2026-02-07
 - የተጋሩ ረዳቶች (`CapacityMetadataEntry`፣ `PricingScheduleV1`፣ ሌይን/መመደብ/SLA አረጋጋጮች) CI እና ታችኛው ተፋሰስ መገልገያ እንደገና ጥቅም ላይ ሊውሉ እንደሚችሉ የሚወስን ቁልፍ ማረጋገጫ እና የስህተት ሪፖርት ያቀርባሉ።【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` አሁን በሰንሰለት ላይ ያለውን ቅጽበታዊ ገጽ እይታ በ`/v1/sorafs/capacity/state` በኩል ያቀርባል፣ የአቅራቢዎችን መግለጫዎች እና የክፍያ ደብተር ግቤቶችን ከወሳኙ I18NT0000008X ጋር በማጣመር ጄሰን።
 - የማረጋገጫ ሽፋን ልምምዶች ቀኖናዊ እጀታ ማስፈጸሚያ፣ የተባዛ ፈልጎ ማግኘት፣ በየመንገድ ድንበሮች፣ መባዛት ጥበቃዎች እና የቴሌሜትሪ ክልል ፍተሻዎች ወዲያውኑ በCI ውስጥ እንደገና እንዲታዩ ያደርጋል።【crates/sorafs_manifest/src/capacity.rs:792】
-- ኦፕሬተር መሳሪያ፡ `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` በሰው ሊነበቡ የሚችሉ ዝርዝሮችን ወደ ቀኖናዊ Norito ክፍያ ጭነቶች፣ ቤዝ64 ብሎብስ እና JSON ማጠቃለያዎች ስለሚለውጥ ኦፕሬተሮች የ `/v1/sorafs/capacity/declare`፣ `/v1/sorafs/capacity/telemetry`፣ `/v1/sorafs/capacity/telemetry`ን ደረጃ እንዲይዙ እና ከአካባቢያዊ ትግበራ ጋር። validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 የማጣቀሻ እቃዎች በ`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`፣ `order_v1.json`፣ `order_v1.to`) እና በI.08NI050501
+- ኦፕሬተር መሳሪያ፡ `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` በሰው ሊነበቡ የሚችሉ ዝርዝሮችን ወደ ቀኖናዊ Norito ክፍያ ጭነቶች፣ ቤዝ64 ብሎብስ እና JSON ማጠቃለያዎች ስለሚለውጥ ኦፕሬተሮች የ `/v1/sorafs/capacity/declare`፣ `/v1/sorafs/capacity/telemetry`፣ `/v1/sorafs/capacity/telemetry`ን ደረጃ እንዲይዙ እና ከአካባቢያዊ ትግበራ ጋር። validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 የማጣቀሻ እቃዎች በ`fixtures/sorafs_manifest/replication_order/` (`order_v1.json`፣ `order_v1.json`፣ `order_v1.to`) እና በI.08NI050501
 
 ### 2. የመቆጣጠሪያ አውሮፕላን ውህደት
 
@@ -164,7 +164,7 @@ translation_last_reviewed: 2026-02-07
   የአገናኝ ምልክት ማጽደቂያ ወደ የማረጋገጫ ሪፖርቱ ይመለሳል።
 
 ### አቅራቢ የመሳፈሪያ እና የጭስ ሙከራዎች
-- የማስታወቂያ/የቴሌሜትሪ ቅርሶችን ከ`sorafs_manifest_stub capacity ...` ጋር ያድሱ እና እንደገና ያጫውቱ።
+- የማስታወቂያ/የቴሌሜትሪ ቅርሶችን ከ`sorafs_manifest_builder capacity ...` ጋር ያድሱ እና እንደገና ያጫውቱ።
   የ CLI ሙከራዎች ከማቅረቡ በፊት (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)።
 - በTorii (`/v1/sorafs/capacity/declare`) ያስገቡ እና ከዚያ `/v1/sorafs/capacity/state` ፕላስ ይያዙ
   Grafana ቅጽበታዊ ገጽ እይታዎች። በ I18NI0000092X ውስጥ የመውጫ ፍሰቱን ይከተሉ።

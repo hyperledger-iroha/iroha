@@ -63,7 +63,7 @@ SDK)。 Она фиксирует инварианты エイリアスとハン�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Отправляет PR, содержащий 試合, предложение, отчет о детерминизме и
@@ -99,14 +99,14 @@ SDK)。 Она фиксирует инварианты エイリアスとハン�
 
 ## Ожидания от ツール
 
-- `sorafs_manifest_chunk_store` および `sorafs_manifest_stub` の詳細:
+- `sorafs_manifest_chunk_store` および `sorafs_manifest_builder` の詳細:
   - `--list-profiles` が表示されます。
   - `--promote-profile=<handle>` для генерации канонического блока метаданных,
     жении профиля です。
   - `--json-out=-` の標準出力、標準出力の標準出力
     логи ревью。
 - `ensure_charter_compliance()` вызывается при запуске релевантных бинарников
-  (`manifest_chunk_store`、`provider_advert_stub`)。 CI тесты должны падать, если
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。 CI тесты должны падать, если
   новые записи нарузают хартию。
 
 ## Документирование

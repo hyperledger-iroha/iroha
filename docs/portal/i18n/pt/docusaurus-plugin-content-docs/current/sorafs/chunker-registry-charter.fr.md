@@ -64,7 +64,7 @@ SDK). Ela impõe invariantes de apelido e identificador verificados por
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Soumettre une PR contendo luminárias, proposição, relacionamento de determinismo et
@@ -101,14 +101,14 @@ SDK). Ela impõe invariantes de apelido e identificador verificados por
 
 ## Ferramentas Atentes
 
-- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` exposto:
+- `sorafs_manifest_chunk_store` e `sorafs_manifest_builder` exposto:
   - `--list-profiles` para inspeção de registro.
   - `--promote-profile=<handle>` para gerar o bloco de metadonées canônico utilizado
     durante a promoção de um perfil.
   - `--json-out=-` para streamer de relatórios em stdout, permitindo registros de revisão
     reprodutíveis.
 - `ensure_charter_compliance()` é invocado durante o descarte nos binários em questão
-  (`manifest_chunk_store`, `provider_advert_stub`). Os testes CI devem ser ouvidos
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Os testes CI devem ser ouvidos
   de nouvelles entrées violenta la charte.
 
 ## Registrar

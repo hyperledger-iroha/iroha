@@ -6,11 +6,16 @@ description: Logical lane taxonomy, lane configuration geometry, and world-state
 
 # Nexus Lane Model & WSV Partitioning
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
+> **Status:** NX-1 production architecture — lane geometry, lifecycle storage,
+> autonomous execution, and canonical merge are implemented; multilane release
+> evidence remains open.
 > **Owners:** Nexus Core WG, Governance WG  
 > **Related roadmap item:** NX-1
 
-This document captures the target architecture for Nexus’ multilane consensus layer. The goal is to produce a single deterministic world state while allowing individual data spaces (lanes) to run public or private validator sets with isolated workloads.
+This document captures the production architecture for Nexus’ multilane
+consensus layer. It produces one deterministic world state while allowing
+individual data spaces (lanes) to run public or private validator sets with
+isolated workloads.
 
 > **Cross-lane proofs:** This note focuses on geometry and storage. The per-lane settlement commitments, relay pipeline, and merge-ledger proofs required for roadmap **NX-4** are spelled out in [nexus_cross_lane.md](nexus_cross_lane.md).
 
@@ -37,7 +42,8 @@ All lane types must declare:
 - Dataspace alias — human-readable grouping that binds compliance policies.
 - Governance handle — identifier resolved through `Nexus.governance.modules`.
 - Settlement handle — identifier consumed by the settlement router to debit XOR buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced through `/status` and dashboards.
+- Optional telemetry metadata (description, contact, business domain) surfaced
+  through `/v1/nexus/lifecycle`, metrics, and dashboards.
 
 ## Lane Configuration Geometry (`LaneConfig`)
 
@@ -85,7 +91,14 @@ LaneConfigEntry {
 - Tiered-state snapshots mirror the same lifecycle; each lane writes under `<cold_root>/lanes/lane_{id:03}_{slug}` where `<cold_root>` is `cold_store_root` (or `da_store_root` when `cold_store_root` is unset), and retirements migrate the directory tree to `<cold_root>/retired/lanes/`.
 - **Key prefixes** — the 4-byte prefix computed from `LaneId` is always prepended to MV encoded keys. No host-specific hashing is used, so ordering is identical across nodes.
 - **Block log layout** — block data, index, hashes, and the durable count marker (`blocks.count.norito`) are nested under `kura/blocks/lane_{id:03}_{slug}/`. Merge-ledger journals reuse the same slug (`kura/merge/lane_{id:03}_{slug}.log`), keeping per-lane recovery flows isolated.
-- **Retention policy** — public lanes retain full block bodies; commitment-only lanes may compact older bodies after checkpoints because commitments are authoritative. Confidential lanes keep ciphertext journals in dedicated segments to avoid blocking other workloads.
+- **Retention policy** — public lanes retain full block bodies;
+  commitment-only lanes may compact older bodies only after the checkpoint,
+  finality, commit manifest, and every required Native application
+  manifest/proof, receipt, and latest-index binding are durable. After body
+  pruning, Native evidence revalidates against the QC-authenticated manifest
+  root; a hash-only legacy marker is not authoritative by itself. Confidential
+  lanes keep ciphertext journals in dedicated segments to avoid blocking other
+  workloads.
 - **Tooling** — `cargo xtask nexus-lane-maintenance --config <path> [--compact-retired]` inspects `<store>/blocks` and `<store>/merge_ledger` using the derived `LaneConfig`, reports active vs retired segments, and archives retired directories/logs under `<store>/retired/...` to keep evidence deterministic. Maintenance utilities (`kagami`, CLI admin commands) should reuse the slugged namespace when exposing metrics, Prometheus labels, or archiving Kura segments.
 
 ## Storage Budgets
@@ -99,7 +112,10 @@ LaneConfigEntry {
 - When the global disk budget is exceeded, eviction is deterministic: prune SoraNet provision spools in lexicographic path order, then SoraVPN spools, then tiered-state cold snapshots oldest-first (offloading to `da_store_root` when configured), then Kura retired segments, and finally evict active Kura block bodies into `da_blocks/` for DA-backed rehydration on read. Blocks that exceed the Kura budget on their own are persisted directly into `da_blocks/` and indexed as evicted.
 - `nexus.storage.max_wsv_memory_bytes` caps the hot WSV tier by propagating deterministic in-memory WSV sizing into `tiered_state.hot_retained_bytes`; grace retention may temporarily exceed the budget, but the overflow is observable via telemetry (`state_tiered_hot_bytes`, `state_tiered_hot_grace_overflow_bytes`).
 - `nexus.storage.disk_budget_weights` splits the disk budget across components using basis points (must sum to 10,000). Operator-explicit aggregate budgets use the existing global split. Auto-derived budgets first assign a budget per filesystem, then normalize the same weights across only the components present on that filesystem before deriving `kura.max_disk_usage_bytes`, `tiered_state.max_cold_bytes`, `sorafs.storage.max_capacity_bytes`, `streaming.soranet.provision_spool_max_bytes`, and `streaming.soravpn.provision_spool_max_bytes`.
-- Kura's storage budget enforcement sums block-store bytes across active + retired lane segments and includes queued blocks not yet persisted to avoid overshoot during write lag.
+- Kura's storage budget enforcement sums block-store bytes across active +
+  retired lane segments, including Native participant receipt,
+  application-manifest/proof, and latest-index files, and includes queued blocks
+  not yet persisted to avoid overshoot during write lag.
 - SoraVPN provisioning spools use `streaming.soravpn` settings and are capped independently from the SoraNet provision spool.
 - Per-component limits still apply: when a component has an explicit non-zero cap, the smaller of the explicit cap and the derived Nexus budget is enforced.
 - Budget telemetry uses `storage_budget_bytes_used{component=...}` and `storage_budget_bytes_limit{component=...}` to report usage/caps for `kura`, `wsv_hot`, `wsv_cold`, `soranet_spool`, and `soravpn_spool`; `storage_budget_exceeded_total{component=...}` increments when enforcement rejects new data and logs emit a warning for the operator.
@@ -711,7 +727,17 @@ LaneConfigEntry {
 
 ## Telemetry & Status
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and settlement profiles, derived from the catalog and `LaneConfig`.
+- `/v1/nexus/lifecycle` exposes the lifecycle/catalog snapshot used to verify
+  lane aliases, dataspace bindings, incarnations, activation/close heights, and
+  autoscale transitions.
+- `/v1/sumeragi/status` exposes only authoritative `SumeragiV2Status` reducer
+  state; it does not carry lane evidence.
+- `/v1/sumeragi/diagnostics` exposes non-authoritative operational evidence
+  including lane commitments/sessions. Its bounded Native
+  participant-application records and bounded restart-stable autonomous
+  execution stages are derived from durable State/Kura evidence (plus durable
+  queue ownership for finalization). A Native same-height identity disagreement
+  is `conflict`, never a silently selected winner.
 - Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so operators can map backlog and TEU pressure quickly.
 - `nexus_lane_configured_total` counts the number of derived lane entries and is recomputed when configuration changes. Telemetry emits signed diffs whenever lane geometry changes.
 - Dataspace backlog gauges include the alias/description metadata to help operators associate queue pressure with business domains.
@@ -726,7 +752,12 @@ LaneConfigEntry {
 ## Outstanding Work
 
 - Integrate settlement router updates (NX-3) with the new geometry so XOR buffer debits and receipts are tagged by lane slug.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and attach regression fixtures for cross-lane replay.
+- Close the still-open multilane release-evidence gates: fresh unskipped
+  four-peer suites; 10/10 fresh twelve-peer corridor seeds; the two-hour fault
+  soak; five pinned-hardware one-versus-four-lane pairs meeting the throughput,
+  latency, and resource bounds; SDK/formal evidence; and the prescribed
+  locked/offline full-workspace build, test, strict Clippy, formatting, and
+  legacy-codec checks. This document does not claim those runs have passed.
 - Add compliance hooks for whitelists/blacklists and programmable-money policies (tracked under NX-12).
 
 ---

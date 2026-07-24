@@ -66,7 +66,7 @@ las herramientas existentes para recopilar esa evidencia:1. Obtenga el paquete d
    las puertas de enlace.
 2. Ejecute el verificador de resguardo del manifiesto con el sobre firmado:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

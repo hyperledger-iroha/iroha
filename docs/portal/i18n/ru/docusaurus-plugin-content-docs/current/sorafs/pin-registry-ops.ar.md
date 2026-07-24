@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` используется в качестве источника питания для проверки.
    - Датчики `torii_sorafs_capacity_*` установлены в GiB в соответствии с PoR.
 3. **Полный выбор**
-   - Для установки `sorafs_manifest_stub capacity replication-order` необходимо установить блок управления (`stat="avg"`) в течение 5 дней. Проверьте (открытый манифест/CAR يستخدم `iroha app sorafs toolkit pack`).
+   - Для установки `sorafs_manifest_builder capacity replication-order` необходимо установить блок управления (`stat="avg"`) в течение 5 дней. Проверьте (открытый манифест/CAR يستخدم `iroha app sorafs toolkit pack`).
    - Используйте псевдонимы تفتقر لربط манифеста (انخفاض غير متوقع في `torii_sorafs_registry_aliases_total`).
 4. **Получить информацию**
    - Ссылка на приложение SoraFS в разделе "Дайджесты".

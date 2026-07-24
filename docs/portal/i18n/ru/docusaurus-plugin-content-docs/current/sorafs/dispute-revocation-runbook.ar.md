@@ -40,7 +40,7 @@ Sidebar_label: دليل تشغيل النزاعات والإلغاءات
 
 ## 3. تقديم النزاع
 
-1. Создайте файл JSON для `sorafs_manifest_stub capacity dispute`:
+1. Создайте файл JSON для `sorafs_manifest_builder capacity dispute`:
 
    ```json
    {
@@ -63,7 +63,7 @@ Sidebar_label: دليل تشغيل النزاعات والإلغاءات
 2. Интерфейс командной строки:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ Sidebar_label: دليل تشغيل النزاعات والإلغاءات
 
 1. **Настройка:** أخطر المزوّد بقرب الإلغاء؛ Он был убит в 2007 году.
 2. **Вход `ProviderAdmissionRevocationV1`:**
-   - استخدم `sorafs_manifest_stub provider-admission revoke` в приложении.
+   - استخدم `sorafs_manifest_builder provider-admission revoke` в приложении.
    - تحقّق в التواقيع и дайджесте الإلغاء.
 3. **Напоминание:**
    - أرسل طلب الإلغاء إلى Torii.
@@ -95,7 +95,7 @@ Sidebar_label: دليل تشغيل النزاعات والإلغاءات
 
 ## 6. Удалить
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (قسم النزاعات)
 - `docs/source/sorafs/provider_admission_policy.md` (سير عمل الإلغاء)
 - Код запроса: `SoraFS / Capacity Providers`.

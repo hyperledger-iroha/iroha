@@ -8,7 +8,12 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use thiserror::Error;
 
-use crate::{account::AccountId, escrow::EscrowId};
+use sorafs_manifest::deal::XorQuantity;
+
+use crate::{
+    account::AccountId, escrow::EscrowId, events::data::sorafs::SorafsOrderbookLedgerEvent,
+    sorafs::capacity::ProviderId,
+};
 
 /// First-release schema version for [`OrderbookAdmissionPolicyV1`].
 pub const ORDERBOOK_ADMISSION_POLICY_VERSION_V1: u16 = 1;
@@ -22,14 +27,38 @@ pub const ORDERBOOK_MAX_CLOCK_SKEW_SECS_V1: u64 = 60 * 60;
 pub const ORDERBOOK_MAX_RECEIPT_BYTES_V1: u64 = 1 << 40;
 /// Hard ceiling for receipt ranges retained in one channel index.
 pub const ORDERBOOK_MAX_RECEIPTS_PER_CHANNEL_V1: u32 = 8_192;
+/// Hard ceiling for open orders retained by the authoritative V1 book.
+pub const ORDERBOOK_MAX_OPEN_ORDERS_V1: u32 = 4_096;
+/// Hard ceiling for fills committed by one deterministic matching instruction.
+pub const ORDERBOOK_MAX_FILLS_PER_EXECUTION_V1: u32 = 64;
+/// Hard ceiling for orders/channels examined by one maintenance instruction.
+pub const ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1: u32 = 512;
 /// Hard ceiling for one authoritative orderbook read page.
 pub const ORDERBOOK_QUERY_MAX_ITEMS_V1: u32 = 500;
+/// Hard ceiling for stored records inspected by one filtered orderbook read page.
+pub const ORDERBOOK_QUERY_MAX_INSPECTED_RECORDS_V1: u32 =
+    ORDERBOOK_QUERY_MAX_ITEMS_V1 + ORDERBOOK_MAX_MAINTENANCE_ITEMS_V1;
+/// Hard encoded-byte ceiling for one committed orderbook event page.
+pub const ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 512 * 1024;
+/// Hard ceiling for encoded stored-record bytes inspected by one filtered read page.
+pub const ORDERBOOK_QUERY_MAX_READ_BYTES_V1: usize = ORDERBOOK_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 128;
 /// Domain separator for policy digests.
 pub const ORDERBOOK_ADMISSION_POLICY_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.admission-policy.v1";
 /// Domain separator for funded settlement locks derived from channel ids.
 pub const ORDERBOOK_SETTLEMENT_ESCROW_ID_DOMAIN_V1: &[u8] =
     b"sorafs.orderbook.settlement-escrow-id.v1";
+/// Domain separator for bid-order custody locks.
+pub const ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1: &[u8] = b"sorafs.orderbook.order-escrow-id.v1";
+
+/// Derive the native asset-lock identifier that funds an admitted bid.
+#[must_use]
+pub fn orderbook_order_escrow_id(order_id: [u8; 32]) -> EscrowId {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(ORDERBOOK_ORDER_ESCROW_ID_DOMAIN_V1);
+    hasher.update(&order_id);
+    EscrowId::new(iroha_crypto::Hash::prehashed(*hasher.finalize().as_bytes()))
+}
 
 /// Derive the native asset-lock identifier required for a settlement channel.
 ///
@@ -271,10 +300,16 @@ pub struct OrderbookAdmissionPolicyRecord {
     norito(tag = "status", content = "value", rename_all = "snake_case")
 )]
 pub enum OrderbookOrderStatusV1 {
-    /// Order is available to an authoritative matcher.
+    /// Order has not yet received a fill.
     Open,
+    /// Order has received at least one fill and retains quantity.
+    PartiallyFilled,
+    /// Order has no remaining quantity.
+    Filled,
     /// Owner cancellation has been committed.
     Cancelled,
+    /// Ledger maintenance retired the order after its signed expiry.
+    Expired,
 }
 
 /// Canonical signed order and its authoritative ledger status.
@@ -297,8 +332,14 @@ pub struct OrderbookOrderRecord {
     pub admitted_policy_digest: [u8; 32],
     /// Block timestamp assigned at admission.
     pub admitted_at_unix: u64,
+    /// Monotonic sequence assigned by the authoritative ledger at admission.
+    pub admission_sequence: u64,
+    /// Quantity not yet filled.
+    pub remaining_gib: u64,
     /// Current authoritative lifecycle status.
     pub status: OrderbookOrderStatusV1,
+    /// Block timestamp of the latest lifecycle mutation.
+    pub updated_at_unix: u64,
     /// Exact canonical cancellation payload, present only after cancellation.
     #[cfg_attr(
         feature = "json",
@@ -378,6 +419,94 @@ pub struct OrderbookSettlementReceiptRecord {
     pub recorded_by: AccountId,
 }
 
+/// Immutable authoritative trade produced by deterministic matching.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookTradeRecord {
+    /// Canonical trade identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub trade_id: [u8; 32],
+    /// Maker order identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub maker_order_id: [u8; 32],
+    /// Taker order identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub taker_order_id: [u8; 32],
+    /// Deterministic sequence in the authoritative trade log.
+    pub trade_sequence: u64,
+    /// Exact canonical `sorafs_manifest::orderbook::TradeEventV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_trade: Vec<u8>,
+    /// Settlement channel derived from this trade.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub channel_id: [u8; 32],
+    /// Book revision committed by the matching transition.
+    pub book_revision: u64,
+    /// Block timestamp assigned to the fill.
+    pub recorded_at_unix: u64,
+}
+
+/// Authoritative settlement-channel lifecycle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "status", content = "value", rename_all = "snake_case")
+)]
+pub enum OrderbookSettlementChannelStatusV1 {
+    /// The provider may submit signed delivery receipts.
+    Open,
+    /// All channel bytes and escrow were settled.
+    Closed,
+    /// The delivery deadline elapsed and remaining custody was refunded.
+    Expired,
+}
+
+/// Authoritative settlement-channel state bound to native custody.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookSettlementChannelRecord {
+    /// Settlement channel identifier.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub channel_id: [u8; 32],
+    /// Trade funded by this channel.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub trade_id: [u8; 32],
+    /// Buyer whose admitted bid funded custody.
+    pub buyer: AccountId,
+    /// Provider account entitled to sign receipts and receive settlement.
+    pub provider: AccountId,
+    /// Provider registry identifier selected deterministically at matching.
+    pub provider_id: ProviderId,
+    /// Account bound as native release authority for the channel lock.
+    pub settlement_authority: AccountId,
+    /// Total byte capacity created by the fill.
+    pub total_bytes: u64,
+    /// Bytes not yet covered by accepted receipts.
+    pub remaining_bytes: u64,
+    /// Initial XOR partitioned from bid custody.
+    pub initial_xor_locked: XorQuantity,
+    /// XOR still held by channel custody.
+    pub remaining_xor_locked: XorQuantity,
+    /// Current channel lifecycle.
+    pub status: OrderbookSettlementChannelStatusV1,
+    /// Block timestamp assigned when matching opened the channel.
+    pub opened_at_unix: u64,
+    /// Inclusive channel delivery deadline.
+    pub expires_at_unix: u64,
+    /// Block timestamp of the latest channel mutation.
+    pub updated_at_unix: u64,
+}
+
 /// One receipt range retained in a channel replay index.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -420,16 +549,47 @@ pub struct OrderbookSettlementIndexRecord {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct OrderbookLedgerStatusV1 {
-    /// Number of currently open admitted orders.
+    /// Number of unfilled open orders.
     pub open_orders: u64,
+    /// Number of partially filled orders with remaining quantity.
+    pub partially_filled_orders: u64,
+    /// Number of fully filled terminal orders.
+    pub filled_orders: u64,
     /// Number of terminal owner/governance cancellations.
     pub cancelled_orders: u64,
+    /// Number of terminal expired orders.
+    pub expired_orders: u64,
+    /// Number of immutable deterministic trades.
+    pub trades: u64,
     /// Number of immutable settlement receipts.
     pub settlement_receipts: u64,
-    /// Number of channels with at least one admitted receipt.
+    /// Number of settlement channels created by fills.
     pub settlement_channels: u64,
+    /// Number of open settlement channels.
+    pub open_settlement_channels: u64,
+    /// Revision of the authoritative book. Every order, fill, cancellation, or
+    /// expiry mutation advances this value exactly once.
+    pub book_revision: u64,
+    /// Next monotonic order admission sequence.
+    pub next_admission_sequence: u64,
+    /// Next monotonic trade sequence.
+    pub next_trade_sequence: u64,
     /// Block timestamp of the most recent counter mutation.
     pub updated_at_unix: u64,
+}
+
+/// Finalized block anchor for one coherent orderbook query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
 }
 
 /// Cursor-bounded authoritative order page.
@@ -439,6 +599,8 @@ pub struct OrderbookLedgerStatusV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct OrderbookOrderPageV1 {
+    /// Finalized state anchor shared by every order in the page.
+    pub finalized_cursor: OrderbookFinalizedCursorV1,
     /// Canonical records in ascending order-id order.
     pub orders: Vec<OrderbookOrderRecord>,
     /// Whether at least one further matching record exists.
@@ -458,6 +620,8 @@ pub struct OrderbookOrderPageV1 {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct OrderbookSettlementReceiptPageV1 {
+    /// Finalized state anchor shared by every receipt in the page.
+    pub finalized_cursor: OrderbookFinalizedCursorV1,
     /// Canonical receipt records in ascending receipt-id order.
     pub receipts: Vec<OrderbookSettlementReceiptRecord>,
     /// Whether at least one further matching record exists.
@@ -470,9 +634,143 @@ pub struct OrderbookSettlementReceiptPageV1 {
     pub next_after_receipt_id: Option<[u8; 32]>,
 }
 
+/// Cursor-bounded authoritative trade page.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookTradePageV1 {
+    /// Finalized state anchor shared by every trade in the page.
+    pub finalized_cursor: OrderbookFinalizedCursorV1,
+    /// Canonical records in ascending trade-id order.
+    pub trades: Vec<OrderbookTradeRecord>,
+    /// Whether at least one further trade exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive cursor for the next page, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after_trade_id: Option<[u8; 32]>,
+}
+
+/// Cursor-bounded authoritative settlement-channel page.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookSettlementChannelPageV1 {
+    /// Finalized state anchor shared by every channel in the page.
+    pub finalized_cursor: OrderbookFinalizedCursorV1,
+    /// Canonical records in ascending channel-id order.
+    pub channels: Vec<OrderbookSettlementChannelRecord>,
+    /// Whether at least one further matching channel exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive cursor for the next page, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after_channel_id: Option<[u8; 32]>,
+}
+
+/// Exclusive cursor for one committed orderbook event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookFinalizedEventCursorV1 {
+    /// Monotonic orderbook-event sequence beginning at one.
+    pub sequence: u64,
+    /// Finalized block height containing the event.
+    pub block_height: u64,
+    /// Finalized block hash resolved only after the block commits.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Orderbook-event index within the committing block.
+    pub event_index: u32,
+}
+
+/// Typed orderbook event with an unambiguous finalized-chain cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookFinalizedEventV1 {
+    /// Monotonic orderbook-event sequence beginning at one.
+    pub sequence: u64,
+    /// Committing block height.
+    pub block_height: u64,
+    /// Committing block hash resolved from finalized state.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Orderbook-event index within the committing block.
+    pub event_index: u32,
+    /// Existing typed, payload-free native orderbook event.
+    pub event: SorafsOrderbookLedgerEvent,
+}
+
+impl OrderbookFinalizedEventV1 {
+    /// Return the exclusive cursor identifying this event.
+    #[must_use]
+    pub const fn cursor(&self) -> OrderbookFinalizedEventCursorV1 {
+        OrderbookFinalizedEventCursorV1 {
+            sequence: self.sequence,
+            block_height: self.block_height,
+            block_hash: self.block_hash,
+            event_index: self.event_index,
+        }
+    }
+}
+
+/// Cursor-bounded page of typed committed orderbook events.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct OrderbookFinalizedEventPageV1 {
+    /// Finalized state anchor shared by every event in the page.
+    pub finalized_cursor: OrderbookFinalizedCursorV1,
+    /// Events in strictly increasing sequence and block/index order.
+    pub events: Vec<OrderbookFinalizedEventV1>,
+    /// Whether at least one later committed event exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive continuation cursor, present only when `has_more` is true.
+    pub next_after: Option<OrderbookFinalizedEventCursorV1>,
+}
+
 #[cfg(test)]
 mod tests {
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use super::*;
+    use crate::events::data::sorafs::SorafsOrderbookLedgerEventKind;
+
+    fn account(seed: u8) -> AccountId {
+        let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
+            .expect("nonzero deterministic Ed25519 seed");
+        AccountId::new(keypair.public_key().clone())
+    }
+
+    fn assert_canonical_norito_round_trip<T>(value: &T)
+    where
+        T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let encoded = norito::to_bytes(value).expect("encode canonical orderbook value");
+        let decoded: T =
+            norito::decode_from_bytes(&encoded).expect("decode canonical orderbook value");
+        assert_eq!(&decoded, value);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode canonical orderbook value"),
+            encoded
+        );
+    }
 
     fn policy() -> OrderbookAdmissionPolicyV1 {
         OrderbookAdmissionPolicyV1 {
@@ -613,5 +911,78 @@ mod tests {
             candidate.validate(),
             Err(OrderbookPolicyValidationError::InvalidReceiptCount { .. })
         ));
+    }
+
+    #[test]
+    fn finalized_query_pages_round_trip_as_exact_canonical_norito() {
+        let finalized_cursor = OrderbookFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0x71; 32],
+        };
+        let event = OrderbookFinalizedEventV1 {
+            sequence: 11,
+            block_height: 7,
+            block_hash: finalized_cursor.block_hash,
+            event_index: 3,
+            event: SorafsOrderbookLedgerEvent {
+                kind: SorafsOrderbookLedgerEventKind::TradeMatched,
+                order_id: Some([0x11; 32]),
+                trade_id: Some([0x22; 32]),
+                channel_id: Some([0x33; 32]),
+                receipt_id: None,
+                provider_id: Some(ProviderId::new([0x44; 32])),
+                book_revision: 9,
+                authority: account(0x51),
+                occurred_at_unix_ms: 12_345,
+            },
+        };
+        let event_cursor = event.cursor();
+        let event_page = OrderbookFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![event],
+            has_more: true,
+            next_after: Some(event_cursor),
+        };
+        let order_page = OrderbookOrderPageV1 {
+            finalized_cursor,
+            orders: Vec::new(),
+            has_more: false,
+            next_after_order_id: None,
+        };
+        let receipt_page = OrderbookSettlementReceiptPageV1 {
+            finalized_cursor,
+            receipts: Vec::new(),
+            has_more: false,
+            next_after_receipt_id: None,
+        };
+        let trade_page = OrderbookTradePageV1 {
+            finalized_cursor,
+            trades: Vec::new(),
+            has_more: false,
+            next_after_trade_id: None,
+        };
+        let channel_page = OrderbookSettlementChannelPageV1 {
+            finalized_cursor,
+            channels: Vec::new(),
+            has_more: false,
+            next_after_channel_id: None,
+        };
+
+        assert_canonical_norito_round_trip(&finalized_cursor);
+        assert_canonical_norito_round_trip(&event_cursor);
+        assert_canonical_norito_round_trip(&event_page);
+        assert_canonical_norito_round_trip(&order_page);
+        assert_canonical_norito_round_trip(&receipt_page);
+        assert_canonical_norito_round_trip(&trade_page);
+        assert_canonical_norito_round_trip(&channel_page);
+
+        #[cfg(feature = "json")]
+        {
+            let encoded =
+                norito::json::to_vec(&event_page).expect("encode finalized event page JSON");
+            let decoded: OrderbookFinalizedEventPageV1 =
+                norito::json::from_slice(&encoded).expect("decode finalized event page JSON");
+            assert_eq!(decoded, event_page);
+        }
     }
 }

@@ -23,6 +23,10 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         XCTAssertEqual(SorafsOrderbookTier.archive.rawValue, 3)
         XCTAssertEqual(SorafsOrderbookCancelReason.replaced.rawValue, 4)
         XCTAssertEqual(SorafsReferenceValidators.orderbookOwnerAccountMaxBytesV1, 256)
+        XCTAssertEqual(SorafsReferenceValidators.governanceDagMaxBlocksV1, 64)
+        XCTAssertEqual(SorafsReferenceValidators.governanceDagCidBytesV1, 32)
+        XCTAssertEqual(SorafsReferenceValidators.referenceMaxInputBytesV1, 67_108_864)
+        XCTAssertEqual(SorafsReferenceValidators.referenceMaxLabelBytesV1, 1_024)
     }
 
     func testRejectsBlankLabelBeforeNativeDispatch() {
@@ -87,6 +91,80 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
                 proof: Data(),
                 commitmentLabel: " "
             )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                payload: Data(),
+                label: " "
+            )
+        }
+        assertInvalidLabel {
+            try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+                head: Data(),
+                blocks: [SorafsGovernanceDagBlockInput(payload: Data())],
+                headLabel: " "
+            )
+        }
+    }
+
+    func testBoundsGovernanceDagInputsBeforeNativeDispatch() {
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+                head: Data(),
+                blocks: [],
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidGovernanceDagInput("blocks must contain 1...64 entries")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+                head: Data(),
+                blocks: Array(
+                    repeating: SorafsGovernanceDagBlockInput(payload: Data()),
+                    count: 65
+                ),
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidGovernanceDagInput("blocks must contain 1...64 entries")
+            )
+        }
+
+        XCTAssertThrowsError(
+            try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                payload: Data(),
+                label: String(repeating: "x", count: 1_025),
+                generatedAtUnix: 1
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SorafsReferenceValidationError,
+                .invalidLabel("label must be at most 1024 UTF-8 bytes")
+            )
+        }
+
+        for invalidLength in [0, 31, 33] {
+            XCTAssertThrowsError(
+                try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                    payload: Data(),
+                    expectedBlockCid: Data(repeating: 0, count: invalidLength),
+                    generatedAtUnix: 1
+                )
+            ) { error in
+                XCTAssertEqual(
+                    error as? SorafsReferenceValidationError,
+                    .invalidGovernanceDagInput(
+                        "expectedBlockCid must contain exactly 32 bytes"
+                    )
+                )
+            }
         }
     }
 
@@ -293,6 +371,163 @@ final class SorafsReferenceValidatorsTests: XCTestCase {
         )
         XCTAssertTrue(json.contains("\"status\": \"Ok\""), json)
         XCTAssertTrue(json.contains("\"code\": \"SFS-OK-000\""), json)
+    }
+
+    func testValidatesGovernanceDagFixturesAndNegativeVectorsWhenNativeBridgeIsAvailable() throws {
+        try XCTSkipIf(
+            !SorafsReferenceValidators.isGovernanceDagNativeAvailable,
+            "SoraFS governance DAG reference bridge unavailable"
+        )
+        let first = try fixture("sorafs_manifest/governance/dag_block_0_v1.to")
+        let second = try fixture("sorafs_manifest/governance/dag_block_1_v1.to")
+        let head = try fixture("sorafs_manifest/governance/dag_head_v1.to")
+
+        let blockOutcome = try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+            payload: first,
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(blockOutcome.contains("\"status\": \"Ok\""), blockOutcome)
+
+        let cidMismatch = try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+            payload: first,
+            expectedBlockCid: Data(repeating: 0x7F, count: 32),
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(cidMismatch.contains("\"status\": \"Error\""), cidMismatch)
+        XCTAssertTrue(cidMismatch.contains("\"code\": \"SFS-GOV-004\""), cidMismatch)
+
+        let headOutcome = try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+            head: head,
+            blocks: [
+                SorafsGovernanceDagBlockInput(
+                    payload: first,
+                    label: "dag_block_0_v1.to"
+                ),
+                SorafsGovernanceDagBlockInput(
+                    payload: second,
+                    label: "dag_block_1_v1.to"
+                )
+            ],
+            headLabel: "dag_head_v1.to",
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(headOutcome.contains("\"status\": \"Ok\""), headOutcome)
+        let goldenOutcome = String(
+            decoding: try fixture(
+                "sorafs_manifest/governance/dag_head_validation_outcome_v1.json"
+            ),
+            as: UTF8.self
+        )
+        XCTAssertEqual(headOutcome, goldenOutcome)
+
+        let reordered = try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+            head: head,
+            blocks: [
+                SorafsGovernanceDagBlockInput(payload: second),
+                SorafsGovernanceDagBlockInput(payload: first)
+            ],
+            generatedAtUnix: 123
+        )
+        XCTAssertTrue(reordered.contains("\"status\": \"Error\""), reordered)
+
+        let blockSignatureOutcome =
+            try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                payload: try fixture(
+                    "sorafs_manifest/governance/dag_block_bad_signature_v1.to"
+                ),
+                label: "dag_block_bad_signature_v1.to",
+                generatedAtUnix: 123
+            )
+        XCTAssertEqual(
+            blockSignatureOutcome,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_block_bad_signature_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
+
+        let trailingBytesOutcome =
+            try SorafsReferenceValidators.validateGovernanceDagBlockJSON(
+                payload: try fixture(
+                    "sorafs_manifest/governance/dag_block_trailing_bytes_v1.to"
+                ),
+                label: "dag_block_trailing_bytes_v1.to",
+                generatedAtUnix: 123
+            )
+        XCTAssertEqual(
+            trailingBytesOutcome,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_block_trailing_bytes_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
+
+        let headSignatureOutcome =
+            try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+                head: try fixture(
+                    "sorafs_manifest/governance/dag_head_bad_signature_v1.to"
+                ),
+                blocks: [
+                    SorafsGovernanceDagBlockInput(
+                        payload: first,
+                        label: "dag_block_0_v1.to"
+                    ),
+                    SorafsGovernanceDagBlockInput(
+                        payload: second,
+                        label: "dag_block_1_v1.to"
+                    )
+                ],
+                headLabel: "dag_head_bad_signature_v1.to",
+                generatedAtUnix: 123
+            )
+        XCTAssertEqual(
+            headSignatureOutcome,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_head_bad_signature_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
+
+        let predecessorOutcome =
+            try SorafsReferenceValidators.validateGovernanceDagHeadChainJSON(
+                head: try fixture(
+                    "sorafs_manifest/governance/dag_head_bad_predecessor_v1.to"
+                ),
+                blocks: [
+                    SorafsGovernanceDagBlockInput(
+                        payload: first,
+                        label: "dag_block_0_v1.to"
+                    ),
+                    SorafsGovernanceDagBlockInput(
+                        payload: try fixture(
+                            "sorafs_manifest/governance/"
+                                + "dag_block_1_bad_predecessor_v1.to"
+                        ),
+                        label: "dag_block_1_bad_predecessor_v1.to"
+                    )
+                ],
+                headLabel: "dag_head_bad_predecessor_v1.to",
+                generatedAtUnix: 123
+            )
+        XCTAssertEqual(
+            predecessorOutcome,
+            String(
+                decoding: try fixture(
+                    "sorafs_manifest/governance/"
+                        + "dag_head_bad_predecessor_validation_outcome_v1.json"
+                ),
+                as: UTF8.self
+            )
+        )
     }
 
     func testSignsOrderbookFixtureWhenNativeBridgeIsAvailable() throws {

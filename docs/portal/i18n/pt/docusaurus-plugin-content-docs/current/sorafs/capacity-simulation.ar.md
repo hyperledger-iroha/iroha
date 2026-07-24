@@ -19,7 +19,7 @@ description: تشغيل مجموعة أدوات محاكاة سوق السعة S
 Verifique o valor `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
 :::
 
-Você pode usar o SF-2c e o SF-2c para usá-lo. Use o failover e o slashing para usar os fixtures no site. `docs/examples/sorafs_capacity_simulation/`. As cargas úteis são definidas como `sorafs_manifest_stub capacity`; Use `iroha app sorafs toolkit pack` para definir o manifesto/CAR.
+Você pode usar o SF-2c e o SF-2c para usá-lo. Use o failover e o slashing para usar os fixtures no site. `docs/examples/sorafs_capacity_simulation/`. As cargas úteis são definidas como `sorafs_manifest_builder capacity`; Use `iroha app sorafs toolkit pack` para definir o manifesto/CAR.
 
 ## 1. Crie artefatos na CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Use `run_cli.sh` para `sorafs_manifest_stub capacity` para carregar cargas úteis e blobs de Norito em base64 e usar Torii A configuração JSON é:
+Use `run_cli.sh` para `sorafs_manifest_builder capacity` para carregar cargas úteis e blobs de Norito em base64 e usar Torii A configuração JSON é:
 
 - Você pode usar a máquina de lavar roupa em qualquer lugar do mundo.
 - أمر نسخ يوزّع المانيفست المجهز عبر أولئك المزوّدين.

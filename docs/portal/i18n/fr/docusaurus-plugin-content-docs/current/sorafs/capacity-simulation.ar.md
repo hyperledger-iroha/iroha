@@ -19,7 +19,7 @@ description: Appareils de montage pour luminaires SF-2c pour luminaires pour lum
 Il s'agit de la référence `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. Il y a des possibilités de basculement et de slashing pour les luminaires. `docs/examples/sorafs_capacity_simulation/`. Pour les charges utiles, utilisez `sorafs_manifest_stub capacity`. استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. Il y a des possibilités de basculement et de slashing pour les luminaires. `docs/examples/sorafs_capacity_simulation/`. Pour les charges utiles, utilisez `sorafs_manifest_builder capacity`. استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. Utiliser les artefacts pour CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Utiliser `run_cli.sh` pour `sorafs_manifest_stub capacity` pour les charges utiles et les blobs Norito en base64 et pour les Torii et JSON à:
+Utiliser `run_cli.sh` pour `sorafs_manifest_builder capacity` pour les charges utiles et les blobs Norito en base64 et pour les Torii et JSON à:
 
 - ثلاث تصريحات لمزوّدين مشاركين في سيناريو تفاوض الحصص.
 - أمر نسخ يوزّع المانيفست المجهز عبر أولئك المزوّدين.

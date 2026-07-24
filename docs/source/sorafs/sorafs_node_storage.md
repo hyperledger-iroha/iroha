@@ -85,12 +85,17 @@ por_sample_interval_secs = 600
 pdp_sample_window = 64
 pdp_tree_memory_limit_bytes = "512 MiB"
 reputation_trust_policy_path = "/etc/iroha/sorafs-reputation-trust-policy.to"
+moderation_screening_enabled = false
+moderation_screening_authority_bundle_path = "/etc/iroha/sorafs-screening-authority.to"
+moderation_screening_authority_bundle_digest_hex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 alias = "tenant.alpha"            # optional human friendly tag
 
 [sorafs.storage.runtime]
 event_history_limit = 4_096
 state_entry_limit = 65_536
 checkpoint_max_bytes = "64 MiB"
+proof_outcome_forwarder_interval_ms = 1_000
+proof_outcome_max_attempts = 8
 
 adverts:
   stake_pointer = "stake.pool.v1:0x1234"
@@ -132,6 +137,38 @@ adverts:
   symlinked, hard-linked, writable-by-other, oversized, noncanonical, or invalid
   policy files. Signed reputation admission is unavailable when the path is
   absent; there is no unsigned publication fallback.
+- `moderation_screening_enabled`: enables authenticated moderation screening
+  admission. This requires storage plus both authority-bundle settings below;
+  startup fails instead of accepting unsigned or process-local authority. It
+  also requires a runtime-injected `ModerationQuarantineKeyWrapper`; neither
+  provider credentials nor a software/file key can be supplied through
+  `iroha_config`.
+- `moderation_screening_authority_bundle_path`: absolute path to the canonical
+  Norito `ModerationScreeningAuthorityBundleV1`. The bundle contains the signed
+  model manifest, signed policy chain, sorted governance trust anchors, and
+  minimum governance quorum. Startup rejects missing, symlinked, hard-linked,
+  writable-by-other, replaced, oversized, noncanonical, and invalid inputs.
+  In-process authority rotation separately rejects policy rollback and
+  same-timestamp equivocation.
+- `moderation_screening_authority_bundle_digest_hex`: exact lowercase BLAKE3
+  digest of the authority-bundle bytes. It must contain 64 hexadecimal
+  characters and cannot be all zeroes. Rotating the bundle therefore requires
+  an explicit configuration change and restart.
+
+Quarantine-object plaintext and private notes are carried only inside the
+chunked ChaCha20-Poly1305 payload. The optional plaintext `content_type` is
+limited to a coarse V1 allowlist (`application/octet-stream`, JSON, PDF, common
+image/audio/video formats, and plain text) without parameters, filenames,
+identities, or free-form text. The legacy-shaped `notes` request and record
+field is reserved and must be absent in V1; requests or checkpoints that
+populate it fail closed.
+
+`ToriiRuntimeDeps` and `IrohaRuntimeDeps` expose the PKCS#11/managed-KMS
+adapter boundary and validate the injected node's screening enablement,
+authority digest, and non-secret active key handle. The standard `irohad`
+launcher still supplies no concrete provider adapter, so a screening-enabled
+reference deployment intentionally fails startup until
+`V1-BLOCK-AI-QUARANTINE-KMS-01` is resolved.
 - `runtime.event_history_limit`: per-stream replay ceiling. Repair, reputation,
   orderbook, and moderation histories retain the newest events while keeping a
   separate monotonic high-water sequence. Gap-aware replay reports when a
@@ -152,6 +189,20 @@ adverts:
 - `runtime.checkpoint_max_bytes`: maximum canonical Norito checkpoint size.
   Oversize, corrupt, symlinked, or non-regular checkpoints fail startup rather
   than resetting durable replay or penalty state.
+- `runtime.proof_outcome_forwarder_interval_ms`: finalized-chain reconciliation
+  cadence for durable PDP and PoTR outcome delivery.
+- `runtime.proof_outcome_max_attempts`: bounded attempts for one exact signed
+  outcome transaction before terminal dead-lettering.
+
+The proof-outcome forwarder reconciles against a height-and-block-hash cursor
+from one finalized state view. Before it claims or signs a ready delivery, it
+also requires the runtime signer's account to hold the exact
+provider-scoped `CanRecordSorafsProofOutcome` permission, directly or through
+a role, in finalized state. A missing or differently scoped grant defers the
+delivery without consuming a retry. The standard `irohad` launcher adapts its
+runtime-only common node key at this boundary; reference deployments can inject
+a PKCS#11/HSM implementation of `SoraFsProofOutcomeTransactionSigner` without
+giving that signer transaction-queue access.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.

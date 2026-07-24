@@ -19,7 +19,7 @@ Sidebar_label: 容量シミュレーションのランブック
 `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` のページを参照してください。スフィンクスの記録は完全に記録されており、すべての記録が保存されています。
 :::
 
-Este Runbook は、SF-2C 容量の市場シミュレーションと、結果のメトリクスを視覚化するためのキットの詳細を説明します。 `docs/examples/sorafs_capacity_simulation/` では、必要な調整、フェイルオーバーの有効性、および極端なスラッシュ修正の検証が行われます。 `sorafs_manifest_stub capacity` での容量損失ペイロード。米国 `iroha app sorafs toolkit pack` マニフェスト/CAR のフルホス デ エンパケタド。
+Este Runbook は、SF-2C 容量の市場シミュレーションと、結果のメトリクスを視覚化するためのキットの詳細を説明します。 `docs/examples/sorafs_capacity_simulation/` では、必要な調整、フェイルオーバーの有効性、および極端なスラッシュ修正の検証が行われます。 `sorafs_manifest_builder capacity` での容量損失ペイロード。米国 `iroha app sorafs toolkit pack` マニフェスト/CAR のフルホス デ エンパケタド。
 
 ## 1. CLI の一般的な成果物
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` envuelve `sorafs_manifest_stub capacity` para Emiir payloads Norito、blobbase64、cuerpos de solicitud para Torii y resúmenes JSON para:
+`run_cli.sh` envuelve `sorafs_manifest_builder capacity` para Emiir payloads Norito、blobbase64、cuerpos de solicitud para Torii y resúmenes JSON para:
 
 - 交渉のシナリオに参加するための証明を宣言します。
 - 証明されたイベントをステージングするために、複製を作成する必要があります。

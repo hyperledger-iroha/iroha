@@ -118,10 +118,10 @@ and will transparently truncate when the request exceeds the available leaves:
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-Manifest stub ასახავს იგივე მონაცემებს, რაც მოსახერხებელია მილსადენებში `--chunker-profile-id` შერჩევის სკრიპტირებისას. ორივე ბლოკის შენახვის CLI ასევე იღებს კანონიკურ სახელურ ფორმას (`--profile=sorafs.sf1@1.0.0`), ასე რომ, სკრიპტებმა თავიდან აიცილონ მყარი კოდირების რიცხვითი ID-ები:
+Manifest builder ასახავს იგივე მონაცემებს, რაც მოსახერხებელია მილსადენებში `--chunker-profile-id` შერჩევის სკრიპტირებისას. ორივე ბლოკის შენახვის CLI ასევე იღებს კანონიკურ სახელურ ფორმას (`--profile=sorafs.sf1@1.0.0`), ასე რომ, სკრიპტებმა თავიდან აიცილონ მყარი კოდირების რიცხვითი ID-ები:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -179,4 +179,4 @@ HTTP მოლაპარაკებაზე დაყრდნობის �
   მოწოდებული ტესტების საშუალებით.
 * `chunker_registry::lookup_by_profile` ამტკიცებს, რომ აღწერის პარამეტრები
   ემთხვევა `ChunkProfile::DEFAULT` შემთხვევითი დივერგენციის დასაცავად.
-* `iroha app sorafs toolkit pack` და `sorafs_manifest_stub` მიერ წარმოებული მანიფესტები მოიცავს რეესტრის მეტამონაცემებს.
+* `iroha app sorafs toolkit pack` და `sorafs_manifest_builder` მიერ წარმოებული მანიფესტები მოიცავს რეესტრის მეტამონაცემებს.

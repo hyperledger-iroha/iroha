@@ -12,6 +12,7 @@ use thiserror::Error;
 
 use crate::{
     account::AccountId,
+    events::data::sorafs::{SorafsModerationLedgerEvent, SorafsRepairLedgerEvent},
     sorafs::moderation::{SoraFsModerationBallotContextV1, SoraFsModerationVoteChoice},
 };
 
@@ -43,6 +44,16 @@ pub const MODERATION_LEDGER_MAX_REASON_BYTES_V1: usize = 512;
 pub const MODERATION_LEDGER_MAX_EVIDENCE_URI_BYTES_V1: usize = 2_048;
 /// Maximum configured penalty points for one no-show.
 pub const MODERATION_LEDGER_MAX_PENALTY_POINTS_V1: u32 = 1_000_000;
+/// First-release finalized moderation snapshot schema version.
+pub const MODERATION_FINALIZED_SNAPSHOT_VERSION_V1: u16 = 1;
+/// Hard upper bound for appeals and activated cases in one finalized snapshot.
+pub const MODERATION_QUERY_MAX_CASES_V1: u32 = 1_024;
+/// Hard upper bound for committed events returned by one moderation query.
+pub const MODERATION_QUERY_MAX_EVENTS_V1: u32 = 4_096;
+/// Hard upper bound for one encoded finalized moderation snapshot.
+pub const MODERATION_QUERY_MAX_SNAPSHOT_BYTES_V1: usize = 32 * 1024 * 1024;
+/// Hard upper bound for one encoded committed moderation-event page.
+pub const MODERATION_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 8 * 1024 * 1024;
 /// Domain separator for moderation policy digests.
 pub const MODERATION_LEDGER_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.moderation.ledger-policy.v1";
 /// Roster hash domain shared with the local first-release ballot lifecycle.
@@ -1517,6 +1528,625 @@ pub struct ModerationLedgerStatusV1 {
     pub updated_at_unix_ms: u64,
 }
 
+/// Finalized block anchor for one coherent moderation query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+/// Exclusive cursor for one committed moderation event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventCursorV1 {
+    /// Monotonic moderation-event sequence beginning at one.
+    pub sequence: u64,
+    /// Finalized block height containing the event.
+    pub block_height: u64,
+    /// Finalized block hash resolved only after the block commits.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Moderation-event index within the committing block.
+    pub event_index: u32,
+}
+
+/// Typed moderation event with an unambiguous finalized-chain cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventV1 {
+    /// Monotonic moderation-event sequence beginning at one.
+    pub sequence: u64,
+    /// Committing block height.
+    pub block_height: u64,
+    /// Committing block hash resolved from finalized state.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Moderation-event index within the committing block.
+    pub event_index: u32,
+    /// Existing typed, payload-free native moderation event.
+    pub event: SorafsModerationLedgerEvent,
+}
+
+impl ModerationFinalizedEventV1 {
+    /// Return the exclusive cursor identifying this event.
+    #[must_use]
+    pub const fn cursor(&self) -> ModerationFinalizedEventCursorV1 {
+        ModerationFinalizedEventCursorV1 {
+            sequence: self.sequence,
+            block_height: self.block_height,
+            block_hash: self.block_hash,
+            event_index: self.event_index,
+        }
+    }
+}
+
+/// Cursor-bounded page of typed committed moderation events.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedEventPageV1 {
+    /// Finalized state anchor shared by every event in the page.
+    pub finalized_cursor: ModerationFinalizedCursorV1,
+    /// Events in strictly increasing sequence and block/index order.
+    pub events: Vec<ModerationFinalizedEventV1>,
+    /// Whether at least one later committed event exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive continuation cursor, present only when `has_more` is true.
+    pub next_after: Option<ModerationFinalizedEventCursorV1>,
+}
+
+/// One appeal and every payload-free eligibility record from one finalized view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedAppealViewV1 {
+    /// Authoritative appeal, sortition, and activation record.
+    pub appeal: ModerationAppealRecordV1,
+    /// Eligibility records sorted by canonical juror identity.
+    pub eligibility: Vec<ModerationJurorEligibilityRecordV1>,
+}
+
+/// One case and every authoritative ballot subrecord from one finalized view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedCaseViewV1 {
+    /// Authoritative case header.
+    pub case: ModerationCaseRecordV1,
+    /// Commitments sorted by canonical juror identity.
+    pub commits: Vec<ModerationCommitRecordV1>,
+    /// Reveals sorted by canonical juror identity.
+    pub reveals: Vec<ModerationRevealRecordV1>,
+    /// Challenges sorted by challenge identifier.
+    pub challenges: Vec<ModerationChallengeRecordV1>,
+    /// Terminal outcome, when the case is finalized.
+    pub outcome: Option<ModerationOutcomeRecordV1>,
+    /// No-show records sorted by canonical juror identity.
+    pub no_shows: Vec<ModerationNoShowRecordV1>,
+}
+
+/// Complete bounded moderation projection read from one finalized state view.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ModerationFinalizedLedgerSnapshotV1 {
+    /// Schema version; must equal [`MODERATION_FINALIZED_SNAPSHOT_VERSION_V1`].
+    pub version: u16,
+    /// Finalized block height.
+    pub finalized_height: u64,
+    /// Finalized block hash resolved from the same immutable state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub finalized_block_hash: [u8; 32],
+    /// Active moderation policy, absent only before ledger initialization.
+    pub policy: Option<ModerationLedgerPolicyRecord>,
+    /// Constant-time ledger counters, absent only before initialization.
+    pub status: Option<ModerationLedgerStatusV1>,
+    /// Every retained appeal sorted by `(case_id, round_id)`.
+    pub appeals: Vec<ModerationFinalizedAppealViewV1>,
+    /// Every retained activated case sorted by `(case_id, round_id)`.
+    pub cases: Vec<ModerationFinalizedCaseViewV1>,
+    /// Latest bounded committed-event suffix in increasing cursor order.
+    pub events: Vec<ModerationFinalizedEventV1>,
+}
+
+impl ModerationFinalizedLedgerSnapshotV1 {
+    /// Return the finalized anchor shared by the complete snapshot.
+    #[must_use]
+    pub const fn anchor(&self) -> ModerationFinalizedCursorV1 {
+        ModerationFinalizedCursorV1 {
+            height: self.finalized_height,
+            block_hash: self.finalized_block_hash,
+        }
+    }
+
+    /// Return one appeal by exact case and round identifier.
+    #[must_use]
+    pub fn appeal(
+        &self,
+        case_id: &str,
+        round_id: &str,
+    ) -> Option<&ModerationFinalizedAppealViewV1> {
+        self.appeals
+            .binary_search_by(|entry| {
+                (
+                    entry.appeal.intake.case_id.as_str(),
+                    entry.appeal.intake.round_id.as_str(),
+                )
+                    .cmp(&(case_id, round_id))
+            })
+            .ok()
+            .map(|index| &self.appeals[index])
+    }
+
+    /// Return one activated case by exact case and round identifier.
+    #[must_use]
+    pub fn case(&self, case_id: &str, round_id: &str) -> Option<&ModerationFinalizedCaseViewV1> {
+        self.cases
+            .binary_search_by(|entry| {
+                (
+                    entry.case.spec.context.case_id.as_str(),
+                    entry.case.spec.round_id.as_str(),
+                )
+                    .cmp(&(case_id, round_id))
+            })
+            .ok()
+            .map(|index| &self.cases[index])
+    }
+}
+
+/// First-release chain-authoritative repair-task record version.
+pub const REPAIR_LEDGER_TASK_VERSION_V1: u16 = 1;
+/// Shortest lease accepted by the chain-authoritative repair ledger.
+pub const REPAIR_LEDGER_MIN_LEASE_MS_V1: u64 = 1_000;
+/// Longest lease accepted by the chain-authoritative repair ledger.
+pub const REPAIR_LEDGER_MAX_LEASE_MS_V1: u64 = 24 * 60 * 60 * 1_000;
+/// Maximum idempotency receipts retained by one repair task.
+pub const REPAIR_LEDGER_MAX_RECEIPTS_V1: usize = 64;
+/// Maximum UTF-8 byte length of one repair idempotency key.
+pub const REPAIR_LEDGER_MAX_IDEMPOTENCY_KEY_BYTES_V1: usize = 256;
+/// Maximum payload-free repair appeal reason length.
+pub const REPAIR_LEDGER_MAX_APPEAL_REASON_BYTES_V1: usize = 512;
+/// Hard upper bound for tasks or committed events returned by one repair query.
+pub const REPAIR_QUERY_MAX_ITEMS_V1: u32 = 500;
+/// Hard encoded-byte ceiling for one finalized repair-task page.
+pub const REPAIR_QUERY_MAX_TASK_PAGE_BYTES_V1: usize = 8 * 1024 * 1024;
+/// Hard encoded-byte ceiling for one committed repair-event page.
+pub const REPAIR_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 512 * 1024;
+/// Domain separator for immutable repair-task identities.
+pub const REPAIR_LEDGER_TASK_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-task-id.v1";
+/// Domain separator for repair action idempotency keys.
+pub const REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-idempotency-key.v1";
+/// Domain separator for repair appeal identities.
+pub const REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1: &[u8] = b"sorafs.repair.ledger-appeal-id.v1";
+
+/// Derive the immutable task identity from a subsystem's exactly-once source identity.
+#[must_use]
+pub fn sorafs_repair_task_id_v1(source_identity: [u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_TASK_ID_DOMAIN_V1);
+    hasher.update(&source_identity);
+    *hasher.finalize().as_bytes()
+}
+
+/// Derive a task-scoped digest for a bounded idempotency key.
+#[must_use]
+pub fn sorafs_repair_idempotency_digest_v1(ticket_id: &str, key: &str) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_IDEMPOTENCY_DOMAIN_V1);
+    for value in [ticket_id, key] {
+        hasher.update(
+            &u64::try_from(value.len())
+                .expect("string length fits u64")
+                .to_le_bytes(),
+        );
+        hasher.update(value.as_bytes());
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// Consensus-owned repair worker lease.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerLeaseV1 {
+    /// Canonical account that exclusively owns the lease.
+    pub owner: AccountId,
+    /// Monotonic lease generation, incremented on every successful claim.
+    pub generation: u64,
+    /// Block timestamp at which the lease was acquired.
+    pub acquired_at_unix_ms: u64,
+    /// Block timestamp of the latest accepted claim or heartbeat.
+    pub renewed_at_unix_ms: u64,
+    /// Exclusive lease expiry; actions at or after this timestamp are rejected.
+    pub expires_at_unix_ms: u64,
+}
+
+/// Successful repair outcome payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerCompletedV1 {
+    /// Digest of the completion evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_digest: [u8; 32],
+}
+
+/// Unsuccessful repair outcome payload without slashing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerFailedV1 {
+    /// Digest of the payload-free failure reason or external evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub failure_digest: [u8; 32],
+}
+
+/// Escalated repair outcome payload.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerEscalatedV1 {
+    /// Digest of the exact canonical slash proposal.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub slash_proposal_digest: [u8; 32],
+}
+
+/// One immutable terminal repair outcome.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(
+    feature = "json",
+    norito(tag = "kind", content = "value", rename_all = "snake_case")
+)]
+pub enum RepairLedgerTerminalKindV1 {
+    /// Repair completed and the external verification evidence is committed by digest.
+    Completed(RepairLedgerCompletedV1),
+    /// Repair failed without a slash proposal.
+    Failed(RepairLedgerFailedV1),
+    /// Repair failed and atomically committed a slash proposal.
+    Escalated(RepairLedgerEscalatedV1),
+}
+
+/// Provenance for the single terminal outcome of a repair task.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerTerminalOutcomeV1 {
+    /// Terminal result.
+    pub kind: RepairLedgerTerminalKindV1,
+    /// Lease generation whose owner committed the result.
+    pub lease_generation: u64,
+    /// Worker account that committed the result.
+    pub finalized_by: AccountId,
+    /// Finalizing block timestamp.
+    pub finalized_at_unix_ms: u64,
+}
+
+/// Idempotent repair action accepted by consensus.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerActionReceiptV1 {
+    /// Task-scoped idempotency key digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub idempotency_digest: [u8; 32],
+    /// Digest of the exact canonical action body.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub action_digest: [u8; 32],
+    /// Task revision produced by the action.
+    pub resulting_revision: u64,
+}
+
+/// Slash proposal committed atomically with an escalated terminal outcome.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerSlashRecordV1 {
+    /// Exact canonical `sorafs_manifest::repair::RepairSlashProposalV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_proposal: Vec<u8>,
+    /// Digest of `canonical_proposal`.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub proposal_digest: [u8; 32],
+    /// Worker that committed the proposal.
+    pub submitted_by: AccountId,
+    /// Committing block timestamp.
+    pub submitted_at_unix_ms: u64,
+}
+
+/// Provider appeal committed against one escalated repair slash proposal.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerAppealRecordV1 {
+    /// Deterministic appeal identity.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub appeal_id: [u8; 32],
+    /// Digest of the slash proposal being appealed.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub slash_proposal_digest: [u8; 32],
+    /// Provider-owner account that submitted the appeal.
+    pub appellant: AccountId,
+    /// Digest of external appeal evidence.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub evidence_digest: [u8; 32],
+    /// Bounded payload-free reason.
+    pub reason: String,
+    /// Committing block timestamp.
+    pub submitted_at_unix_ms: u64,
+}
+
+/// Derive the immutable identity of a repair slash appeal.
+#[must_use]
+pub fn sorafs_repair_appeal_id_v1(
+    task_id: [u8; 32],
+    slash_proposal_digest: [u8; 32],
+    appellant: &AccountId,
+    evidence_digest: [u8; 32],
+    reason: &str,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(REPAIR_LEDGER_APPEAL_ID_DOMAIN_V1);
+    hasher.update(&task_id);
+    hasher.update(&slash_proposal_digest);
+    let appellant = appellant.to_string();
+    for value in [appellant.as_str(), reason] {
+        hasher.update(
+            &u64::try_from(value.len())
+                .expect("string length fits u64")
+                .to_le_bytes(),
+        );
+        hasher.update(value.as_bytes());
+    }
+    hasher.update(&evidence_digest);
+    *hasher.finalize().as_bytes()
+}
+
+/// Chain-authoritative repair task, lease, terminal result, slash, and appeal.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerTaskV1 {
+    /// Schema version; must equal [`REPAIR_LEDGER_TASK_VERSION_V1`].
+    pub version: u16,
+    /// Immutable task identity derived from the exact canonical report.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub task_id: [u8; 32],
+    /// Non-zero exactly-once identity supplied by the originating proof subsystem.
+    ///
+    /// `PoTR` uses the signed receipt digest; other subsystems use an equally
+    /// stable canonical failure or handoff digest.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub source_identity: [u8; 32],
+    /// Canonical repair ticket identifier.
+    pub ticket_id: String,
+    /// Exact canonical `sorafs_manifest::repair::RepairReportV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub canonical_report: Vec<u8>,
+    /// Manifest under repair.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub manifest_digest: [u8; 32],
+    /// Provider responsible for the affected replica.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub provider_id: [u8; 32],
+    /// Auditor account that admitted the task.
+    pub submitted_by: AccountId,
+    /// Admission block timestamp.
+    pub submitted_at_unix_ms: u64,
+    /// Monotonic task revision.
+    pub revision: u64,
+    /// Current exclusive worker lease, including an expired lease until reclaimed.
+    pub lease: Option<RepairLedgerLeaseV1>,
+    /// Immutable terminal outcome, when finalized.
+    pub terminal_outcome: Option<RepairLedgerTerminalOutcomeV1>,
+    /// Slash proposal committed with an escalated terminal outcome.
+    pub slash: Option<RepairLedgerSlashRecordV1>,
+    /// Single provider appeal against the committed slash proposal.
+    pub appeal: Option<RepairLedgerAppealRecordV1>,
+    /// Bounded idempotency receipts ordered by acceptance.
+    pub action_receipts: Vec<RepairLedgerActionReceiptV1>,
+    /// Block timestamp of the latest accepted mutation.
+    pub updated_at_unix_ms: u64,
+}
+
+/// Constant-time counters for the authoritative repair ledger.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerStatusV1 {
+    /// Admitted repair tasks.
+    pub tasks: u64,
+    /// Tasks that currently retain a lease record.
+    pub leased_tasks: u64,
+    /// Persisted terminal outcomes.
+    pub terminal_outcomes: u64,
+    /// Completed terminal outcomes.
+    pub completed: u64,
+    /// Failed terminal outcomes without a slash proposal.
+    pub failed: u64,
+    /// Escalated terminal outcomes with a slash proposal.
+    pub escalated: u64,
+    /// Committed slash proposals.
+    pub slash_proposals: u64,
+    /// Committed provider appeals.
+    pub appeals: u64,
+    /// Block timestamp of the latest mutation.
+    pub updated_at_unix_ms: u64,
+}
+
+/// Finalized block anchor for one coherent repair-ledger query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same immutable state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+/// One authoritative repair task anchored to finalized chain state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedTaskV1 {
+    /// Finalized state anchor at which the task was read.
+    pub finalized_cursor: RepairFinalizedCursorV1,
+    /// Chain-authoritative repair task.
+    pub task: RepairLedgerTaskV1,
+}
+
+/// Authoritative repair counters anchored to finalized chain state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedStatusV1 {
+    /// Finalized state anchor at which the counters were read.
+    pub finalized_cursor: RepairFinalizedCursorV1,
+    /// Chain-authoritative repair-ledger counters.
+    pub status: RepairLedgerStatusV1,
+}
+
+/// Cursor-bounded authoritative repair-task page.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairLedgerTaskPageV1 {
+    /// Finalized state anchor shared by every task in the page.
+    pub finalized_cursor: RepairFinalizedCursorV1,
+    /// Canonical records in ascending immutable task-id order.
+    pub tasks: Vec<RepairLedgerTaskV1>,
+    /// Whether at least one later task exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive task-id cursor for the next page, present only when `has_more` is true.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::fixed_bytes::option")
+    )]
+    pub next_after_task_id: Option<[u8; 32]>,
+}
+
+/// Exclusive cursor for one committed repair-ledger event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedEventCursorV1 {
+    /// Monotonic repair-event sequence beginning at one.
+    pub sequence: u64,
+    /// Finalized block height containing the event.
+    pub block_height: u64,
+    /// Finalized block hash resolved only after the block commits.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Repair-event index within the committing block.
+    pub event_index: u32,
+}
+
+/// Typed repair-ledger event with an unambiguous finalized-chain cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedEventV1 {
+    /// Monotonic repair-event sequence beginning at one.
+    pub sequence: u64,
+    /// Committing block height.
+    pub block_height: u64,
+    /// Committing block hash resolved from finalized state.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Repair-event index within the committing block.
+    pub event_index: u32,
+    /// Existing typed, payload-free native repair-ledger event.
+    pub event: SorafsRepairLedgerEvent,
+}
+
+impl RepairFinalizedEventV1 {
+    /// Return the exclusive cursor identifying this event.
+    #[must_use]
+    pub const fn cursor(&self) -> RepairFinalizedEventCursorV1 {
+        RepairFinalizedEventCursorV1 {
+            sequence: self.sequence,
+            block_height: self.block_height,
+            block_hash: self.block_hash,
+            event_index: self.event_index,
+        }
+    }
+}
+
+/// Cursor-bounded page of typed committed repair-ledger events.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct RepairFinalizedEventPageV1 {
+    /// Finalized state anchor shared by every event in the page.
+    pub finalized_cursor: RepairFinalizedCursorV1,
+    /// Events in strictly increasing sequence and block/index order.
+    pub events: Vec<RepairFinalizedEventV1>,
+    /// Whether at least one later committed event exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive continuation cursor, present only when `has_more` is true.
+    pub next_after: Option<RepairFinalizedEventCursorV1>,
+}
+
 #[cfg(test)]
 mod tests {
     use iroha_crypto::{Algorithm, KeyPair};
@@ -1530,6 +2160,21 @@ mod tests {
         let keypair = KeyPair::try_from_seed(vec![seed.max(1); 32], Algorithm::Ed25519)
             .expect("nonzero deterministic Ed25519 seed");
         AccountId::new(keypair.public_key().clone())
+    }
+
+    fn assert_canonical_norito_round_trip<T>(value: &T)
+    where
+        T: core::fmt::Debug + PartialEq + norito::core::NoritoSerialize,
+        for<'de> T: norito::core::NoritoDeserialize<'de>,
+    {
+        let encoded = norito::to_bytes(value).expect("encode canonical repair-ledger value");
+        let decoded: T =
+            norito::decode_from_bytes(&encoded).expect("decode canonical repair-ledger value");
+        assert_eq!(&decoded, value);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode canonical repair-ledger value"),
+            encoded
+        );
     }
 
     fn policy() -> ModerationLedgerPolicyV1 {
@@ -1623,6 +2268,59 @@ mod tests {
         let encoded = norito::to_bytes(&case).unwrap();
         let decoded: ModerationCaseSpecV1 = norito::decode_from_bytes(&encoded).unwrap();
         assert_eq!(decoded, case);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn finalized_event_page_json_roundtrip_preserves_typed_event() {
+        let event = ModerationFinalizedEventV1 {
+            sequence: 7,
+            block_height: 11,
+            block_hash: [0xAB; 32],
+            event_index: 2,
+            event: SorafsModerationLedgerEvent {
+                kind: crate::events::data::sorafs::SorafsModerationLedgerEventKind::CaseFinalized,
+                case_id: Some("case-1".to_owned()),
+                round_id: Some("round-1".to_owned()),
+                authority: account(7),
+                occurred_at_unix_ms: 4_321,
+            },
+        };
+        let page = ModerationFinalizedEventPageV1 {
+            finalized_cursor: ModerationFinalizedCursorV1 {
+                height: event.block_height,
+                block_hash: event.block_hash,
+            },
+            events: vec![event.clone()],
+            has_more: true,
+            next_after: Some(event.cursor()),
+        };
+
+        let json = norito::json::to_json(&page).expect("serialize finalized moderation event page");
+        let decoded: ModerationFinalizedEventPageV1 =
+            norito::json::from_json(&json).expect("deserialize finalized moderation event page");
+        let value = norito::json::to_value(&page).expect("serialize event page as JSON value");
+        let norito::json::Value::Object(root) = value else {
+            panic!("finalized moderation event page must be a JSON object");
+        };
+        let Some(norito::json::Value::Array(events)) = root.get("events") else {
+            panic!("finalized moderation event page must contain an events array");
+        };
+        let Some(norito::json::Value::Object(committed_event)) = events.first() else {
+            panic!("finalized moderation event must be a JSON object");
+        };
+        let Some(norito::json::Value::Object(ledger_event)) = committed_event.get("event") else {
+            panic!("committed event must contain a typed ledger event");
+        };
+
+        assert_eq!(decoded, page);
+        assert_eq!(
+            ledger_event.get("kind"),
+            Some(&norito::json!({
+                "kind": "case_finalized",
+                "detail": null,
+            }))
+        );
     }
 
     #[test]
@@ -2002,5 +2700,131 @@ mod tests {
                 found: 2
             })
         ));
+    }
+
+    #[test]
+    fn repair_identity_and_ledger_roundtrip_are_stable() {
+        let source_identity = [0xA5; 32];
+        let task_id = sorafs_repair_task_id_v1(source_identity);
+        assert_eq!(task_id, sorafs_repair_task_id_v1(source_identity));
+        assert_ne!(task_id, sorafs_repair_task_id_v1([0xA6; 32]));
+        assert_ne!(
+            sorafs_repair_idempotency_digest_v1("REP-1", "claim-1"),
+            sorafs_repair_idempotency_digest_v1("REP-1", "claim-2")
+        );
+
+        let owner = account(21);
+        let task = RepairLedgerTaskV1 {
+            version: REPAIR_LEDGER_TASK_VERSION_V1,
+            task_id,
+            source_identity,
+            ticket_id: "REP-1".to_owned(),
+            canonical_report: norito::to_bytes(&"canonical-report").unwrap(),
+            manifest_digest: [0x11; 32],
+            provider_id: [0x22; 32],
+            submitted_by: owner.clone(),
+            submitted_at_unix_ms: 1_000,
+            revision: 2,
+            lease: Some(RepairLedgerLeaseV1 {
+                owner,
+                generation: 1,
+                acquired_at_unix_ms: 1_000,
+                renewed_at_unix_ms: 1_000,
+                expires_at_unix_ms: 2_000,
+            }),
+            terminal_outcome: None,
+            slash: None,
+            appeal: None,
+            action_receipts: vec![RepairLedgerActionReceiptV1 {
+                idempotency_digest: sorafs_repair_idempotency_digest_v1("REP-1", "claim-1"),
+                action_digest: [0x33; 32],
+                resulting_revision: 2,
+            }],
+            updated_at_unix_ms: 1_000,
+        };
+        let encoded = norito::to_bytes(&task).unwrap();
+        let decoded: RepairLedgerTaskV1 = norito::decode_from_bytes(&encoded).unwrap();
+        assert_eq!(decoded, task);
+
+        let finalized_cursor = RepairFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0x71; 32],
+        };
+        let event = RepairFinalizedEventV1 {
+            sequence: 2,
+            block_height: 7,
+            block_hash: finalized_cursor.block_hash,
+            event_index: 1,
+            event: SorafsRepairLedgerEvent {
+                kind: crate::events::data::sorafs::SorafsRepairLedgerEventKind::LeaseClaimed,
+                ticket_id: task.ticket_id.clone(),
+                task_id,
+                provider_id: crate::sorafs::capacity::ProviderId::new(task.provider_id),
+                manifest_digest: crate::sorafs::pin_registry::ManifestDigest::new(
+                    task.manifest_digest,
+                ),
+                revision: task.revision,
+                authority: task.submitted_by.clone(),
+                occurred_at_unix_ms: task.updated_at_unix_ms,
+            },
+        };
+        let event_cursor = event.cursor();
+        let event_page = RepairFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![event],
+            has_more: true,
+            next_after: Some(event_cursor),
+        };
+        let task_page = RepairLedgerTaskPageV1 {
+            finalized_cursor,
+            tasks: vec![task.clone()],
+            has_more: false,
+            next_after_task_id: None,
+        };
+        let finalized_task = RepairFinalizedTaskV1 {
+            finalized_cursor,
+            task: task.clone(),
+        };
+        let finalized_status = RepairFinalizedStatusV1 {
+            finalized_cursor,
+            status: RepairLedgerStatusV1 {
+                tasks: 1,
+                leased_tasks: 1,
+                terminal_outcomes: 0,
+                completed: 0,
+                failed: 0,
+                escalated: 0,
+                slash_proposals: 0,
+                appeals: 0,
+                updated_at_unix_ms: task.updated_at_unix_ms,
+            },
+        };
+        assert_canonical_norito_round_trip(&finalized_cursor);
+        assert_canonical_norito_round_trip(&finalized_task);
+        assert_canonical_norito_round_trip(&finalized_status);
+        assert_canonical_norito_round_trip(&task_page);
+        assert_canonical_norito_round_trip(&event_cursor);
+        assert_canonical_norito_round_trip(&event_page);
+
+        #[cfg(feature = "json")]
+        {
+            let encoded =
+                norito::json::to_vec(&event_page).expect("encode finalized repair event page JSON");
+            let decoded: RepairFinalizedEventPageV1 = norito::json::from_slice(&encoded)
+                .expect("decode finalized repair event page JSON");
+            assert_eq!(decoded, event_page);
+
+            let encoded =
+                norito::json::to_vec(&task_page).expect("encode finalized repair task page JSON");
+            let decoded: RepairLedgerTaskPageV1 =
+                norito::json::from_slice(&encoded).expect("decode finalized repair task page JSON");
+            assert_eq!(decoded, task_page);
+        }
+
+        let appeal_a =
+            sorafs_repair_appeal_id_v1(task_id, [0x44; 32], &task.submitted_by, [0x55; 32], "why");
+        let appeal_b =
+            sorafs_repair_appeal_id_v1(task_id, [0x44; 32], &task.submitted_by, [0x55; 32], "why");
+        assert_eq!(appeal_a, appeal_b);
     }
 }

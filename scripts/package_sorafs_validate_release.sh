@@ -19,9 +19,20 @@ Options:
   --target-dir <path>    Cargo target directory override.
   --version <string>     Release version label (default: git describe or commit hash).
   --manifest-signing-key <path>
-                         Optional PEM private key used to sign the manifest.
+                         Development-only owner-private raw 32-byte Ed25519 seed used for
+                         local packager tests with --development-local-signing.
+  --development-local-signing
+                         Explicitly enable the development-only local raw-seed signer.
+                         Reference-production signing must use the HSM input path.
+  --manifest-signature-in <path>
+                         Optional 64-byte raw Ed25519 signature produced by an
+                         external PKCS#11/HSM signer for this exact manifest.
+                         Mutually exclusive with --manifest-signing-key.
   --manifest-public-key <path>
-                         Optional PEM public key used to verify the manifest signature.
+                         Raw 32-byte Ed25519 public key required for signed manifests.
+  --manifest-public-key-fingerprint <hex>
+                         Required reviewed lowercase SHA256 fingerprint of the
+                         exact 32 raw public-key bytes.
   --manifest-signature-out <path>
                          Signature path (default: <manifest>.sig).
   --skip-smoke           Skip committed-fixture smoke checks.
@@ -115,6 +126,175 @@ validate_existing_executable_file_path() {
   fi
 }
 
+validate_signing_seed_permissions() {
+  local label="$1"
+  local target="$2"
+  python3 - "$label" "$target" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+label = sys.argv[1]
+path = Path(sys.argv[2])
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    path_stat = path.lstat()
+except OSError as error:
+    fail(f"failed to inspect {label} permissions at `{path}`: {error}")
+
+if not stat.S_ISREG(path_stat.st_mode):
+    fail(f"{label} must be a regular file: {path}")
+if path_stat.st_uid != os.geteuid():
+    fail(f"{label} must be owned by the current effective user")
+if path_stat.st_nlink != 1:
+    fail(f"{label} must have exactly one hard link")
+
+mode = stat.S_IMODE(path_stat.st_mode)
+if mode not in {0o400, 0o600}:
+    fail(f"{label} permissions must be owner-only 0400 or 0600")
+PY
+}
+
+snapshot_release_signing_input() {
+  local label="$1"
+  local source_path="$2"
+  local snapshot_path="$3"
+  local input_kind="$4"
+  python3 - "$label" "$source_path" "$snapshot_path" "$input_kind" <<'PY'
+import os
+from pathlib import Path
+import stat
+import sys
+
+label = sys.argv[1]
+source_path = Path(sys.argv[2])
+snapshot_path = Path(sys.argv[3])
+input_kind = sys.argv[4]
+expected_bytes_by_kind = {
+    "seed": 32,
+    "public": 32,
+    "signature": 64,
+}
+
+def fail(message):
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(1)
+
+def read_flags():
+    return (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+
+def write_all(fd, payload):
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("failed to write pinned signing input")
+        view = view[written:]
+
+def open_anchored_regular(path):
+    if not path.is_absolute():
+        fail(f"{label} must use an absolute path")
+    components = path.parts[1:]
+    if not components or any(component in {"", ".", ".."} for component in components):
+        fail(f"{label} path is not canonical")
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    directory_fds = []
+    try:
+        current_fd = os.open("/", directory_flags)
+        directory_fds.append(current_fd)
+        for component in components[:-1]:
+            current_fd = os.open(
+                component,
+                directory_flags,
+                dir_fd=current_fd,
+            )
+            directory_fds.append(current_fd)
+        leaf = components[-1]
+        before = os.stat(leaf, dir_fd=current_fd, follow_symlinks=False)
+        source_fd = os.open(leaf, read_flags(), dir_fd=current_fd)
+        return source_fd, before, directory_fds
+    except OSError:
+        for directory_fd in reversed(directory_fds):
+            os.close(directory_fd)
+        raise
+
+if input_kind not in expected_bytes_by_kind:
+    fail("internal release signing input kind is invalid")
+expected_bytes = expected_bytes_by_kind[input_kind]
+
+source_fd = -1
+snapshot_fd = -1
+directory_fds = []
+try:
+    source_fd, before_path, directory_fds = open_anchored_regular(source_path)
+    before = os.fstat(source_fd)
+    if not stat.S_ISREG(before.st_mode):
+        fail(f"{label} must be a regular file")
+    if (before.st_dev, before.st_ino) != (before_path.st_dev, before_path.st_ino):
+        fail(f"{label} changed before it could be pinned")
+    if before.st_nlink != 1:
+        fail(f"{label} must have exactly one hard link")
+    if before.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        fail(f"{label} must not be group- or world-writable")
+    if input_kind == "seed":
+        if before.st_uid != os.geteuid():
+            fail(f"{label} must be owned by the current effective user")
+        mode = stat.S_IMODE(before.st_mode)
+        if mode not in {0o400, 0o600}:
+            fail(f"{label} permissions must be owner-only 0400 or 0600")
+    if before.st_size != expected_bytes:
+        fail(f"{label} must contain exactly {expected_bytes} raw bytes")
+    payload = bytearray()
+    while len(payload) <= expected_bytes:
+        chunk = os.read(source_fd, min(8192, expected_bytes + 1 - len(payload)))
+        if not chunk:
+            break
+        payload.extend(chunk)
+    if len(payload) != expected_bytes:
+        fail(f"{label} must contain exactly {expected_bytes} raw bytes")
+    after = os.fstat(source_fd)
+    stable_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+        fail(f"{label} changed while it was pinned")
+
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    snapshot_fd = os.open(snapshot_path, flags, 0o600)
+    write_all(snapshot_fd, payload)
+    os.fsync(snapshot_fd)
+except FileNotFoundError:
+    fail(f"{label} is missing")
+except OSError as error:
+    fail(f"failed to pin {label}: {error}")
+finally:
+    if source_fd >= 0:
+        os.close(source_fd)
+    if snapshot_fd >= 0:
+        os.close(snapshot_fd)
+    for directory_fd in reversed(directory_fds):
+        os.close(directory_fd)
+PY
+}
+
 prepare_output_directory_path() {
   local label="$1"
   local target="$2"
@@ -175,9 +355,27 @@ binary_path=""
 target_dir=""
 version=""
 manifest_signing_key=""
+development_local_signing=0
+manifest_signature_input=""
 manifest_public_key=""
+manifest_public_key_fingerprint=""
 manifest_signature_path=""
+release_signing_snapshot_dir=""
 skip_smoke=0
+
+cleanup_release_signing_snapshot() {
+  if [[ -z "$release_signing_snapshot_dir" ]]; then
+    return
+  fi
+  rm -f -- \
+    "${release_signing_snapshot_dir}/private.seed" \
+    "${release_signing_snapshot_dir}/public.key" \
+    "${release_signing_snapshot_dir}/external.sig" \
+    "${release_signing_snapshot_dir}/preflight.sig" \
+    "${release_signing_snapshot_dir}/generated.sig"
+  rmdir -- "$release_signing_snapshot_dir" 2>/dev/null || true
+}
+trap cleanup_release_signing_snapshot EXIT
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -221,9 +419,23 @@ while [[ $# -gt 0 ]]; do
       manifest_signing_key="$(abs_path "$2")"
       shift 2
       ;;
+    --development-local-signing)
+      development_local_signing=1
+      shift
+      ;;
+    --manifest-signature-in)
+      require_option_value "$1" "${2-}"
+      manifest_signature_input="$(abs_path "$2")"
+      shift 2
+      ;;
     --manifest-public-key)
       require_option_value "$1" "${2-}"
       manifest_public_key="$(abs_path "$2")"
+      shift 2
+      ;;
+    --manifest-public-key-fingerprint)
+      require_option_value "$1" "${2-}"
+      manifest_public_key_fingerprint="$2"
       shift 2
       ;;
     --manifest-signature-out)
@@ -247,20 +459,59 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-if [[ -n "$manifest_public_key" && -z "$manifest_signing_key" ]]; then
-  echo "error: --manifest-public-key requires --manifest-signing-key" >&2
-  exit 1
-fi
 if [[ -n "$manifest_signing_key" ]]; then
   validate_existing_file_path "manifest signing key" "$manifest_signing_key"
-  if ! command -v openssl >/dev/null 2>&1; then
-    echo "error: openssl is required for --manifest-signing-key" >&2
-    exit 1
-  fi
+  validate_signing_seed_permissions "manifest signing key" "$manifest_signing_key"
+fi
+if [[ -n "$manifest_signature_input" ]]; then
+  validate_existing_file_path "external manifest signature" "$manifest_signature_input"
 fi
 if [[ -n "$manifest_public_key" ]]; then
   validate_existing_file_path "manifest public key" "$manifest_public_key"
 fi
+if [[ -n "$manifest_public_key_fingerprint" ]] &&
+  [[ ! "$manifest_public_key_fingerprint" =~ ^[0-9a-f]{64}$ ]]; then
+  echo "error: --manifest-public-key-fingerprint must be exact lowercase 32-byte SHA256 hex" >&2
+  exit 1
+fi
+if [[ -n "$manifest_signing_key" && -n "$manifest_signature_input" ]]; then
+  echo "error: --manifest-signing-key and --manifest-signature-in are mutually exclusive" >&2
+  exit 1
+fi
+if [[ -n "$manifest_signing_key" && "$development_local_signing" -ne 1 ]]; then
+  echo "error: --manifest-signing-key is development-only and requires --development-local-signing" >&2
+  exit 1
+fi
+if [[ -z "$manifest_signing_key" && "$development_local_signing" -eq 1 ]]; then
+  echo "error: --development-local-signing requires --manifest-signing-key" >&2
+  exit 1
+fi
+manifest_signature_requested=0
+if [[ -n "$manifest_signing_key" || -n "$manifest_signature_input" ]]; then
+  manifest_signature_requested=1
+fi
+if [[ -n "$manifest_public_key" && "$manifest_signature_requested" -eq 0 ]]; then
+  echo "error: --manifest-public-key requires --manifest-signing-key or --manifest-signature-in" >&2
+  exit 1
+fi
+if [[ -n "$manifest_public_key_fingerprint" && "$manifest_signature_requested" -eq 0 ]]; then
+  echo "error: --manifest-public-key-fingerprint requires --manifest-signing-key or --manifest-signature-in" >&2
+  exit 1
+fi
+if [[ -n "$manifest_signature_path" && "$manifest_signature_requested" -eq 0 ]]; then
+  echo "error: --manifest-signature-out requires --manifest-signing-key or --manifest-signature-in" >&2
+  exit 1
+fi
+if [[ "$manifest_signature_requested" -eq 1 && -z "$manifest_public_key" ]]; then
+  echo "error: signed manifests require --manifest-public-key" >&2
+  exit 1
+fi
+if [[ "$manifest_signature_requested" -eq 1 && -z "$manifest_public_key_fingerprint" ]]; then
+  echo "error: signed manifests require --manifest-public-key-fingerprint" >&2
+  exit 1
+fi
+
+manifest_public_key_sha256=""
 
 workspace="$(abs_path "$workspace")"
 [[ -z "$out_dir" ]] && out_dir="${workspace}/dist/sorafs-validate-release"
@@ -300,7 +551,6 @@ fi
 binary_path="$(abs_path "$binary_path")"
 validate_existing_executable_file_path "sorafs-validate binary" "$binary_path"
 
-prepare_output_directory_path "release output directory" "$out_dir"
 safe_version="${version//[^A-Za-z0-9._-]/_}"
 safe_target="${target//[^A-Za-z0-9._-]/_}"
 package_name="sorafs-validate-${safe_version}-${safe_target}"
@@ -308,23 +558,43 @@ stage_dir="${out_dir}/${package_name}"
 archive_path="${out_dir}/${package_name}.tar.gz"
 manifest_path="${out_dir}/${package_name}.manifest.json"
 manifest_sha_path="${manifest_path}.sha256"
-[[ -z "$manifest_signature_path" ]] && manifest_signature_path="${manifest_path}.sig"
+default_manifest_signature_path="${manifest_path}.sig"
+if [[ "$manifest_signature_requested" -eq 1 && -z "$manifest_signature_path" ]]; then
+  manifest_signature_path="$default_manifest_signature_path"
+fi
 binary_sha_path="${out_dir}/${package_name}.sha256"
 archive_sha_path="${archive_path}.sha256"
 header_path="${workspace}/crates/sorafs_manifest/include/sorafs_reference.h"
 
-safe_remove_manifest_signature_output() {
+reject_release_key_cleanup_target() {
+  local label="$1"
+  local key_path="$2"
+  case "$key_path" in
+    "$stage_dir"|"$stage_dir"/*|"$archive_path"|"$manifest_path"|"$manifest_sha_path"|"$binary_sha_path"|"$archive_sha_path")
+      echo "error: ${label} must be kept outside generated release artifact paths" >&2
+      exit 1
+      ;;
+  esac
+}
+
+validate_new_manifest_signature_output() {
   local output_path="$1"
-  python3 - "$output_path" <<'PY'
+  shift
+  python3 - "$output_path" "$stage_dir" "$@" <<'PY'
+import os
 from pathlib import Path
-import stat
 import sys
 
 path = Path(sys.argv[1])
+stage_dir = Path(sys.argv[2])
+generated_paths = [Path(value) for value in sys.argv[3:]]
 
 def fail(message):
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
+
+def normalized(value):
+    return Path(os.path.abspath(value))
 
 try:
     if path.is_symlink():
@@ -335,22 +605,106 @@ try:
         if parent.exists() and not parent.is_dir():
             fail(f"release manifest signature output parent `{parent}` must be a directory")
     try:
-        path_stat = path.lstat()
+        path.lstat()
     except FileNotFoundError:
-        raise SystemExit(0)
-    if not stat.S_ISREG(path_stat.st_mode):
-        fail(f"release manifest signature output `{path}` must be a regular file")
-    path.unlink()
+        pass
+    else:
+        fail(f"release manifest signature output `{path}` must not already exist")
 except OSError as error:
     fail(f"failed to inspect release manifest signature output `{path}`: {error}")
+
+normalized_path = normalized(path)
+normalized_stage = normalized(stage_dir)
+try:
+    normalized_path.relative_to(normalized_stage)
+except ValueError:
+    pass
+else:
+    fail("release manifest signature output must not collide with the generated stage")
+if normalized_path in {normalized(value) for value in generated_paths}:
+    fail("release manifest signature output must not collide with a generated release artifact")
 PY
 }
 
 validate_existing_file_path "SoraFS reference FFI header" "$header_path"
 
+if [[ "$manifest_signature_path" != "$default_manifest_signature_path" ]] &&
+  [[ -e "$default_manifest_signature_path" || -L "$default_manifest_signature_path" ]]; then
+  echo "error: stale default manifest signature exists; refuse to publish a replacement manifest" >&2
+  exit 1
+fi
+
+if [[ "$manifest_signature_requested" -eq 1 ]]; then
+  reject_release_key_cleanup_target "manifest public key" "$manifest_public_key"
+  if [[ -n "$manifest_signing_key" ]]; then
+    reject_release_key_cleanup_target "manifest signing key" "$manifest_signing_key"
+  else
+    reject_release_key_cleanup_target \
+      "external manifest signature" "$manifest_signature_input"
+  fi
+  if [[ "$manifest_signature_path" == "$manifest_public_key" ]] ||
+    [[ -n "$manifest_signing_key" &&
+      "$manifest_signature_path" == "$manifest_signing_key" ]] ||
+    [[ -n "$manifest_signature_input" &&
+      "$manifest_signature_path" == "$manifest_signature_input" ]]; then
+    echo "error: release manifest signature output must not overwrite a manifest key or external signature input" >&2
+    exit 1
+  fi
+  validate_new_manifest_signature_output \
+    "$manifest_signature_path" \
+    "$archive_path" "$manifest_path" "$manifest_sha_path" \
+    "$binary_sha_path" "$archive_sha_path"
+
+  manifest_signing_key_source="$manifest_signing_key"
+  manifest_signature_input_source="$manifest_signature_input"
+  manifest_public_key_source="$manifest_public_key"
+  release_signing_snapshot_dir="$(
+    mktemp -d "${TMPDIR:-/tmp}/sorafs-release-signing.XXXXXXXX"
+  )"
+  chmod 0700 "$release_signing_snapshot_dir"
+  release_signing_snapshot_dir="$(
+    cd "$release_signing_snapshot_dir" && pwd -P
+  )"
+  snapshot_release_signing_input \
+    "manifest public key" "$manifest_public_key_source" \
+    "${release_signing_snapshot_dir}/public.key" "public"
+  manifest_public_key="${release_signing_snapshot_dir}/public.key"
+  if [[ -n "$manifest_signing_key_source" ]]; then
+    snapshot_release_signing_input \
+      "manifest signing key" "$manifest_signing_key_source" \
+      "${release_signing_snapshot_dir}/private.seed" "seed"
+    manifest_signing_key="${release_signing_snapshot_dir}/private.seed"
+  else
+    snapshot_release_signing_input \
+      "external manifest signature" "$manifest_signature_input_source" \
+      "${release_signing_snapshot_dir}/external.sig" "signature"
+    manifest_signature_input="${release_signing_snapshot_dir}/external.sig"
+  fi
+
+  manifest_public_key_sha256="$(sha256_file "$manifest_public_key")"
+  if [[ "$manifest_public_key_fingerprint" != "$manifest_public_key_sha256" ]]; then
+    echo "error: pinned manifest public key does not match the reviewed fingerprint" >&2
+    exit 1
+  fi
+  if [[ -n "$manifest_signing_key" ]]; then
+    preflight_signature="${release_signing_snapshot_dir}/preflight.sig"
+    if ! "$binary_path" release-manifest \
+      --manifest "$header_path" \
+      --public-key "$manifest_public_key" \
+      --public-key-fingerprint "$manifest_public_key_fingerprint" \
+      --signing-seed "$manifest_signing_key" \
+      --signature-out "$preflight_signature" \
+      --development-local-signing >/dev/null; then
+      echo "error: native development-only Ed25519 signing-key preflight failed" >&2
+      exit 1
+    fi
+    rm -f -- "$preflight_signature"
+  fi
+fi
+
+prepare_output_directory_path "release output directory" "$out_dir"
 rm -rf "$stage_dir" "$archive_path" "$manifest_path" "$manifest_sha_path" \
   "$binary_sha_path" "$archive_sha_path"
-safe_remove_manifest_signature_output "$manifest_signature_path"
 mkdir -p "$stage_dir/include"
 cp "$binary_path" "${stage_dir}/${packaged_binary_name}"
 cp "$header_path" "${stage_dir}/include/sorafs_reference.h"
@@ -740,7 +1094,12 @@ def read_open_flags():
     return flags
 
 def write_open_flags():
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     nofollow = getattr(os, "O_NOFOLLOW", 0)
     if nofollow:
         flags |= nofollow
@@ -835,21 +1194,40 @@ sync_output_parent(target_path)
 PY
 }
 
-if [[ -n "$manifest_signing_key" ]]; then
-  signature_tmp_path="$(mktemp "${out_dir}/.sorafs-manifest-signature.XXXXXX")"
-  if ! openssl dgst -sha256 -sign "$manifest_signing_key" \
-    -out "$signature_tmp_path" "$manifest_path"; then
-    rm -f "$signature_tmp_path"
+if [[ "$manifest_signature_requested" -eq 1 ]]; then
+  signature_source_path="$manifest_signature_input"
+  signature_tmp_path="${release_signing_snapshot_dir}/generated.sig"
+  if [[ -n "$manifest_signing_key" ]]; then
+    signature_source_path="$signature_tmp_path"
+    if ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+      --manifest "$manifest_path" \
+      --public-key "$manifest_public_key" \
+      --public-key-fingerprint "$manifest_public_key_fingerprint" \
+      --signing-seed "$manifest_signing_key" \
+      --signature-out "$signature_tmp_path" \
+      --development-local-signing >/dev/null; then
+      echo "error: native development-only Ed25519 manifest signing failed" >&2
+      exit 1
+    fi
+  elif ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+    --manifest "$manifest_path" \
+    --public-key "$manifest_public_key" \
+    --public-key-fingerprint "$manifest_public_key_fingerprint" \
+    --signature "$signature_source_path" >/dev/null; then
+    echo "error: native external Ed25519 manifest signature verification failed" >&2
     exit 1
   fi
-  if ! install_manifest_signature "$signature_tmp_path" "$manifest_signature_path" "$manifest_path"; then
-    rm -f "$signature_tmp_path"
+  if ! install_manifest_signature \
+    "$signature_source_path" "$manifest_signature_path" "$manifest_path"; then
     exit 1
   fi
-  rm -f "$signature_tmp_path"
-  if [[ -n "$manifest_public_key" ]]; then
-    openssl dgst -sha256 -verify "$manifest_public_key" \
-      -signature "$manifest_signature_path" "$manifest_path" >/dev/null
+  if ! "${stage_dir}/${packaged_binary_name}" release-manifest \
+    --manifest "$manifest_path" \
+    --public-key "$manifest_public_key" \
+    --public-key-fingerprint "$manifest_public_key_fingerprint" \
+    --signature "$manifest_signature_path" >/dev/null; then
+    echo "error: installed native Ed25519 manifest signature verification failed" >&2
+    exit 1
   fi
 fi
 
@@ -858,8 +1236,9 @@ echo "SoraFS reference validator release package:"
 echo "  Archive : $archive_path"
 echo "  Manifest: $manifest_path"
 echo "  Manifest SHA256: $manifest_sha_path"
-if [[ -f "$manifest_signature_path" ]]; then
+if [[ "$manifest_signature_requested" -eq 1 ]]; then
   echo "  Manifest signature: $manifest_signature_path"
+  echo "  Manifest signer fingerprint (reviewed): $manifest_public_key_sha256"
 fi
 echo "  Binary SHA256 : $binary_sha_path"
 echo "  Archive SHA256: $archive_sha_path"

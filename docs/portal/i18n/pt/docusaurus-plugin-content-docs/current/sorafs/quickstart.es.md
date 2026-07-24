@@ -67,11 +67,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Construir e firmar uma manifestação
 
 Envolva o plano de pedaços, os pseudônimos e as firmas de governo em uma manifestação usando
-`sorafs-manifest-stub`. O comando abaixo mostra uma carga útil de um único arquivo; pasa
+`sorafs-manifest-builder`. O comando abaixo mostra uma carga útil de um único arquivo; pasa
 uma rota de diretório para empaquetar uma árvore (a CLI recorre na ordem lexicográfica).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

@@ -24,7 +24,7 @@ O que você precisa saber sobre o RFC e o RFC
 
 | المعلم | نافذة السريان | ملخص التغيير | الفرق المتأثرة | عناصر العمل | الحالة |
 |--------|---------------|--------------|----------------|-------------|--------|
-| M0 | أسابيع 1–6 | نُشرت fixtures للـ chunker؛ Construir pipelines no CAR + manifesto ou nos artefatos Isso é tudo. | Documentos, DevRel, SDKs | Use `sorafs_manifest_stub` para sinalizar o código de barras no CDN. | ✅ نشط |
+| M0 | أسابيع 1–6 | نُشرت fixtures للـ chunker؛ Construir pipelines no CAR + manifesto ou nos artefatos Isso é tudo. | Documentos, DevRel, SDKs | Use `sorafs_manifest_builder` para sinalizar o código de barras no CDN. | ✅ نشط |
 | M1 | Capítulo 7–12 | يفرض CI jogos أدلة alias متاحة في staging؛ ferramentas يعرض sinalizadores توقع صريحة. | Documentos, armazenamento, governança | No caso de fixtures, você pode usar aliases no staging, usando o `--car-digest/--root-cid`. | ⏳ معلّق |
 | M2 | Dias 13–20 | Fixando o registro no registro e fixando-o تتحول artefatos القديمة إلى قراءة فقط؛ تفضل البوابات أدلة registro. | Armazenamento, operações, governança | Fixando o registro, fixando os hosts do sistema, você pode instalar o sistema. | ⏳ معلّق |
 | M3 | أسبوع 21+ | فرض وصول قائم على alias فقط؛ تنبه المراقبة إلى تكافؤ registro; إزالة CDN القديم. | Operações, redes, SDKs | O DNS DNS, os URLs não são os padrões do SDK e os padrões do SDK. | ⏳ معلّق |

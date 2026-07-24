@@ -86,8 +86,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 الذي يطلب التفاوض الصريح مع العميل (`Accept-Chunker` + `Accept-Digest`).| مكون | الحالة | نوتاس |
 |-----------|--------|-------|
 | `sorafs_manifest_chunk_store` | ✅مدعم | التحقق من صحة التعامل مع Canonico + الأسماء المستعارة، وتدفق الروابط عبر `--json-out=-` وتطبيق ميثاق التسجيل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ اعتزال | مُنشئ بيان لمنتدى الدعم؛ استخدم `iroha app sorafs toolkit pack` لتعبئة السيارة/البيان والحفاظ على `--plan=-` لإعادة التحقق من الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ اعتزال | مساعد التحقق من صحة البيانات دون اتصال بالإنترنت؛ إعلانات الموفر يجب أن يتم إنتاجها من خلال خط أنابيب النشر والمصادقة عبر `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ اعتزال | مُنشئ بيان لمنتدى الدعم؛ استخدم `iroha app sorafs toolkit pack` لتعبئة السيارة/البيان والحفاظ على `--plan=-` لإعادة التحقق من الحتمية. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (منسق المطور) | ✅مدعم | يحتوي `chunk_fetch_specs` على حمولات ذات سعة `range` ويحمل CARv2. |
 | تركيبات SDK (الصدأ/الذهاب/TS) | ✅مدعم | التجديد عبر `export_vectors`; o التعامل مع Canonico الذي يظهر لأول مرة في كل قائمة من الأسماء المستعارة ويتم حذفه من خلال المظاريف التي يتم اقتراحها. |
 | Negociacao de perfil no gate Torii | ✅مدعم | قم بتنفيذ قواعد `Accept-Chunker` الكاملة، بما في ذلك الرؤوس `Content-Chunker` واعرض جسر CARv1 فقط من خلال طلبات الرجوع الصريحة إلى إصدار أقدم. |
@@ -140,12 +140,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-O manifest stub espelha os mesmos dados, o que e conveniente ao automatizar a selecao de
+O manifest builder espelha os mesmos dados, o que e conveniente ao automatizar a selecao de
 `--chunker-profile-id` em pipelines. Ambos os CLIs de chunk store tambem aceitam a forma de handle canonico
 (`--profile=sorafs.sf1@1.0.0`) para que scripts de build evitem hard-codear IDs numericos:
 
 ```
-تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1،
@@ -209,4 +209,4 @@ Ao solicitar dados CAR, clientes devem enviar um header `Accept-Chunker` listand
   عبر نظام التشغيل الخصيتين fornecidos.
 * `chunker_registry::lookup_by_profile` يؤكد أن المعلمات تعمل بالواصف
   قم بالمراسلة مع `ChunkProfile::DEFAULT` لتجنب التباعد الحمضي.
-* تتضمن بيانات المنتجات حسب `iroha app sorafs toolkit pack` و`sorafs_manifest_stub` بيانات التعريف المسجلة.
+* تتضمن بيانات المنتجات حسب `iroha app sorafs toolkit pack` و`sorafs_manifest_builder` بيانات التعريف المسجلة.

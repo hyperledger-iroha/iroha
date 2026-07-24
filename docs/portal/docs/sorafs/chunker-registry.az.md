@@ -120,10 +120,10 @@ and will transparently truncate when the request exceeds the available leaves:
 $ yük qaçışı -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
     --por-sample=8 --por-sample-seed=0xfeedface --por-sample-out=por.samples.json
 
-Manifest stub eyni məlumatları əks etdirir, bu da boru kəmərlərində `--chunker-profile-id` seçimini skript edərkən əlverişlidir. Hər iki yığın mağazası CLI-ləri həm də kanonik tutacaq formasını (`--profile=sorafs.sf1@1.0.0`) qəbul edir, beləliklə qurmaq skriptləri sərt kodlaşdırılan rəqəmli ID-lərdən qaça bilər:
+Manifest builder eyni məlumatları əks etdirir, bu da boru kəmərlərində `--chunker-profile-id` seçimini skript edərkən əlverişlidir. Hər iki yığın mağazası CLI-ləri həm də kanonik tutacaq formasını (`--profile=sorafs.sf1@1.0.0`) qəbul edir, beləliklə qurmaq skriptləri sərt kodlaşdırılan rəqəmli ID-lərdən qaça bilər:
 
 ```
-$ cargo run -p sorafs_car --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_car --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -181,4 +181,4 @@ HTTP danışıqlarına etibar etmədən.
   təqdim olunan testlər vasitəsilə.
 * `chunker_registry::lookup_by_profile` təsdiq edir ki, deskriptor parametrləri
   təsadüfi divergensiyanı qorumaq üçün `ChunkProfile::DEFAULT` uyğunlaşdırın.
-* `iroha app sorafs toolkit pack` və `sorafs_manifest_stub` tərəfindən hazırlanmış manifestlərə reyestr metadata daxildir.
+* `iroha app sorafs toolkit pack` və `sorafs_manifest_builder` tərəfindən hazırlanmış manifestlərə reyestr metadata daxildir.

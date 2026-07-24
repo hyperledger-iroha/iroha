@@ -62,7 +62,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-ოპერატორებმა უნდა განაახლონ საბორტო/დავის მოთხოვნის დატვირთვა `sorafs_manifest_stub capacity {declaration,dispute}`-ით და დაარქივონ მიღებული JSON/Norito ბაიტი მმართველობის ბილეთთან ერთად.
+ოპერატორებმა უნდა განაახლონ საბორტო/დავის მოთხოვნის დატვირთვა `sorafs_manifest_builder capacity {declaration,dispute}`-ით და დაარქივონ მიღებული JSON/Norito ბაიტი მმართველობის ბილეთთან ერთად.
 
 ## ხელმოწერის არტეფაქტები
 

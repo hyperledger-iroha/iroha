@@ -66,7 +66,7 @@ TOML эх сурвалжийг хайж байна.【docs/source/da/replication
    гарцууд.
 2. Гарын үсэг зурсан дугтуйтай манифест stub баталгаажуулагчийг ажиллуулна уу:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

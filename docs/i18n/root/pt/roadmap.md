@@ -386,7 +386,7 @@ Unless stated otherwise, roadmap items call out which release line they affect.
 18. **SORAFS-GATEWAY-LIVE — Replace fixture gateway stub with live integration** (SoraFS/Core, Line: Iroha 3, Owner: SoraFS WG, Priority: Medium, Status: 🈴 Completed, target TBD)
  - [x] Wire gateway to the real storage/pinning pipeline and remove fixture-only logic.
  - [x] Replace `proof-stub` header acceptance with real proof verification and update SoraFS gateway tests/fixtures.
- - [x] Retire `sorafs_manifest_stub`/`sorafs_provider_advert_stub` usage once real manifest/proof pipelines land; update CLI helpers and docs.
+ - [x] Retire `sorafs_manifest_builder`/`sorafs_provider_advert` usage once real manifest/proof pipelines land; update CLI helpers and docs.
  - [x] Add integration tests and update runbooks.
 
 19. **SORANET-RELAY-LIVE — Implement SoraNet relay** (Networking, Line: Iroha 3, Owner: Networking WG, Priority: Medium, Status: 🈴 Completed, target TBD)

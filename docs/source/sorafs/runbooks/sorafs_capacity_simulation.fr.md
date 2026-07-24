@@ -11,7 +11,7 @@ translation_last_reviewed: 2026-01-30
 
 # Runbook de simulation de capacité SoraFS
 
-Ce runbook explique comment exercer le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. L'objectif est de valider la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures reproductibles dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
+Ce runbook explique comment exercer le kit de simulation du marketplace de capacité SF-2c et visualiser les métriques résultantes. L'objectif est de valider la négociation de quotas, la gestion du failover et la remédiation du slashing de bout en bout à l'aide des fixtures reproductibles dans `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_builder capacity`; utilisez `iroha app sorafs toolkit pack` pour les flux d'empaquetage manifest/CAR.
 
 ## 1. Générer les artefacts CLI
 
@@ -20,7 +20,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Le script invoque `sorafs_manifest_stub capacity` pour émettre des payloads Norito déterministes, des encodages base64, des corps de requête Torii et des résumés JSON pour :
+Le script invoque `sorafs_manifest_builder capacity` pour émettre des payloads Norito déterministes, des encodages base64, des corps de requête Torii et des résumés JSON pour :
 
 - Trois déclarations de fournisseurs participant au scénario de négociation de quotas.
 - Un ordre de réplication allouant le manifeste en staging entre les fournisseurs.

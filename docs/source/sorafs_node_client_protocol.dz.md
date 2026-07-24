@@ -98,12 +98,35 @@ The signature covers the serialized `ProviderAdvertBodyV1` and currently
 supports `Ed25519` (single-signer) with reserved space for future Norito-backed
 multi-signatures.
 
-For operator tooling, the repository ships `sorafs_provider_advert_stub`.
-It validates the inputs, emits the Norito advertisement blob, and produces a
-JSON summary for dashboards:
+For operator tooling, the repository ships `sorafs_provider_advert`. Production signing is private-key-free: `--prepare` emits the exact canonical bytes for an external Ed25519/HSM signer, and `--emit` accepts only the reviewed signing payload, exact raw public key, reviewed SHA-256 fingerprint, and raw external signature before writing an advert.
 
 ```bash
-cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
+  --prepare \
+  --chunker-profile=sorafs.sf1@1.0.0 \
+  --provider-id=001122... \
+  --stake-pool-id=ffeedd... \
+  --stake-amount=5000000 \
+  --availability=hot \
+  --max-latency-ms=1500 \
+  --capability=torii \
+  --capability=quic \
+  --range-capability=max_span=1048576,min_granularity=4096,sparse=true,alignment=false,merkle=true \
+  --stream-budget=max_in_flight=4,max_bytes_per_sec=5000000,burst=2000000 \
+  --transport-hint=torii_http_range:0 \
+  --transport-hint=quic_stream:1 \
+  --endpoint=torii:storage.example.com \
+  --topic=sorafs.sf1.primary:global \
+  --issued-at=1700000000 \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-out=provider-advert.signing-payload \
+  --json-out=provider-advert.signing-request.json
+
+# Send the exact signing payload to the governed PKCS#11/HSM signer.
+# The signer returns exactly 64 raw Ed25519 bytes in provider.sig.
+
+cargo run -p sorafs_car --bin sorafs_provider_advert -- \
   --emit \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --provider-id=001122... \
@@ -119,10 +142,11 @@ cargo run -p sorafs_car --bin sorafs_provider_advert_stub -- \
   --transport-hint=quic_stream:1 \
   --endpoint=torii:storage.example.com \
   --topic=sorafs.sf1.primary:global \
-  --signing-key-file=provider.key \
-  # or alternatively --signing-key=<hex seed> \
-  --public-key-out=provider.pub \
-  --signature-out=provider.sig \
+  --issued-at=1700000000 \
+  --public-key-file=provider.pub \
+  --public-key-fingerprint-sha256="$REVIEWED_PROVIDER_KEY_SHA256" \
+  --signing-payload-file=provider-advert.signing-payload \
+  --signature-file=provider.sig \
   --advert-out=provider.advert \
   --json-out=provider.report.json
 
@@ -581,14 +605,7 @@ and submit fetch requests in `max_chunk_span`-bounded slices. The CLI’s
 end-to-end tests cover this flow and expose the resulting provider receipts so
 integrations can assert deterministic scheduling.【crates/sorafs_car/src/multi_fetch.rs:1341-1501】
 
-For audits, run `sorafs_provider_advert_stub --verify --advert=<path> [--now=unix_ts]` to
-validate signatures, enforce TTL/path/QoS rules, and print a JSON summary of an
-existing advert (optionally with `--json-out` to persist the summary). The JSON
-payload includes `signature_verified=true` when the ed25519 signature matches the
-body, and explicitly reports `signature_strict` so tooling can distinguish governed
-adverts (`true`) from diagnostic fixtures (`false`). Operators can export the derived
-key/signature via `--public-key-out`/`--signature-out`, and the CLI accepts raw
-signatures when preceded by `--council-signature-public-key`.
+For audits, run `sorafs_provider_advert --verify --advert=<path> --public-key-file=<raw-32-byte-path> --public-key-fingerprint-sha256=<reviewed-hex> [--now=unix_ts]`. Verification requires the advert signer to equal the exact reviewed raw public key, validates its SHA-256 fingerprint and Ed25519 signature, enforces TTL/path/QoS rules, and prints a JSON summary. Inputs must be bounded direct regular files; symlinks, hard links, unsafe permissions, path replacement, malformed material, and key/fingerprint mismatches fail closed.
 
 ### TTL, Refresh, and Expiry
 

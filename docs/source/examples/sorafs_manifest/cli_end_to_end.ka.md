@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS მანიფესტის CLI ბოლოდან ბოლომდე მაგალითი
 
 ეს მაგალითი განიხილავს დოკუმენტაციის build-ის გამოქვეყნებას SoraFS-ზე, გამოყენებით
-`sorafs_manifest_stub` CLI განმსაზღვრელ სქელ დანამატებთან ერთად
+`sorafs_manifest_builder` CLI განმსაზღვრელ სქელ დანამატებთან ერთად
 აღწერილია SoraFS Architecture RFC-ში. ნაკადი მოიცავს მანიფესტ თაობას,
 მოლოდინების შემოწმება, მოპოვების გეგმის ვალიდაცია და დადასტურების მოძიების რეპეტიცია
 გუნდებს შეუძლიათ იგივე ნაბიჯების ჩასმა CI-ში.
@@ -30,7 +30,7 @@ translator: machine-google-reviewed
 ## ნაბიჯი 1 - შექმენით მანიფესტი, CAR, ხელმოწერები და მიიღეთ გეგმა
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ CI გარემოებისთვის, მიაწოდეთ ცა�
 გაგზავნეთ მანიფესტი CLI-ის მეშვეობით:
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

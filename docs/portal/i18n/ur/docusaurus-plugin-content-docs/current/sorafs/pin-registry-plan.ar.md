@@ -79,7 +79,7 @@ SF-4 پن رجسٹری نوڈس اور معاون خدمات مہیا کرتا �
 | -------- | -------- | -------------------- |
 | خدمت Torii | `/v1/sorafs/pin` (جمع کروائیں) ، `/v1/sorafs/pin/{cid}` (تلاش) ، `/v1/sorafs/aliases` (فہرست/پابند) ، `/v1/sorafs/replication` (آرڈرز/رسیدیں) کا پتہ لگائیں۔ نمبر + فلٹرنگ فراہم کریں۔ | نیٹ ورکنگ TL / کور انفرا |
 | اسٹیشن | ردعمل میں اونچائی/ہیش رجسٹری شامل کریں۔ SDKs کے ذریعہ استعمال ہونے والے اسٹیشن میں Norito کو شامل کیا گیا۔ | کور انفرا |
-| Cli | `sorafs_manifest_stub` یا نیا CLI `sorafs_pin` کے ساتھ `pin submit` ، `alias bind` ، `order issue` ، `registry export` کو بڑھاؤ۔ | ٹولنگ ڈبلیو جی |
+| Cli | `sorafs_manifest_builder` یا نیا CLI `sorafs_pin` کے ساتھ `pin submit` ، `alias bind` ، `order issue` ، `registry export` کو بڑھاؤ۔ | ٹولنگ ڈبلیو جی |
 | SDK | نقشہ Norito سے کلائنٹ بائنڈنگ (زنگ/GO/TS) تیار کریں۔ انضمام کے ٹیسٹ شامل کریں۔ | ایس ڈی کے ٹیمیں |
 
 آپریشنز:

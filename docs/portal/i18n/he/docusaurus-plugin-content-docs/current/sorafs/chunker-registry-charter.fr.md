@@ -64,7 +64,7 @@ La charte s'applique à chaque entrée de `sorafs_manifest::chunker_registry` et
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Soumettre une תוצרי יחסי ציבור גופי, הצעה, rapport de déterminisme et
@@ -101,14 +101,14 @@ La charte s'applique à chaque entrée de `sorafs_manifest::chunker_registry` et
 
 ## כלי תשומת לב
 
-- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` חשיפה:
+- `sorafs_manifest_chunk_store` et `sorafs_manifest_builder` חשיפה:
   - `--list-profiles` pour l'inspection du registre.
   - `--promote-profile=<handle>` pour générer le bloc de métadonnées canonique utilisé
     lors de la promotion d'un profil.
   - `--json-out=-` pour streamer les rapports vers stdout, permettant des logs de revue
     מוצרים לשחזור.
 - `ensure_charter_compliance()` est invoqué au démarrage dans les binaires concernés
-  (`manifest_chunk_store`, `provider_advert_stub`). Les tests CI doivent échouer si
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Les tests CI doivent échouer si
   de nouvelles entrées violent la charte.
 
 ## הירשם

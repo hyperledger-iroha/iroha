@@ -905,6 +905,11 @@ fn minimal_config_snapshot() {
                     pdp_tree_memory_limit_bytes: Bytes(
                         536870912,
                     ),
+                    moderation_screening_enabled: false,
+                    moderation_screening_authority_bundle_path: None,
+                    moderation_screening_authority_bundle_digest: None,
+                    pop_credentials: None,
+                    moderation_orchestrator: None,
                     pdp_provider: SorafsPdpProviderPolicy {
                         max_pending_records: 4096,
                         max_terminal_records: 65536,
@@ -928,6 +933,8 @@ fn minimal_config_snapshot() {
                         checkpoint_max_bytes: Bytes(
                             67108864,
                         ),
+                        proof_outcome_forwarder_interval: 1s,
+                        proof_outcome_max_attempts: 8,
                     },
                     alias: None,
                     adverts: SorafsAdvertOverrides {
@@ -967,6 +974,16 @@ fn minimal_config_snapshot() {
                         enabled: false,
                         cycle_seconds: 604800,
                         publish_delay_seconds: 3600,
+                        aggregate_id_prefix: "sfm4c-cycle",
+                        privacy_mode: "differential_privacy_with_suppression",
+                        epsilon_numerator: 4,
+                        epsilon_denominator: 5,
+                        per_subject_metric_cap: 1,
+                        suppression_threshold: 25,
+                        policy_digest: None,
+                        composition_budget_epsilon_numerator: 12,
+                        composition_budget_epsilon_denominator: 1,
+                        composition_budget_max_publications: 52,
                     },
                     evidence_viewer_audits: SorafsEvidenceViewerAuditSchedule {
                         enabled: false,
@@ -1167,6 +1184,7 @@ fn minimal_config_snapshot() {
                         },
                         ech_enabled: false,
                     },
+                    compliance: None,
                     direct_mode: None,
                 },
                 sorafs_por: SorafsPor {
@@ -2735,6 +2753,7 @@ fn minimal_config_snapshot() {
                     escrow_accounts: {},
                     kagemusha_release_policy_path: None,
                     kagemusha_artifact_dir: None,
+                    kagemusha_max_decoded_bytes: 268435456,
                 },
                 router: Router {
                     twap_window: 60s,

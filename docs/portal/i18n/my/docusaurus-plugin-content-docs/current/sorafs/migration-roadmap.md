@@ -40,14 +40,14 @@ Milestone အခြေအနေကို `docs/source/sorafs/migration_ledger.md
 |--------|-----------|----------------|----------------|--------|
 | ခံစစ်မှူး အစမ်းလေ့ကျင့်မှု | M0 | `fixtures/sorafs_chunker` နှင့် ဒေသတွင်း အတုံးအခဲများကို နှိုင်းယှဉ်ကာ အပတ်စဉ် ခြောက်သွေ့မှု။ `docs/source/sorafs/reports/` အောက်တွင် အစီရင်ခံစာကို ထုတ်ဝေပါ။ | သိုလှောင်ပံ့ပိုးသူများ | pass/fail matrix ပါသော `determinism-<date>.md`။ |
 | လက်မှတ်များ | ပဌာန်း M1 | လက်မှတ်များ သို့မဟုတ် ထင်ရှားပေါ်လွင်ပါက `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` မအောင်မြင်ပါ။ ဖွံ့ဖြိုးရေးဆိုင်ရာ လွှမ်းမိုးမှုများသည် PR နှင့် ပူးတွဲပါရှိသော အုပ်ချုပ်မှုကို စွန့်လွှတ်ရန် လိုအပ်သည်။ | Tooling WG | CI မှတ်တမ်း၊ စွန့်လွှတ်လက်မှတ်လင့်ခ် (လိုအပ်ပါက)။ |
-| မျှော်လင့်ချက်အလံများ | M1 | ပိုက်လိုင်းများသည် `sorafs_manifest_stub` ကို ခေါ်ဆို၍ အထွက်များကို ချိတ်ရန် ပြတ်သားစွာ မျှော်လင့်ထားပါသည်- | Docs CI | မျှော်လင့်ခြင်းအလံများကို ရည်ညွှန်းသည့် script များကို အပ်ဒိတ်လုပ်ထားသည် (အောက်ပါ command block ကိုကြည့်ပါ)။ |
+| မျှော်လင့်ချက်အလံများ | M1 | ပိုက်လိုင်းများသည် `sorafs_manifest_builder` ကို ခေါ်ဆို၍ အထွက်များကို ချိတ်ရန် ပြတ်သားစွာ မျှော်လင့်ထားပါသည်- | Docs CI | မျှော်လင့်ခြင်းအလံများကို ရည်ညွှန်းသည့် script များကို အပ်ဒိတ်လုပ်ထားသည် (အောက်ပါ command block ကိုကြည့်ပါ)။ |
 | Registry-ပထမ pinning | M2 | `sorafs pin propose` နှင့် `sorafs pin approve` ထင်ရှားသော တင်ပြချက်များကို ခြုံငုံသုံးသပ်ပါ။ CLI သည် `--require-registry` သို့ ပုံသေဖြစ်သည်။ | အုပ်ချုပ်ရေး Ops | Registry CLI စာရင်းစစ်မှတ်တမ်း၊ မအောင်မြင်သောအဆိုပြုချက်များအတွက် telemetry။ |
 | မြင်နိုင်မှု တန်းတူညီမျှ | M3 | Prometheus/Grafana အစုအပြုံလိုက်စာရင်းများ မှတ်ပုံတင်ခြင်းဖော်ပြချက်မှ ကွဲပြားသွားသောအခါ ဒိုင်ခွက်များသတိပေးချက်။ ဖုန်းခေါ်ဆိုမှုတွင် ops များအတွက် ကြိုးတပ်ထားသော သတိပေးချက်များ။ | မြင်နိုင်စွမ်း | ဒက်ရှ်ဘုတ်လင့်ခ်၊ သတိပေးချက် စည်းမျဉ်း IDs၊ GameDay ရလဒ်များ။ |
 
 #### Canonical ထုတ်ဝေခြင်း အမိန့်
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

@@ -41,14 +41,14 @@ Dans cette double carte, le Département gère le grand livre, la gouvernance et
 |-----|------|----------|---------------|-------|
 | Calendrier de répétition | M0 | Il existe des essais à sec, des résumés de fragments locaux avec `fixtures/sorafs_chunker`. Publier la réponse dans `docs/source/sorafs/reports/`. | Fournisseurs de stockage | `determinism-<date>.md` avec réussite/échec. |
 | Envoyer des commentaires | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` sont compatibles avec la dérive ou les manifestes. Dev annule la renonciation à la gouvernance dans les relations publiques. | GT Outillage | Лог CI, ссылка на renonciation ticket (если применимо). |
-| Indicateurs d'attente | M1 | L'application `sorafs_manifest_stub` correspond à vos attentes en matière de configuration de sortie : | Documents CI | Les scripts sont associés aux drapeaux d'attente (avec le bloc de commandes ci-dessous). |
+| Indicateurs d'attente | M1 | L'application `sorafs_manifest_builder` correspond à vos attentes en matière de configuration de sortie : | Documents CI | Les scripts sont associés aux drapeaux d'attente (avec le bloc de commandes ci-dessous). |
 | Épinglage dans le registre en premier | M2 | `sorafs pin propose` et `sorafs pin approve` оборачивают отправку manifeste ; La CLI peut utiliser `--require-registry`. | Opérations de gouvernance | Journal d'audit CLI du registre, informations télémétriques. |
 | Parité d'observabilité | M3 | Les tableaux de bord Prometheus/Grafana proposent l'inventaire des fragments et les manifestes de registre ; alert'ы подключены к ops on-call. | Observabilité | Recherchez le tableau de bord, les identifiants et les alertes, les résultats GameDay. |
 
 #### Publications de la commande canonique
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

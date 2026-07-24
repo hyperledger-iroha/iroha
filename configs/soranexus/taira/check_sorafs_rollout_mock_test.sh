@@ -343,7 +343,7 @@ echo "unexpected iroha invocation: $*" >&2
 exit 1
 SH
 
-  cat >"${root}/mockbin/sorafs_manifest_stub" <<'SH'
+  cat >"${root}/mockbin/sorafs_manifest_builder" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -352,7 +352,7 @@ request_out=""
 authority=""
 private_key=""
 private_key_file=""
-argv_log="${MOCK_STATE_DIR:?}/sorafs_manifest_stub_argv"
+argv_log="${MOCK_STATE_DIR:?}/sorafs_manifest_builder_argv"
 printf '%s\n' "$*" >"$argv_log"
 
 for arg in "$@"; do
@@ -377,7 +377,7 @@ for arg in "$@"; do
 done
 
 [[ "$1" == "capacity" && "$2" == "declaration" ]] || {
-  echo "unexpected sorafs_manifest_stub invocation: $*" >&2
+  echo "unexpected sorafs_manifest_builder invocation: $*" >&2
   exit 1
 }
 [[ -n "$spec" && -n "$request_out" && -n "$authority" && -n "$private_key_file" ]] || {
@@ -448,7 +448,7 @@ SH
     "${root}/scripts/taira_faucet_canary.py" \
     "${root}/mockbin/curl" \
     "${root}/mockbin/iroha" \
-    "${root}/mockbin/sorafs_manifest_stub" \
+    "${root}/mockbin/sorafs_manifest_builder" \
     "${root}/mockbin/sorafs_tx_stdin_builder"
 }
 
@@ -510,7 +510,7 @@ PY
     success \
     --write-config "$config_path" \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     >"$output_file" 2>&1; then
     echo "invalid canary identity case ${mutation} unexpectedly succeeded" >&2
@@ -574,7 +574,7 @@ run_implicit_bootstrap_success_case() {
       "$root" \
       success \
       --iroha-bin "${root}/mockbin/iroha" \
-      --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+      --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
       --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
       >"$output_file" 2>&1
 
@@ -585,7 +585,7 @@ run_implicit_bootstrap_success_case() {
   test -f "${root}/state/submit_seen"
   test -f "${root}/state/fee_program_seen"
   test -f "$config_path"
-  ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
+  ! grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
   grep -q 'BOOTSTRAPPRIVATEKEY' "${root}/state/private_key_seen"
 }
 
@@ -624,7 +624,7 @@ run_explicit_config_is_preserved_case() {
     explicit_config \
     --write-config "$config_path" \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     >"$output_file" 2>&1
 
@@ -634,7 +634,7 @@ run_explicit_config_is_preserved_case() {
   test ! -f "${root}/state/bootstrap_seen"
   test -f "${root}/state/fee_program_seen"
   grep -q 'EXPLICITPRIVATEKEY' "${root}/state/private_key_seen"
-  ! grep -q 'EXPLICITPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
+  ! grep -q 'EXPLICITPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
   test -f "${root}/state/private_key_file_seen"
 }
 
@@ -649,7 +649,7 @@ run_explicit_missing_config_fails_without_bootstrap_case() {
     explicit_config \
     --write-config "$config_path" \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     >"$output_file" 2>&1; then
     echo "explicit missing write-config case unexpectedly succeeded" >&2
@@ -685,7 +685,7 @@ run_expected_failure_case() {
     "$scenario" \
     --write-config "$config_path" \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     "$@" \
     >"$output_file" 2>&1; then
@@ -746,7 +746,7 @@ run_expected_numeric_failure_case() {
     "${root}/configs/soranexus/taira/check_sorafs_rollout.sh" \
       --public-root https://taira.sora.org \
       --iroha-bin "${root}/mockbin/iroha" \
-      --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+      --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
       --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
       >"$output_file" 2>&1; then
     echo "numeric validation case unexpectedly succeeded" >&2
@@ -776,7 +776,7 @@ run_expected_numeric_argument_failure_case() {
     "$root" \
     success \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     "$@" \
     >"$output_file" 2>&1; then
@@ -810,7 +810,7 @@ run_asset_retry_success_case() {
     failed_asset_then_success \
     --write-config "$config_path" \
     --iroha-bin "${root}/mockbin/iroha" \
-    --sorafs-manifest-stub-bin "${root}/mockbin/sorafs_manifest_stub" \
+    --sorafs-manifest-builder-bin "${root}/mockbin/sorafs_manifest_builder" \
     --sorafs-tx-stdin-builder-bin "${root}/mockbin/sorafs_tx_stdin_builder" \
     >"$output_file" 2>&1
 
@@ -819,7 +819,7 @@ run_asset_retry_success_case() {
   test -f "${root}/state/faucet_seen"
   grep -q '^120000$' "${root}/state/faucet_status_timeout_seen"
   test -f "${root}/state/fee_program_seen"
-  ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_stub_argv"
+  ! grep -q 'ASSETRETRYPRIVATEKEY' "${root}/state/sorafs_manifest_builder_argv"
 }
 
 run_read_only_success_case

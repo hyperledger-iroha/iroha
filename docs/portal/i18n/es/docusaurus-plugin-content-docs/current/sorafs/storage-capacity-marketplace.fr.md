@@ -58,7 +58,7 @@ les livrables requis pour la première release et les decline en pistes actionna
 - `CapacityTelemetryV1` exprime des snapshots por época (GiB declarado vs utilisés, compteurs de replication, pourcentages d'uptime/PoR) que alimenta la distribución de tarifas. Los pagos mantienen la utilización en las declaraciones y los porcentajes en 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - Los asistentes participantes (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores lane/assignment/SLA) proporcionan una validación determinada de las claves y un informe de error reutilizable por CI y las herramientas posteriores.【crates/sorafs_manifest/src/capacity.rs:230】- `PinProviderRegistry` expone la instantánea en cadena a través de `/v1/sorafs/capacity/state`, y combina declaraciones de proveedores y entradas del libro mayor de tarifas posterior con un Norito JSON déterministe.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La cobertura de validación ejerce la aplicación de manejadores canónicos, la detección de doblones, los bornes por carril, los guardias de asignación de réplica y las comprobaciones de placa de télémétrie para que las regresiones aparezcan inmediatamente en CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operador de herramientas: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` convierte especificaciones flexibles en cargas útiles Norito canónicas, blobs base64 y currículums JSON para que los operadores puedan preparar accesorios `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y pedidos. de réplica con validación local.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Los accesorios de referencia viven en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) y son generados a través de `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Operador de herramientas: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` convierte especificaciones flexibles en cargas útiles Norito canónicas, blobs base64 y currículums JSON para que los operadores puedan preparar accesorios `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` y pedidos. de réplica con validación local.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Los accesorios de referencia viven en `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) y son generados a través de `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Integración del plan de control| tache | Propietario(s) | Notas |
 |------|----------|-------|
@@ -134,13 +134,13 @@ ci-dessous pour garder les critères d'acceptation alignés avec l'implementatio
 - Archivar el currículum JSON y los hashes en `docs/examples/sorafs_capacity_marketplace_validation/` con los paquetes de gobierno.
 
 ### Preuve de disputa y corte
-- Déposer des disputas vía `sorafs_manifest_stub capacity dispute` (pruebas:
+- Déposer des disputas vía `sorafs_manifest_builder capacity dispute` (pruebas:
   `cargo test -p sorafs_car --test capacity_cli`) para guardar las cargas útiles canónicas.
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` et les suites de pénalité (`record_capacity_telemetry_penalises_persistent_under_delivery`) para demostrar que las disputas y las barras diagonales rejouent de manera determinada.
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` pour la capture de preuves et l'escalade ; lier les approbations de strike au rapport de validation.
 
 ### Incorporación de proveedores y pruebas de humo de salida.
-- Regénérer les artefactos de declaración/télémétrie con `sorafs_manifest_stub capacity ...` y rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Regénérer les artefactos de declaración/télémétrie con `sorafs_manifest_builder capacity ...` y rejouer les tests CLI avant soumission (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Soumettre vía Torii (`/v1/sorafs/capacity/declare`) luego de la captura `/v1/sorafs/capacity/state` y de las capturas Grafana. Siga el flujo de salida en `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Archivar los artefactos firmados y las salidas de reconciliación en el país.
   `docs/examples/sorafs_capacity_marketplace_validation/`.## Dependencias y secuenciación

@@ -39,6 +39,7 @@ use norito::{
 };
 use reqwest::{Client, Method, redirect::Policy};
 use sorafs_manifest::{
+    GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1, GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1,
     GovernanceDagBlockV1, GovernanceDagHeadV1, GovernanceLogPayloadV1,
     GovernanceSignatureAlgorithm, validate_governance_dag_head_against_chain_v1,
 };
@@ -80,6 +81,7 @@ const SUPPORTED_RUNTIME_PAYLOAD_KINDS: &[&str] = &[
     "gc_audit",
     "moderation_ballot_event",
     "orderbook_settlement_receipt",
+    "pdp_archive",
     "proof_token_issuance",
     "reconciliation",
     "repair_audit",
@@ -1275,6 +1277,37 @@ fn payload_kind(payload: &GovernanceLogPayloadV1) -> String {
     }
 }
 
+fn canonical_source_payload_bytes(
+    payload: &GovernanceLogPayloadV1,
+) -> Result<Vec<u8>, ServiceError> {
+    macro_rules! encode {
+        ($value:expr) => {
+            norito::to_bytes($value).map_err(|err| {
+                ServiceError::Source(format!(
+                    "failed to encode canonical governance source payload: {err}"
+                ))
+            })
+        };
+    }
+
+    match payload {
+        GovernanceLogPayloadV1::ProviderAdvert(value) => encode!(value),
+        GovernanceLogPayloadV1::ReplicationOrder(value) => encode!(value),
+        GovernanceLogPayloadV1::PorChallenge(value) => encode!(value),
+        GovernanceLogPayloadV1::PorProof(value) => encode!(value),
+        GovernanceLogPayloadV1::PdpArchive(value) => encode!(value),
+        GovernanceLogPayloadV1::AuditVerdict(value) => encode!(value),
+        GovernanceLogPayloadV1::DealSettlement(value) => encode!(value),
+        GovernanceLogPayloadV1::SignedReputationSnapshot(value) => encode!(value),
+        GovernanceLogPayloadV1::ModerationBallotEvent(value) => encode!(value),
+        GovernanceLogPayloadV1::AppealFinanceReport(value) => encode!(value),
+        GovernanceLogPayloadV1::AppealFinanceWeeklyRollup(value) => encode!(value),
+        GovernanceLogPayloadV1::AppealFinanceSettlementReceipt(value) => encode!(value),
+        GovernanceLogPayloadV1::OrderbookSettlementReceipt(value) => encode!(value),
+        GovernanceLogPayloadV1::ExternalPayload(value) => Ok(value.encoded_payload.clone()),
+    }
+}
+
 fn validate_expected_signer(
     block: &GovernanceDagBlockV1,
     expected_public_key: &[u8; 32],
@@ -1322,7 +1355,10 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
         ));
     }
     let peer_hex = required_json_string(map, "publisher_peer_id_hex")?;
-    if peer_hex.is_empty() || peer_hex.len() > 1024 || peer_hex.len() % 2 != 0 {
+    if peer_hex.is_empty()
+        || peer_hex.len() > GOVERNANCE_DAG_PUBLISHER_PEER_ID_MAX_BYTES_V1 * 2
+        || peer_hex.len() % 2 != 0
+    {
         return Err(ServiceError::Source(
             "runtime index publisher peer id is invalid".to_owned(),
         ));
@@ -1338,7 +1374,9 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
         )));
     }
     let advertised_count = required_json_u64(map, "block_count")?;
-    if advertised_count != block_values.len() as u64 {
+    let available_block_count = u64::try_from(block_values.len())
+        .map_err(|_| ServiceError::Source("runtime index block count exceeds u64".to_owned()))?;
+    if advertised_count != available_block_count {
         return Err(ServiceError::Source(
             "runtime index block_count does not match its blocks array".to_owned(),
         ));
@@ -1348,16 +1386,19 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
     let latest_allowed = now.saturating_add(config.max_future_skew_secs);
     let mut blocks = Vec::with_capacity(block_values.len());
     let mut decoded_blocks = Vec::with_capacity(block_values.len());
-    let mut expected_by_digest = JsonMap::new();
+    let mut expected_by_digest = BTreeMap::<String, Vec<JsonValue>>::new();
+    let mut expected_by_source_payload_digest = BTreeMap::<String, Vec<JsonValue>>::new();
     let mut expected_by_kind = BTreeMap::<String, Vec<JsonValue>>::new();
     let mut total_bytes = 0_u64;
     let mut previous_node_cid: Option<Vec<u8>> = None;
     for (position, value) in block_values.iter().enumerate() {
+        let position_u64 = u64::try_from(position)
+            .map_err(|_| ServiceError::Source("runtime index position exceeds u64".to_owned()))?;
         let entry = value.as_object().ok_or_else(|| {
             ServiceError::Source(format!("runtime index block {position} is not an object"))
         })?;
-        if required_json_u64(entry, "position")? != position as u64
-            || required_json_u64(entry, "sequence")? != position as u64
+        if required_json_u64(entry, "position")? != position_u64
+            || required_json_u64(entry, "sequence")? != position_u64
         {
             return Err(ServiceError::Source(format!(
                 "runtime index block {position} position or sequence is invalid"
@@ -1366,13 +1407,16 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
         let block_path = required_json_string(entry, "block_path")?;
         let path = resolve_index_path(&config.source_dir, &block_path)?;
         let bytes = read_verified_sidecar_file(&path, config.max_request_bytes)?;
-        if required_json_u64(entry, "encoded_len")? != bytes.len() as u64 {
+        let block_encoded_len = u64::try_from(bytes.len()).map_err(|_| {
+            ServiceError::Source(format!("runtime index block {position} length exceeds u64"))
+        })?;
+        if required_json_u64(entry, "encoded_len")? != block_encoded_len {
             return Err(ServiceError::Source(format!(
                 "runtime index block {position} encoded_len is invalid"
             )));
         }
         total_bytes = total_bytes
-            .checked_add(bytes.len() as u64)
+            .checked_add(block_encoded_len)
             .ok_or_else(|| ServiceError::Source("source byte count overflow".to_owned()))?;
         if total_bytes > SOURCE_TOTAL_BYTES_HARD_CAP {
             return Err(ServiceError::Source(format!(
@@ -1384,7 +1428,7 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
             .validate()
             .map_err(|err| ServiceError::Source(format!("block {position} is invalid: {err}")))?;
         validate_expected_signer(&block, &config.expected_public_key, &peer_id)?;
-        if block.sequence != position as u64 || block.timestamp > latest_allowed {
+        if block.sequence != position_u64 || block.timestamp > latest_allowed {
             return Err(ServiceError::Source(format!(
                 "block {position} sequence or timestamp is invalid"
             )));
@@ -1445,14 +1489,54 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
                 "runtime index block {position} digest is invalid"
             )));
         }
-        expected_by_digest.insert(
-            hex::encode(digest),
-            JsonValue::Array(vec![JsonValue::from(position as u64)]),
-        );
+        expected_by_digest
+            .entry(hex::encode(digest))
+            .or_default()
+            .push(JsonValue::from(position_u64));
+
+        let source_payload_path = required_json_string(entry, "encoded_path")?;
+        let source_payload_path = resolve_index_path(&config.source_dir, &source_payload_path)?;
+        let source_payload_bytes =
+            read_verified_sidecar_file(&source_payload_path, config.max_request_bytes)?;
+        let source_payload_len = u64::try_from(source_payload_bytes.len()).map_err(|_| {
+            ServiceError::Source(format!(
+                "runtime index block {position} source payload length exceeds u64"
+            ))
+        })?;
+        total_bytes = total_bytes
+            .checked_add(source_payload_len)
+            .ok_or_else(|| ServiceError::Source("source byte count overflow".to_owned()))?;
+        if total_bytes > SOURCE_TOTAL_BYTES_HARD_CAP {
+            return Err(ServiceError::Source(format!(
+                "runtime DAG exceeds the {SOURCE_TOTAL_BYTES_HARD_CAP} byte hard cap"
+            )));
+        }
+        if required_json_u64(entry, "source_payload_len")? != source_payload_len {
+            return Err(ServiceError::Source(format!(
+                "runtime index block {position} source_payload_len is invalid"
+            )));
+        }
+        let source_payload_digest = blake3_array(&source_payload_bytes);
+        if required_json_string(entry, "source_payload_blake3")?
+            != hex::encode(source_payload_digest)
+        {
+            return Err(ServiceError::Source(format!(
+                "runtime index block {position} source payload digest is invalid"
+            )));
+        }
+        if canonical_source_payload_bytes(&block.node.payload)? != source_payload_bytes {
+            return Err(ServiceError::Source(format!(
+                "runtime index block {position} source payload does not match its signed governance node"
+            )));
+        }
+        expected_by_source_payload_digest
+            .entry(hex::encode(source_payload_digest))
+            .or_default()
+            .push(JsonValue::from(position_u64));
         expected_by_kind
             .entry(kind.clone())
             .or_default()
-            .push(JsonValue::from(position as u64));
+            .push(JsonValue::from(position_u64));
         decoded_blocks.push(block.clone());
         blocks.push(SourceBlock {
             block,
@@ -1462,11 +1546,21 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
         });
     }
 
+    let expected_by_digest = expected_by_digest
+        .into_iter()
+        .map(|(digest, positions)| (digest, JsonValue::Array(positions)))
+        .collect::<JsonMap>();
+    let expected_by_source_payload_digest = expected_by_source_payload_digest
+        .into_iter()
+        .map(|(digest, positions)| (digest, JsonValue::Array(positions)))
+        .collect::<JsonMap>();
     let expected_by_kind = expected_by_kind
         .into_iter()
         .map(|(kind, positions)| (kind, JsonValue::Array(positions)))
         .collect::<JsonMap>();
     if map.get("by_encoded_blake3") != Some(&JsonValue::Object(expected_by_digest))
+        || map.get("by_source_payload_blake3")
+            != Some(&JsonValue::Object(expected_by_source_payload_digest))
         || map.get("by_payload_kind") != Some(&JsonValue::Object(expected_by_kind))
     {
         return Err(ServiceError::Source(
@@ -1483,8 +1577,7 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
     let head_path = resolve_index_path(&config.source_dir, &head_path_label)?;
     let head_bytes = read_verified_sidecar_file(&head_path, config.max_request_bytes)?;
     let head: GovernanceDagHeadV1 = decode_canonical(&head_bytes, "governance DAG head")?;
-    validate_governance_dag_head_against_chain_v1(&head, &decoded_blocks)
-        .map_err(|err| ServiceError::Source(format!("signed head chain is invalid: {err}")))?;
+    validate_source_head_chain(&head, &decoded_blocks)?;
     if head.head_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519
         || head.head_signature.public_key.as_slice() != config.expected_public_key
         || head.publisher_peer_id != peer_id
@@ -1522,6 +1615,21 @@ fn load_source_snapshot(config: &RuntimeConfig) -> Result<SourceSnapshot, Servic
         head_bytes,
         blocks,
     })
+}
+
+fn validate_source_head_chain(
+    head: &GovernanceDagHeadV1,
+    blocks: &[GovernanceDagBlockV1],
+) -> Result<(), ServiceError> {
+    validate_governance_dag_head_against_chain_v1(head, blocks)
+        .map_err(|err| ServiceError::Source(format!("signed head chain is invalid: {err}")))?;
+    if blocks.len() > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 {
+        let tail_start = blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1;
+        validate_governance_dag_head_against_chain_v1(head, &blocks[tail_start..]).map_err(
+            |err| ServiceError::Source(format!("signed head checkpoint window is invalid: {err}")),
+        )?;
+    }
+    Ok(())
 }
 
 async fn build_pinned_endpoint(
@@ -2019,10 +2127,12 @@ fn validate_remote_head(
     let head: GovernanceDagHeadV1 = decode_canonical(bytes, "public Governance DAG head")?;
     head.validate()
         .map_err(|err| ServiceError::Conflict(format!("public head is invalid: {err}")))?;
+    let source_block_count = u64::try_from(source.blocks.len())
+        .map_err(|_| ServiceError::State("source block count exceeds u64".to_owned()))?;
     if head.head_signature.algorithm != GovernanceSignatureAlgorithm::Ed25519
         || head.head_signature.public_key.as_slice() != config.expected_public_key
         || head.block_count == 0
-        || head.block_count > source.blocks.len() as u64
+        || head.block_count > source_block_count
     {
         return Err(ServiceError::Conflict(
             "public head key or block count is incompatible with the source chain".to_owned(),
@@ -2328,27 +2438,37 @@ impl Service {
                 PublicHead::Missing => None,
                 PublicHead::Present { bytes, .. } => Some(blake3_array(bytes)),
             };
-            let start = self
-                .checkpoint
-                .as_ref()
-                .map_or(0, |checkpoint| checkpoint.block_count as usize);
-            let generation = self
-                .checkpoint
-                .as_ref()
-                .map_or(1, |checkpoint| checkpoint.generation.saturating_add(1));
+            let start = match self.checkpoint.as_ref() {
+                Some(checkpoint) => usize::try_from(checkpoint.block_count).map_err(|_| {
+                    ServiceError::State("checkpoint block count exceeds host limits".to_owned())
+                })?,
+                None => 0,
+            };
+            let generation = match self.checkpoint.as_ref() {
+                Some(checkpoint) => checkpoint.generation.checked_add(1).ok_or_else(|| {
+                    ServiceError::State("checkpoint generation exhausted".to_owned())
+                })?,
+                None => 1,
+            };
             let blocks = source.blocks[start..]
                 .iter()
-                .map(|block| IntentBlockV1 {
-                    sequence: block.block.sequence,
-                    governance_block_cid: block.block.block_cid.clone(),
-                    governance_node_cid: block.block.node.node_cid.clone(),
-                    payload_kind: block.payload_kind.clone(),
-                    timestamp: block.block.timestamp,
-                    encoded_blake3: block.encoded_blake3,
-                    encoded_len: block.bytes.len() as u64,
-                    ipfs_cid: None,
+                .map(|block| {
+                    Ok(IntentBlockV1 {
+                        sequence: block.block.sequence,
+                        governance_block_cid: block.block.block_cid.clone(),
+                        governance_node_cid: block.block.node.node_cid.clone(),
+                        payload_kind: block.payload_kind.clone(),
+                        timestamp: block.block.timestamp,
+                        encoded_blake3: block.encoded_blake3,
+                        encoded_len: u64::try_from(block.bytes.len()).map_err(|_| {
+                            ServiceError::State(
+                                "source block length exceeds u64 while preparing intent".to_owned(),
+                            )
+                        })?,
+                        ipfs_cid: None,
+                    })
                 })
-                .collect::<Vec<_>>();
+                .collect::<Result<Vec<_>, ServiceError>>()?;
             if blocks.is_empty() {
                 return Err(ServiceError::State(
                     "source head changed without adding a block".to_owned(),
@@ -2620,7 +2740,9 @@ fn validate_checkpoint_against_source(
     let Some(checkpoint) = checkpoint else {
         return Ok(());
     };
-    if checkpoint.block_count > source.blocks.len() as u64 {
+    let source_block_count = u64::try_from(source.blocks.len())
+        .map_err(|_| ServiceError::State("source block count exceeds u64".to_owned()))?;
+    if checkpoint.block_count > source_block_count {
         return Err(ServiceError::Conflict(
             "source chain rolled back behind the authenticated checkpoint".to_owned(),
         ));
@@ -2638,11 +2760,13 @@ fn validate_checkpoint_against_source(
         let source_block = source.blocks.get(position).ok_or_else(|| {
             ServiceError::Conflict("checkpoint mirror points outside the source chain".to_owned())
         })?;
+        let source_encoded_len = u64::try_from(source_block.bytes.len())
+            .map_err(|_| ServiceError::State("source block length exceeds u64".to_owned()))?;
         if source_block.block.block_cid != published.governance_block_cid
             || source_block.block.node.node_cid != published.governance_node_cid
             || source_block.payload_kind != published.payload_kind
             || source_block.encoded_blake3 != published.encoded_blake3
-            || source_block.bytes.len() as u64 != published.encoded_len
+            || source_encoded_len != published.encoded_len
         {
             return Err(ServiceError::Conflict(
                 "checkpoint mirror no longer matches the verified source chain".to_owned(),
@@ -2659,7 +2783,9 @@ fn validate_intent_against_source(
     config: &RuntimeConfig,
 ) -> Result<(), ServiceError> {
     validate_publish_intent(intent)?;
-    if intent.target_block_count > source.blocks.len() as u64 {
+    let source_block_count = u64::try_from(source.blocks.len())
+        .map_err(|_| ServiceError::State("source block count exceeds u64".to_owned()))?;
+    if intent.target_block_count > source_block_count {
         return Err(ServiceError::Conflict(
             "source rolled back behind the durable publish intent".to_owned(),
         ));
@@ -2681,13 +2807,16 @@ fn validate_intent_against_source(
             "durable intent head metadata is inconsistent".to_owned(),
         ));
     }
-    let expected_generation = checkpoint.map_or(1, |checkpoint| {
-        if checkpoint.head_block_cid == intent.target_head_block_cid {
+    let expected_generation = match checkpoint {
+        Some(checkpoint) if checkpoint.head_block_cid == intent.target_head_block_cid => {
             checkpoint.generation
-        } else {
-            checkpoint.generation.saturating_add(1)
         }
-    });
+        Some(checkpoint) => checkpoint
+            .generation
+            .checked_add(1)
+            .ok_or_else(|| ServiceError::State("checkpoint generation exhausted".to_owned()))?,
+        None => 1,
+    };
     if intent.generation != expected_generation {
         return Err(ServiceError::State(
             "publish intent generation is not monotonic".to_owned(),
@@ -2699,11 +2828,13 @@ fn validate_intent_against_source(
         let source_block = source.blocks.get(position).ok_or_else(|| {
             ServiceError::Conflict("intent block is absent from the source".to_owned())
         })?;
+        let source_encoded_len = u64::try_from(source_block.bytes.len())
+            .map_err(|_| ServiceError::State("source block length exceeds u64".to_owned()))?;
         if source_block.block.block_cid != block.governance_block_cid
             || source_block.block.node.node_cid != block.governance_node_cid
             || source_block.payload_kind != block.payload_kind
             || source_block.encoded_blake3 != block.encoded_blake3
-            || source_block.bytes.len() as u64 != block.encoded_len
+            || source_encoded_len != block.encoded_len
         {
             return Err(ServiceError::Conflict(
                 "durable intent block no longer matches source bytes".to_owned(),
@@ -2774,7 +2905,8 @@ fn merge_published_blocks(
         if retained_sequences.len() == max_entries {
             break;
         }
-        let encoded_len = source_block.bytes.len() as u64;
+        let encoded_len = u64::try_from(source_block.bytes.len())
+            .map_err(|_| ServiceError::State("source block length exceeds u64".to_owned()))?;
         let next = retained_bytes
             .checked_add(encoded_len)
             .ok_or_else(|| ServiceError::State("mirror byte count overflow".to_owned()))?;
@@ -3379,6 +3511,7 @@ mod tests {
         },
         governance_dag_block_cid_v1,
     };
+    use sorafs_node::{FilesystemGovernancePublisher, GovernancePublisher};
     use tempfile::TempDir;
     use tokio::{sync::Mutex, task::JoinHandle};
     use tower::ServiceExt as _;
@@ -3816,7 +3949,9 @@ mod tests {
                 prev_cid: previous_node_cid.clone(),
                 timestamp,
                 publisher_peer_id: peer_id.clone(),
-                payload: GovernanceLogPayloadV1::DealSettlement(settlement(sequence, timestamp)),
+                payload: GovernanceLogPayloadV1::DealSettlement(Box::new(settlement(
+                    sequence, timestamp,
+                ))),
                 publisher_signature: empty_signature(),
             };
             node.node_cid = node.recompute_node_cid().expect("derive test node CID");
@@ -3861,13 +3996,19 @@ mod tests {
             });
         }
         let last = source_blocks.last().expect("test source is non-empty");
+        let checkpoint_cid = (count > GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1).then(|| {
+            source_blocks[count - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1]
+                .block
+                .block_cid
+                .clone()
+        });
         let mut head = GovernanceDagHeadV1 {
             version: GOVERNANCE_DAG_HEAD_VERSION_V1,
             head_block_cid: last.block.block_cid.clone(),
             block_count: count as u64,
             generated_at: last.block.timestamp,
             publisher_peer_id: peer_id,
-            checkpoint_cid: None,
+            checkpoint_cid,
             head_signature: empty_signature(),
         };
         head.head_signature = signer.sign(
@@ -3988,6 +4129,7 @@ mod tests {
         fs::create_dir_all(root).expect("create Governance DAG source root");
         let mut entries = Vec::with_capacity(source.blocks.len());
         let mut by_digest = JsonMap::new();
+        let mut by_source_payload_digest = BTreeMap::<String, Vec<JsonValue>>::new();
         let mut by_kind = BTreeMap::<String, Vec<JsonValue>>::new();
         for (position, block) in source.blocks.iter().enumerate() {
             let block_cid_hex = hex::encode(&block.block.block_cid);
@@ -3996,6 +4138,15 @@ mod tests {
                 block.block.sequence
             );
             write_test_sidecar_file(&root.join(&block_path_label), &block.bytes);
+            let source_payload_bytes = canonical_source_payload_bytes(&block.block.node.payload)
+                .expect("encode test source payload");
+            let source_payload_path_label =
+                format!("source-payloads/{:020}.to", block.block.sequence);
+            write_test_sidecar_file(
+                &root.join(&source_payload_path_label),
+                &source_payload_bytes,
+            );
+            let source_payload_digest_hex = hex::encode(blake3_array(&source_payload_bytes));
 
             let digest_hex = hex::encode(block.encoded_blake3);
             let mut entry = JsonMap::new();
@@ -4003,8 +4154,24 @@ mod tests {
             entry.insert("sequence".into(), JsonValue::from(block.block.sequence));
             entry.insert("block_path".into(), JsonValue::from(block_path_label));
             entry.insert(
+                "encoded_path".into(),
+                JsonValue::from(source_payload_path_label),
+            );
+            entry.insert(
+                "json_path".into(),
+                JsonValue::from(format!("source-payloads/{:020}.json", block.block.sequence)),
+            );
+            entry.insert(
                 "encoded_len".into(),
                 JsonValue::from(block.bytes.len() as u64),
+            );
+            entry.insert(
+                "source_payload_len".into(),
+                JsonValue::from(source_payload_bytes.len() as u64),
+            );
+            entry.insert(
+                "source_payload_blake3".into(),
+                JsonValue::from(source_payload_digest_hex.clone()),
             );
             entry.insert("block_cid_hex".into(), JsonValue::from(block_cid_hex));
             entry.insert(
@@ -4042,6 +4209,10 @@ mod tests {
                 digest_hex,
                 JsonValue::Array(vec![JsonValue::from(position as u64)]),
             );
+            by_source_payload_digest
+                .entry(source_payload_digest_hex)
+                .or_default()
+                .push(JsonValue::from(position as u64));
             by_kind
                 .entry(block.payload_kind.clone())
                 .or_default()
@@ -4073,6 +4244,15 @@ mod tests {
             JsonValue::from(source.head.block_count),
         );
         index.insert("by_encoded_blake3".into(), JsonValue::Object(by_digest));
+        index.insert(
+            "by_source_payload_blake3".into(),
+            JsonValue::Object(
+                by_source_payload_digest
+                    .into_iter()
+                    .map(|(digest, positions)| (digest, JsonValue::Array(positions)))
+                    .collect(),
+            ),
+        );
         index.insert(
             "by_payload_kind".into(),
             JsonValue::Object(
@@ -4457,6 +4637,201 @@ listen_addr = "127.0.0.1:0"
         let mut expected_key = [0_u8; 32];
         expected_key.copy_from_slice(&block.block_signature.public_key);
         assert!(validate_expected_signer(block, &expected_key, b"wrong-peer").is_err());
+    }
+
+    #[test]
+    fn service_validates_full_history_and_canonical_checkpoint_tail() {
+        let source = signed_source(
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 + 1,
+            0x73,
+            1_800_000_000,
+        );
+        let blocks = source
+            .blocks
+            .iter()
+            .map(|block| block.block.clone())
+            .collect::<Vec<_>>();
+        let tail = &blocks[blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1..];
+
+        assert_eq!(source.head.checkpoint_cid, Some(tail[0].block_cid.clone()));
+        assert_eq!(tail[0].sequence, 1);
+        assert_eq!(
+            tail[0].prev_block_cid,
+            Some(blocks[0].block_cid.clone()),
+            "the canonical tail may retain a parent outside the checkpoint window"
+        );
+        assert_eq!(tail[0].node.prev_cid, Some(blocks[0].node.node_cid.clone()));
+        validate_source_head_chain(&source.head, &blocks)
+            .expect("service accepts and validates the complete root history");
+        validate_source_head_chain(&source.head, tail)
+            .expect("service accepts the canonical signed checkpoint tail");
+
+        let governed_public_key = &source.head.head_signature.public_key;
+        for block in &blocks {
+            assert_eq!(block.publisher_peer_id, source.head.publisher_peer_id);
+            assert_eq!(block.node.publisher_peer_id, source.head.publisher_peer_id);
+            assert_eq!(&block.block_signature.public_key, governed_public_key);
+            assert_eq!(
+                &block.node.publisher_signature.public_key,
+                governed_public_key
+            );
+        }
+    }
+
+    #[test]
+    fn service_rejects_checkpoint_tail_signature_and_continuity_drift() {
+        let source = signed_source(
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 + 1,
+            0x74,
+            1_800_000_000,
+        );
+        let tail_start = source.blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1;
+        let canonical_tail = source.blocks[tail_start..]
+            .iter()
+            .map(|block| block.block.clone())
+            .collect::<Vec<_>>();
+
+        let attacker = TestSigner::new(0x75);
+        let mut wrong_head_identity = source.head.clone();
+        wrong_head_identity.head_signature = attacker.sign(
+            &wrong_head_identity
+                .signature_payload_bytes()
+                .expect("encode attacker head payload"),
+        );
+        assert!(
+            validate_source_head_chain(&wrong_head_identity, &canonical_tail).is_err(),
+            "a byte-valid head signature from another identity must fail closed"
+        );
+
+        let mut wrong_identity = canonical_tail.clone();
+        wrong_identity[0].block_signature = attacker.sign(
+            &wrong_identity[0]
+                .signature_payload_bytes()
+                .expect("encode attacker block payload"),
+        );
+        assert!(
+            validate_source_head_chain(&source.head, &wrong_identity).is_err(),
+            "a byte-valid block signature from another identity must fail closed"
+        );
+
+        let governed = TestSigner::new(0x74);
+        let mut broken_continuity = canonical_tail;
+        broken_continuity[1].prev_block_cid = Some(vec![0xA5; 32]);
+        broken_continuity[1].block_cid = broken_continuity[1]
+            .recompute_block_cid()
+            .expect("recompute continuity-drift block CID");
+        broken_continuity[1].block_signature = governed.sign(
+            &broken_continuity[1]
+                .signature_payload_bytes()
+                .expect("encode continuity-drift block payload"),
+        );
+        assert!(
+            validate_source_head_chain(&source.head, &broken_continuity).is_err(),
+            "a re-signed internal parent discontinuity must fail closed"
+        );
+    }
+
+    #[test]
+    fn source_loader_accepts_checkpointed_full_history_from_real_publisher() {
+        let root = secure_temp_dir();
+        let source_dir = root.path().join("source");
+        let signing_key_path = root.path().join("publisher.key");
+        fs::write(&signing_key_path, [0x76; 32]).expect("write publisher signing key");
+        #[cfg(unix)]
+        fs::set_permissions(&signing_key_path, fs::Permissions::from_mode(0o600))
+            .expect("secure publisher signing key");
+        let publisher_peer_id = b"12D3KooWGovernanceServiceTest".to_vec();
+        let publisher = FilesystemGovernancePublisher::try_new(source_dir.clone())
+            .expect("create real filesystem governance publisher")
+            .with_runtime_dag_signer(publisher_peer_id, &signing_key_path)
+            .expect("configure real runtime DAG signer");
+        let timestamp = current_unix_timestamp_seconds();
+        for sequence in 0..=GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 as u64 {
+            let settlement = settlement(sequence, timestamp);
+            let encoded = norito::to_bytes(&settlement).expect("encode source settlement");
+            publisher
+                .publish_deal_settlement(&settlement, &encoded)
+                .expect("publish source settlement");
+        }
+        drop(publisher);
+
+        let signer = TestSigner::new(0x76);
+        let config = RuntimeConfig {
+            source_dir,
+            state_dir: root.path().join("state"),
+            listen_addr: "127.0.0.1:0".parse().expect("test address"),
+            poll_interval: Duration::from_millis(10),
+            max_response_bytes: 1024 * 1024,
+            max_request_bytes: 1024 * 1024,
+            mirror_max_entries: 1024,
+            mirror_max_bytes: 1024 * 1024,
+            max_head_age_secs: 3600,
+            max_future_skew_secs: 60,
+            allow_head_bootstrap: true,
+            expected_public_key: signer.public_key,
+        };
+
+        let loaded = load_source_snapshot(&config)
+            .expect("service loads and revalidates checkpointed full source history");
+        assert_eq!(
+            loaded.blocks.len(),
+            GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1 + 1
+        );
+        assert_eq!(
+            loaded.head.checkpoint_cid,
+            Some(
+                loaded.blocks[loaded.blocks.len() - GOVERNANCE_DAG_CHECKPOINT_WINDOW_BLOCKS_V1]
+                    .block
+                    .block_cid
+                    .clone()
+            )
+        );
+
+        let index_path = config.source_dir.join("runtime-dag-index.json");
+        let mut index: JsonValue =
+            json::from_slice(&fs::read(&index_path).expect("read publisher runtime index"))
+                .expect("decode publisher runtime index");
+        let first_entry = index
+            .get_mut("blocks")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|blocks| blocks.first_mut())
+            .and_then(JsonValue::as_object_mut)
+            .expect("first publisher runtime index entry");
+        let source_payload_path = first_entry
+            .get("encoded_path")
+            .and_then(JsonValue::as_str)
+            .expect("source payload path")
+            .to_owned();
+        let substituted = settlement(999, timestamp);
+        let substituted_bytes =
+            norito::to_bytes(&substituted).expect("encode substituted source payload");
+        write_test_sidecar_file(
+            &config.source_dir.join(source_payload_path),
+            &substituted_bytes,
+        );
+        first_entry.insert(
+            "source_payload_len".into(),
+            JsonValue::from(
+                u64::try_from(substituted_bytes.len())
+                    .expect("test source payload length fits u64"),
+            ),
+        );
+        first_entry.insert(
+            "source_payload_blake3".into(),
+            JsonValue::from(hex::encode(blake3_array(&substituted_bytes))),
+        );
+        let tampered_index = json::to_json_pretty(&index)
+            .expect("encode substituted runtime index")
+            .into_bytes();
+        write_test_sidecar_file(&index_path, &tampered_index);
+        let error = load_source_snapshot(&config)
+            .expect_err("source payload substitution must not escape the signed node binding");
+        assert!(
+            error
+                .to_string()
+                .contains("source payload does not match its signed governance node"),
+            "unexpected source substitution error: {error}"
+        );
     }
 
     #[test]

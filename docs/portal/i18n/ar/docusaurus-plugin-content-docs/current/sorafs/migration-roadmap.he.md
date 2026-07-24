@@ -49,14 +49,14 @@ generator: docs/portal/scripts/sync-i18n.mjs
 |--------|--------|-------|------------|----------|
 | تدريبات fixtures | M0 | Dry-runs أسبوعية تقارن digests المحلية للـ chunk مع `fixtures/sorafs_chunker`. نشر التقرير تحت `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` مع مصفوفة pass/fail. |
 | فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` تفشل إذا انحرفت التواقيع أو manifests. overrides التطوير تتطلب waiver من الحوكمة مرفق بالـ PR. | Tooling WG | سجل CI، رابط تذكرة waiver (إن وجدت). |
-| Expectation flags | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` بتوقعات صريحة لتثبيت المخرجات: | Docs CI | سكربتات محدثة تشير إلى expectation flags (انظر كتلة الأمر أدناه). |
+| Expectation flags | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_builder` بتوقعات صريحة لتثبيت المخرجات: | Docs CI | سكربتات محدثة تشير إلى expectation flags (انظر كتلة الأمر أدناه). |
 | Registry-first pinning | M2 | `sorafs pin propose` و`sorafs pin approve` يغلِّفان تقديمات manifest؛ CLI الافتراضي يستخدم `--require-registry`. | Governance Ops | سجل تدقيق CLI للـ registry، تليمترية فشل المقترحات. |
 | تكافؤ observability | M3 | لوحات Prometheus/Grafana تنبه عند اختلاف مخزون chunks عن manifests في registry؛ التنبيهات موصولة بمناوبة ops. | Observability | رابط لوحة، IDs قواعد التنبيه، نتائج GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

@@ -106,6 +106,8 @@ const defaultContext = {
   async generateSpec(repoRoot, outputFile) {
     const code = await runCargo(repoRoot, [
       'run',
+      '--locked',
+      '--offline',
       '-p',
       'xtask',
       '--bin',

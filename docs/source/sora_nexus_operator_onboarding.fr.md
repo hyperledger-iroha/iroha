@@ -2,7 +2,7 @@
 lang: fr
 direction: ltr
 source: docs/source/sora_nexus_operator_onboarding.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
 source_hash: f294a466276763d6323c31fcaad70388c5c0513f40087dab1d7da283f62496a8
 source_last_modified: "2026-01-18T05:31:56.979748+00:00"
@@ -15,7 +15,15 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 
 ## Audience & prerequisites
 - You have been approved by the Nexus Program and received your data-space assignment (lane index, data-space ID/alias, and routing policy requirements).
-- You can access the signed release artefacts published by Release Engineering (tarballs, images, manifests, signatures, public keys).
+- You can access the signed release artefacts published by Release Engineering
+  (tarballs, images, manifests, raw 64-byte Ed25519 signatures, generated
+  Ed25519 SPKI PEM public keys for individual artifacts, the signed aggregate
+  `release_manifest.json`, its raw 32-byte public key, and provenance bundles).
+- You obtained the reviewed SHA-256 fingerprint of the exact raw 32-byte
+  release-signing public key through an authenticated channel independent of
+  the downloaded manifest.
+- You obtained the packaged `sorafs-validate` candidate by direct path and its
+  independently reviewed exact executable SHA-256.
 - You have generated or received production key material for your validator/observer role (Ed25519 node identity; BLS consensus key + PoP for validators; plus any confidential feature toggles).
 - You can reach the existing Sora Nexus peers that will bootstrap your node.
 
@@ -25,20 +33,67 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 3. Note the version tag the release announcement referenced (e.g. `iroha3-v3.2.0`); you will use it to fetch artefacts and manifests.
 
 ## Step 2 — Retrieve and validate artefacts
-1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its companion files (`.sha256`, optional `.sig/.pub`, `<profile>-<version>-manifest.json`, and `<profile>-<version>-image.json` if you deploy containers).
-2. Validate integrity before unpacking:
+1. Download the `iroha3` bundle (`<profile>-<version>-<os>.tar.zst`) and its
+   companion `.sha256`, `.sig`, `.pub`, and
+   `<profile>-<version>-manifest.json` files. A promoted artifact must include
+   all four companions. Download `<profile>-<version>-image.json` as well when
+   deploying a container. Also download `release_manifest.json`,
+   `release_manifest.json.sig`, and `release_manifest.json.pub`.
+2. Verify the final aggregate inventory before trusting any path or hash it
+   contains:
    ```bash
-   sha256sum -c iroha3-<version>-linux.tar.zst.sha256
-   openssl dgst -sha256 -verify iroha3-<version>-linux.tar.zst.pub \
-       -signature iroha3-<version>-linux.tar.zst.sig \
-       iroha3-<version>-linux.tar.zst
+   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+   RELEASE_MANIFEST_VERIFIER=/opt/iroha/bin/sorafs-validate
+   TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256=<reviewed-lowercase-sha256>
+
+   python3 scripts/release_manifest_signing.py verify \
+     --manifest release_manifest.json \
+     --signature release_manifest.json.sig \
+     --public-key release_manifest.json.pub \
+     --trusted-signing-fingerprint "$TRUSTED_SIGNING_FINGERPRINT" \
+     --release-manifest-verifier "$RELEASE_MANIFEST_VERIFIER" \
+     --trusted-release-manifest-verifier-sha256 \
+       "$TRUSTED_RELEASE_MANIFEST_VERIFIER_SHA256"
    ```
-   Replace `openssl` with the organisation-approved verifier if you use a hardware-backed KMS.
-3. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
+   The aggregate `.pub` is exactly 32 raw Ed25519 bytes; it is not PEM.
+   The wrapper pins the verifier digest and identity, invokes
+   `sorafs-validate release-manifest`, then rechecks the manifest, key,
+   signature, and verifier. Production publication-plan generation and
+   validation re-run this check, require the independently reviewed signing and
+   verifier pins, and bind themselves to the exact aggregate-manifest SHA-256.
+   An inventory or plan marked `development-unsigned` is not promotable.
+3. Validate the checksum, per-artifact manifest
+   algorithm/format/fingerprint binding, exact
+   public key, and detached Ed25519 signature before unpacking:
+   ```bash
+   ARTIFACT=iroha3-<version>-linux.tar.zst
+   MANIFEST=iroha3-<version>-manifest.json
+   TRUSTED_SIGNING_FINGERPRINT=<reviewed-lowercase-sha256>
+
+   sha256sum -c "$ARTIFACT.sha256"
+   test "$(jq -r '.artifacts[0].signature_algorithm' "$MANIFEST")" = ed25519
+   test "$(jq -r '.artifacts[0].public_key_format' "$MANIFEST")" = pem-spki-ed25519
+   test "$(jq -r '.artifacts[0].signer_fingerprint_sha256' "$MANIFEST")" \
+     = "$TRUSTED_SIGNING_FINGERPRINT"
+   ACTUAL_SIGNING_FINGERPRINT="$(
+     openssl pkey -pubin -in "$ARTIFACT.pub" -outform DER |
+       python3 -c 'import hashlib,sys; d=sys.stdin.buffer.read(); p=bytes.fromhex("302a300506032b6570032100"); assert len(d)==44 and d.startswith(p); print(hashlib.sha256(d[len(p):]).hexdigest())'
+   )"
+   test "$ACTUAL_SIGNING_FINGERPRINT" = "$TRUSTED_SIGNING_FINGERPRINT"
+   openssl pkeyutl -verify -pubin -rawin \
+     -inkey "$ARTIFACT.pub" -in "$ARTIFACT" -sigfile "$ARTIFACT.sig"
+   ```
+   The fingerprint from the downloaded manifest is not a trust anchor; it must
+   equal the independently reviewed runtime fingerprint. A signature made by a
+   substituted `.pub` file is rejected by the raw-key fingerprint check.
+4. Inspect `PROFILE.toml` inside the tarball and the JSON manifests to confirm:
    - `profile = "iroha3"`
    - The `version`, `commit`, and `built_at` fields match the release announcement.
    - The OS/architecture match your deployment target.
-4. If you use the container image, repeat the hash/signature verification for `<profile>-<version>-<os>-image.tar` and confirm the image ID recorded in `<profile>-<version>-image.json`.
+5. If you use the container image, repeat the checksum, manifest binding,
+   raw-key fingerprint, and `openssl pkeyutl` verification for
+   `<profile>-<version>-<os>-image.tar`, then confirm the image ID recorded in
+   `<profile>-<version>-image.json`.
 
 ## Step 3 — Stage configuration from templates
 1. Extract the bundle and copy `config/` to the location where the node will read its configuration.
@@ -52,7 +107,7 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
 ## Step 4 — Align data-space metadata and routing
 1. Edit `config/config.toml` so the `[nexus]` section matches the data-space catalogue the Nexus Council provided:
    - `lane_count` must equal the total lanes enabled in the current epoch.
-   - Every entry in `[[nexus.lane_catalog]]` and `[[nexus.dataspace_catalog]]` must contain a unique `index`/`id` and the agreed aliases. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
+   - Every entry in `[[nexus.lane_catalog]]` must contain a unique `index` and the agreed alias. Every non-universal `[[nexus.dataspace_catalog]]` entry must include the council-provided 32-byte `manifest_hash`; an explicit `id` is allowed only when it matches the manifest-derived ID. Do not delete the existing global entries; add your delegated aliases if the council assigned additional data-spaces.
 2. Update `[[nexus.routing_policy.rules]]` to capture the policy you were given. The default template routes governance instructions to lane `1` and contract deployments to lane `2`; append or modify rules so traffic destined for your data-space is forwarded to the correct lane and alias. Coordinate with Release Engineering before changing rule order.
 3. Review `[nexus.da]`, `[nexus.da.audit]`, and `[nexus.da.recovery]` thresholds. Operators are expected to keep the council-approved values; only adjust them if an updated policy was ratified.
 4. Record the final configuration in your operations tracker. The dual-track release runbook requires attaching the effective `config.toml` (with secrets redacted) to the onboarding ticket.
@@ -64,21 +119,29 @@ This guide captures the end-to-end flow Sora Nexus data-space operators must fol
    ```
    This prints the resolved configuration and fails early if catalogue/routing entries are inconsistent or if genesis and config disagree.
 2. If you deploy containers, run the same command inside the image after loading it with `docker load -i <profile>-<version>-<os>-image.tar` (remember to include `--sora`).
-3. Check logs for warnings about placeholder lane/data-space identifiers. If any appear, revisit Step 4—production deployments must not rely on the placeholder IDs that ship with the templates.
+3. Check logs and `--trace-config` output for lane/data-space validation warnings. If any appear, revisit Step 4 so the effective catalog, aliases, and routing rules match the council-approved topology.
 4. Execute your local smoke procedure (e.g., submit a `FindNetworkStatus` query with `iroha_cli`, confirm telemetry endpoints expose `nexus_lane_state_total`, and verify streaming keys are rotated or imported as required).
 
 ## Step 6 — Cutover and hand-off
-1. Store the verified `manifest.json` and signature artifacts in the release ticket so auditors can reproduce your checks.
+1. Store the verified per-artifact manifests and signatures plus
+   `release_manifest.json`, `release_manifest.json.sig`, and
+   `release_manifest.json.pub` in the release ticket so auditors can reproduce
+   your checks.
 2. Notify Nexus Operations that the node is ready to be introduced; include:
    - Node identity (peer ID, hostnames, Torii endpoint).
    - Effective lane/data-space catalogue and routing policy values.
    - Hashes of the binaries/images you verified.
 3. Coordinate the final peer admission (gossip seeds and lane assignment) with `@nexus-core`. Do not join the network until you receive approval; Sora Nexus enforces deterministic lane occupancy and requires an updated admissions manifest.
 4. After the node is live, update your runbooks with any overrides you introduced and note the release tag so the next iteration can start from this baseline.
+5. Attach the external PKCS#11/HSM signing-ceremony record, OIDC/cosign
+   provenance verification, vulnerability-scan result, registry/publication
+   receipt, and rollback/yank rehearsal. These hosted records remain open until
+   Release Engineering supplies them; local verification cannot synthesize
+   them.
 
 ## Reference checklist
 - [ ] Release profile validated as `iroha3`.
-- [ ] Bundle/image hashes and signatures verified.
+- [ ] Aggregate inventory plus bundle/image hashes and signatures verified.
 - [ ] Keys, peer addresses, and Torii endpoints updated to production values.
 - [ ] Nexus lane/dataspace catalogue and routing policy match council assignment.
 - [ ] Configuration validator (`irohad --sora --config … --trace-config`) passes without warnings.

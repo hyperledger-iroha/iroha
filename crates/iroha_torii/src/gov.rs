@@ -5176,9 +5176,8 @@ seiyaku GovernedReadFixture {
         let target = 3_604;
         let effective = target + activation_delay;
 
-        let early =
-            validate_validation_fee_policy_enactment_draft_height(effective, target - 2)
-                .expect_err("next block is still earlier than the exact target");
+        let early = validate_validation_fee_policy_enactment_draft_height(effective, target - 2)
+            .expect_err("next block is still earlier than the exact target");
         assert!(early.contains("not ready"));
         assert!(early.contains("3604"));
 
@@ -5390,10 +5389,39 @@ seiyaku GovernedReadFixture {
         let authority_str = harness.authority.to_string();
         let chain_id_str = harness.chain_id.as_str().to_string();
 
-        let code_hash_bytes = [0x11u8; 32];
-        let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
-        let manifest_provenance =
-            mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
+        let (artifact, manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(
+                r#"
+seiyaku GovernanceFlowFixture {
+    view fn ready() -> bool { return true; }
+}
+"#,
+            )
+            .expect("compile governance flow contract fixture");
+        let verified =
+            ivm::verify_contract_artifact(&artifact).expect("verify governance flow contract");
+        let code_hash_bytes: [u8; 32] = verified.code_hash.into();
+        let abi_hash_bytes: [u8; 32] = verified.abi_hash.into();
+        let signed_manifest = manifest.signed(&harness.authority_keypair);
+        let manifest_provenance = signed_manifest
+            .provenance
+            .clone()
+            .expect("signed governance flow manifest provenance");
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = harness.state.block(header);
+            let mut transaction = block.transaction();
+            let registered_hash =
+                register_code_bytes(&harness.authority, artifact, &mut transaction)
+                    .expect("register governance flow contract bytes");
+            assert_eq!(registered_hash, verified.code_hash);
+            register_manifest(&harness.authority, signed_manifest, &mut transaction)
+                .expect("register signed governance flow contract manifest");
+            transaction.apply();
+            block
+                .commit()
+                .expect("commit governance flow contract artifacts");
+        }
         let contract_address = sample_contract_address();
 
         let propose = ProposeDeployContractDto {

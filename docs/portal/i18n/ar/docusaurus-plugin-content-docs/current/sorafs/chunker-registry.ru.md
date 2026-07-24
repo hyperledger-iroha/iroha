@@ -136,13 +136,13 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-Manifest stub отражает те же данные, что удобно при скриптинге выбора `--chunker-profile-id`
+Manifest builder отражает те же данные, что удобно при скриптинге выбора `--chunker-profile-id`
 в пайплайнах. Оба chunk store CLI также принимают канонический формат handle
 (`--profile=sorafs.sf1@1.0.0`), поэтому build-скрипты могут избежать жесткого
 хардкода числовых ID:
 
 ```
-تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1،
@@ -206,4 +206,4 @@ Gateways и клиенты объявляют поддерживаемые пр�
   من خلال الاختبارات المسبقة.
 * `chunker_registry::lookup_by_profile` يؤكد على وصف المعلمة
   تم الانضمام إلى `ChunkProfile::DEFAULT` للحماية من الاختلافات المحتملة.
-* البيانات، المنتجة `iroha app sorafs toolkit pack` و`sorafs_manifest_stub`، تتضمن السجل البديل.
+* البيانات، المنتجة `iroha app sorafs toolkit pack` و`sorafs_manifest_builder`، تتضمن السجل البديل.

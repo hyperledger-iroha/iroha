@@ -1220,6 +1220,43 @@ pub struct Iroha {
     network: IrohaNetwork,
 }
 
+/// Runtime-only daemon dependencies supplied by the deployment launcher.
+///
+/// Implementations of the moderation wrapper and privacy-cycle PRF provider are
+/// the reference-node boundaries for PKCS#11, managed-KMS, and threshold
+/// services. Provider credentials, unwrapped keys, PRF shares, seeds, and
+/// outputs must stay inside those implementations and must never be sourced
+/// from `iroha_config`.
+#[derive(Clone, Default)]
+pub struct IrohaRuntimeDeps {
+    moderation_quarantine_key_wrapper: Option<Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>>,
+    privacy_cycle_prf_provider: Option<Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>>,
+}
+
+impl IrohaRuntimeDeps {
+    /// Attach the production PKCS#11/KMS wrapper for moderation quarantine
+    /// object data keys.
+    #[must_use]
+    pub fn with_moderation_quarantine_key_wrapper(
+        mut self,
+        key_wrapper: Arc<dyn sorafs_node::ModerationQuarantineKeyWrapper>,
+    ) -> Self {
+        self.moderation_quarantine_key_wrapper = Some(key_wrapper);
+        self
+    }
+
+    /// Attach the production threshold-PRF provider for differential-privacy
+    /// publication cycles.
+    #[must_use]
+    pub fn with_privacy_cycle_prf_provider(
+        mut self,
+        provider: Arc<dyn sorafs_node::PrivacyCyclePrfProviderV1>,
+    ) -> Self {
+        self.privacy_cycle_prf_provider = Some(provider);
+        self
+    }
+}
+
 /// Error(s) that might occur while starting [`Iroha`]
 #[derive(Debug, Copy, Clone)]
 pub enum StartError {
@@ -2245,10 +2282,11 @@ impl ConsensusIngressLimiter {
                 | BlockMessage::LaneBlockVote(_)
                 | BlockMessage::LaneBlockQc(_)
                 | BlockMessage::LaneBlockCertificate(_)
+                | BlockMessage::LaneHistoricalRecoveryRequest(_)
                 | BlockMessage::LaneExecutablePayload(_)
-                | BlockMessage::LaneExecutablePayloadHandoff(_)
                 | BlockMessage::LaneBlockNewViewVote(_)
                 | BlockMessage::LaneBlockNewViewCertificate(_) => IngressPolicy::critical(),
+                BlockMessage::LaneHistoricalRecoveryResponse(_) => IngressPolicy::bulk(),
                 BlockMessage::V2(message) => {
                     use iroha_data_model::block::consensus_v2::ConsensusMessageV2Payload;
 
@@ -2832,12 +2870,13 @@ fn sumeragi_relay_class(message: &iroha_core::NetworkMessage) -> Option<Sumeragi
             BlockMessage::V2(_) => Some(SumeragiRelayClass::V2),
             BlockMessage::LaneBlockProposal(_)
             | BlockMessage::LaneExecutablePayload(_)
-            | BlockMessage::LaneExecutablePayloadHandoff(_)
             | BlockMessage::LaneBlockNewViewVote(_)
             | BlockMessage::LaneBlockNewViewCertificate(_)
             | BlockMessage::LaneBlockVote(_)
             | BlockMessage::LaneBlockQc(_)
-            | BlockMessage::LaneBlockCertificate(_) => Some(SumeragiRelayClass::Lane),
+            | BlockMessage::LaneBlockCertificate(_)
+            | BlockMessage::LaneHistoricalRecoveryRequest(_)
+            | BlockMessage::LaneHistoricalRecoveryResponse(_) => Some(SumeragiRelayClass::Lane),
             _ => None,
         },
         LaneRelay(_)
@@ -3144,16 +3183,27 @@ impl NetworkRelayShared {
                     message: Arc::unwrap_or_clone(message),
                 }),
             ),
-            LaneDrainVote(_) => {
-                iroha_logger::debug!(
-                    %peer,
-                    "rejecting decode-only lane-drain vote in retained ingress"
-                );
-                return PrepareSumeragiRelayResult::Terminal {
-                    outcome: SumeragiRelayTerminalOutcome::Failed,
-                    retention_guard,
-                    completion,
-                };
+            LaneDrainVote(vote) => {
+                let vote = *vote;
+                if vote.signer != peer_id {
+                    iroha_logger::debug!(
+                        %peer,
+                        signer = %vote.signer,
+                        "rejecting lane-drain vote whose signed identity differs from its authenticated sender"
+                    );
+                    return PrepareSumeragiRelayResult::Terminal {
+                        outcome: SumeragiRelayTerminalOutcome::Failed,
+                        retention_guard,
+                        completion,
+                    };
+                }
+                (
+                    SumeragiRelayClass::Lane,
+                    PreparedSumeragiRelayItem::Lane(LaneRelayMessage::DrainVote {
+                        sender: peer_id,
+                        vote,
+                    }),
+                )
             }
             _ => {
                 iroha_logger::error!(
@@ -4672,11 +4722,6 @@ impl NetworkRelayShared {
                 Some(payload.origin_proposal.descriptor.lane_block_height),
                 Some(payload.origin_proposal.descriptor.lane_block_view),
             ),
-            LaneExecutablePayloadHandoff(handoff) => (
-                "LaneExecutablePayloadHandoff",
-                Some(handoff.origin_proposal.descriptor.lane_block_height),
-                Some(handoff.origin_proposal.descriptor.lane_block_view),
-            ),
             LaneBlockNewViewVote(vote) => (
                 "LaneBlockNewViewVote",
                 Some(vote.body.lane_block_height),
@@ -4716,6 +4761,29 @@ impl NetworkRelayShared {
                 Some(certificate.proposal.descriptor.lane_block_height),
                 Some(certificate.proposal.descriptor.lane_block_view),
             ),
+            LaneHistoricalRecoveryRequest(request) => (
+                "LaneHistoricalRecoveryRequest",
+                Some(request.proposal().descriptor.lane_block_height),
+                Some(request.proposal().descriptor.lane_block_view),
+            ),
+            LaneHistoricalRecoveryResponse(response) => match &response.payload {
+                iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::CanonicalBlock {
+                    block,
+                    ..
+                } => (
+                    "LaneHistoricalRecoveryResponse",
+                    Some(block.header().height().get()),
+                    Some(block.header().view_change_index()),
+                ),
+                iroha_core::sumeragi::message::LaneHistoricalRecoveryPayloadV1::AutonomousPayload {
+                    payload,
+                    ..
+                } => (
+                    "LaneHistoricalRecoveryResponse",
+                    Some(payload.origin_proposal.descriptor.lane_block_height),
+                    Some(payload.origin_proposal.descriptor.lane_block_view),
+                ),
+            },
             KuraReplicaAdvert(advert) => ("KuraReplicaAdvert", Some(advert.height), None),
             V2(message) => match &message.payload {
                 ConsensusMessageV2Payload::Proposal(value) => (
@@ -4970,15 +5038,15 @@ mod network_relay_tests {
         MAX_LANE_DRAIN_VOTE_WIRE_BYTES, SoranetPowConfigBroadcast, SoranetPuzzleConfigBroadcast,
         lane_consensus::{
             LaneBlockNewViewBodyV1, LaneBlockNewViewCertificateV1, LaneBlockNewViewVoteV1,
-            LaneDrainVoteV1, LaneExecutablePayloadHandoffV1, LaneExecutablePayloadV1,
+            LaneDrainVoteV1, LaneExecutablePayloadV1,
         },
         sumeragi::{
             consensus::{LaneBlockDescriptorV1, LaneBlockProposalV1, LaneBlockQcV1, Phase},
             message::{BlockMessage, BlockMessageWire},
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -5572,10 +5640,6 @@ mod network_relay_tests {
                 .requires_blocking_ingress()
         );
         assert!(
-            BlockMessage::LaneExecutablePayloadHandoff(sample_lane_executable_payload_handoff())
-                .requires_blocking_ingress()
-        );
-        assert!(
             BlockMessage::LaneBlockNewViewVote(sample_lane_block_new_view_vote())
                 .requires_blocking_ingress()
         );
@@ -5752,16 +5816,26 @@ mod network_relay_tests {
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: Hash::new(b"irohad-lane-drain-incarnation"),
                 close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-initial")),
+                initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    Hash::new(b"irohad-lane-drain-incarnation"),
+                    4,
+                    Some(Hash::new(b"irohad-lane-drain-initial")),
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
                 validator_count: 1,
                 min_quorum: 1,
             },
-            final_lane_block_height: 5,
-            final_lane_block_descriptor_hash: Some(Hash::new(b"irohad-lane-drain-final")),
+            final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                LaneId::new(3),
+                DataSpaceId::new(7),
+                Hash::new(b"irohad-lane-drain-incarnation"),
+                5,
+                Some(Hash::new(b"irohad-lane-drain-final")),
+            ),
         };
         let proof_of_possession = iroha_crypto::bls_normal_pop_prove(keypair.private_key())
             .expect("derive lane-drain fixture proof of possession");
@@ -5945,7 +6019,7 @@ mod network_relay_tests {
         let origin_proposal = sample_lane_block_proposal();
         let producer = origin_proposal.descriptor.validator_set[0].clone();
         LaneExecutablePayloadV1 {
-            version: 1,
+            version: 2,
             chain_id_hash: Hash::new(b"irohad-lane-payload-chain"),
             epoch: 3,
             origin_proposal,
@@ -5957,22 +6031,6 @@ mod network_relay_tests {
             payload_hash: Hash::new(b"irohad-lane-payload"),
             producer,
             producer_signature: vec![0xAA],
-        }
-    }
-
-    fn sample_lane_executable_payload_handoff() -> LaneExecutablePayloadHandoffV1 {
-        let origin_proposal = sample_lane_block_proposal();
-        let proposer = origin_proposal.descriptor.validator_set[0].clone();
-        LaneExecutablePayloadHandoffV1 {
-            version: 1,
-            chain_id_hash: Hash::new(b"irohad-lane-handoff-chain"),
-            epoch: 3,
-            origin_proposal,
-            entrypoint_hashes: Vec::new(),
-            entrypoints: Vec::new(),
-            payload_hash: Hash::new(b"irohad-lane-handoff"),
-            proposer,
-            proposer_signature: vec![0xBB],
         }
     }
 
@@ -6054,13 +6112,13 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::prehashed([0x41; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -6217,12 +6275,6 @@ mod network_relay_tests {
             ("LaneExecutablePayload", Some(5), Some(7))
         );
         assert_eq!(
-            NetworkRelayShared::block_message_meta(&BlockMessage::LaneExecutablePayloadHandoff(
-                sample_lane_executable_payload_handoff()
-            )),
-            ("LaneExecutablePayloadHandoff", Some(5), Some(7))
-        );
-        assert_eq!(
             NetworkRelayShared::block_message_meta(&BlockMessage::LaneBlockNewViewVote(
                 sample_lane_block_new_view_vote()
             )),
@@ -6277,9 +6329,6 @@ mod network_relay_tests {
         let payload = sumeragi_msg(BlockMessage::LaneExecutablePayload(
             sample_lane_executable_payload(),
         ));
-        let handoff = sumeragi_msg(BlockMessage::LaneExecutablePayloadHandoff(
-            sample_lane_executable_payload_handoff(),
-        ));
         let new_view_vote = sumeragi_msg(BlockMessage::LaneBlockNewViewVote(
             sample_lane_block_new_view_vote(),
         ));
@@ -6290,10 +6339,6 @@ mod network_relay_tests {
 
         assert_eq!(
             ConsensusIngressLimiter::ingress_policy(&payload).rate_class,
-            Some(IngressRateClass::Critical)
-        );
-        assert_eq!(
-            ConsensusIngressLimiter::ingress_policy(&handoff).rate_class,
             Some(IngressRateClass::Critical)
         );
         assert_eq!(
@@ -7354,13 +7399,47 @@ impl Iroha {
     /// - Reading telemetry configs
     /// - Telemetry setup
     /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
+    pub async fn start(
+        config: Config,
+        genesis: Option<GenesisBlock>,
+        logger: LoggerHandle,
+        shutdown_signal: ShutdownSignal,
+    ) -> ReportResult<
+        (
+            Self,
+            impl Future<Output = iroha_futures::supervisor::Result<()>>,
+        ),
+        StartError,
+    > {
+        Self::start_with_runtime_deps(
+            config,
+            genesis,
+            logger,
+            shutdown_signal,
+            IrohaRuntimeDeps::default(),
+        )
+        .await
+    }
+
+    /// Starts Iroha with deployment-owned, runtime-only service dependencies.
+    ///
+    /// The standard daemon entry point supplies no crypto providers.
+    /// Consequently, enabling authenticated SoraFS moderation screening or
+    /// differential-privacy aggregates without a launcher that injects the
+    /// corresponding production adapter fails closed at startup.
+    ///
+    /// # Errors
+    /// - Reading telemetry configs
+    /// - Telemetry setup
+    /// - Initialization of the Sumeragi v2 reducer via [`SumeragiStartArgs`] and [`Kura`]
     #[allow(clippy::too_many_lines)]
     #[iroha_logger::log(name = "start", skip_all)] // This is actually easier to understand as a linear sequence of init statements.
-    pub async fn start(
+    pub async fn start_with_runtime_deps(
         mut config: Config,
         mut genesis: Option<GenesisBlock>,
         logger: LoggerHandle,
         shutdown_signal: ShutdownSignal,
+        runtime_deps: IrohaRuntimeDeps,
     ) -> ReportResult<
         (
             Self,
@@ -7625,9 +7704,10 @@ impl Iroha {
                 iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::empty()
             }
             (Some(policy_path), Some(artifact_dir)) => {
-                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load(
+                iroha_core::smartcontracts::isi::offline::KagemushaReleaseCatalogV4::load_with_decoded_budget(
                     policy_path,
                     artifact_dir,
+                    config.settlement.offline.kagemusha_max_decoded_bytes,
                 )
                 .map_err(|error| {
                     Report::new(StartError::InitKura).attach(format!(
@@ -8002,50 +8082,48 @@ impl Iroha {
             restored = lane_reservation_replay.restored,
             awaiting_transaction_replay = lane_reservation_replay.awaiting_transaction_replay,
             commit_barriers = lane_reservation_replay.commit_barriers,
+            release_barriers = lane_reservation_replay.release_barriers,
+            completed_releases = lane_reservation_replay.completed_releases,
             "lane queue reservation journal installed"
         );
 
-        if config.queue.plan_journal_enabled {
-            let journal_path = config
-                .kura
-                .store_dir
-                .resolve_relative_path()
-                .join("queue_plan_journal.norito");
-            let replayable = queue
-                .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
-                .map_err(|err| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to open queue plan journal {}: {err}",
-                        journal_path.display()
-                    ))
-                })?;
-            let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+        if !config.queue.plan_journal_enabled {
+            return Err(Report::new(StartError::InitKura).attach(
+                "queue.plan_journal_enabled=false is unsupported: production transaction \
+                 acknowledgement requires durable pending-plan recovery",
+            ));
+        }
+        let journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("queue_plan_journal.norito");
+        let replayable = queue
+            .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
+            .map_err(|err| {
                 Report::new(StartError::InitKura).attach(format!(
-                    "failed to replay queue plan journal {}: {err}",
+                    "failed to open queue plan journal {}: {err}",
                     journal_path.display()
                 ))
             })?;
-            iroha_logger::info!(
-                path = %journal_path.display(),
-                replayable,
-                records = replay_summary.records,
-                replayed = replay_summary.replayed,
-                tombstoned_committed = replay_summary.tombstoned_committed,
-                tombstoned_expired = replay_summary.tombstoned_expired,
-                tombstoned_stale = replay_summary.tombstoned_stale,
-                tombstoned_malformed = replay_summary.tombstoned_malformed,
-                rejected = replay_summary.rejected,
-                "queue plan journal installed"
-            );
-        } else {
-            queue
-                .finalize_plan_journal_startup_disabled()
-                .map_err(|err| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to finalize disabled queue plan journal startup: {err}"
-                    ))
-                })?;
-        }
+        let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+            Report::new(StartError::InitKura).attach(format!(
+                "failed to replay queue plan journal {}: {err}",
+                journal_path.display()
+            ))
+        })?;
+        iroha_logger::info!(
+            path = %journal_path.display(),
+            replayable,
+            records = replay_summary.records,
+            replayed = replay_summary.replayed,
+            tombstoned_committed = replay_summary.tombstoned_committed,
+            tombstoned_expired = replay_summary.tombstoned_expired,
+            tombstoned_stale = replay_summary.tombstoned_stale,
+            tombstoned_malformed = replay_summary.tombstoned_malformed,
+            rejected = replay_summary.rejected,
+            "queue plan journal installed"
+        );
 
         let compliance_policy_digest = state
             .lane_compliance_engine()
@@ -8868,13 +8946,33 @@ impl Iroha {
             supervisor.monitor(snapshot_maker.start(supervisor.shutdown_signal()));
         }
 
-        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies(
-            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage),
-            sorafs_node::config::RepairConfig::from_repair_and_policy(
-                &config.torii.sorafs_repair,
-                &state.gov.sorafs_repair_escalation,
-            ),
-            sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc),
+        let sorafs_storage_config =
+            sorafs_node::config::StorageConfig::from(&config.torii.sorafs_storage);
+        let sorafs_repair_config = sorafs_node::config::RepairConfig::from_repair_and_policy(
+            &config.torii.sorafs_repair,
+            &state.gov.sorafs_repair_escalation,
+        );
+        let sorafs_gc_config = sorafs_node::config::GcConfig::from(&config.torii.sorafs_gc);
+        let moderation_quarantine_key_wrapper =
+            runtime_deps.moderation_quarantine_key_wrapper.clone();
+        let privacy_cycle_prf_provider = runtime_deps.privacy_cycle_prf_provider.clone();
+        let sorafs_runtime_deps = sorafs_node::NodeRuntimeDeps::default();
+        let sorafs_runtime_deps =
+            if let Some(key_wrapper) = moderation_quarantine_key_wrapper.as_ref() {
+                sorafs_runtime_deps.with_moderation_quarantine_key_wrapper(Arc::clone(key_wrapper))
+            } else {
+                sorafs_runtime_deps
+            };
+        let sorafs_runtime_deps = if let Some(provider) = privacy_cycle_prf_provider.as_ref() {
+            sorafs_runtime_deps.with_privacy_cycle_prf_provider(Arc::clone(provider))
+        } else {
+            sorafs_runtime_deps
+        };
+        let sorafs_node = sorafs_node::NodeHandle::try_new_with_policies_and_runtime_deps(
+            sorafs_storage_config,
+            sorafs_repair_config,
+            sorafs_gc_config,
+            sorafs_runtime_deps,
         )
         .map_err(|err| {
             Report::new(StartError::StartTorii).attach(format!(
@@ -8954,10 +9052,26 @@ impl Iroha {
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
+            // The standard launcher uses the runtime-only node key adapter.
+            // The worker fails closed before signing unless finalized
+            // governance grants this account the exact provider-scoped
+            // CanRecordSorafsProofOutcome permission. Deployments can replace
+            // this adapter with a PKCS#11/HSM implementation at this boundary.
+            .with_sorafs_proof_outcome_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
             runtime_deps.with_sorafs_cache(cache)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(key_wrapper) = moderation_quarantine_key_wrapper {
+            runtime_deps.with_sorafs_moderation_quarantine_key_wrapper(key_wrapper)
+        } else {
+            runtime_deps
+        };
+        let runtime_deps = if let Some(provider) = privacy_cycle_prf_provider {
+            runtime_deps.with_sorafs_privacy_cycle_prf_provider(provider)
         } else {
             runtime_deps
         };
@@ -13223,8 +13337,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -13238,13 +13352,13 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V3,
                     request_id: Hash::new(b"torii-proxy-request"),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
-                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                    request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,
                         path_args: Vec::new(),

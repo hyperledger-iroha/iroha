@@ -105,7 +105,7 @@ so manifests, CAR tooling, and fixtures stay aligned.
 |----------|----------|------------|
 | Chunker profile & CLI | [`sorafs_chunker`](../../crates/sorafs_chunker/src/lib.rs) · [`export_vectors`](../../crates/sorafs_chunker/src/bin/export_vectors.rs) | `ChunkProfile::DEFAULT` implements the SF-1 parameters, and the CLI regenerates signed fixtures with mandatory council signatures. |
 | CAR planner & fetch tooling | [`sorafs_car`](../../crates/sorafs_car/src/lib.rs) · [`sorafs_fetch`](../../crates/sorafs_car/src/bin/sorafs_fetch.rs) | `CarBuildPlan`, `CarStreamingWriter`, and `ChunkFetchPlan` emit deterministic chunk metadata and PoR descriptors; the fetch CLI replays manifests across multi-provider inputs, enforcing BLAKE3 digests before reassembly. |
-| Manifest builder & stub CLI | [`sorafs_manifest`](../../crates/sorafs_manifest/src/lib.rs) · [`sorafs_manifest_stub`](../../crates/sorafs_car/src/bin/sorafs_manifest_stub.rs) | `ManifestBuilder` encodes Norito manifests, attaches pin policy and alias claims, and writes governance envelopes; the stub orchestrates end-to-end CAR + manifest generation for CI and release pipelines. |
+| Manifest builder CLI | [`sorafs_manifest`](../../crates/sorafs_manifest/src/lib.rs) · [`sorafs_manifest_builder`](../../crates/sorafs_car/src/bin/sorafs_manifest_builder.rs) | `ManifestBuilder` encodes Norito manifests, attaches pin policy and alias claims, and writes governance envelopes; the builder orchestrates end-to-end CAR + manifest generation for CI and release pipelines. |
 | Manifest validator & PoR CLI | [`sorafs_manifest_chunk_store`](../../crates/sorafs_car/src/bin/sorafs_manifest_chunk_store.rs) | Replays CAR payloads through `ChunkStore`, derives PoR trees, and emits manifest reports for QA and governance tooling. |
 | Fixture bundle | [`fixtures/sorafs_chunker`](../../fixtures/sorafs_chunker) | Signed JSON/Rust/Go/TS vectors plus manifest digests; CI (`ci/check_sorafs_fixtures.sh`) replays the generator to enforce determinism. |
 
@@ -187,7 +187,7 @@ versions distinct.
 flowchart LR
     source["Input bytes / directory"] --> chunker["sorafs_chunker::ChunkProfile::DEFAULT"]
     chunker --> plan["sorafs_car::CarBuildPlan"]
-    plan --> stub["sorafs_manifest_stub CLI\n(ManifestBuilder + CarStreamingWriter)"]
+    plan --> builder["sorafs_manifest_builder CLI\n(ManifestBuilder + CarStreamingWriter)"]
     stub --> car["CARv2 archive\n(sorafs_car::CarStreamingWriter)"]
     stub --> manifest["Norito manifest\n(sorafs_manifest::ManifestV1 + envelope)"]
     manifest --> registry["Pin Registry\n(governance signatures)"]
@@ -200,14 +200,14 @@ flowchart LR
 
 ### Publication
 
-1. The builder invokes `sorafs_manifest_stub` (commonly via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- <payload>`), which:
+1. The builder invokes `sorafs_manifest_builder` (commonly via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- <payload>`), which:
    1. Streams the payload through `ChunkProfile::DEFAULT`.
    2. Uses `CarBuildPlan` + `CarStreamingWriter` to emit deterministic CAR payload/index files.
    3. Calls `ManifestBuilder` to materialise the `ManifestV1` Norito record, governance envelope, and optional JSON reports.
    4. Optionally exports chunk fetch plans (`--chunk-fetch-plan-out`) for `sorafs_fetch`.
 
    ```bash
-  cargo run -p sorafs_car --bin sorafs_manifest_stub -- docs/book \
+  cargo run -p sorafs_car --bin sorafs_manifest_builder -- docs/book \
      --manifest-out target/sorafs/docs.manifest \
      --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
      --car-out target/sorafs/docs.car \
@@ -330,7 +330,7 @@ so downstream consumers can verify artifacts even before the governance
 contracts reach mainnet. The migration plan keeps both paths alive while the
 Pin Registry rolls out:
 
-- **H0 — Dual publication (current).** `sorafs_manifest_stub` emits `manifest_signatures.json` containing the manifest
+- **H0 — Dual publication (current).** `sorafs_manifest_builder` emits `manifest_signatures.json` containing the manifest
   digest, chunk digest SHA3-256 summary, and council signatures. The envelope is
   stored next to the CAR and manifest in SoraFS and mirrored in
   `fixtures/sorafs_chunker`. Off-chain consumers verify artifacts exclusively
@@ -386,7 +386,7 @@ The envelope serialises to Norito as:
 The canonical associated data for manifest envelopes is
 `sorafs.hybrid.manifest.v1 || manifest_digest || chunk_digest_sha3 || len(name) || name`,
 anchoring the ciphertext to both the manifest digest and the CAR summary. The
-`sorafs_manifest_stub` CLI now exposes
+`sorafs_manifest_builder` CLI now exposes
 `--hybrid-recipient-x25519[(-file)]`, `--hybrid-recipient-kyber[(-file)]`, and
 `--hybrid-envelope-{out,json-out}` so publishers can generate Norito-encoded
 `HybridPayloadEnvelopeV1` artefacts alongside manifests and CARs. The helper
@@ -430,7 +430,7 @@ teams can execute in parallel without blocking the rollout.
 
 - **M0:** Teams consume new chunker fixtures; pipelines emit CAR + manifest
 - **M1:** CI enforces deterministic fixtures; alias proofs published in staging;
-  docs tooling gains expectation flags on `sorafs_manifest_stub` (`--car-digest`,
+  docs tooling gains expectation flags on `sorafs_manifest_builder` (`--car-digest`,
   `--car-size`, `--root-cid`, etc.).
 - **M2:** Assets switch to read-only; gateways prefer registry proofs over envelopes.
 - **M3:** Alias-only access enforced; observability alerts on registry parity;
@@ -566,7 +566,7 @@ Operational expectations:
 
 - **M0 (completed):**
   - Completed: reference chunker profiles and the Norito manifest schema now live in the workspace.
-  - Completed: `sorafs_manifest_stub` emits CAR v2, manifest, digest, and signature artifacts for CI and release pipelines.
+  - Completed: `sorafs_manifest_builder` emits CAR v2, manifest, digest, and signature artifacts for CI and release pipelines.
   - Completed: Torii SoraFS APIs, local node storage, and the fixture-backed gateway conformance harness cover the single-node serving path.
 - **M1 (Weeks 7–12):**
   - Completed locally: fixture verification and expectation-flag tooling enforce

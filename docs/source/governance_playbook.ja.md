@@ -62,9 +62,9 @@ Infrastructure Panel は `docs/examples/da_manifest_review_template.md` の
 1. Torii から manifest バンドルを取得する（`iroha app da get-blob --storage-ticket <hex>`
    もしくは同等の SDK helper）。全員がゲートウェイに到達した同一 bytes をハッシュ
    するため。
-2. 署名済みエンベロープで manifest stub 検証を実行する:
+2. 署名済みエンベロープで manifest builder 検証を実行する:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

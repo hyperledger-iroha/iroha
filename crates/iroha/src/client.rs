@@ -4861,6 +4861,30 @@ fn normalize_hex_lower<const N: usize>(value: &str, context: &str) -> Result<Str
     Ok(hex::encode(bytes))
 }
 
+fn validate_canonical_standard_base64(
+    value: &str,
+    max_decoded_bytes: usize,
+    context: &str,
+) -> Result<()> {
+    let max_encoded_bytes = max_decoded_bytes
+        .saturating_mul(4)
+        .div_ceil(3)
+        .saturating_add(4);
+    if value.is_empty() || value.len() > max_encoded_bytes {
+        return Err(eyre!("{context} must encode 1..={max_decoded_bytes} bytes"));
+    }
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(value)
+        .wrap_err_with(|| format!("{context} must use padded standard base64"))?;
+    if decoded.is_empty() || decoded.len() > max_decoded_bytes {
+        return Err(eyre!("{context} must encode 1..={max_decoded_bytes} bytes"));
+    }
+    if base64::engine::general_purpose::STANDARD.encode(&decoded) != value {
+        return Err(eyre!("{context} must use canonical padded standard base64"));
+    }
+    Ok(())
+}
+
 fn require_non_empty_path_segment<'a>(value: &'a str, context: &str) -> Result<&'a str> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -5165,29 +5189,17 @@ impl SorafsModerationScreeningResultsFilter {
     }
 }
 
-/// Request body for submitting one local moderation screening result.
+/// Request body for submitting authenticated moderation screening evidence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SorafsModerationScreeningResultRequest<'a> {
-    /// Gateway or content subject identifier.
-    pub subject: &'a str,
-    /// Hex-encoded BLAKE3 digest of the screened payload or stable content reference.
-    pub subject_digest_hex: &'a str,
-    /// Hex-encoded governance-approved reproducibility manifest id.
-    pub manifest_id_hex: &'a str,
-    /// Hex-encoded BLAKE3 digest of the deterministic runner binary.
-    pub runner_hash_hex: &'a str,
-    /// Combined moderation score in basis points.
-    pub combined_score_bps: u16,
-    /// Verdict label: pass, warn, quarantine, escalate, or block.
-    pub verdict: &'a str,
-    /// Unix timestamp in seconds; omitted values let Torii apply server time.
-    pub screened_at_unix: Option<u64>,
-    /// Optional evidence digest encoded as hexadecimal.
-    pub evidence_digest_hex: Option<&'a str>,
-    /// Optional policy/configuration digest encoded as hexadecimal.
-    pub policy_digest_hex: Option<&'a str>,
-    /// Optional operator note.
-    pub notes: Option<&'a str>,
+    /// Non-zero 32-byte idempotency key encoded as hexadecimal.
+    pub idempotency_key_hex: &'a str,
+    /// Canonical authority kind: `signed_result` or `committee_aggregate`.
+    pub evidence_kind: &'a str,
+    /// Canonical padded standard-base64 Norito signed result or aggregate.
+    pub authority_b64: &'a str,
+    /// Complete canonical signed-member inventory for a committee aggregate.
+    pub committee_member_results_b64: &'a [String],
 }
 
 /// Request body for finalizing one local moderation ballot tally.
@@ -7657,14 +7669,16 @@ impl Client {
             .map_err(|err| eyre!("Failed to render Sumeragi v2 status JSON: {err}"))
     }
 
-    /// GET `/v1/sumeragi/diagnostics` with typed decoding and lane relay validation.
+    /// GET `/v1/sumeragi/diagnostics` with typed decoding and evidence validation.
     ///
-    /// This helper decodes [`SumeragiDiagnosticsStatus`] and rejects responses that
-    /// contain invalid lane relay envelopes (e.g., mismatched settlement hashes or DA/QC bindings).
+    /// This helper decodes [`SumeragiDiagnosticsStatus`] and rejects malformed
+    /// Native AMX receipt groups or participant-application rows as well as
+    /// invalid lane relay envelopes (e.g., mismatched settlement hashes or
+    /// DA/QC bindings).
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, decoding fails, or any
-    /// lane relay envelope fails verification.
+    /// diagnostics evidence fails verification.
     pub fn get_sumeragi_diagnostics(&self) -> Result<SumeragiDiagnosticsStatus> {
         let url = join_torii_url(&self.torii_url, "v1/sumeragi/diagnostics");
         let resp = self.send_builder(
@@ -7694,6 +7708,12 @@ impl Client {
             npos.validate()
                 .map_err(|reason| eyre!("Invalid NPoS diagnostics payload: {reason}"))?;
         }
+        wire.validate_native_amx_receipts()
+            .map_err(|reason| eyre!("Invalid Native AMX receipt diagnostics payload: {reason}"))?;
+        wire.validate_native_amx_participant_applications()
+            .map_err(|reason| {
+                eyre!("Invalid Native AMX participant diagnostics payload: {reason}")
+            })?;
         for envelope in &wire.lane_relay_envelopes {
             envelope
                 .verify()
@@ -8077,7 +8097,8 @@ mod offline_client_tests {
         nonce: u64,
     }
 
-    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 = 65_536;
+    const TEST_RECURSIVE_PROOF_MAX_BYTES: u32 =
+        iroha_data_model::offline::KAGEMUSHA_RECURSIVE_SPEND_PROOF_PAIR_ABSOLUTE_MAX_BYTES_V4;
 
     fn asset_definition_id(name: &str) -> AssetDefinitionId {
         AssetDefinitionId::new(
@@ -8424,7 +8445,7 @@ mod offline_client_tests {
             .active_recursive_step_ep_verifier
             .as_mut()
             .expect("fixture StepEp verifier")
-            .max_proof_bytes = artifact_proof_limit + 1;
+            .max_proof_bytes = artifact_proof_limit - 1;
         let mut reused_commitment = first_release_readiness(&requested);
         let transfer_commitment = reused_commitment
             .active_transfer_verifier
@@ -18846,68 +18867,70 @@ impl Client {
     fn sorafs_moderation_screening_result_body(
         request: &SorafsModerationScreeningResultRequest<'_>,
     ) -> Result<Vec<u8>> {
-        let subject = Self::sorafs_required_text(request.subject, "subject")?;
-        let subject_digest_hex =
-            normalize_hex_lower::<32>(request.subject_digest_hex, "subject_digest_hex")?;
-        let manifest_id_hex =
-            normalize_hex_lower::<16>(request.manifest_id_hex, "manifest_id_hex")?;
-        let runner_hash_hex =
-            normalize_hex_lower::<32>(request.runner_hash_hex, "runner_hash_hex")?;
-        if request.combined_score_bps > 10_000 {
-            return Err(eyre!("combined_score_bps must be <= 10000"));
+        const AUTHORITY_MAX_BYTES: usize = 256 * 1024;
+        const MEMBER_MAX_BYTES: usize = 64 * 1024;
+        const COMMITTEE_MAX_RESULTS: usize = 64;
+        let idempotency_key_hex =
+            normalize_hex_lower::<32>(request.idempotency_key_hex, "idempotency_key_hex")?;
+        if idempotency_key_hex.bytes().all(|byte| byte == b'0') {
+            return Err(eyre!("idempotency_key_hex must not be all zeroes"));
         }
-        if request.screened_at_unix == Some(0) {
-            return Err(eyre!("screened_at_unix must be non-zero"));
-        }
-        let verdict = request.verdict.trim().to_ascii_lowercase();
+        let evidence_kind = Self::sorafs_required_text(request.evidence_kind, "evidence_kind")?;
         if !matches!(
-            verdict.as_str(),
-            "pass" | "warn" | "quarantine" | "escalate" | "block"
+            evidence_kind.as_str(),
+            "signed_result" | "committee_aggregate"
         ) {
             return Err(eyre!(
-                "verdict must be pass, warn, quarantine, escalate, or block"
+                "evidence_kind must be `signed_result` or `committee_aggregate`"
             ));
         }
-        let evidence_digest_hex = request
-            .evidence_digest_hex
-            .map(|value| normalize_hex_lower::<32>(value, "evidence_digest_hex"))
-            .transpose()?;
-        let policy_digest_hex = request
-            .policy_digest_hex
-            .map(|value| normalize_hex_lower::<32>(value, "policy_digest_hex"))
-            .transpose()?;
-        let notes = Self::sorafs_optional_text(request.notes, "notes")?;
-
+        validate_canonical_standard_base64(
+            request.authority_b64,
+            AUTHORITY_MAX_BYTES,
+            "authority_b64",
+        )?;
+        match evidence_kind.as_str() {
+            "signed_result" if !request.committee_member_results_b64.is_empty() => {
+                return Err(eyre!(
+                    "signed_result must not include committee_member_results_b64"
+                ));
+            }
+            "committee_aggregate"
+                if request.committee_member_results_b64.is_empty()
+                    || request.committee_member_results_b64.len() > COMMITTEE_MAX_RESULTS =>
+            {
+                return Err(eyre!(
+                    "committee_member_results_b64 must contain 1..={COMMITTEE_MAX_RESULTS} signed results"
+                ));
+            }
+            _ => {}
+        }
+        let committee_member_results_b64 = request
+            .committee_member_results_b64
+            .iter()
+            .enumerate()
+            .map(|(index, encoded)| {
+                validate_canonical_standard_base64(
+                    encoded,
+                    MEMBER_MAX_BYTES,
+                    &format!("committee_member_results_b64[{index}]"),
+                )?;
+                Ok(JsonValue::from(encoded.clone()))
+            })
+            .collect::<Result<Vec<_>>>()?;
         let mut map = JsonMap::new();
-        map.insert("subject".into(), JsonValue::from(subject));
         map.insert(
-            "subject_digest_hex".into(),
-            JsonValue::from(subject_digest_hex),
+            "idempotency_key_hex".into(),
+            JsonValue::from(idempotency_key_hex),
         );
-        map.insert("manifest_id_hex".into(), JsonValue::from(manifest_id_hex));
-        map.insert("runner_hash_hex".into(), JsonValue::from(runner_hash_hex));
+        map.insert("evidence_kind".into(), JsonValue::from(evidence_kind));
         map.insert(
-            "combined_score_bps".into(),
-            JsonValue::from(u64::from(request.combined_score_bps)),
-        );
-        map.insert("verdict".into(), JsonValue::from(verdict));
-        map.insert(
-            "screened_at_unix".into(),
-            request
-                .screened_at_unix
-                .map_or(JsonValue::Null, JsonValue::from),
+            "authority_b64".into(),
+            JsonValue::from(request.authority_b64),
         );
         map.insert(
-            "evidence_digest_hex".into(),
-            evidence_digest_hex.map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "policy_digest_hex".into(),
-            policy_digest_hex.map_or(JsonValue::Null, JsonValue::from),
-        );
-        map.insert(
-            "notes".into(),
-            notes.map_or(JsonValue::Null, JsonValue::from),
+            "committee_member_results_b64".into(),
+            JsonValue::Array(committee_member_results_b64),
         );
         Ok(norito::json::to_vec(&JsonValue::Object(map))?)
     }
@@ -24574,8 +24597,8 @@ mod tests {
             BlockHeader,
             consensus::{
                 CertPhase, LaneBlockCommitment, LaneLiquidityProfile, LaneSettlementReceipt,
-                LaneSwapMetadata, LaneVolatilityClass, PERMISSIONED_TAG, SumeragiQcEntry,
-                SumeragiQcSnapshot,
+                LaneSwapMetadata, LaneVolatilityClass, NativeAmxReceipt, PERMISSIONED_TAG,
+                SumeragiQcEntry, SumeragiQcSnapshot,
             },
             consensus_v2::{
                 ConsensusMode, DualQuorum, HeightContextId, PROTOCOL_VERSION, SumeragiV2BodyState,
@@ -26828,6 +26851,8 @@ mod tests {
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
+            native_amx_participant_applications: Vec::new(),
+            autonomous_lane_executions: Vec::new(),
         };
         (status, relay_envelope)
     }
@@ -30557,6 +30582,68 @@ mod tests {
     }
 
     #[test]
+    fn get_sumeragi_diagnostics_rejects_malformed_native_amx_receipts_in_every_container() {
+        let client = client_with_base_url(base_url());
+        let malformed_receipt = |settlement: &LaneBlockCommitment| NativeAmxReceipt {
+            version: 2,
+            source_id: [0xA5; Hash::LENGTH],
+            chain_id_hash: Hash::new(b"client-native-amx-chain"),
+            plan_digest: Hash::new(b"client-native-amx-plan"),
+            lane_id: settlement.lane_id,
+            dataspace_id: settlement.dataspace_id,
+            lane_incarnation: settlement.lane_incarnation,
+            authority_context_height: 12,
+            lane_block_height: settlement.block_height,
+            lane_block_view: 1,
+            coordinator_proposal_hash: Hash::new(b"client-native-amx-proposal"),
+            legs: Vec::new(),
+        };
+
+        let (mut direct, _) = sample_sumeragi_status_with_relay();
+        let receipt = malformed_receipt(&direct.lane_settlement_commitments[0]);
+        direct.lane_settlement_commitments[0]
+            .native_amx_receipts
+            .push(receipt);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&direct).expect("encode malformed direct settlement"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_diagnostics()
+        })
+        .expect_err("malformed direct Native AMX receipt must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid Native AMX receipt diagnostics payload")
+        );
+
+        let (mut relayed, _) = sample_sumeragi_status_with_relay();
+        let receipt = malformed_receipt(&relayed.lane_relay_envelopes[0].settlement_commitment);
+        relayed.lane_relay_envelopes[0]
+            .settlement_commitment
+            .native_amx_receipts
+            .push(receipt);
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&relayed).expect("encode malformed relay settlement"))
+            .unwrap();
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let error = with_mock_http(respond_with(&snapshots, response), || {
+            client.get_sumeragi_diagnostics()
+        })
+        .expect_err("malformed relayed Native AMX receipt must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("Invalid Native AMX receipt diagnostics payload")
+        );
+    }
+
+    #[test]
     fn get_sumeragi_diagnostics_rejects_malformed_json_payload() {
         let client = client_with_base_url(base_url());
         let response = HttpResponse::builder()
@@ -31780,8 +31867,9 @@ mod tests {
             "event_id": "privacy-event-1",
             "occurred_at_unix": 1_800_000_500_u64,
             "population_label": "moderation.global",
+            "subject_digest_hex": ("b2".repeat(32)),
             "metrics": [
-                { "key": "quarantined", "value": 3_u64 }
+                { "key": "quarantined", "value": 3_u64, "unit": "count" }
             ],
             "policy_digest_hex": ("a1".repeat(32)),
         }))
@@ -31830,12 +31918,7 @@ mod tests {
         let response = json_response(StatusCode::OK, r#"{"schema":"publish-due"}"#);
         let payload = norito::json::to_vec(&norito::json!({
             "now_unix": 1_800_000_800_u64,
-            "aggregate_id_prefix": "moderation",
-            "privacy_mode": "suppression",
-            "suppression_threshold": 4_u64,
-            "metadata": [
-                { "key": "producer", "value": "scheduler-a" }
-            ],
+            "previous_block_hash_hex": ("d4".repeat(32)),
         }))
         .expect("encode privacy aggregate publish-due payload");
 
@@ -31859,13 +31942,11 @@ mod tests {
         assert!(headers.contains_key(HEADER_NONCE));
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert!(body.get("cycle_prf_output_hex").is_none());
         assert_eq!(
-            body.get("aggregate_id_prefix").and_then(JsonValue::as_str),
-            Some("moderation")
-        );
-        assert_eq!(
-            body.get("privacy_mode").and_then(JsonValue::as_str),
-            Some("suppression")
+            body.get("previous_block_hash_hex")
+                .and_then(JsonValue::as_str),
+            Some("d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4d4")
         );
     }
 
@@ -32664,27 +32745,15 @@ mod tests {
         let client = client_with_base_url(base_url());
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::ACCEPTED, r#"{"schema":"screening"}"#);
-        let subject_digest = "AA".repeat(32);
-        let manifest_id = "BB".repeat(16);
-        let runner_hash = "CC".repeat(32);
-        let evidence_digest = "DD".repeat(32);
-        let policy_digest = "EE".repeat(32);
-        let subject_digest_lower = subject_digest.to_ascii_lowercase();
-        let manifest_id_lower = manifest_id.to_ascii_lowercase();
-        let runner_hash_lower = runner_hash.to_ascii_lowercase();
-        let evidence_digest_lower = evidence_digest.to_ascii_lowercase();
-        let policy_digest_lower = policy_digest.to_ascii_lowercase();
+        let idempotency_key = "AA".repeat(32);
+        let idempotency_key_lower = idempotency_key.to_ascii_lowercase();
+        let authority_b64 =
+            base64::engine::general_purpose::STANDARD.encode(b"canonical signed-result fixture");
         let request = SorafsModerationScreeningResultRequest {
-            subject: " cid:bafyfixture ",
-            subject_digest_hex: &subject_digest,
-            manifest_id_hex: &manifest_id,
-            runner_hash_hex: &runner_hash,
-            combined_score_bps: 6_500,
-            verdict: " Quarantine ",
-            screened_at_unix: Some(1_800_000_110),
-            evidence_digest_hex: Some(&evidence_digest),
-            policy_digest_hex: Some(&policy_digest),
-            notes: Some(" local runner fixture "),
+            idempotency_key_hex: &idempotency_key,
+            evidence_kind: "signed_result",
+            authority_b64: &authority_b64,
+            committee_member_results_b64: &[],
         };
 
         with_mock_http(respond_with(&store, response), || {
@@ -32714,69 +32783,39 @@ mod tests {
         let body: JsonValue =
             norito::json::from_slice(&snapshot.body).expect("decode request body");
         assert_eq!(
-            body.get("subject").and_then(JsonValue::as_str),
-            Some("cid:bafyfixture")
+            body.get("idempotency_key_hex").and_then(JsonValue::as_str),
+            Some(idempotency_key_lower.as_str())
         );
         assert_eq!(
-            body.get("subject_digest_hex").and_then(JsonValue::as_str),
-            Some(subject_digest_lower.as_str())
+            body.get("evidence_kind").and_then(JsonValue::as_str),
+            Some("signed_result")
         );
         assert_eq!(
-            body.get("manifest_id_hex").and_then(JsonValue::as_str),
-            Some(manifest_id_lower.as_str())
+            body.get("authority_b64").and_then(JsonValue::as_str),
+            Some(authority_b64.as_str())
         );
         assert_eq!(
-            body.get("runner_hash_hex").and_then(JsonValue::as_str),
-            Some(runner_hash_lower.as_str())
-        );
-        assert_eq!(
-            body.get("combined_score_bps").and_then(JsonValue::as_u64),
-            Some(6_500)
-        );
-        assert_eq!(
-            body.get("verdict").and_then(JsonValue::as_str),
-            Some("quarantine")
-        );
-        assert_eq!(
-            body.get("screened_at_unix").and_then(JsonValue::as_u64),
-            Some(1_800_000_110)
-        );
-        assert_eq!(
-            body.get("evidence_digest_hex").and_then(JsonValue::as_str),
-            Some(evidence_digest_lower.as_str())
-        );
-        assert_eq!(
-            body.get("policy_digest_hex").and_then(JsonValue::as_str),
-            Some(policy_digest_lower.as_str())
-        );
-        assert_eq!(
-            body.get("notes").and_then(JsonValue::as_str),
-            Some("local runner fixture")
+            body.get("committee_member_results_b64")
+                .and_then(JsonValue::as_array)
+                .map(Vec::len),
+            Some(0)
         );
     }
 
     #[test]
-    fn sorafs_moderation_screening_submit_rejects_invalid_score() {
+    fn sorafs_moderation_screening_submit_rejects_missing_runtime_authority() {
         let client = client_with_base_url(base_url());
-        let subject_digest = "11".repeat(32);
-        let manifest_id = "22".repeat(16);
-        let runner_hash = "33".repeat(32);
+        let idempotency_key = "11".repeat(32);
         let request = SorafsModerationScreeningResultRequest {
-            subject: "cid:bafyfixture",
-            subject_digest_hex: &subject_digest,
-            manifest_id_hex: &manifest_id,
-            runner_hash_hex: &runner_hash,
-            combined_score_bps: 10_001,
-            verdict: "pass",
-            screened_at_unix: Some(1),
-            evidence_digest_hex: None,
-            policy_digest_hex: None,
-            notes: None,
+            idempotency_key_hex: &idempotency_key,
+            evidence_kind: "signed_result",
+            authority_b64: "",
+            committee_member_results_b64: &[],
         };
         let err = client
             .post_sorafs_moderation_screening_result(&request)
-            .expect_err("invalid score must be rejected");
-        assert!(err.to_string().contains("combined_score_bps"));
+            .expect_err("missing signed authority must be rejected");
+        assert!(err.to_string().contains("authority_b64"));
     }
 
     #[test]

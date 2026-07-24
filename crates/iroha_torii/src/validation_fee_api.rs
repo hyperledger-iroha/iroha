@@ -547,8 +547,7 @@ fn validate_draft_referendum_window(
         .checked_add(1)
         .and_then(|height| height.checked_add(min_enactment_delay))
         .ok_or_else(|| {
-            "validation-fee referendum staging height overflows the block-height domain"
-                .to_owned()
+            "validation-fee referendum staging height overflows the block-height domain".to_owned()
         })?;
     if window.lower < earliest_lower {
         return Err(format!(

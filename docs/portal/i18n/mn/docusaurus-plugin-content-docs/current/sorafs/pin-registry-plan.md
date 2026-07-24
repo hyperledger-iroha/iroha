@@ -78,7 +78,7 @@ Rust Norito схемүүд болон баталгаажуулалтын тус�
 |----------|------|----------|
 | Torii Үйлчилгээ | `/v1/sorafs/pin` (илгээх), `/v1/sorafs/pin/{cid}` (хайлт), `/v1/sorafs/aliases` (жагсаалт/холбох), `/v1/sorafs/replication` (захиалга/баримт) илчлэх. Хуудсууд + шүүлтүүрээр хангана. | Сүлжээний TL / Core Infra |
 | Баталгаажуулалт | Хариултуудад бүртгэлийн өндөр/хэшийг оруулах; SDK-уудын хэрэглэдэг Norito баталгаажуулалтын бүтцийг нэмнэ үү. | Core Infra |
-| CLI | `sorafs_manifest_stub` эсвэл шинэ `sorafs_pin` CLI-г `pin submit`, `alias bind`, `order issue`, `registry export`-ээр сунгана. | Багажны WG |
+| CLI | `sorafs_manifest_builder` эсвэл шинэ `sorafs_pin` CLI-г `pin submit`, `alias bind`, `order issue`, `registry export`-ээр сунгана. | Багажны WG |
 | SDK | Norito схемээс үйлчлүүлэгчийн холболт (Rust/Go/TS) үүсгэх; интеграцийн тест нэмэх. | SDK багууд |
 
 Үйл ажиллагаа:

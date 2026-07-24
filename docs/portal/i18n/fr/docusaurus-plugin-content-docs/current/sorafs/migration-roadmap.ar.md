@@ -41,14 +41,14 @@ Vous êtes actuellement en contact avec `docs/source/sorafs/migration_ledger.md`
 |--------|--------|-------|------------|----------|
 | calendriers de تدريبات | M0 | Les essais à sec digèrent le morceau du morceau `fixtures/sorafs_chunker`. Il s'agit de `docs/source/sorafs/reports/`. | Fournisseurs de stockage | `determinism-<date>.md` est une réussite/échec. |
 | فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` sont des manifestes. remplace la renonciation de التطوير تتطلب من الحوكمة مرفق بالـ PR. | GT Outillage | Il y a une renonciation au CI, رابط تذكرة (إن وجدت). |
-| Indicateurs d'attente | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` بتوقعات صريحة لتثبيت المخرجات: | Documents CI | Il s'agit de drapeaux d'attente (انظر كتلة الأمر أدناه). |
+| Indicateurs d'attente | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_builder` بتوقعات صريحة لتثبيت المخرجات: | Documents CI | Il s'agit de drapeaux d'attente (انظر كتلة الأمر أدناه). |
 | Épinglage dans le registre en premier | M2 | `sorafs pin propose` و`sorafs pin approve` يغلِّفان تقديمات manifeste؛ CLI est disponible sur `--require-registry`. | Opérations de gouvernance | سجل تدقيق CLI للـ Registry, تليمترية فشل المقترحات. |
 | Voir observabilité | M3 | Prometheus/Grafana vous permet de récupérer des morceaux dans les manifestes du registre. التنبيهات موصولة بمناوبة ops. | Observabilité | Utilisez les ID pour le GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

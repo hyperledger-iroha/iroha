@@ -147,12 +147,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-manifest stub משקף את אותם נתונים, מה שנוח לסקריפטים של בחירת `--chunker-profile-id`
+manifest builder משקף את אותם נתונים, מה שנוח לסקריפטים של בחירת `--chunker-profile-id`
 ב-pipelines. שני ה-CLIs של chunk store מקבלים גם את פורמט ה-handle הקנוני
 (`--profile=sorafs.sf1@1.0.0`) כדי שסקריפטי build יימנעו מהטמעת IDs מספריים קשיחים:
 
 ```
-$ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1,
@@ -216,4 +216,4 @@ downstream יכולים לאמת את פריסת ה-chunks בלי להסתמך �
   `fixtures/sorafs_chunker` ולקורפוסים הרשומים תחת
   `fuzz/sorafs_chunker`. פריטי parity מקצה-לקצה נבדקים ב-Rust, Go ו-Node באמצעות הבדיקות שסופקו.
 * `chunker_registry::lookup_by_profile` מאשר שפרמטרי ה-descriptor תואמים ל-`ChunkProfile::DEFAULT` כדי למנוע סטיות מקריות.
-* Manifests שמיוצרים על ידי `iroha app sorafs toolkit pack` ו-`sorafs_manifest_stub` כוללים את מטאדאטת הרישום.
+* Manifests שמיוצרים על ידי `iroha app sorafs toolkit pack` ו-`sorafs_manifest_builder` כוללים את מטאדאטת הרישום.

@@ -48,7 +48,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 ## 受け入れワークフロー
 
 1. **提案作成**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      を追加し、`ProviderAdmissionProposalV1` とアテステーション・バンドルを生成する。
    - 検証: 必須フィールド、stake > 0、`profile_id` 内の正規 chunker handle を保証する。
 2. **ガバナンス承認**
@@ -68,7 +68,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 | 領域 | タスク | Owner(s) | 状態 |
 |------|--------|----------|------|
 | スキーマ | `crates/sorafs_manifest/src/provider_admission.rs` 配下に `ProviderAdmissionProposalV1`、`ProviderAdmissionEnvelopeV1`、`EndpointAttestationV1` (Norito) を定義する。`sorafs_manifest::provider_admission` に検証ヘルパー付きで実装済み。【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ 完了 |
-| CLI ツール | `sorafs_manifest_stub` に `provider-admission proposal`、`provider-admission sign`、`provider-admission verify` のサブコマンドを追加する。 | Tooling WG | ✅ 完了 |
+| CLI ツール | `sorafs_manifest_builder` に `provider-admission proposal`、`provider-admission sign`、`provider-admission verify` のサブコマンドを追加する。 | Tooling WG | ✅ 完了 |
 
 CLI フローは中間証明書バンドル (`--endpoint-attestation-intermediate`) を受け付け、
 正規の提案/ envelope bytes を出力し、`sign`/`verify` 中に評議会署名を検証する。運用者は
@@ -78,7 +78,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
 
 ### CLI リファレンス
 
-各コマンドは `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` で実行する。
+各コマンドは `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` で実行する。
 
 - `proposal`
   - 必須フラグ: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -111,7 +111,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
     `--revocation-out` で Norito ペイロードを書き出し、digest と署名数を記した JSON レポートを出力する。
 | 検証 | Torii、ゲートウェイ、`sorafs-node` が使う共有バリデータを実装し、単体テスト + CLI 結合テストを提供する。【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ 完了 |
 | Torii 統合 | Torii の advert 取り込みにバリデータを組み込み、ポリシー外の advert を拒否し、テレメトリを発行する。 | Networking TL | ✅ 完了 | Torii は現在、ガバナンス envelope (`torii.sorafs.admission_envelopes_dir`) を読み込み、取り込み時に digest/署名一致を検証し、受け入れテレメトリを公開する。【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| 更新 | 更新/失効スキーマ + CLI ヘルパーを追加し、ライフサイクルガイドを docs に公開する (下の runbook と `provider-admission renewal`/`revoke` の CLI コマンドを参照)。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ 完了 |
+| 更新 | 更新/失効スキーマ + CLI ヘルパーを追加し、ライフサイクルガイドを docs に公開する (下の runbook と `provider-admission renewal`/`revoke` の CLI コマンドを参照)。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ 完了 |
 | テレメトリ | `provider_admission` のダッシュボードとアラート (更新漏れ、envelope 期限切れ) を定義する。 | Observability | 🟠 進行中 | カウンタ `torii_sorafs_admission_total{result,reason}` は存在するが、ダッシュボード/アラートは未完。【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### 更新・失効のランブック
@@ -121,7 +121,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
    `--retention-epoch` を増やし、必要に応じて stake/エンドポイントを更新する。
 2. 実行:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -130,7 +130,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
      --notes="stake top-up 2025-03"
    ```
    このコマンドは `AdmissionRecord::apply_renewal` を通じて能力/プロフィールの不変を検証し、
-   `ProviderAdmissionRenewalV1` を出力し、ガバナンスログ向けに digests を表示する。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   `ProviderAdmissionRenewalV1` を出力し、ガバナンスログ向けに digests を表示する。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir` 内の旧 envelope を置き換え、更新 Norito/JSON をガバナンス
    リポジトリにコミットし、更新 hash + retention epoch を `docs/source/sorafs/migration_ledger.md` に追記する。
 4. 新しい envelope が有効になったことを運用者に通知し、
@@ -141,7 +141,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
 #### 緊急失効
 1. 侵害された envelope を特定し、失効を発行する:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -152,7 +152,7 @@ advert 本文を直接渡すことも署名済み advert を再利用するこ�
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI は `ProviderAdmissionRevocationV1` を署名し、`verify_revocation_signatures` で署名セットを検証し、
-   失効 digest を報告する。【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
+   失効 digest を報告する。【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
 2. `torii.sorafs.admission_envelopes_dir` から envelope を削除し、失効 Norito/JSON を admission キャッシュに配布し、
    理由 hash をガバナンス議事録に記録する。
 3. `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` を確認し、

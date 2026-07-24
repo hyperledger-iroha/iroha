@@ -161,14 +161,12 @@ it to Ed25519, and requires the non-zero
 node layers independently re-check that policy before committing state, so a
 self-signed key embedded by an attacker is never a trust root.
 
-The `/v1/sorafs/storage/por-challenge`, `por-proof`, and `por-verdict` method/path
-pairs are not registered. Keeping one authenticated capacity lifecycle prevents
-a direct-storage route from bypassing the coordinator, admission binding,
-replay protection, or auditor checks.
-
-`ManualPorChallengeV1` remains an offline fixture/tooling type only. Torii does
-not admit manual or externally supplied challenges. The verified scheduler is
-the only permitted production authority for the `PorChallengeV1` contract.
+The retired direct-storage challenge, proof, and verdict mutation pairs are not
+registered. Keeping one authenticated capacity lifecycle prevents a
+direct-storage route from bypassing the coordinator, admission binding, replay
+protection, or auditor checks. Torii does not admit externally supplied
+challenges; the verified scheduler is the only permitted production authority
+for the `PorChallengeV1` contract.
 Production startup currently
 rejects `torii.sorafs_por.enabled = true` because no authenticated external
 drand/VRF feed is wired; deterministic seed material is explicitly not a
@@ -259,7 +257,7 @@ the selected required kinds.
 ## Rollout Status
 Implemented locally:
 - `PorChallengeStatusV1`, `PorWeeklyReportV1`, `PorProviderSummaryV1`,
-  `PorSlashingEventV1`, `ManualPorChallengeV1`, and `PorStatusExportV1`.
+  `PorSlashingEventV1`, and `PorStatusExportV1`.
 - Torii status, export, report, ingestion, provider-proof, auditor-verdict, and
   authenticated provider-VRF routes.
 - `sorafs_cli por status`, `por export`, and `por report`.

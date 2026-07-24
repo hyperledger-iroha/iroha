@@ -161,7 +161,27 @@ import json
 import subprocess
 import sys
 
-manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+def read_bounded(path, maximum):
+    if path.stat().st_size > maximum:
+        raise SystemExit(f"bounded input is too large: {path}")
+    chunks = []
+    total = 0
+    with path.open("rb") as handle:
+        while chunk := handle.read(min(1024 * 1024, maximum + 1 - total)):
+            total += len(chunk)
+            if total > maximum:
+                raise SystemExit(f"bounded input grew while reading: {path}")
+            chunks.append(chunk)
+    return b"".join(chunks)
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+manifest = json.loads(read_bounded(Path(sys.argv[1]), 1024 * 1024))
 validator = manifest["validator"]
 for tool, digest_key, version_key in (
     (Path(sys.argv[2]).resolve(), "cargo_binary_sha256", "cargo_version_verbose"),
@@ -169,7 +189,7 @@ for tool, digest_key, version_key in (
 ):
     if not tool.is_file():
         raise SystemExit(f"validator tool is not regular: {tool}")
-    if hashlib.sha256(tool.read_bytes()).hexdigest() != validator[digest_key]:
+    if sha256_file(tool) != validator[digest_key]:
         raise SystemExit(f"current {tool.name} binary does not match the stage validator")
     version = subprocess.run(
         [str(tool), "--version", "--verbose"],
@@ -299,8 +319,16 @@ if len(header) < 20 or header[:4] != b"\x7fELF" or header[4] != 2 or header[5] !
     raise SystemExit("candidate lab bridge is not a 64-bit little-endian ELF")
 if int.from_bytes(header[18:20], "little") != 183:
     raise SystemExit("candidate lab bridge is not AArch64")
-payload = path.read_bytes()
-missing = [needle.decode("ascii") for needle in required if needle not in payload]
+found = {needle: False for needle in required}
+overlap = b""
+overlap_bytes = max(map(len, required)) - 1
+with path.open("rb") as handle:
+    while chunk := handle.read(1024 * 1024):
+        searchable = overlap + chunk
+        for needle in required:
+            found[needle] = found[needle] or needle in searchable
+        overlap = searchable[-overlap_bytes:]
+missing = [needle.decode("ascii") for needle in required if not found[needle]]
 if missing:
     raise SystemExit(f"candidate lab bridge is missing feature-only marker/symbols: {missing}")
 PY

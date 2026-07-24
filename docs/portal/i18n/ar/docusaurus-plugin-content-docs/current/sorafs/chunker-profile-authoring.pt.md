@@ -94,9 +94,9 @@ Cruzamentos manuais. في حالة حدوث ذلك، قم بتنفيذ CLIs ال
   ملخص القيام بالبيان والتحقق من PoR مع المعلمات المقترحة.
 - `sorafs_manifest_chunk_store --json-out=-` - جهاز الإرسال أو الارتباط الخاص بتخزين القطع
   stdout للمقارنات التلقائية.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - لتأكيد إظهار مخطط السيارة
+- `sorafs_manifest_builder --chunker-profile=<handle>` - لتأكيد إظهار مخطط السيارة
   embutem أو التعامل مع canonico mais الأسماء المستعارة.
-- `sorafs_manifest_stub --plan=-` - قم بالرجوع إلى `chunk_fetch_specs` الأمامي للفقرة
+- `sorafs_manifest_builder --plan=-` - قم بالرجوع إلى `chunk_fetch_specs` الأمامي للفقرة
   التحقق من الإزاحة/الخلاصات في المستقبل.
 
 قم بتسجيل كلمة dos comandos (الملخصات، ورفع PoR، وتجزئة البيان) على النحو المقترح
@@ -135,7 +135,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -144,7 +144,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

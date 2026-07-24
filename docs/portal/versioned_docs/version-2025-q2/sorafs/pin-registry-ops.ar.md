@@ -116,7 +116,7 @@ groups:
    - قم بتشغيل `iroha app sorafs providers list` وتحقق من تطابق القدرات المعلن عنها مع متطلبات النسخ المتماثل.
    - تحقق من أجهزة القياس `torii_sorafs_capacity_*` لتأكيد نجاح GiB وPoR المقدم.
 3. ** إعادة تعيين النسخ المتماثل **
-   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_stub capacity replication-order` عندما تنخفض فترة ركود الأعمال المتراكمة (`stat="avg"`) إلى أقل من 5 فترات (يستخدم البيان/تغليف CAR `iroha app sorafs toolkit pack`).
+   - قم بإصدار أوامر جديدة عبر `sorafs_manifest_builder capacity replication-order` عندما تنخفض فترة ركود الأعمال المتراكمة (`stat="avg"`) إلى أقل من 5 فترات (يستخدم البيان/تغليف CAR `iroha app sorafs toolkit pack`).
    - قم بإخطار الإدارة إذا كانت الأسماء المستعارة تفتقر إلى روابط البيان النشطة (`torii_sorafs_registry_aliases_total` يسقط بشكل غير متوقع).
 4. **نتيجة الوثيقة**
    - سجل ملاحظات الحوادث في سجل عمليات SoraFS مع الطوابع الزمنية وملخصات البيان المتأثرة.

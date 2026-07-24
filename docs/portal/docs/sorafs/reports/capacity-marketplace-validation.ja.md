@@ -66,7 +66,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-オペレーターは `sorafs_manifest_stub capacity {declaration,dispute}` でオンボーディング/ディスピュート要求の payloads を再生成し、生成された JSON/Norito bytes をガバナンスチケットと一緒に保管する。
+オペレーターは `sorafs_manifest_builder capacity {declaration,dispute}` でオンボーディング/ディスピュート要求の payloads を再生成し、生成された JSON/Norito bytes をガバナンスチケットと一緒に保管する。
 
 ## サインオフ artefacts
 

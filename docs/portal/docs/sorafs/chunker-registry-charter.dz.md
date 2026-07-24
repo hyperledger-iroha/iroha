@@ -94,7 +94,7 @@ translator: machine-google-reviewed
 
 ## ལག་ཆས་ཀྱི་རེ་བ།
 
-- `sorafs_manifest_chunk_store` དང་ `sorafs_manifest_stub` གསལ་སྟོན་:
+- `sorafs_manifest_chunk_store` དང་ `sorafs_manifest_builder` གསལ་སྟོན་:
   - ཐོ་བཀོད་ཞིབ་དཔྱད་ཀྱི་དོན་ལུ་ `--list-profiles`.
   - ཀེ་ནོ་ནིག་མེ་ཊ་ཌེ་ཊ་སྡེབ་ཚན་ལག་ལེན་འཐབ་ཐོག་ལས་ `--promote-profile=<handle>` ལག་ལེན་འཐབ་ཡོདཔ།
     གསལ་སྡུད་ཅིག་ཁྱབ་སྤེལ་འབད་བའི་སྐབས།

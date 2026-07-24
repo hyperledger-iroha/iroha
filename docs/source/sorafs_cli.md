@@ -23,11 +23,6 @@ local testing and CI.
   status so queued-but-rejected publishes do not look successful.
 - `proof verify` — validate CAR responses against a manifest and emit the
   PoR-ready digests required for registry admission.
-- `manifest sign` — emit a keyless (OIDC-backed) signature bundle so pipelines
-  can attest to published artefacts without long-lived signing keys.
-- `manifest verify-signature` — confirm bundles or raw signatures match the
-  manifest digest and (optionally) the computed chunk plan digests before
-  promoting artefacts.
 
 ## Proxy remediation helper
 
@@ -75,47 +70,21 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --pin-storage-class=warm \
   --pin-retention-epoch=42
 
-# Option 1: provide an explicit token (environment, file, or inline)
-export SIGSTORE_ID_TOKEN=$(oidc-client fetch-token)
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest sign \
-  --manifest artifacts/manifest.to \
-  --bundle-out artifacts/manifest.bundle.json \
-  --signature-out artifacts/manifest.sig \
-  --identity-token-env=SIGSTORE_ID_TOKEN
-
-# Option 2: rely on the default SIGSTORE_ID_TOKEN fallback
-SIGSTORE_ID_TOKEN=$(oidc-client fetch-token) \
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest sign \
-  --manifest artifacts/manifest.to \
-  --bundle-out artifacts/manifest.bundle.json \
-  --signature-out artifacts/manifest.sig
-
-# Option 3: run inside GitHub Actions with `permissions: id-token: write`
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest sign \
-  --manifest artifacts/manifest.to \
-  --bundle-out artifacts/manifest.bundle.json \
-  --signature-out artifacts/manifest.sig \
-  --identity-token-provider=github-actions \
-  --identity-token-audience=sorafs
 ```
 
 Looking for a turnkey script? `docs/examples/sorafs_cli_quickstart.sh` wraps the
 commands above into a single workflow that expects standard environment
-variables (`SORA_PAYLOAD`, `TORII_URL`, `SIGSTORE_ID_TOKEN`, etc.) and writes
+variables (`SORA_PAYLOAD`, `TORII_URL`, etc.) and writes
 every summary JSON to an output directory. It is ideal for CI runners or for
 developers who want to capture canonical artefacts without typing each step.
-For release automation, see `scripts/release_sorafs_cli.sh`, which packages
-the signing and verification flow into a single command that produces bundle,
-signature, and summary outputs under `artifacts/sorafs_cli_release/`. The script
-accepts a `--config` file (see `docs/examples/sorafs_cli_release.conf`) and
-defaults to the curated fixtures in `fixtures/sorafs_manifest/ci_sample/`, so you
-can run a dry-run without supplying arguments.
-If you need deterministic fixtures to diff against, grab the bundle under
-`fixtures/sorafs_manifest/ci_sample` and the accompanying README in
-`docs/examples/sorafs_ci_sample/`.
+For release authentication, see `scripts/release_sorafs_cli.sh`. It requires an
+external Ed25519 signer, a governed raw public key and reviewed fingerprint, and
+an explicitly pinned `sorafs-validate` path and SHA256. It has no fixture,
+credential, or verifier defaults.
+If you need deterministic content fixtures to diff against, use the
+content-only set under `fixtures/sorafs_manifest/ci_sample` and the accompanying
+README in `docs/examples/sorafs_ci_sample/`. Those fixtures are not
+release-authenticity evidence.
 
 Key behaviours:
 
@@ -138,82 +107,29 @@ Key behaviours:
 - `manifest submit` recomputes the chunk SHA3 digest when a plan is provided,
   validates alias inputs, and forwards Ed25519 keys via the Norito
   `ExposedPrivateKey` wrapper just like the Torii Rust client.
-- If no identity flag is supplied the CLI reads `SIGSTORE_ID_TOKEN`
-  automatically, matching the variable exported by GitHub Actions and GitLab CI.
-- Passing `--identity-token-provider=github-actions` lets the CLI fetch the OIDC
-  token directly via `ACTIONS_ID_TOKEN_REQUEST_URL`; **you must also provide**
-  `--identity-token-audience=<audience>` so the CLI can request the precise
-  scope required by your Fulcio policy.
 - `proof verify` rebuilds the PoR store, reports the deterministic chunk digest,
   and surfaces the payload/CAR digests so CI can gate registry submission.
   Supply `--chunk-plan` for directory or multi-file payloads so verification
   reuses the exact packed chunk boundaries instead of reconstructing a
   single-file plan from the manifest alone.
-- `manifest verify-signature` accepts either a bundle or raw signature/public
-  key pair, checks the embedded metadata (chunk digests, token hashes) against
-  locally recomputed summaries, and ensures the Ed25519 signature matches the
-  manifest digest before continuing the rollout.
-- Signature bundles never persist the raw OIDC token unless
-  `--include-token=true` is passed; instead a BLAKE3 hash and source metadata are
-  recorded so CI systems can audit which identity issued each artefact.
-
-## Keyless Signing Workflow
-
-`manifest sign` can mint Sigstore-verifiable signatures from multiple token
-sources. Provide a credential inline, via an explicit environment variable, or
-from a file when running locally. Inside GitHub Actions, pass
-`--identity-token-provider=github-actions` **and**
-`--identity-token-audience=<value>` to let the CLI fetch the job-scoped token
-via `ACTIONS_ID_TOKEN_REQUEST_URL`. Choose an explicit audience (for example
-`sorafs` or `sigstore-ci`) that matches your Fulcio configuration; the CLI no
-longer falls back to a default value.
-
-Every signature bundle embeds the manifest digest, an ephemeral Ed25519 public
-key, and identity metadata whose `token_source` now distinguishes inline
-(`inline`), environment (`env:VAR`), file (`file:/path`), and provider-driven
-(`oidc:github-actions(AUD)`) flows. Downstream tooling can hand the bundle to
-`cosign verify-blob --bundle` or a Sigstore transparency log while preserving
-the caller’s provenance.
-
-To avoid leaking credentials:
-
-- Bundles store only the BLAKE3 hash and source label for each token; keep
-  `--include-token=false` unless an air-gapped verification or a regulated audit
-  explicitly requires the raw JWT.
-- Store bundles and summaries in restricted artefact buckets; by default only
-  the BLAKE3 hash of the token is persisted for auditing.
-- Rotate OIDC audiences regularly and audit CI runs using the
-  `identity_token_source` field exposed in the CLI summary JSON.
-
-See `docs/examples/sorafs_ci.md` for ready-to-use GitHub Actions and GitLab
-pipelines that exercise these flows end-to-end.
-
-## Verify signature bundles
+## Release authenticity
 
 ```bash
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest verify-signature \
-  --manifest artifacts/manifest.to \
-  --bundle artifacts/manifest.bundle.json \
-  --summary artifacts/car_summary.json \
-  --expect-token-hash 77c3...
-
-cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
-  manifest verify-signature \
-  --manifest artifacts/manifest.to \
-  --signature artifacts/manifest.sig \
-  --public-key-hex 90af... \
-  --summary artifacts/car_summary.json
+scripts/release_sorafs_cli.sh \
+  --manifest artifacts/release/release_manifest.json \
+  --external-signer /run/sorafs-release/ed25519-sign \
+  --signing-public-key /run/sorafs-release/release.ed25519.pub \
+  --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-- Supplying `--bundle` validates the embedded manifest digest, token hash, and
-  chunk digest fields against locally recomputed values before checking the
-  Ed25519 signature.
-- Use `--expect-token-hash` to pin the hashed OIDC identity observed during
-  signing; verification fails if the bundle records a different value.
-- When only a signature is available, provide `--public-key-hex` explicitly; the
-  CLI still recomputes chunk digests when `--summary` or `--chunk-plan` inputs
-  are supplied.
+The wrapper signs the canonical aggregate release manifest through the external
+signer and verifies immutable snapshots with `sorafs-validate release-manifest`.
+The signature must be exactly 64 raw bytes; the public key must be exactly 32
+raw bytes and match the reviewed SHA256 fingerprint. A pinned verifier digest
+is mandatory. OIDC/cosign attestations remain useful provenance, but they do not
+replace this release-authenticity check.
 
 ## Compile Kotodama bytecode
 
@@ -715,8 +631,9 @@ slashing events, and VRF anomalies), while `--format=json` emits the canonical
 ## Roadmap
 
 The local CLI command set now covers manifest scaffolding, governance proposal
-export, keyless manifest signature bundles, bundle verification, gateway fetch
-authorization, PoR trigger/export/report flows, and PoTR proof streaming.
+export, gateway fetch authorization, PoR trigger/export/report flows, and PoTR
+proof streaming. Release signing and verification are deliberately outside the
+CLI and use the governed aggregate-manifest path described above.
 Remaining CLI work is release distribution and live-network governance evidence
 collection:
 

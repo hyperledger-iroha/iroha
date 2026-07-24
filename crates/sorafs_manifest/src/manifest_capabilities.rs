@@ -140,7 +140,7 @@ pub fn detect_manifest_capabilities(
                         summary.range_capability = Some(range);
                     }
                 }
-                CapabilityType::VendorReserved => {}
+                CapabilityType::PotrMlDsa | CapabilityType::VendorReserved => {}
             }
         }
     }

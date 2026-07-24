@@ -92,6 +92,10 @@ if [[ ! -d "$ROOT_ARG" ]]; then
 fi
 
 ROOT_DIR="$(cd "$ROOT_ARG" && pwd)"
+APPLE_ARTIFACT_DIR="${MOBILE_SDK_APPLE_ARTIFACT_DIR:-$ROOT_DIR/dist}"
+if [[ "$APPLE_ARTIFACT_DIR" != /* ]]; then
+  APPLE_ARTIFACT_DIR="$ROOT_DIR/$APPLE_ARTIFACT_DIR"
+fi
 FAILURES=0
 CANDIDATE_LAB_MARKER="KAGEMUSHA_CANDIDATE_EVIDENCE_LAB_DO_NOT_SHIP_V2"
 CANDIDATE_LAB_SYMBOL_FRAGMENT="kagemusha_recursive_spend_candidate_lab_"
@@ -1257,9 +1261,9 @@ check_swift_package() {
 }
 
 check_xcframework() {
-  local xcframework="$ROOT_DIR/dist/NoritoBridge.xcframework"
+  local xcframework="$APPLE_ARTIFACT_DIR/NoritoBridge.xcframework"
   local info="$xcframework/Info.plist"
-  local manifest="$ROOT_DIR/dist/NoritoBridge.artifacts.json"
+  local manifest="$APPLE_ARTIFACT_DIR/NoritoBridge.artifacts.json"
   local privacy_marker="$xcframework/.privacy-production-enabled"
   local slices=(ios-arm64 ios-arm64_x86_64-simulator macos-arm64)
   local slice

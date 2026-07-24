@@ -1050,11 +1050,69 @@ impl From<crate::isi::sorafs::CancelSorafsOrderbookOrder> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::MatchSorafsOrderbook> for InstructionBox {
+    fn from(i: crate::isi::sorafs::MatchSorafsOrderbook) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::MaintainSorafsOrderbook> for InstructionBox {
+    fn from(i: crate::isi::sorafs::MaintainSorafsOrderbook) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt> for InstructionBox {
     fn from(i: crate::isi::sorafs::RecordSorafsOrderbookSettlementReceipt) -> Self {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::sorafs::SubmitSorafsRepairTask> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsRepairTask) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::ApplySorafsRepairTaskAction> for InstructionBox {
+    fn from(i: crate::isi::sorafs::ApplySorafsRepairTaskAction) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsRepairAppeal> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsRepairAppeal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SetSorafsProofOutcomeSignerPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::sorafs::SubmitSorafsProofOutcome> for InstructionBox {
+    fn from(i: crate::isi::sorafs::SubmitSorafsProofOutcome) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+macro_rules! impl_sorafs_reserve_instruction_box {
+    ($($instruction:ty),+ $(,)?) => {
+        $(
+            impl From<$instruction> for InstructionBox {
+                fn from(instruction: $instruction) -> Self {
+                    InstructionBox(Box::new(instruction))
+                }
+            }
+        )+
+    };
+}
+impl_sorafs_reserve_instruction_box!(
+    crate::isi::sorafs::SetSorafsReservePolicy,
+    crate::isi::sorafs::RegisterSorafsReserveAccount,
+    crate::isi::sorafs::RequestSorafsReserveMovement,
+    crate::isi::sorafs::DecideSorafsReserveMovement,
+    crate::isi::sorafs::ChargeSorafsReserveRent,
+    crate::isi::sorafs::AdvanceSorafsReserveLifecycle,
+    crate::isi::sorafs::DrawSorafsReserveCredit,
+    crate::isi::sorafs::RepaySorafsReserveCredit,
+    crate::isi::sorafs::SubmitSorafsReserveAppeal,
+    crate::isi::sorafs::DecideSorafsReserveAppeal,
+);
 impl From<crate::isi::sorafs::SetSorafsPopIssuerPolicy> for InstructionBox {
     fn from(i: crate::isi::sorafs::SetSorafsPopIssuerPolicy) -> Self {
         InstructionBox(Box::new(i))
@@ -3982,16 +4040,20 @@ pub mod prelude {
         },
         sorafs::{
             AcceptSorafsModerationJurorAssignment, ActivateSorafsModerationCase,
-            ApprovePinManifest, BindManifestAlias, CancelSorafsOrderbookOrder,
-            CommitSorafsPopCredentialBatch, CompleteReplicationOrder, ExpireReplicationOrder,
-            FinalizeSorafsModerationCase, FinalizeSorafsModerationSortition, IssueReplicationOrder,
-            PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
+            AdvanceSorafsReserveLifecycle, ApprovePinManifest, BindManifestAlias,
+            CancelSorafsOrderbookOrder, ChargeSorafsReserveRent, CommitSorafsPopCredentialBatch,
+            CompleteReplicationOrder, DecideSorafsReserveAppeal, DecideSorafsReserveMovement,
+            DrawSorafsReserveCredit, ExpireReplicationOrder, FinalizeSorafsModerationCase,
+            FinalizeSorafsModerationSortition, IssueReplicationOrder, MaintainSorafsOrderbook,
+            MatchSorafsOrderbook, PublishSorafsPopRevocationList, RaiseSorafsModerationChallenge,
             RecordCapacityTelemetry, RecordSorafsOrderbookSettlementReceipt,
             RegisterCapacityDeclaration, RegisterCapacityDispute, RegisterPinManifest,
-            RegisterSorafsModerationJurorEligibility, ResolveSorafsModerationChallenge,
-            RetirePinManifest, SetPricingSchedule, SetSorafsModerationPolicy,
-            SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy, SubmitSorafsModerationAppeal,
-            SubmitSorafsModerationCommit, SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder,
+            RegisterSorafsModerationJurorEligibility, RegisterSorafsReserveAccount,
+            RepaySorafsReserveCredit, RequestSorafsReserveMovement,
+            ResolveSorafsModerationChallenge, RetirePinManifest, SetPricingSchedule,
+            SetSorafsModerationPolicy, SetSorafsOrderbookPolicy, SetSorafsPopIssuerPolicy,
+            SetSorafsReservePolicy, SubmitSorafsModerationAppeal, SubmitSorafsModerationCommit,
+            SubmitSorafsModerationReveal, SubmitSorafsOrderbookOrder, SubmitSorafsReserveAppeal,
             UpsertProviderCredit,
         },
         space_directory::{

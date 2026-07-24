@@ -1,0 +1,28 @@
+name: Workflow action pin policy
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - "scripts/check_workflow_action_pins.py"
+      - "scripts/tests/check_workflow_action_pins_test.py"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/**"
+      - "scripts/check_workflow_action_pins.py"
+      - "scripts/tests/check_workflow_action_pins_test.py"
+
+permissions:
+  contents: read
+
+jobs:
+  action-pins:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Exercise the fail-closed checker
+        run: python3 scripts/tests/check_workflow_action_pins_test.py
+      - name: Enforce immutable action references
+        run: python3 scripts/check_workflow_action_pins.py

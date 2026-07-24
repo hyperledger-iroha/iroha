@@ -40,7 +40,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے, منسوخی�
 
 ## 3. تنازع جمع کرائیں
 
-1. `sorafs_manifest_stub capacity dispute` کے لیے JSON spec بنائیں:
+1. `sorafs_manifest_builder capacity dispute` کے لیے JSON spec بنائیں:
 
    ```json
    {
@@ -63,7 +63,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے, منسوخی�
 2. CLI چلائیں:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -80,7 +80,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے, منسوخی�
 
 1. **Janela de graça:** پرووائیڈر کو متوقع منسوخی سے آگاہ کریں؛ پالیسی اجازت دے تو dados fixados کے انخلا کی اجازت دیں۔
 2. **`ProviderAdmissionRevocationV1` Nota:**
-   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_stub provider-admission revoke` استعمال کریں۔
+   - منظور شدہ وجہ کے ساتھ `sorafs_manifest_builder provider-admission revoke` استعمال کریں۔
    - دستخط اور resumo de revogação ویریفائی کریں۔
 3. **منسوخی شائع کریں:**
    - منسوخی ریکوئسٹ Torii کو جمع کریں۔
@@ -95,7 +95,7 @@ description: SoraFS کپیسٹی تنازعات جمع کرانے, منسوخی�
 
 ## 6. حوالہ جاتی مواد
 
--`sorafs_manifest_stub capacity dispute --help`
+-`sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (seção de disputa)
 - `docs/source/sorafs/provider_admission_policy.md` (fluxo de trabalho de revogação)
 - Painel de observabilidade: `SoraFS / Capacity Providers`

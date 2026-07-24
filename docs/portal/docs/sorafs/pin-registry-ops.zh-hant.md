@@ -125,7 +125,7 @@ groups:
    - 運行 `iroha app sorafs providers list` 並驗證公佈的功能是否符合複製要求。
    - 檢查 `torii_sorafs_capacity_*` 儀表以確認配置的 GiB 和 PoR 成功。
 3. **重新分配複製**
-   - 當積壓訂單 (`stat="avg"`) 低於 5 個週期時，通過 `sorafs_manifest_stub capacity replication-order` 發出新訂單（艙單/CAR 包裝使用 `iroha app sorafs toolkit pack`）。
+   - 當積壓訂單 (`stat="avg"`) 低於 5 個週期時，通過 `sorafs_manifest_builder capacity replication-order` 發出新訂單（艙單/CAR 包裝使用 `iroha app sorafs toolkit pack`）。
    - 如果別名缺少活動清單綁定（`torii_sorafs_registry_aliases_total` 意外下降），則通知治理。
 4. **記錄結果**
    - 在 SoraFS 操作日誌中記錄事件註釋以及時間戳和受影響的清單摘要。

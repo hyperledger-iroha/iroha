@@ -71,7 +71,7 @@ Testing:
 |-----------|------|----------|
 | Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{digest}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering; manifest detail readback bounds embedded alias and replication-order arrays with `limit` (default 50, max 500) while preserving full count and truncation metadata. | Networking TL / Core Infra |
 | Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | Extend `sorafs_manifest_builder` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
 
 Operations:

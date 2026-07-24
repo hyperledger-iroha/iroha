@@ -24,11 +24,17 @@ summary: Current SF-6 release automation and QA surfaces.
    - Chunk-range smoketest.
    - Proof streaming checks.
 4. **Packaging**
-   - Build CLI binaries (Linux/macOS/Windows) via cross.
+   - Build CLI binaries natively for Linux x86_64/aarch64 and macOS
+     x86_64/aarch64; retain Windows x86_64 as the additional fifth target.
+   - Rebuild each metadata-normalized platform archive twice, require
+     byte-identical archive and manifest output, and run every packaged binary
+     from a clean extraction.
    - Package SDK surfaces that are present in this repository, including
      JavaScript, JVM/Android, Swift, C#, Python, and Rust crate artifacts.
 5. **Signing & Attestation**
-   - Sigstore `cosign sign-blob` for binaries.
+   - Governed PKCS#11/HSM Ed25519 signature over the canonical aggregate
+     release manifest, verified by the SHA256-pinned native validator.
+   - OIDC/cosign attestations for build provenance only.
    - SBOM/provenance generation for artifacts that have committed packaging hooks.
 6. **Release Publishing**
    - Create Git tag, update changelog.
@@ -51,14 +57,28 @@ summary: Current SF-6 release automation and QA surfaces.
   formatting, Clippy, shell syntax, adversarial release-helper tests, and
   focused SoraFS crate tests.
 - `.github/workflows/sorafs-cli-release.yml` runs the strict release gate,
-  validates `release/version-map.toml`, builds Linux/macOS/Windows `sorafs_cli` and
-  `sorafs_fetch` candidates, packages `sorafs-validate` with its checked FFI
-  header and deterministic manifest, generates an SPDX JSON dependency SBOM,
-  fails on known high/critical vulnerabilities, and optionally keyless-signs
-  and immediately verifies every candidate, manifest, SBOM, and scan report
-  through GitHub OIDC for an exact `sorafs-cli-v<version>` tag or reviewed manual
-  dispatch. `docs/examples/sorafs_ci.md` remains an integration example, not
-  the authoritative release workflow.
+  validates `release/version-map.toml`, builds native Linux x86_64/aarch64,
+  macOS x86_64/aarch64, and additional Windows x86_64 `sorafs_cli`,
+  `sorafs_fetch`, and `sorafs-validate` candidates, packages
+  `sorafs-validate` with its checked FFI header and deterministic manifest,
+  generates an SPDX JSON dependency SBOM, fails on known high/critical
+  vulnerabilities, rebuilds the whole platform archive for byte-identical
+  replay, and executes all three binaries from each clean extraction. For an
+  exact `sorafs-cli-v<version>` tag or reviewed manual dispatch, it builds the
+  canonical manifest for the exact five candidate trees twice and uploads the
+  byte-identical unsigned manifest for an operator to sign outside GitHub with
+  the governed Ed25519 HSM. The `sorafs-release-authentication` environment
+  then admits a protected `sorafs-release-auth` runner only after the raw
+  signature, raw public key, reviewed key fingerprint, native verifier path,
+  and reviewed verifier SHA256 have been provisioned as public verification
+  inputs. That job invokes `scripts/release_manifest_signing.py verify` and
+  never receives a private key or invokes a signer. Release provenance and the
+  promoted artifact remain dependency-blocked until candidate reconciliation
+  and both native verification passes succeed. OIDC/cosign attestations are
+  added afterward as provenance only; they do not authenticate the aggregate
+  release manifest.
+  `docs/examples/sorafs_ci.md` remains an integration example, not the
+  authoritative release workflow.
 - `scripts/check_sorafs_release_automation.py` pins the three SoraFS workflows
   to reviewed full action commit hashes, rejects floating actions,
   `pull_request_target`, network-bootstrap shell commands, cancellable evidence
@@ -74,44 +94,80 @@ summary: Current SF-6 release automation and QA surfaces.
 - Orchestrator SDK parity runs through `ci/sdk_sorafs_orchestrator.sh` so
   multi-source fetch, proof, and pin-registration client behavior stays tied
   to the release matrix.
-- Config templates for scripted runs live under `docs/examples/` (for example,
-  `sorafs_cli_release.conf`), and both helper scripts fall back to the
-  `fixtures/sorafs_manifest/ci_sample/` dataset so dry-run executions require no
-  additional setup.
+- Config templates for scripted runs live under `docs/examples/`, but production
+  release and gateway-self-cert helpers require explicit deployment inputs.
+  They never substitute the committed `ci_sample` fixtures for a release
+  manifest, signer, trusted fingerprint, or native verifier.
 - Existing workflow steps call repository scripts directly; add reusable
   composite actions only when multiple committed release workflows share the
   same signing/publishing sequence.
 - The repository `Jenkinsfile` remains the heavier integration/soak-test path;
   mirror the release-gate command order there when adding SoraFS stages.
-- `scripts/release_sorafs_cli.sh` wraps `sorafs_cli manifest sign` and
-  `manifest verify-signature`, producing signing/verification summaries so the
-  release job fails fast if bundle metadata drifts before artefacts publish.
-  The wrapper rejects symlinked or non-regular bundle, signature, sign-summary,
-  and verify-summary targets, plus symlinked output-parent components, before
-  invoking the signing CLI so release evidence cannot be written through
-  ambiguous filesystem aliases. Wrapper options must also provide explicit
-  non-option-shaped values, and manifest, chunk-plan, chunk-summary, identity
-  token file, and prebuilt CLI inputs are rejected when they are symlinks,
-  missing, non-regular, or reached through symlinked parent components.
+- `scripts/release_sorafs_cli.sh` signs the canonical aggregate release manifest
+  through a reviewed external Ed25519/HSM adapter, then verifies the raw
+  signature and governed raw public key through a SHA256-pinned
+  `sorafs-validate release-manifest` binary. The signer fingerprint, verifier
+  path, and verifier digest are mandatory. The wrapper rejects missing,
+  malformed, existing-output, symlinked, non-regular, or aliased inputs before
+  producing public signature/key/verification artifacts.
 - `scripts/package_sorafs_validate_release.sh` builds or packages
   `sorafs-validate` into `dist/sorafs-validate-release/`, stages the checked
   `include/sorafs_reference.h` C FFI header for downstream SDK bindings,
   records binary/header/archive SHA256 digests, records manifest and staged-file
-  digests, can emit a detached manifest signature with
-  `--manifest-signing-key`, and runs fixture smoke checks before archive
-  creation. Packager options must provide explicit non-option-shaped values,
-  prebuilt binaries, manifest signing keys, manifest public keys, and the
-  checked FFI header are rejected when they are symlinks, missing, non-regular,
-  non-executable where required, or reached through symlinked parent components,
-  and `--out-dir` is rejected when it is a symlink or parent-aliased before any
-  cleanup can remove staged artifacts. Archive creation uses a
+  digests, and runs fixture smoke checks before archive creation. The
+  production path accepts only a detached signature through
+  `--manifest-signature-in`; the local raw-seed signer additionally requires
+  the explicit `--development-local-signing` mode and is not a production
+  release path. Manifest signing is raw Ed25519 only and requires a 32-byte raw
+  `--manifest-public-key` plus an independently reviewed lowercase SHA-256
+  fingerprint of those exact public-key bytes through
+  `--manifest-public-key-fingerprint`. The development seed is exactly 32 raw
+  bytes, must be owned by the current effective user, have exactly one hard
+  link, and use mode `0400` or `0600`. Every key, seed, or external signature
+  input is copied from one stable no-follow descriptor into an owner-private
+  ephemeral snapshot before any build work. The packaged `sorafs-validate
+  release-manifest` command performs strict native key, fingerprint, and
+  signature validation with `ed25519-dalek`; it also performs the explicitly
+  development-gated raw-seed signing path. The helper rejects encoded,
+  malformed, or mismatched key material, fingerprint mismatches, and signatures
+  that are not a verified, nonzero 64-byte Ed25519 value. The reference
+  production release keeps the private key in PKCS#11/HSM custody: generate the
+  deterministic manifest once, sign its exact bytes with the HSM, then rerun
+  the identical package command with `--manifest-signature-in`, the reviewed
+  raw Ed25519 public key, and its fingerprint. The packager recreates the
+  manifest and admits the external signature only when native strict Ed25519
+  verification succeeds.
+  Signature publication is no-clobber and rejects the stage, archive, manifest,
+  checksum sidecars, input identities, existing destinations, and stale default
+  signatures before generated artifacts are changed.
+  Packager options must
+  provide explicit non-option-shaped values, prebuilt binaries, manifest
+  signing keys, manifest public keys, and the checked FFI header are rejected
+  when they are symlinks, missing, non-regular, non-executable where required,
+  or reached through symlinked parent components, and `--out-dir` is rejected
+  when it is a symlink or parent-aliased before any cleanup can remove staged
+  artifacts. Runtime keys are never staged or written into release artifacts.
+  Archive creation uses a
   metadata-normalized tar/gzip writer
   (sorted entries, zero mtime, fixed uid/gid, deterministic file modes) so
   identical staged inputs reproduce the same archive hash. Generated `dist/*`
   artifacts remain untracked; keep only `dist/.gitkeep` committed.
-- `scripts/sorafs_gateway_self_cert.sh` can be invoked post-deploy with
-  `--manifest`/`--manifest-bundle` to ensure staging gateways continue to serve
-  the signed manifest expected by clients.
+- `scripts/package_sorafs_cli_candidate.py` assembles the whole platform
+  candidate into a metadata-normalized tar/gzip archive with a canonical
+  per-file digest manifest. It rejects symlinks, hardlinks, non-regular or
+  mutable inputs, missing or unexpected changelog/license/runbook/reference-
+  validator inventory, overlapping output paths, unsupported targets, and
+  failed clean-consumer smoke runs. The workflow invokes it twice per native
+  target and compares the archive and manifest bytes before staging
+  run-specific SBOM/SARIF evidence. This keeps volatile scanner metadata
+  outside the deterministic archive while the final exact `SHA256SUMS`,
+  provenance, and signatures still bind both the archive and scan evidence.
+- `scripts/sorafs_gateway_self_cert.sh` can be invoked post-deploy only with the
+  complete aggregate release-authentication tuple: canonical manifest, raw
+  Ed25519 signature/public key, reviewed signer fingerprint, and the reviewed
+  native-verifier path plus its SHA256. The wrapper authenticates that tuple
+  before it starts the gateway harness and records the verification receipt
+  beside the self-cert evidence.
 - `scripts/check_sorafs_production_readiness.py` is the final aggregate
   SoraFS promotion gate over the per-lane rollout/release evidence summaries.
   Final readiness also requires exactly one signed, payload-free
@@ -268,15 +324,25 @@ summary: Current SF-6 release automation and QA surfaces.
   the source and platform SBOMs
   fail the candidate on high/critical Grype findings. Every platform package
   includes its platform-specific SBOM and SARIF report, the source scan, and
-  all other candidate files in `SHA256SUMS`; requested keyless signing then
-  requires exactly the three expected platform checksum manifests, rejects
+  all other candidate files in `SHA256SUMS`; requested provenance generation
+  requires exactly the five expected target-triple checksum manifests, rejects
   duplicate entries or any listed/actual file-set mismatch, verifies every
   digest, and only then creates GitHub/Sigstore SLSA build
   provenance over the complete candidate set. The offline provenance bundle is
-  retained with the candidate before every file is keyless-signed and
-  immediately verified together with the binaries. Public promotion
+  retained with the candidate and verified together with the binaries. It does
+  not replace the aggregate Ed25519/HSM signature or native verification
+  receipt. Public promotion
   still requires a clean hosted run and the deployment/package canaries; source
   configuration alone is not release evidence.
+- The five-target CLI archive path is source-complete, but its hosted-run
+  artifacts, PKCS#11/HSM Ed25519 manifest signature and reviewed fingerprint,
+  GitHub OIDC/Sigstore attestations, registry publication/withdrawal receipts,
+  and deployed provider/gateway smoke records are external evidence. The
+  reference SDK release lane remains a separate source gap: it does not yet
+  build, publish, and clean-install all six JavaScript, Python, Kotlin/JVM,
+  Java Android, Swift, and C# packages from one release-bound workflow. Boolean
+  canary builders and source-tree parity tests do not substitute for those
+  package-consumer records.
 - Existing repository patterns to reuse include `scripts/js_sbom_provenance.sh`,
   `scripts/android_sbom_provenance.sh`, and the docs portal `syft` packaging
   path. Keep generated SBOMs and signatures beside the release hashes in the
@@ -289,10 +355,19 @@ summary: Current SF-6 release automation and QA surfaces.
 ## Changelog Automation
 
 - Current SoraFS release evidence comes from `scripts/release_sorafs_cli.sh`,
-  `scripts/package_sorafs_validate_release.sh`, `status.md`, `roadmap.md`, and
-  the governance release notes template. Keep the package archive, manifest,
-  manifest signature when produced, and all SHA256 sidecars hash-addressed in
-  the release ticket.
+  `scripts/package_sorafs_validate_release.sh`,
+  `scripts/package_sorafs_cli_candidate.py`, `status.md`, `roadmap.md`, and the
+  governance release notes template. Keep the package archive, manifest,
+  manifest signature when produced, all SHA256 sidecars, and the completed
+  rollback/yank record hash-addressed in the release ticket. The operational
+  procedure for Cargo, npm, PyPI, NuGet, JVM/Android, Swift, and GitHub
+  artifacts is
+  `docs/portal/docs/sorafs/release-rollback-yank.md`.
+- Every deterministic CLI archive carries the checked root `CHANGELOG.md` and
+  `LICENSE`. The version-specific release-notes template remains
+  `docs/examples/sorafs_release_notes.md`; operators must fill and review it,
+  then attach its digest to the release ticket rather than letting automation
+  invent governance-impacting prose.
 - Add package-native changelog tooling in the same change as any new public SDK
   publishing workflow. Do not reference `.changeset`,
   `scripts/update_rust_changelog.sh`, or `scripts/update_go_changelog.sh` until

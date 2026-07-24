@@ -2,12 +2,16 @@ use std::cell::RefCell;
 
 use getset::CopyGetters;
 
+#[cfg(feature = "halo2-axiom")]
+use crate::halo2_proofs::circuit::Cell;
+#[cfg(not(feature = "halo2-axiom"))]
+use crate::utils::halo2::raw_assign_advice;
 use crate::{
     gates::{
         circuit::CircuitBuilderStage,
         flex_gate::{BasicGateConfig, ThreadBreakPoints},
     },
-    utils::halo2::{raw_assign_advice, raw_constrain_equal},
+    utils::halo2::{raw_assign_advice_discarding_value, raw_constrain_equal},
     utils::ScalarField,
     virtual_region::copy_constraints::{CopyConstraintManager, SharedCopyConstraintManager},
     Context, ContextCell,
@@ -73,7 +77,10 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
     /// Creates a new [SinglePhaseCoreManager] with `use_unknown` flag set.
     /// * `use_unknown`: If true, during key generation witness [Value]s are replaced with Value::unknown() for safety.
     pub fn unknown(self, use_unknown: bool) -> Self {
-        Self { use_unknown, ..self }
+        Self {
+            use_unknown,
+            ..self
+        }
     }
 
     /// Mutates `self` to use the given copy manager everywhere, including in all threads.
@@ -141,7 +148,10 @@ impl<F: ScalarField> SinglePhaseCoreManager<F> {
 
     /// Returns total advice cells
     pub fn total_advice(&self) -> usize {
-        self.threads.iter().map(|ctx| ctx.advice.len()).sum::<usize>()
+        self.threads
+            .iter()
+            .map(|ctx| ctx.advice.len())
+            .sum::<usize>()
     }
 }
 
@@ -218,7 +228,11 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
 
         for (i, (advice, &q)) in ctx.advice.iter().zip(ctx.selector.iter()).enumerate() {
             let column = basic_gate.value;
-            let value = if use_unknown { Value::unknown() } else { Value::known(advice) };
+            let value = if use_unknown {
+                Value::unknown()
+            } else {
+                Value::known(advice)
+            };
             #[cfg(feature = "halo2-axiom")]
             let cell = region.assign_advice(column, row_offset, value).cell();
             #[cfg(not(feature = "halo2-axiom"))]
@@ -260,8 +274,9 @@ pub fn assign_with_constraints<F: ScalarField, const ROTATIONS: usize>(
                 #[cfg(feature = "halo2-axiom")]
                 let ncell = region.assign_advice(column, row_offset, value);
                 #[cfg(not(feature = "halo2-axiom"))]
-                let ncell =
-                    region.assign_advice(|| "", column, row_offset, || value.map(|v| *v)).unwrap();
+                let ncell = region
+                    .assign_advice(|| "", column, row_offset, || value.map(|v| *v))
+                    .unwrap();
                 raw_constrain_equal(region, ncell.cell(), cell);
             }
 
@@ -313,7 +328,25 @@ pub fn assign_witnesses<F: ScalarField>(
     for ctx in threads {
         // Assign advice values to the advice columns in each [Context]
         for (offset, advice) in ctx.advice.iter().enumerate() {
+            #[cfg(feature = "halo2-axiom")]
+            let cell = {
+                // The Axiom backend exposes physical coordinates directly, so
+                // avoid retaining an AssignedCell value solely to recover them.
+                let cell = Cell {
+                    row_offset,
+                    column: column.into(),
+                };
+                raw_assign_advice_discarding_value(
+                    region,
+                    column,
+                    row_offset,
+                    Value::known(advice),
+                );
+                cell
+            };
+            #[cfg(not(feature = "halo2-axiom"))]
             let cell = raw_assign_advice(region, column, row_offset, Value::known(advice)).cell();
+
             let virtual_cell = ContextCell::new(ctx.type_id, ctx.context_id, offset);
             if let Some(old_cell) = copy_manager.assigned_advices.insert(virtual_cell, cell) {
                 assert!(
@@ -328,7 +361,12 @@ pub fn assign_witnesses<F: ScalarField>(
                 gate_index += 1;
                 column = basic_gates[gate_index].value;
 
-                raw_assign_advice(region, column, row_offset, Value::known(advice));
+                raw_assign_advice_discarding_value(
+                    region,
+                    column,
+                    row_offset,
+                    Value::known(advice),
+                );
             }
 
             row_offset += 1;
@@ -342,9 +380,9 @@ mod physical_mapping_tests {
 
     use super::*;
     use crate::{
-        QuantumCell,
-        gates::circuit::{BaseCircuitParams, builder::BaseCircuitBuilder},
+        gates::circuit::{builder::BaseCircuitBuilder, BaseCircuitParams},
         halo2_proofs::{dev::MockProver, halo2curves::bn256::Fr},
+        QuantumCell,
     };
 
     const K: u32 = 6;
@@ -416,8 +454,7 @@ mod physical_mapping_tests {
     #[test]
     fn witness_assignment_maps_every_virtual_cell_stably_across_breakpoints() {
         let break_points = pinned_break_points();
-        let mut circuit =
-            BaseCircuitBuilder::<Fr>::prover(params(), vec![break_points.clone()]);
+        let mut circuit = BaseCircuitBuilder::<Fr>::prover(params(), vec![break_points.clone()]);
         let virtual_cells = circuit
             .main(0)
             .assign_witnesses(witness_values())

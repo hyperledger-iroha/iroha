@@ -1,7 +1,7 @@
 Reference replication order fixture set used by SDKs, Torii smoke tests, and the conformance harness.
 
 - `order_v1.json` – human-readable breakdown of the sample order (hex identifiers, decoded chunk plan, governance tickets).
-- `order_v1.to` – canonical Norito encoding generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
+- `order_v1.to` – canonical Norito encoding generated via `cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json`.
 
 Companion assets produced from the same fixture run live alongside this directory and keep the replication order, PDP fixture set, PoR proof set, and governance audit log in sync:
 

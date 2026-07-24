@@ -65,7 +65,7 @@ SDK)。エイリアスの不変性を無視して検証を処理します
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - コンテンガ フィクスチャ、プロプエスタ、決定レポートの作成を支援
@@ -103,14 +103,14 @@ SDK)。エイリアスの不変性を無視して検証を処理します
 
 ## ツールへの期待
 
-- `sorafs_manifest_chunk_store` y `sorafs_manifest_stub` 指数:
+- `sorafs_manifest_chunk_store` y `sorafs_manifest_builder` 指数:
   - `--list-profiles` 登録パラ検査。
   - `--promote-profile=<handle>` メタデータの一般的なブロック
     アルプロムーバーアンパーフィル。
   - `--json-out=-` パラ送信が標準出力、改訂ログを報告します
     再現可能。
 - `ensure_charter_compliance()` 関連するバイナリを呼び出します
-  (`manifest_chunk_store`、`provider_advert_stub`)。ラス プルエバス CI デベン フォールラー SI
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。ラス プルエバス CI デベン フォールラー SI
   ヌエバス・エントラーダス・ヴィオラン・ラ・カルタ。
 
 ## レジストロ- `docs/source/sorafs/reports/` に関する決定論的な報告を保護します。

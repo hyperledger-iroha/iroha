@@ -251,10 +251,11 @@ in-progress locales locally.
 - `scripts/sorafs-package-preview.sh` converts the preview site into a deterministic SoraFS bundle (CAR, plan, manifest) and, when credentials are supplied via a JSON config (see `docs/examples/sorafs_preview_publish.json`), can submit the manifest to a staging Torii endpoint.
 - `scripts/preview_verify.sh` performs the checksum + descriptor validation flow that reviewers previously executed manually. Point it at an extracted `build/` directory (and optional descriptor/archive paths) to confirm the preview artefacts are untampered.
 - `scripts/sorafs-pin-release.sh` implements the production SoraFS pipeline:
-  build/test, CAR and manifest generation, Sigstore signing, verification, and
-  optional alias binding. There is no dedicated Actions dispatch wrapper in
-  this repository; invoke the script only through the operator-reviewed release
-  process.
+  build/test, CAR and content-manifest generation, proof verification, and
+  optional alias binding. It does not authenticate a release. The reviewed
+  release process must fold its fixed inventory into the canonical aggregate
+  manifest and invoke `scripts/release_sorafs_cli.sh` with the governed external
+  Ed25519/HSM signer and SHA256-pinned native verifier.
 - `cargo run -p xtask --bin xtask -- soradns-verify-gar --gar <path> --name <fqdn> [...]` validates Gateway Authorization Records before they are signed or shipped to ops. The helper ensures canonical/pretty hosts, manifest metadata, and telemetry labels match the deterministic policy and can emit a JSON summary for DG-3 evidence via `--json-out`.
 - When a submission occurs, the pin helper also invokes `scripts/generate-dns-cutover-plan.mjs` to produce `artifacts/sorafs/portal.dns-cutover.json`. Set `DNS_CHANGE_TICKET`, `DNS_CUTOVER_WINDOW`, `DNS_HOSTNAME`, `DNS_ZONE`, and `DNS_OPS_CONTACT` (or pass the corresponding `--dns-*` flags) so the descriptor carries the metadata Ops needs for production DNS cutovers. When cache invalidation and rollback hooks are required, add `DNS_CACHE_PURGE_ENDPOINT`, `DNS_CACHE_PURGE_AUTH_ENV`, and `DNS_PREVIOUS_PLAN` (or the `--cache-purge-*` / `--previous-dns-plan` flags) so the descriptor records the purge API call and the prior descriptor for reversions. The descriptor now also documents the stapled `Sora-Route-Binding` (host, CID, header/binding paths, verification commands) so GAR promotion and fallback plan reviews reference the exact headers served at the edge.
 - The same workflow can emit the SNS zonefile skeleton/resolver snippet via `scripts/sns_zonefile_skeleton.py`. Provide IPv4/IPv6/CNAME/SPKI/TXT metadata (either as env vars such as `DNS_ZONEFILE_IPV4` or CLI flags like `--dns-zonefile-ipv4`), pass the GAR digest with `DNS_GAR_DIGEST`, and the helper will write `artifacts/sns/zonefiles/<zone>/<hostname>.json` (plus the resolver snippet) automatically so SN-7 evidence lands alongside the cutover descriptor.

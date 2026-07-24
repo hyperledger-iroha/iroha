@@ -41,7 +41,7 @@ kuzatilishi mumkin bo'lgan muhandislik vazifalari.
 ## Qabul ish jarayoni
 
 1. **Taklif yaratish**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` qo'shing
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` qo'shing
      `ProviderAdmissionProposalV1` + attestatsiya to'plamini ishlab chiqarish.
    - Tasdiqlash: `profile_id` da kerakli maydonlar, stavka > 0, kanonik chunker tutqichiga ishonch hosil qiling.
 2. **Boshqaruvni tasdiqlash**
@@ -61,7 +61,7 @@ kuzatilishi mumkin bo'lgan muhandislik vazifalari.
 | Hudud | Vazifa | Ega(lar)i | Holati |
 |------|------|----------|--------|
 | Sxema | `crates/sorafs_manifest/src/provider_admission.rs` ostida `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) ni aniqlang. `sorafs_manifest::provider_admission` da tekshirish yordamchilari bilan amalga oshirilgan.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Saqlash / Boshqarish | ✅ Tugallandi |
-| CLI asboblari | `sorafs_manifest_stub` ni quyi buyruqlar bilan kengaytiring: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Asboblar WG | ✅ |
+| CLI asboblari | `sorafs_manifest_builder` ni quyi buyruqlar bilan kengaytiring: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Asboblar WG | ✅ |
 
 CLI oqimi endi oraliq sertifikat paketlarini (`--endpoint-attestation-intermediate`) qabul qiladi, chiqaradi
 kanonik taklif/konvert baytlari va `sign`/`verify` davrida kengash imzolarini tasdiqlaydi. Operatorlar mumkin
@@ -70,7 +70,7 @@ Avtomatlashtirish qulayligi uchun `--council-signature-public-key` `--council-si
 
 ### CLI ma'lumotnomasi
 
-Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` orqali bajaring.
+Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` orqali bajaring.
 
 - `proposal`
   - Kerakli bayroqlar: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- pro
     dayjest va imzolar sonini olish.
 | Tekshirish | Torii, shlyuzlar va `sorafs-node` tomonidan foydalaniladigan umumiy tekshirgichni amalga oshiring. Birlik + CLI integratsiya testlarini taqdim eting.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Tarmoq TL / Saqlash | ✅ Tugallandi |
 | Torii integratsiyasi | Tasdiqlagichni Torii reklama qabuliga o'tkazing, siyosatdan tashqari reklamalarni rad eting, telemetriyani chiqaring. | Networking TL | ✅ Tugallandi | Torii endi boshqaruv konvertlarini (`torii.sorafs.admission_envelopes_dir`) yuklaydi, qabul qilish vaqtida dayjest/imzo mosligini tekshiradi va kirishni yuzaga chiqaradi telemetriya.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api. |
-| Yangilash | Yangilash/bekor qilish sxemasi + CLI yordamchilarini qo‘shing, hujjatlarda hayot aylanishi bo‘yicha qo‘llanmani nashr eting (quyida runbook va CLI buyruqlariga qarang). `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120】 Saqlash / Boshqarish | ✅ Tugallandi |
+| Yangilash | Yangilash/bekor qilish sxemasi + CLI yordamchilarini qo‘shing, hujjatlarda hayot aylanishi bo‘yicha qo‘llanmani nashr eting (quyida runbook va CLI buyruqlariga qarang). `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120】 Saqlash / Boshqarish | ✅ Tugallandi |
 | Telemetriya | `provider_admission` asboblar paneli va ogohlantirishlarni aniqlang (yangilash etishmayotgan, konvertning amal qilish muddati). | Kuzatish mumkinligi | 🟠 Davom etmoqda | `torii_sorafs_admission_total{result,reason}` hisoblagichi mavjud; asboblar paneli/ogohlantirishlar kutilmoqda.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### Yangilash va bekor qilish kitobi
 
@@ -117,7 +117,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- pro
 1. `provider-admission proposal` va `provider-admission sign` bilan voris taklifi/reklama juftligini yarating, `--retention-epoch` ni oshiring va kerak bo'lganda ulush/so'nggi nuqtalarni yangilang.
 2. Bajarmoq  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- pro
    ```
    Buyruq orqali o'zgarmagan imkoniyatlar/profil maydonlarini tasdiqlaydi
    `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` chiqaradi va uchun dayjestlarni chop etadi
-   boshqaruv jurnali.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   boshqaruv jurnali.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Oldingi konvertni `torii.sorafs.admission_envelopes_dir` bilan almashtiring, Norito/JSON yangilanishini boshqaruv omboriga topshiring va `docs/source/sorafs/migration_ledger.md` ga yangilash xesh + saqlash davrini qo'shing.
 4. Operatorlarga yangi konvertning faol ekanligi haqida xabar bering va qabul qilishni tasdiqlash uchun `torii_sorafs_admission_total{result="accepted",reason="stored"}` ni kuzatib boring.
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` orqali kanonik moslamalarni qayta tiklang va bajaring; CI (`ci/check_sorafs_fixtures.sh`) Norito chiqishlarining barqarorligini tasdiqlaydi.
@@ -135,7 +135,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- pro
 #### Favqulodda bekor qilish
 1. Buzilgan konvertni aniqlang va bekor qilish to'g'risida qaror chiqaring:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ Har bir buyruqni `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- pro
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` ga imzo qo'yadi, imzo to'plamini tasdiqlaydi
-   `verify_revocation_signatures` va bekor qilish dayjestini xabar qiladi.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
+   `verify_revocation_signatures` va bekor qilish dayjestini xabar qiladi.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
 2. `torii.sorafs.admission_envelopes_dir` dan konvertni olib tashlang, bekor qilish Norito/JSON ni qabul keshlariga tarqating va boshqaruv bayonnomasida xesh sababini yozib oling.
 3. Keshlar bekor qilingan reklamani tashlab yuborishini tasdiqlash uchun `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ni tomosha qiling; bekor qilish artefaktlarini voqea retrospektivlarida saqlang.
 

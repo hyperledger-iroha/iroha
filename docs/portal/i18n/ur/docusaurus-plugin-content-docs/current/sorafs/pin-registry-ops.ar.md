@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` چلائیں اور اس بات کو یقینی بنائیں کہ اعلان کردہ صلاحیتیں فالتو پن کی ضروریات سے ملتی ہیں۔
    - لیس GIB اور POR کامیابی کی تصدیق کے ل g گیجز `torii_sorafs_capacity_*` چیک کریں۔
 3. ** دوبارہ تکرار کی بحالی **
-   - `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب جمع مارجن (`stat="avg"`) 5 ای بکس سے نیچے آجاتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
+   - `sorafs_manifest_builder capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب جمع مارجن (`stat="avg"`) 5 ای بکس سے نیچے آجاتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - گورننس کا خطرہ اگر عرفیت میں فعال مینی فیسٹ بائنڈنگ کی کمی ہے (`torii_sorafs_registry_aliases_total` میں غیر متوقع ڈراپ)۔
 4. ** نتیجہ کی دستاویزات **
    - SoraFS عمل میں ٹائم اسٹیمپ اور ہضموں کے ساتھ ریکارڈ واقعے کے نوٹ۔

@@ -31,7 +31,7 @@ Takedown או שינויים בשימור (roadmap DA-10). העתיקו את ה-
 
 ## אימות חתימות
 - מקור משיכת המניפסט / כרטיס אחסון: `<hex>`
-- פקודת/פלט אימות: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (מצורף קטע לוג?)
+- פקודת/פלט אימות: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (מצורף קטע לוג?)
 - `manifest_blake3` כפי שדווח ע"י הכלי: `<digest>`
 - `chunk_digest_sha3_256` כפי שדווח ע"י הכלי: `<digest>`
 - מולטי-האש של חותמי המועצה:

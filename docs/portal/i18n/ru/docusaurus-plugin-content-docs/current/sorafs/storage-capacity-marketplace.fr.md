@@ -63,7 +63,7 @@ les livrables, необходимые для премьерного выпуск
 - Частные помощники (`CapacityMetadataEntry`, `PricingScheduleV1`, дорожка проверки/назначение/SLA) обеспечивают определенную проверку данных и отчетность об ошибках, которые можно повторно использовать для CI и инструментов. ниже по течению.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` предоставляет деформированный снимок в цепочке через `/v1/sorafs/capacity/state`, а также комбинированные декларации поставщиков и записи в реестре комиссий из Norito JSON. определитесь.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - La couverture de validation exerce l'application des handles canoniques, la detection du dublons, les Bornes par Lane, les Guards d'Asignation de Replication и les checks de plage de télémétrie для немедленной регрессии устройства. CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Оператор инструментов: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` конвертирует доступные спецификации в полезные нагрузки Norito каноны, большие двоичные объекты base64 и резюме JSON, чтобы операторы могли подготовить приспособления `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и порядок репликации с локалью проверки.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Референтные устройства, живущие в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и создаются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Оператор инструментов: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` конвертирует доступные спецификации в полезные нагрузки Norito каноны, большие двоичные объекты base64 и резюме JSON, чтобы операторы могли подготовить приспособления `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и порядок репликации с локалью проверки.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Референтные устройства, живущие в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и создаются через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Интеграция плана контроля| Таче | Владелец(и) | Заметки |
 |------|----------|-------|
@@ -147,13 +147,13 @@ ci-dessous для того, чтобы согласовать критерии �
 - Архиватор резюме в формате JSON и хешей `docs/examples/sorafs_capacity_marketplace_validation/` с пакетами управления.
 
 ### Превью спора и порезов
-- Отправитель споров через `sorafs_manifest_stub capacity dispute` (тесты:
+- Отправитель споров через `sorafs_manifest_builder capacity dispute` (тесты:
   `cargo test -p sorafs_car --test capacity_cli`) для защиты канонических полезных нагрузок.
 - Lancer `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` и наборы наказаний (`record_capacity_telemetry_penalises_persistent_under_delivery`) для доказательства того, что споры и косые черты радуют детерминистским поведением.
 - Suivre `docs/source/sorafs/dispute_revocation_runbook.md` для захвата превью и подъема; больше одобрений забастовки или раппорта де валидации.
 
 ### Привлечение поставщиков и дымовые проверки вылетов
-- Обновите артефакты декларации/телеметрии с `sorafs_manifest_stub capacity ...` и обновите тесты CLI перед запуском (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- Обновите артефакты декларации/телеметрии с `sorafs_manifest_builder capacity ...` и обновите тесты CLI перед запуском (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Суммируется через Torii (`/v1/sorafs/capacity/declare`) с помощью захвата `/v1/sorafs/capacity/state` и захватывает Grafana. Suivre le Flux de Sortie в `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - Архиватор знаков артефактов и результатов выверки
   `docs/examples/sorafs_capacity_marketplace_validation/`.

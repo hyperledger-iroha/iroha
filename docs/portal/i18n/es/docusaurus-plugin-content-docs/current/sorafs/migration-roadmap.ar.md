@@ -41,14 +41,14 @@ Utilice SoraFS.
 |--------|--------|-------|------------|----------|
 | accesorios de تدريبات | M0 | Ejecuciones en seco de un resumen del fragmento de `fixtures/sorafs_chunker`. نشر التقرير تحت `docs/source/sorafs/reports/`. | Proveedores de almacenamiento | `determinism-<date>.md` La prueba pasa/no pasa. |
 | فرض التواقيع | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` تفشل إذا انحرفت التواقيع أو manifiestos. anula la exención de التطوير تتطلب من الحوكمة مرفق بالـ PR. | Grupo de Trabajo sobre Herramientas | سجل CI، رابط تذكرة waiver (إن وجدت). |
-| Banderas de expectativa | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_stub` بتوقعات صريحة لتثبيت المخرجات: | Documentos CI | سكربتات محدثة تشير إلى indicadores de expectativa (انظر كتلة الأمر أدناه). |
+| Banderas de expectativa | M1 | خطوط الأنابيب تستدعي `sorafs_manifest_builder` بتوقعات صريحة لتثبيت المخرجات: | Documentos CI | سكربتات محدثة تشير إلى indicadores de expectativa (انظر كتلة الأمر أدناه). |
 | Fijación de registro primero | M2 | `sorafs pin propose` y `sorafs pin approve` manifiestan el manifiesto CLI الافتراضي يستخدم `--require-registry`. | Operaciones de gobernanza | Utilice el registro CLI para acceder a los archivos. |
 | تكافؤ observabilidad | M3 | Los programas Prometheus/Grafana utilizan fragmentos de manifiestos del registro التنبيهات موصولة بمناوبة ops. | Observabilidad | رابط لوحة، IDs قواعد التنبيه، نتائج GameDay. |
 
 #### أمر النشر القياسي
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

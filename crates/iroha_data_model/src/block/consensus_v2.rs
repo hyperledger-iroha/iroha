@@ -16,8 +16,10 @@ use super::Header as BlockHeader;
 use crate::{
     ChainId,
     account::AccountId,
-    nexus::{LaneId, PublicLaneValidatorRecord},
+    block::consensus::LaneBlockCommitment,
+    nexus::{DataSpaceId, LaneId, PublicLaneValidatorRecord},
     peer::PeerId,
+    transaction::signed::{TransactionEntrypoint, TransactionResult},
 };
 
 /// Durable finality artifacts associated with canonical Sumeragi v2 blocks.
@@ -53,6 +55,14 @@ pub const NPOS_BLS_DOMAIN: &str = "bls-iroha2:npos-sumeragi:v2";
 /// Maximum block-local Kagemusha top-up anchors authenticated by one execution commitment.
 pub const MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK: u32 = 16;
 const KAGEMUSHA_TOPUP_POST_STATE_ROOT_DOMAIN: &[u8] = b"iroha:kagemusha:v2:post-state-root";
+/// Canonical Native AMX application-manifest wire version.
+pub const NATIVE_AMX_APPLICATION_MANIFEST_VERSION: u16 = 1;
+/// Maximum participant route/incarnation leaves committed by one global block.
+pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES: u32 = 1_024;
+/// Maximum ordered source/result members in one participant application leaf.
+pub const MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS: usize = 4_096;
+const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN: &[u8] =
+    b"iroha:sumeragi:v2:native-amx-application-manifest:v1:empty";
 /// Canonical Nexus/AMX context commitment for the repository's recommended
 /// single-lane defaults and no staged public-lane validators.
 ///
@@ -726,6 +736,141 @@ pub struct BlockSubject {
     pub payload_hash: Hash,
 }
 
+/// Ordered result-bearing membership in one Native AMX participant application.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct NativeAmxApplicationManifestMemberV1 {
+    /// Zero-based index of the source entrypoint in the canonical external block payload.
+    pub entrypoint_index: u64,
+    /// Source transaction identity authenticated by both participant QCs.
+    pub source_id: [u8; Hash::LENGTH],
+    /// Typed hash of the exact canonical transaction entrypoint.
+    pub entrypoint_hash: HashOf<TransactionEntrypoint>,
+    /// Typed hash of the exact deterministic transaction result.
+    pub result_hash: HashOf<TransactionResult>,
+}
+
+/// Canonical result-bearing Native AMX participant application leaf.
+///
+/// A leaf is control evidence only. It binds one separate participant route to
+/// the global carrier that executed its economic effects; it does not authorize
+/// the participant lane to mutate WSV independently.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct NativeAmxApplicationManifestLeafV1 {
+    /// Exact leaf schema version. No legacy layout is decoded implicitly.
+    pub version: u16,
+    /// Participant lane route.
+    pub lane_id: LaneId,
+    /// Participant dataspace route.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active participant-lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Contiguous participant-local block height.
+    pub participant_height: u64,
+    /// Participant-local consensus view.
+    pub participant_view: u64,
+    /// Exact predecessor participant-local height.
+    pub predecessor_height: u64,
+    /// Descriptor hash of the predecessor, absent only at the incarnation genesis.
+    pub predecessor_descriptor_hash: Option<Hash>,
+    /// Exact certified participant descriptor hash.
+    pub descriptor_hash: Hash,
+    /// Exact certified participant proposal hash.
+    pub proposal_hash: Hash,
+    /// Hash of the exact zero-effect participant control settlement.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Ordered source, entrypoint, and result membership in canonical block order.
+    pub members: Vec<NativeAmxApplicationManifestMemberV1>,
+    /// Height of the canonical global application block.
+    pub application_block_height: u64,
+    /// Header hash of the canonical global application block.
+    pub application_block_hash: HashOf<BlockHeader>,
+    /// Hash of the canonical result-bearing global block wire.
+    pub executed_block_wire_hash: Hash,
+}
+
+impl NativeAmxApplicationManifestLeafV1 {
+    /// Validate the bounded, canonical leaf layout.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported version, a non-contiguous
+    /// predecessor, malformed or duplicate membership, or a missing identity.
+    pub fn validate(&self) -> Result<(), ValidationError> {
+        if self.version != NATIVE_AMX_APPLICATION_MANIFEST_VERSION {
+            return Err(ValidationError::InvalidNativeAmxApplicationManifestVersion);
+        }
+        if self.participant_height == 0
+            || self.application_block_height == 0
+            || self.predecessor_height.checked_add(1) != Some(self.participant_height)
+            || (self.predecessor_height == 0) != self.predecessor_descriptor_hash.is_none()
+        {
+            return Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf);
+        }
+        if self.members.is_empty()
+            || self.members.len() > MAX_NATIVE_AMX_APPLICATION_MANIFEST_MEMBERS
+            || self
+                .members
+                .windows(2)
+                .any(|pair| pair[0].entrypoint_index >= pair[1].entrypoint_index)
+            || self
+                .members
+                .iter()
+                .map(|member| member.source_id)
+                .collect::<BTreeSet<_>>()
+                .len()
+                != self.members.len()
+        {
+            return Err(ValidationError::InvalidNativeAmxApplicationManifestMembership);
+        }
+        let identities = [
+            self.lane_incarnation,
+            self.descriptor_hash,
+            self.proposal_hash,
+            Hash::from(self.settlement_hash),
+            Hash::from(self.application_block_hash),
+            self.executed_block_wire_hash,
+        ];
+        if identities
+            .iter()
+            .any(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+            || self
+                .predecessor_descriptor_hash
+                .is_some_and(|hash| hash.as_ref().iter().all(|byte| *byte == 0))
+            || self.members.iter().any(|member| {
+                member.source_id.iter().all(|byte| *byte == 0)
+                    || Hash::from(member.entrypoint_hash)
+                        .as_ref()
+                        .iter()
+                        .all(|byte| *byte == 0)
+                    || Hash::from(member.result_hash)
+                        .as_ref()
+                        .iter()
+                        .all(|byte| *byte == 0)
+            })
+        {
+            return Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf);
+        }
+        Ok(())
+    }
+}
+
+/// Canonical commitment used when a global block contains no separate
+/// Native AMX participant applications.
+#[must_use]
+pub fn native_amx_application_manifest_empty_root() -> Hash {
+    Hash::new(NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT_DOMAIN)
+}
+
 /// Deterministic state-transition commitment authenticated by every Prepare and Commit vote.
 ///
 /// The commitment is derived from the exact state-block execution witness
@@ -750,6 +895,12 @@ pub struct ExecutionCommitment {
     pub topup_anchor_root: Option<Hash>,
     /// Number of real Kagemusha top-up leaves committed by `topup_anchor_root`.
     pub topup_anchor_count: u32,
+    /// Exact Native AMX application-manifest schema version.
+    pub native_amx_application_manifest_version: u16,
+    /// Merkle root of canonical separate-participant application leaves.
+    pub native_amx_application_manifest_root: Hash,
+    /// Number of leaves committed by `native_amx_application_manifest_root`.
+    pub native_amx_application_manifest_count: u32,
     /// Hash of the canonical result-bearing block wire produced by deterministic execution.
     pub executed_block_wire_hash: Hash,
 }
@@ -757,7 +908,7 @@ pub struct ExecutionCommitment {
 impl ExecutionCommitment {
     /// Construct a transition that contains no Kagemusha top-up anchors.
     #[must_use]
-    pub const fn without_topups(
+    pub fn without_topups(
         parent_state_root: Hash,
         post_state_root: Hash,
         ordinary_writes_root: Hash,
@@ -769,6 +920,9 @@ impl ExecutionCommitment {
             ordinary_writes_root,
             topup_anchor_root: None,
             topup_anchor_count: 0,
+            native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+            native_amx_application_manifest_count: 0,
             executed_block_wire_hash,
         }
     }
@@ -788,12 +942,46 @@ impl ExecutionCommitment {
         topup_anchor_count: u32,
         executed_block_wire_hash: Hash,
     ) -> Result<Self, ValidationError> {
+        Self::new_with_native_amx_application_manifest(
+            parent_state_root,
+            post_state_root,
+            ordinary_writes_root,
+            topup_anchor_root,
+            topup_anchor_count,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            native_amx_application_manifest_empty_root(),
+            0,
+            executed_block_wire_hash,
+        )
+    }
+
+    /// Construct a commitment with an explicit Native AMX application manifest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when either the state-transition projection or the
+    /// versioned Native AMX manifest commitment is non-canonical.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_with_native_amx_application_manifest(
+        parent_state_root: Hash,
+        post_state_root: Hash,
+        ordinary_writes_root: Hash,
+        topup_anchor_root: Option<Hash>,
+        topup_anchor_count: u32,
+        native_amx_application_manifest_version: u16,
+        native_amx_application_manifest_root: Hash,
+        native_amx_application_manifest_count: u32,
+        executed_block_wire_hash: Hash,
+    ) -> Result<Self, ValidationError> {
         let commitment = Self {
             parent_state_root,
             post_state_root,
             ordinary_writes_root,
             topup_anchor_root,
             topup_anchor_count,
+            native_amx_application_manifest_version,
+            native_amx_application_manifest_root,
+            native_amx_application_manifest_count,
             executed_block_wire_hash,
         };
         commitment.validate()?;
@@ -803,17 +991,33 @@ impl ExecutionCommitment {
     /// Validate the canonical count/root relationship and combined top-up root.
     pub fn validate(&self) -> Result<(), ValidationError> {
         match (self.topup_anchor_count, self.topup_anchor_root) {
-            (0, None) => Ok(()),
-            (0, Some(_)) | (_, None) => Err(ValidationError::InvalidExecutionCommitment),
+            (0, None) => {}
+            (0, Some(_)) | (_, None) => {
+                return Err(ValidationError::InvalidExecutionCommitment);
+            }
             (count, Some(root)) if count <= MAX_KAGEMUSHA_TOPUP_ANCHORS_PER_BLOCK => {
                 if self.post_state_root
                     != Self::topup_post_state_root(count, self.ordinary_writes_root, root)
                 {
                     return Err(ValidationError::ExecutionCommitmentPostRootMismatch);
                 }
-                Ok(())
             }
-            (_, Some(_)) => Err(ValidationError::TooManyKagemushaTopupAnchors),
+            (_, Some(_)) => return Err(ValidationError::TooManyKagemushaTopupAnchors),
+        }
+        if self.native_amx_application_manifest_version != NATIVE_AMX_APPLICATION_MANIFEST_VERSION {
+            return Err(ValidationError::InvalidNativeAmxApplicationManifestVersion);
+        }
+        let empty_root = native_amx_application_manifest_empty_root();
+        match self.native_amx_application_manifest_count {
+            0 if self.native_amx_application_manifest_root == empty_root => Ok(()),
+            0 => Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment),
+            count if count > MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES => {
+                Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
+            }
+            _ if self.native_amx_application_manifest_root == empty_root => {
+                Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
+            }
+            _ => Ok(()),
         }
     }
 
@@ -3396,6 +3600,16 @@ pub enum ValidationError {
     TooManyKagemushaTopupAnchors,
     /// A top-up execution commitment's combined post root is not canonical.
     ExecutionCommitmentPostRootMismatch,
+    /// A Native AMX application manifest declared an unsupported version.
+    InvalidNativeAmxApplicationManifestVersion,
+    /// A Native AMX application manifest count/root pair is not canonical.
+    InvalidNativeAmxApplicationManifestCommitment,
+    /// A Native AMX application manifest exceeds the route-leaf bound.
+    TooManyNativeAmxApplicationManifestLeaves,
+    /// A Native AMX application leaf carries an invalid route or block identity.
+    InvalidNativeAmxApplicationManifestLeaf,
+    /// A Native AMX application leaf carries malformed ordered membership.
+    InvalidNativeAmxApplicationManifestMembership,
     /// An aggregate certificate or timeout group carries no aggregate signature.
     MissingAggregateSignature,
     /// A signature or aggregate exceeds the protocol allocation bound.
@@ -3543,6 +3757,21 @@ impl fmt::Display for ValidationError {
             }
             Self::ExecutionCommitmentPostRootMismatch => {
                 f.write_str("execution commitment post-state root is not canonical")
+            }
+            Self::InvalidNativeAmxApplicationManifestVersion => {
+                f.write_str("Native AMX application manifest version is unsupported")
+            }
+            Self::InvalidNativeAmxApplicationManifestCommitment => {
+                f.write_str("Native AMX application manifest count/root is not canonical")
+            }
+            Self::TooManyNativeAmxApplicationManifestLeaves => {
+                f.write_str("Native AMX application manifest exceeds the route-leaf limit")
+            }
+            Self::InvalidNativeAmxApplicationManifestLeaf => {
+                f.write_str("Native AMX application manifest leaf identity is malformed")
+            }
+            Self::InvalidNativeAmxApplicationManifestMembership => {
+                f.write_str("Native AMX application manifest membership is malformed")
             }
             Self::MissingAggregateSignature => {
                 f.write_str("certificate has an empty aggregate signature")
@@ -3851,6 +4080,164 @@ mod tests {
         );
     }
 
+    #[test]
+    fn execution_commitment_enforces_native_amx_manifest_shape_and_bound() {
+        #[derive(Encode)]
+        struct LegacyExecutionCommitment {
+            parent_state_root: Hash,
+            post_state_root: Hash,
+            ordinary_writes_root: Hash,
+            topup_anchor_root: Option<Hash>,
+            topup_anchor_count: u32,
+            executed_block_wire_hash: Hash,
+        }
+
+        let parent = Hash::new(b"native manifest parent");
+        let post = Hash::new(b"native manifest post");
+        let ordinary = Hash::new(b"native manifest ordinary");
+        let executed = Hash::new(b"native manifest executed wire");
+        let root = Hash::new(b"native manifest non-empty root");
+        let empty = ExecutionCommitment::without_topups(parent, post, ordinary, executed);
+        assert_eq!(
+            empty.native_amx_application_manifest_root,
+            native_amx_application_manifest_empty_root()
+        );
+        assert_eq!(empty.native_amx_application_manifest_count, 0);
+        assert_eq!(empty.validate(), Ok(()));
+        let legacy = LegacyExecutionCommitment {
+            parent_state_root: parent,
+            post_state_root: post,
+            ordinary_writes_root: ordinary,
+            topup_anchor_root: None,
+            topup_anchor_count: 0,
+            executed_block_wire_hash: executed,
+        }
+        .encode();
+        let mut legacy_cursor = legacy.as_slice();
+        assert!(
+            ExecutionCommitment::decode_all(&mut legacy_cursor).is_err(),
+            "the pre-manifest execution commitment must not decode implicitly"
+        );
+        let canonical = ExecutionCommitment::new_with_native_amx_application_manifest(
+            parent,
+            post,
+            ordinary,
+            None,
+            0,
+            NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            root,
+            1,
+            executed,
+        )
+        .expect("canonical Native AMX manifest commitment");
+        assert_eq!(canonical.validate(), Ok(()));
+
+        assert_eq!(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                root,
+                0,
+                executed,
+            ),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestCommitment)
+        );
+        assert_eq!(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                root,
+                MAX_NATIVE_AMX_APPLICATION_MANIFEST_LEAVES + 1,
+                executed,
+            ),
+            Err(ValidationError::TooManyNativeAmxApplicationManifestLeaves)
+        );
+        assert_eq!(
+            ExecutionCommitment::new_with_native_amx_application_manifest(
+                parent,
+                post,
+                ordinary,
+                None,
+                0,
+                NATIVE_AMX_APPLICATION_MANIFEST_VERSION + 1,
+                root,
+                1,
+                executed,
+            ),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestVersion)
+        );
+    }
+
+    #[test]
+    fn native_amx_manifest_leaf_rejects_reordered_or_duplicate_members() {
+        let member = |index: u64, source: u8| NativeAmxApplicationManifestMemberV1 {
+            entrypoint_index: index,
+            source_id: [source; Hash::LENGTH],
+            entrypoint_hash: HashOf::from_untyped_unchecked(Hash::new([source, 1])),
+            result_hash: HashOf::from_untyped_unchecked(Hash::new([source, 2])),
+        };
+        let mut leaf = NativeAmxApplicationManifestLeafV1 {
+            version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+            lane_id: LaneId::new(2),
+            dataspace_id: DataSpaceId::new(3),
+            lane_incarnation: Hash::new(b"native leaf incarnation"),
+            participant_height: 8,
+            participant_view: 4,
+            predecessor_height: 7,
+            predecessor_descriptor_hash: Some(Hash::new(b"native leaf predecessor")),
+            descriptor_hash: Hash::new(b"native leaf descriptor"),
+            proposal_hash: Hash::new(b"native leaf proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(b"native leaf settlement")),
+            members: vec![member(1, 0x11), member(2, 0x22)],
+            application_block_height: 21,
+            application_block_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native leaf application",
+            )),
+            executed_block_wire_hash: Hash::new(b"native leaf executed wire"),
+        };
+        assert_eq!(leaf.validate(), Ok(()));
+
+        leaf.members.swap(0, 1);
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestMembership)
+        );
+        leaf.members = vec![member(1, 0x11), member(2, 0x11)];
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestMembership)
+        );
+
+        leaf.members = vec![member(1, 0x11), member(2, 0x22)];
+        leaf.predecessor_descriptor_hash = Some(Hash::prehashed([0; Hash::LENGTH]));
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
+        );
+        leaf.predecessor_descriptor_hash = Some(Hash::new(b"native leaf predecessor"));
+        leaf.members[0].entrypoint_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
+        );
+        leaf.members[0] = member(1, 0x11);
+        leaf.members[1].result_hash =
+            HashOf::from_untyped_unchecked(Hash::prehashed([0; Hash::LENGTH]));
+        assert_eq!(
+            leaf.validate(),
+            Err(ValidationError::InvalidNativeAmxApplicationManifestLeaf)
+        );
+    }
+
     #[cfg(feature = "json")]
     #[test]
     fn genesis_context_json_uses_nexus_amx_context_name_only() {
@@ -4036,6 +4423,9 @@ mod tests {
                 ordinary_writes_root: Hash::new(b"ordinary writes"),
                 topup_anchor_root: None,
                 topup_anchor_count: 1,
+                native_amx_application_manifest_version: NATIVE_AMX_APPLICATION_MANIFEST_VERSION,
+                native_amx_application_manifest_root: native_amx_application_manifest_empty_root(),
+                native_amx_application_manifest_count: 0,
                 executed_block_wire_hash: Hash::new(b"executed block wire"),
             },
             signers: vec![0, 1, 2],

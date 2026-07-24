@@ -63,9 +63,9 @@ manifest, תג ה-retention וארטיפקטי Norito יישארו מקושרי�
 
 1. משכו את חבילת ה-manifest מ-Torii (`iroha app da get-blob --storage-ticket <hex>`
    או helper שקול ב-SDK) כדי שכולם יגבו hash של אותם בייטים שהגיעו ל-gateways.
-2. הריצו את מאמת ה-manifest stub עם המעטפה החתומה:
+2. הריצו את מאמת ה-manifest builder עם המעטפה החתומה:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

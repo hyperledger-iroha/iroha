@@ -609,7 +609,7 @@ pub fn persist_record(
 /// trusted context store. They are copied into the record only after the full
 /// pair passes structural, roster, PoP, and individual-signature validation.
 /// A canonical WSV key makes exact replay and swapped-pair replay idempotent.
-#[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
+#[cfg(test)]
 pub(crate) fn persist_sumeragi_v2_equivocation(
     state: &State,
     context: &wire_v2::HeightContext,

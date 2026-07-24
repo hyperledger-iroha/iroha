@@ -624,20 +624,18 @@ mod tests {
     fn enact_draft_response(proposal_id: [u8; 32]) -> norito::json::Value {
         use iroha::data_model::isi::{Instruction, frame_instruction_payload};
 
-        let instruction: InstructionBox =
-            iroha::data_model::isi::governance::EnactReferendum {
-                referendum_id: proposal_id,
-                preimage_hash: proposal_id,
-                at_window: iroha::data_model::governance::types::AtWindow {
-                    lower: 10,
-                    upper: 20,
-                },
-            }
-            .into();
+        let instruction: InstructionBox = iroha::data_model::isi::governance::EnactReferendum {
+            referendum_id: proposal_id,
+            preimage_hash: proposal_id,
+            at_window: iroha::data_model::governance::types::AtWindow {
+                lower: 10,
+                upper: 20,
+            },
+        }
+        .into();
         let wire_id = Instruction::id(&*instruction);
         let payload = Instruction::dyn_encode(&*instruction);
-        let framed =
-            frame_instruction_payload(wire_id, &payload).expect("frame enact instruction");
+        let framed = frame_instruction_payload(wire_id, &payload).expect("frame enact instruction");
         norito::json!({
             "ok": true,
             "tx_instructions": [{
@@ -652,13 +650,8 @@ mod tests {
         let proposal_id = [0xAB; 32];
         let response = enact_draft_response(proposal_id);
         let mut context = TestContext::new();
-        finish_enact(
-            &mut context,
-            &hex::encode(proposal_id),
-            false,
-            &response,
-        )
-        .expect("render enact draft");
+        finish_enact(&mut context, &hex::encode(proposal_id), false, &response)
+            .expect("render enact draft");
         assert!(context.submitted.is_none());
         assert_eq!(context.printed.len(), 1);
     }
@@ -668,13 +661,8 @@ mod tests {
         let proposal_id = [0xAC; 32];
         let response = enact_draft_response(proposal_id);
         let mut context = TestContext::new();
-        finish_enact(
-            &mut context,
-            &hex::encode(proposal_id),
-            true,
-            &response,
-        )
-        .expect("apply exact enact draft");
+        finish_enact(&mut context, &hex::encode(proposal_id), true, &response)
+            .expect("apply exact enact draft");
         let submitted = context.submitted.expect("submitted instructions");
         assert_eq!(submitted.len(), 1);
         let enactment = submitted[0]

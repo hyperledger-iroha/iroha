@@ -19,7 +19,7 @@ sidebar_label: Runbook de simulación de capacidad
 Esta página refleja `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Mantén ambas copias sincronizadas hasta que el conjunto de documentación heredada en Sphinx se haya migrado por completo.
 :::
 
-ראה ספר הפעלה הסבר על הוצאת ערכת סימולציה של השוק SF-2c עם תוצאות חזותיות. Valida la negociación de cuotas, el manejo de failover y la remediación de slashing de extremo a extremo usando los fixtures deterministas en `docs/examples/sorafs_capacity_simulation/`. Los loads de capacidad aún usan `sorafs_manifest_stub capacity`; ארה"ב `iroha app sorafs toolkit pack` עבור los flujos de empaquetado de manifest/CAR.
+ראה ספר הפעלה הסבר על הוצאת ערכת סימולציה של השוק SF-2c עם תוצאות חזותיות. Valida la negociación de cuotas, el manejo de failover y la remediación de slashing de extremo a extremo usando los fixtures deterministas en `docs/examples/sorafs_capacity_simulation/`. Los loads de capacidad aún usan `sorafs_manifest_builder capacity`; ארה"ב `iroha app sorafs toolkit pack` עבור los flujos de empaquetado de manifest/CAR.
 
 ## 1. חפצי אמנות כלליים של CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` envuelve `sorafs_manifest_stub capacity` עבור מטענים emitir Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
+`run_cli.sh` envuelve `sorafs_manifest_builder capacity` עבור מטענים emitir Norito, blobs base64, cuerpos de solicitud para Torii y resúmenes JSON para:
 
 - Tres declaraciones de proveedores que participan en el escenario de negociación de cuotas.
 - Una orden de replicación que asigna el manifiesto in staging entre esos proveedores.

@@ -63,7 +63,7 @@ os entregaveis exigidos para o primeiro lançamento e os divididos em trilhas ac
 - Ajudantes compartilhados (`CapacityMetadataEntry`, `PricingScheduleV1`, validadores de pista/atribuição/SLA) fornecem validação determinística de chaves e relatório de erro reutilizavel por CI e ferramentas downstream. [crates/sorafs_manifest/src/capacity.rs:230]
 - `PinProviderRegistry` agora expõe o snapshot on-chain via `/v1/sorafs/capacity/state`, combinando declarações de provedores e entradas do livro de taxas por meio de Norito JSON determinístico. [crates/iroha_torii/src/sorafs/registry.rs:17] [crates/iroha_torii/src/sorafs/api.rs:64]
 - A cobertura de validação, exercício de execução de cabos canônicos, detecção de duplicados, limites por via, guardas de atribuição de replicação e verificações de alcance de telemetria para que os regressos aparecam imediatamente no CI. [crates/sorafs_manifest/src/capacity.rs:792]
-- Tooling para operadores: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` converte especificações legíveis em payloads Norito canônicos, blobs base64 e resumos JSON para que operadores preparem fixtures de `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` e ordens de replicação com validação local. [crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1] Fixtures de referência vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) e são gerados via `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Tooling para operadores: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` converte especificações legíveis em payloads Norito canônicos, blobs base64 e resumos JSON para que operadores preparem fixtures de `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` e ordens de replicação com validação local. [crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1] Fixtures de referência vivem em `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) e são gerados via `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Integração do plano de controle| Tarefa | Responsavel(é) | Notas |
 |------|------------------|-------|
@@ -152,7 +152,7 @@ manter os critérios de aceitação em sincronia com a implementação.
   junto com pacotes de governança.
 
 ### Evidência de disputa e corte
-- Arquivar disputas via `sorafs_manifest_stub capacity dispute` (testes:
+- Arquivar disputas via `sorafs_manifest_builder capacity dispute` (testes:
   `cargo test -p sorafs_car --test capacity_cli`) para manter cargas úteis canônicas.
 - Execute `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` e como suítes
   de deliberação (`record_capacity_telemetry_penalises_persistent_under_delivery`) para provar
@@ -161,7 +161,7 @@ manter os critérios de aceitação em sincronia com a implementação.
   linke aprovações de greve no relatorio de validação.
 
 ### Onboarding de provedores e saída de testes de fumaça
-- Regenere artistas de declaração/telemetria com `sorafs_manifest_stub capacity ...` e rode os
+- Regenere artistas de declaração/telemetria com `sorafs_manifest_builder capacity ...` e rode os
   testes de CLI antes da submissão (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Submeta via Torii (`/v1/sorafs/capacity/declare`) e captura `/v1/sorafs/capacity/state` mais
   capturas de tela fazem Grafana. Siga o fluxo de saida em `docs/source/sorafs/capacity_onboarding_runbook.md`.

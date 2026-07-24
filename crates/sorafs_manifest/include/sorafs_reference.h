@@ -71,6 +71,11 @@ extern "C" {
 #define SORAFS_REFERENCE_PROFILE_WARM 2
 #define SORAFS_REFERENCE_PROFILE_ARCHIVE 3
 
+#define SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 64
+#define SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 32
+#define SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 67108864
+#define SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 1024
+
 typedef struct SorafsReferenceFfiBuffer {
   uint8_t *ptr;
   size_t len;
@@ -83,6 +88,13 @@ typedef struct SorafsReferenceFfiBundlePayload {
   const uint8_t *label_ptr;
   size_t label_len;
 } SorafsReferenceFfiBundlePayload;
+
+typedef struct SorafsReferenceFfiInput {
+  const uint8_t *bytes_ptr;
+  size_t bytes_len;
+  const uint8_t *label_ptr;
+  size_t label_len;
+} SorafsReferenceFfiInput;
 
 void sorafs_reference_free_buffer(SorafsReferenceFfiBuffer buffer);
 
@@ -186,6 +198,18 @@ SorafsReferenceFfiBuffer sorafs_reference_validate_governance_json(
     const uint8_t *bytes_ptr, size_t bytes_len, const uint8_t *label_ptr,
     size_t label_len, const uint8_t *expected_cid_ptr,
     size_t expected_cid_len, uint64_t generated_at);
+
+SorafsReferenceFfiBuffer
+sorafs_reference_validate_governance_dag_block_json(
+    const uint8_t *bytes_ptr, size_t bytes_len, const uint8_t *label_ptr,
+    size_t label_len, const uint8_t *expected_block_cid_ptr,
+    size_t expected_block_cid_len, uint64_t generated_at);
+
+SorafsReferenceFfiBuffer
+sorafs_reference_validate_governance_dag_head_chain_json(
+    const uint8_t *head_ptr, size_t head_len, const uint8_t *head_label_ptr,
+    size_t head_label_len, const SorafsReferenceFfiInput *blocks_ptr,
+    size_t blocks_len, uint64_t generated_at);
 
 SorafsReferenceFfiBuffer sorafs_reference_validate_bundle_json(
     const SorafsReferenceFfiBundlePayload *payloads_ptr, size_t payloads_len,

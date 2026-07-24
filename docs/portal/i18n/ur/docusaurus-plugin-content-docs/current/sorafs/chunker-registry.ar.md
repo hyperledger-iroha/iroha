@@ -84,8 +84,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 CARV1 + SHA-256 تعمیل راستہ جس میں واضح صارفین کی بات چیت کی ضرورت ہوتی ہے (`Accept-Chunker` + `Accept-Digest`)۔| اجزاء | حیثیت | نوٹ |
 | -------- | -------- | --------- |
 | `sorafs_manifest_chunk_store` | ✅ طاقت | مجاز ہینڈل + سروگیٹس کی تصدیق کرتا ہے ، `--json-out=-` کے ذریعے رپورٹس کی نشریات ، اور `ensure_charter_compliance()` کے ذریعے لاگ چارٹر کو نافذ کرتا ہے۔ |
-| `sorafs_manifest_stub` | ⚠ پرانا | متروک منشور تعمیر کنندہ ؛ کار/مینی فیسٹ ریپنگ کے لئے `iroha app sorafs toolkit pack` استعمال کریں اور `--plan=-` کو ناگزیر revalidation کے لئے رکھیں۔ |
-| `sorafs_provider_advert_stub` | ⚠ پرانا | صرف آف لائن توثیق اسسٹنٹ ؛ فراہم کنندہ اشتہارات کو تعیناتی پائپ لائن کے ذریعے تیار کیا جانا چاہئے اور `/v1/sorafs/providers` کے ذریعے تصدیق کی جانی چاہئے۔ |
+| `sorafs_manifest_builder` | ⚠ پرانا | متروک منشور تعمیر کنندہ ؛ کار/مینی فیسٹ ریپنگ کے لئے `iroha app sorafs toolkit pack` استعمال کریں اور `--plan=-` کو ناگزیر revalidation کے لئے رکھیں۔ |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (ڈویلپر آرکسٹریٹر) | ✅ طاقت | `chunk_fetch_specs` `range` پاور پے لوڈ کو پڑھتا اور سمجھتا ہے اور CARV2 آؤٹ پٹ جمع کرتا ہے۔ |
 | SDK (زنگ/GO/TS) کے لئے فکسچر | ✅ طاقت | `export_vectors` کے ذریعے دوبارہ پیدا ہوا ؛ منظور شدہ ہینڈل ہر متبادل کی فہرست میں پہلے ظاہر ہوتا ہے اور بورڈ کے لفافوں میں دستخط ہوتا ہے۔ |
 | بات چیت گیٹ وے فائلیں Torii | ✅ طاقت | اس میں مکمل `Accept-Chunker` قواعد نافذ کیے گئے ہیں ، اس میں `Content-Chunker` ہیڈر شامل ہیں ، اور صرف واضح ڈاون گریڈ درخواستوں کے لئے برج CARV1 کو بے نقاب کرتا ہے۔ |
@@ -138,12 +138,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_stub--list-chunker-profiles
+$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_builder--list-chunker-profiles
 کے بعد کے کے لئے کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا ، کے آیا کے ایل کے کے لئے کے یا.
   {
     "پروفائل_ آئی ڈی": 1 ،
@@ -206,4 +206,4 @@ CARV1+SHA-2 ایکسپورٹ راہ کے ساتھ:
   `fixtures/sorafs_chunker` اور گروپ کے تحت رجسٹرڈ
   `fuzz/sorafs_chunker`۔ زنگ ، گو ، اور نوڈ میں ٹرمینل برابری کو دستیاب ٹیسٹوں کے ذریعے آزمایا جاتا ہے۔
 *`chunker_registry::lookup_by_profile` اس بات کی تصدیق کرتا ہے کہ تفصیل کے پیرامیٹرز حادثاتی انحرافات سے بچانے کے لئے `ChunkProfile::DEFAULT` سے ملتے ہیں۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` کے ذریعہ پیدا ہونے والے منشور میں لاگ ڈیٹا شامل ہیں۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_builder` کے ذریعہ پیدا ہونے والے منشور میں لاگ ڈیٹا شامل ہیں۔

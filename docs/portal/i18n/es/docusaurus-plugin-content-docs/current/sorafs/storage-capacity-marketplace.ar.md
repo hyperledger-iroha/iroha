@@ -53,7 +53,7 @@ Aquí está el mensaje `docs/source/sorafs/storage_capacity_marketplace.md`. ح�
 - يعبر `CapacityTelemetryV1` عن instantáneas الحقبة (GiB المعلنة مقابل المستخدمة، عدادات النسخ، نسب uptime/PoR) التي تغذي توزيع الرسوم. La configuración de la configuración de la red es 0-100%.【crates/sorafs_manifest/src/capacity.rs:476】
 - Ayudantes de ayuda (`CapacityMetadataEntry` y `PricingScheduleV1` y carril/asignación/SLA) تحقق مفاتيح حتمي وتقارير أخطاء يمكن Para CI y herramientas posteriores están disponibles.【crates/sorafs_manifest/src/capacity.rs:230】
 - يعرض `PinProviderRegistry` Instantánea على السلسلة عبر `/v1/sorafs/capacity/state`, جامعاً إعلانات المزودين y خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】- تغطي اختبارات التحقق فرض maneja القياسية, كشف التكرار، حدود carril, حمايات تعيين النسخ المتماثل، وفحوص نطاق Las aplicaciones de CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Contenido del paquete: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` Especificaciones del producto Compatible con cargas útiles Norito, blobs base64 y archivos JSON يتمكن المشغلون من تجهيز accesorios لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق Más `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Contenido del paquete: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` Especificaciones del producto Compatible con cargas útiles Norito, blobs base64 y archivos JSON يتمكن المشغلون من تجهيز accesorios لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق Más `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم| المهمة | Propietario(s) | ملاحظات |
 |------|----------|-------|
@@ -134,12 +134,12 @@ Aquí está el mensaje `docs/source/sorafs/storage_capacity_marketplace.md`. ح�
   Paquetes de gobernanza de بجانب.
 
 ### Disputa y evidencia de reducción
-- قدّم disputas عبر `sorafs_manifest_stub capacity dispute` (اختبارات:
+- قدّم disputas عبر `sorafs_manifest_builder capacity dispute` (اختبارات:
   `cargo test -p sorafs_car --test capacity_cli`) حتى تبقى cargas útiles قياسية.
 - شغّل `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` وحزم العقوبات
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) لإثبات أن disputas y barras diagonales تُعاد حتميا.
 - اتبع `docs/source/sorafs/dispute_revocation_runbook.md` لالتقاط الأدلة والتصعيد؛ اربط موافقات huelga في تقرير التحقق.### Pruebas de humo de incorporación y salida de proveedores
-- أعد توليد artefactos للإعلان/التليمترية باستخدام `sorafs_manifest_stub capacity ...` y تشغيل اختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- أعد توليد artefactos للإعلان/التليمترية باستخدام `sorafs_manifest_builder capacity ...` y تشغيل اختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Utilice Torii (`/v1/sorafs/capacity/declare`) o `/v1/sorafs/capacity/state` o Grafana. Utilice el dispositivo `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف artefactos الموقعة ومخرجات reconciliación داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 

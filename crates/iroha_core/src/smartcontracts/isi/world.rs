@@ -6898,9 +6898,7 @@ pub mod isi {
             || !matching_entrypoints[0].params.is_empty()
             || matching_entrypoints[0].argument_schema.is_some()
             || matching_entrypoints[0].permission.as_deref()
-                != Some(
-                    crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION,
-                )
+                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires one argument-free autonomous entrypoint protected by exact contract-selector authorization"
@@ -7030,9 +7028,7 @@ pub mod isi {
             || matching_pool_entrypoints[0].kind
                 != iroha_data_model::smart_contract::manifest::EntryPointKind::Kotoage
             || matching_pool_entrypoints[0].permission.as_deref()
-                != Some(
-                    crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION,
-                )
+                != Some(crate::validation_fee::VALIDATION_FEE_PAYOUT_WRAPPER_ENTRYPOINT_PERMISSION)
         {
             return Err(InstructionExecutionError::InvariantViolation(
                 "validation-fee payout lifecycle requires one exact protected public pool swap selector"
@@ -20367,12 +20363,11 @@ pub mod isi {
                 crate::validation_fee::permission_targets_enacted_validation_fee_payout_trigger(
                     state_transaction,
                     permission,
+                ) || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
+                    state_transaction,
+                    permission,
                 )
-                    || crate::validation_fee::enacted_validation_fee_payout_runtime_permission_owner(
-                        state_transaction,
-                        permission,
-                    )
-                    .is_some()
+                .is_some()
             }) {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "an enacted validation-fee payout lifecycle forbids role delegation of its trigger or exact runtime permissions"
@@ -20947,10 +20942,9 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let asset_definition_id: AssetDefinitionId =
-                "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                    .parse()
-                    .expect("canonical asset definition id");
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
             let permission: Permission = CanTransferAsset {
                 asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
             }
@@ -20959,10 +20953,9 @@ pub mod isi {
             super::require_absent_validation_fee_payout_effect_permission(&stx, &permission)
                 .expect("an absent effect permission is eligible for protected derivation");
 
-            stx.world.account_permissions.insert(
-                BOB_ID.clone(),
-                Permissions::from([permission.clone()]),
-            );
+            stx.world
+                .account_permissions
+                .insert(BOB_ID.clone(), Permissions::from([permission.clone()]));
             let direct_error =
                 super::require_absent_validation_fee_payout_effect_permission(&stx, &permission)
                     .expect_err("a caller-made direct effect grant must fail closed");
@@ -20972,9 +20965,7 @@ pub mod isi {
             );
             stx.world.account_permissions.remove(BOB_ID.clone());
 
-            let role_id: RoleId = "validation_fee_effect_holder"
-                .parse()
-                .expect("role id");
+            let role_id: RoleId = "validation_fee_effect_holder".parse().expect("role id");
             let role = Role::new(role_id.clone(), ALICE_ID.clone())
                 .add_permission(permission.clone())
                 .build(&ALICE_ID);
@@ -21014,10 +21005,9 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let asset_definition_id: AssetDefinitionId =
-                "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
-                    .parse()
-                    .expect("canonical asset definition id");
+            let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+                .parse()
+                .expect("canonical asset definition id");
             let permission: Permission = CanTransferAsset {
                 asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
             }

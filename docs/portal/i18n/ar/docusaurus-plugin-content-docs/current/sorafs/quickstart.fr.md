@@ -65,12 +65,12 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. إنشاء بيان وتوقيعه
 
 قم بتغليف خطة القطع والأسماء المستعارة وتوقيعات الإدارة في الأمم المتحدة
-البيان عبر `sorafs-manifest-stub`. يوضح الأمر ci-dessous الحمولة
+البيان عبر `sorafs-manifest-builder`. يوضح الأمر ci-dessous الحمولة
 ملف فريد ; قم بتمرير مسار ذخيرة لتغليف شجرة (la CLI le
 parcourt en ordre lexicographique).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

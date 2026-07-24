@@ -8,8 +8,9 @@ use iroha_data_model::{
     block::BlockHeader,
     da::commitment::DaProofScheme,
     merge::{
-        LaneDrainCertificateV1, MergeExecutionBatch, MergeLaneBinding, MergeLaneExecution,
-        MergeLaneSnapshot, MergeLedgerEntry, MergeQuorumCertificate,
+        LaneDrainCertificateV1, MERGE_LEDGER_ENTRY_VERSION_V1, MergeExecutionBatch,
+        MergeLaneBinding, MergeLaneExecution, MergeLaneSnapshot, MergeLedgerEntry,
+        MergeQuorumCertificate,
     },
     nexus::{DataSpaceId, LaneConfig, LaneId, LaneStorageProfile, LaneVisibility},
     peer::PeerId,
@@ -44,7 +45,10 @@ const MERGE_CANDIDATE_BODY_DOMAIN_TAG: &[u8] = b"iroha:merge:candidate-body:v1\0
 
 /// Merge-ledger entry data required for signature payloads.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode)]
+#[norito(deny_unknown_fields)]
 pub struct MergeLedgerCandidate {
+    /// Exact merge-entry layout this candidate will become.
+    pub version: u8,
     /// Epoch/height for the merge entry.
     pub epoch_id: u64,
     /// Merge committee view derived from lane tips.
@@ -72,6 +76,15 @@ pub struct MergeLedgerCandidate {
 }
 
 impl MergeLedgerCandidate {
+    /// Current supported candidate/entry layout.
+    pub const VERSION: u8 = MERGE_LEDGER_ENTRY_VERSION_V1;
+
+    /// Return whether this candidate advertises the current first-release layout.
+    #[must_use]
+    pub const fn has_current_version(&self) -> bool {
+        self.version == Self::VERSION
+    }
+
     /// Return the canonical framed Norito body transferred before QC signing.
     #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
@@ -113,6 +126,7 @@ impl MergeLedgerCandidate {
     #[must_use]
     pub fn into_entry(self, merge_qc: MergeQuorumCertificate) -> MergeLedgerEntry {
         MergeLedgerEntry {
+            version: self.version,
             epoch_id: self.epoch_id,
             lane_catalog_hash: self.lane_catalog_hash,
             active_lanes: self.active_lanes,
@@ -130,6 +144,7 @@ impl MergeLedgerCandidate {
 impl From<&MergeLedgerEntry> for MergeLedgerCandidate {
     fn from(entry: &MergeLedgerEntry) -> Self {
         Self {
+            version: entry.version,
             epoch_id: entry.epoch_id,
             view: entry.merge_qc.view,
             carrier_height: entry.merge_qc.carrier_height,
@@ -179,6 +194,7 @@ pub fn merge_ledger_entry_reference_matches(
 
 #[derive(Encode)]
 struct MergeLedgerSignPayload {
+    version: u8,
     chain_id_digest: Hash,
     validator_set_hash_version: u16,
     validator_set_hash: HashOf<Vec<PeerId>>,
@@ -205,6 +221,7 @@ pub fn merge_qc_message_digest(
     validator_set_hash: HashOf<Vec<PeerId>>,
 ) -> Hash {
     let payload = MergeLedgerSignPayload {
+        version: candidate.version,
         chain_id_digest: merge_chain_id_digest(chain_id),
         validator_set_hash_version,
         validator_set_hash,
@@ -753,6 +770,7 @@ mod tests {
             activation_height: 1,
         }];
         let candidate = MergeLedgerCandidate {
+            version: MergeLedgerCandidate::VERSION,
             epoch_id: 7,
             view: 3,
             carrier_height: 10,
@@ -787,6 +805,13 @@ mod tests {
         let digest_a = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
         let digest_b = merge_qc_message_digest(&chain_id, &candidate, 1, validator_set_hash);
         assert_eq!(digest_a, digest_b);
+        let mut other_version = candidate.clone();
+        other_version.version = MergeLedgerCandidate::VERSION + 1;
+        assert_ne!(
+            digest_a,
+            merge_qc_message_digest(&chain_id, &other_version, 1, validator_set_hash),
+            "the entry layout version must be bound into the merge QC signature payload"
+        );
 
         let drain_keypair = KeyPair::try_from_seed(
             b"merge-digest-drain-validator".to_vec(),
@@ -805,16 +830,26 @@ mod tests {
                     dataspace_id,
                     lane_incarnation,
                     close_global_height: 8,
-                    initial_merged_lane_height: 9,
-                    initial_merged_descriptor_hash: Some(Hash::new(b"drain-initial")),
+                    initial_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                        lane_id,
+                        dataspace_id,
+                        lane_incarnation,
+                        9,
+                        Some(Hash::new(b"drain-final")),
+                    ),
                     validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                     validator_set_hash: HashOf::new(&drain_validators),
                     validator_set: drain_validators.clone(),
                     validator_count: 1,
                     min_quorum: 1,
                 },
-                final_lane_block_height: 9,
-                final_lane_block_descriptor_hash: Some(Hash::new(b"drain-final")),
+                final_frontier: iroha_data_model::merge::LaneDrainFrontierV1::ordinary(
+                    lane_id,
+                    dataspace_id,
+                    lane_incarnation,
+                    9,
+                    Some(Hash::new(b"drain-final")),
+                ),
             },
             validator_set: drain_validators,
             signers_bitmap: vec![1],

@@ -58,7 +58,7 @@ description: خطة SF-2c لسوق السعة، أوامر النسخ المتم
 - توفر helpers المشتركة (`CapacityMetadataEntry` و`PricingScheduleV1` ومدققات lane/assignment/SLA) تحقق مفاتيح حتمي وتقارير أخطاء يمكن لـ CI والـ downstream tooling إعادة استخدامها.【crates/sorafs_manifest/src/capacity.rs:230】
 - يعرض `PinProviderRegistry` الآن snapshot على السلسلة عبر `/v1/sorafs/capacity/state`، جامعاً إعلانات المزودين وإدخالات fee ledger خلف Norito JSON حتمي.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - تغطي اختبارات التحقق فرض handles القياسية، كشف التكرار، حدود lane، حمايات تعيين النسخ المتماثل، وفحوص نطاق التليمترية حتى تظهر الانحدارات فوراً في CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- أدوات المشغل: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` تحول specs المقروءة من البشر إلى Norito payloads قياسية، base64 blobs وملخصات JSON حتى يتمكن المشغلون من تجهيز fixtures لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 توجد Reference fixtures في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- أدوات المشغل: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` تحول specs المقروءة من البشر إلى Norito payloads قياسية، base64 blobs وملخصات JSON حتى يتمكن المشغلون من تجهيز fixtures لـ `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وأوامر النسخ المتماثل مع تحقق محلي.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 توجد Reference fixtures في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ويتم توليدها عبر `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. تكامل طبقة التحكم
 
@@ -145,14 +145,14 @@ description: خطة SF-2c لسوق السعة، أوامر النسخ المتم
   بجانب governance packets.
 
 ### מחלוקת ופיזור ראיות
-- قدّم disputes عبر `sorafs_manifest_stub capacity dispute` (اختبارات:
+- قدّم disputes عبر `sorafs_manifest_builder capacity dispute` (اختبارات:
   `cargo test -p sorafs_car --test capacity_cli`) حتى تبقى payloads قياسية.
 - شغّل `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` وحزم العقوبات
   (`record_capacity_telemetry_penalises_persistent_under_delivery`) لإثبات أن disputes و slashes تُعاد حتميا.
 - اتبع `docs/source/sorafs/dispute_revocation_runbook.md` لالتقاط الأدلة والتصعيد؛ اربط موافقات strike في تقرير التحقق.
 
 ### בדיקות עשן ויציאה של ספק
-- أعد توليد artefacts للإعلان/التليمترية باستخدام `sorafs_manifest_stub capacity ...` وأعد تشغيل اختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
+- أعد توليد artefacts للإعلان/التليمترية باستخدام `sorafs_manifest_builder capacity ...` وأعد تشغيل اختبارات CLI قبل الإرسال (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - أرسل عبر Torii (`/v1/sorafs/capacity/declare`) ثم التقط `/v1/sorafs/capacity/state` مع لقطات Grafana. اتبع مسار الخروج في `docs/source/sorafs/capacity_onboarding_runbook.md`.
 - أرشِف artefacts الموقعة ومخرجات reconciliation داخل `docs/examples/sorafs_capacity_marketplace_validation/`.
 

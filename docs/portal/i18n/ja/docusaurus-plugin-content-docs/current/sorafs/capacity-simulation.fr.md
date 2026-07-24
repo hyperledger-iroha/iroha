@@ -19,7 +19,7 @@ Sidebar_label: 容量のシミュレーションのランブック
 Cette ページは `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` を参照します。 Gardez les deux は、ドキュメントのアンサンブルとスフィンクスの統合を同期させます。
 :::
 
-Ce Runbook の明示的なコメントは、SF-2C の容量を市場でシミュレーションするためのキットと結果を視覚化するツールです。 `docs/examples/sorafs_capacity_simulation/` は、クォータの交渉、フェイルオーバーの発生、および試合中の修正の決定を有効にします。容量を使用したペイロード `sorafs_manifest_stub capacity`; `iroha app sorafs toolkit pack` は、マニフェスト/CAR のフラックス ダンプを利用します。
+Ce Runbook の明示的なコメントは、SF-2C の容量を市場でシミュレーションするためのキットと結果を視覚化するツールです。 `docs/examples/sorafs_capacity_simulation/` は、クォータの交渉、フェイルオーバーの発生、および試合中の修正の決定を有効にします。容量を使用したペイロード `sorafs_manifest_builder capacity`; `iroha app sorafs toolkit pack` は、マニフェスト/CAR のフラックス ダンプを利用します。
 
 ## 1. アーティファクト CLI の生成
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` カプセル化 `sorafs_manifest_stub capacity` ペイロード Norito、ブロブ Base64、リクエスト Torii および履歴 JSON を注ぎます:
+`run_cli.sh` カプセル化 `sorafs_manifest_builder capacity` ペイロード Norito、ブロブ Base64、リクエスト Torii および履歴 JSON を注ぎます:
 
 - ノルマ交渉のトロワ宣言参加者。
 - 定期的な準備を整えるためのマニフェストの複製を作成します。

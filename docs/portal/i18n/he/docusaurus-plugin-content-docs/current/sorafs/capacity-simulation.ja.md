@@ -26,7 +26,7 @@ description: הפעלת ערכת הסימולציה של שוק הקיבולת S
 דף זה משקף את `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. שמרו על שתי העתקות מסונכרנות עד שמערכת התיעוד הישנה של Sphinx תועבר במלואה.
 :::
 
-מדריך זה מסביר כיצד להריץ את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. הוא מאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הדטרמיניסטיים תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_stub capacity`; השתמשו ב‑`iroha app sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
+מדריך זה מסביר כיצד להריץ את ערכת הסימולציה של שוק הקיבולת SF-2c וכיצד להמחיש את המדדים המתקבלים. הוא מאמת משא ומתן על מכסות, טיפול ב‑failover ותיקון slashing מקצה לקצה באמצעות ה‑fixtures הדטרמיניסטיים תחת `docs/examples/sorafs_capacity_simulation/`. ה‑payloads של הקיבולת עדיין משתמשים ב‑`sorafs_manifest_builder capacity`; השתמשו ב‑`iroha app sorafs toolkit pack` לזרימות אריזה של manifest/CAR.
 
 ## 1. הפקת ארטיפקטים של CLI
 
@@ -35,7 +35,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` עוטף את `sorafs_manifest_stub capacity` כדי להפיק payloads של Norito, blobs של base64, גופי בקשה ל‑Torii וסיכומי JSON עבור:
+`run_cli.sh` עוטף את `sorafs_manifest_builder capacity` כדי להפיק payloads של Norito, blobs של base64, גופי בקשה ל‑Torii וסיכומי JSON עבור:
 
 - שלוש הצהרות ספקים המשתתפות בתרחיש משא ומתן על מכסות.
 - הוראת שכפול שמקצה את המניפסט המוכן בין הספקים הללו.

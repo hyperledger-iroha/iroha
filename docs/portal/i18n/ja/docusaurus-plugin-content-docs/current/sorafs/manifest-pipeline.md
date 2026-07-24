@@ -53,7 +53,7 @@ JSON には順序付きのオフセット、長さ、チャンクダイジェス
 - 評議会の署名と任意のメタデータ（例: build ID）。
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

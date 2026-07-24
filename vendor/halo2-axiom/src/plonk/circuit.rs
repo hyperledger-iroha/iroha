@@ -672,6 +672,20 @@ pub trait Assignment<F: Field> {
         to: Value<Assigned<F>>,
     ) -> Value<&'v Assigned<F>>;
 
+    /// Assign an advice value when the caller does not need its returned value.
+    ///
+    /// Backends may override this to avoid retaining an [`Assigned`] value after
+    /// it has been copied into their proving representation. The default keeps
+    /// the ordinary assignment semantics for existing backends.
+    fn assign_advice_discarding_value(
+        &mut self,
+        column: Column<Advice>,
+        row: usize,
+        to: Value<Assigned<F>>,
+    ) {
+        let _ = self.assign_advice(column, row, to);
+    }
+
     /// Assign a fixed value
     fn assign_fixed(&mut self, column: Column<Fixed>, row: usize, to: Assigned<F>);
 

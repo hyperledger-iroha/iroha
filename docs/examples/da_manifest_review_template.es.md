@@ -27,7 +27,7 @@ payloads Norito firmados y los artefactos de CI referenciados abajo.
 
 ## Verificacion de firmas
 - Fuente de descarga del manifiesto / ticket de storage: `<hex>`
-- Comando/salida de verificacion: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (fragmento de log adjunto?)
+- Comando/salida de verificacion: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (fragmento de log adjunto?)
 - `manifest_blake3` reportado por la herramienta: `<digest>`
 - `chunk_digest_sha3_256` reportado por la herramienta: `<digest>`
 - Multihashes del firmante del consejo:

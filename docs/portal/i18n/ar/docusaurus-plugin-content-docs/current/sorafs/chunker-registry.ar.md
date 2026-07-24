@@ -81,8 +81,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 | المكون | الحالة | تعليقات |
 |--------|--------|---------|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | إذا كان المفحوص مؤهلاً + بديلاً، ويستحق التقدير عبر `--json-out=-`، ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ البيان القديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` إعادة التصديق الحتمية. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد يتحقق غير متصل فقط؛ يجب إنتاج إعلانات مزود الخدمة عبر خط النشر والتحقق منها عبر `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ قديم | مُنشئ البيان القديم؛ استخدم `iroha app sorafs toolkit pack` لتغليف CAR/manifest وأبقِ `--plan=-` إعادة التصديق الحتمية. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (منسق المطور) | ✅ مدعوم | تمت طباعة `chunk_fetch_specs` ويفهم قدرة تكتيكية `range` ويجمع من إخراج CARv2. |
 | تركيبات للـ SDK (Rust/Go/TS) | ✅ مدعوم | يُعاد توليدها عبر `export_vectors`؛ المقبض سيظهر في كل قائمة استبدال ويعوقّ بواسطة أظرف المجلس. |
 | التفاوض على ملفات البوابة Torii | ✅ مدعوم | يطبق كامل متطلبات `Accept-Chunker`، يفهم ترويسات `Content-Chunker`، ويعرض Bridge CARv1 فقط لطلبات الرجوع إلى إصدار أقدم من الصريحة. |
@@ -133,12 +133,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+تشغيل البضائع $ -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "profile_id": 1،
@@ -199,4 +199,4 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
   `fixtures/sorafs_chunker` والمجموعات الأصلية تحت
   `fuzz/sorafs_chunker`. يتم اختبار التكافؤ الطرفي في Rust وGo وNode عبر المنطقة المتاحة.
 * تؤكد `chunker_registry::lookup_by_profile` أن معلمات الوصف تطابق `ChunkProfile::DEFAULT` للحماية من الانحرافات العرضية.
-*تتضمن البيانات الصادرة عن سجل بيانات `iroha app sorafs toolkit pack` و `sorafs_manifest_stub`.
+*تتضمن البيانات الصادرة عن سجل بيانات `iroha app sorafs toolkit pack` و `sorafs_manifest_builder`.

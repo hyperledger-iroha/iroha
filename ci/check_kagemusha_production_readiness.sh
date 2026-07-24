@@ -38,6 +38,7 @@ CATALOG = "crates/iroha_core/src/smartcontracts/isi/offline/kagemusha_terminal_r
 CORE = "crates/iroha_core/src/smartcontracts/isi/offline.rs"
 STEP_TRANSITION = "crates/iroha_core/src/zk/kagemusha_step_transition.rs"
 RECURSIVE_BACKEND = "crates/iroha_core/src/zk/kagemusha_v2.rs"
+RECURSION_ADAPTER = "crates/iroha_core/src/zk/kagemusha_recursion_adapter.rs"
 VALUE_CONTRACT = "crates/iroha_data_model/tests/kagemusha_value_contract.rs"
 SCHEMA_GOLDEN = "crates/iroha_data_model/tests/offline_public_schema_golden.rs"
 CONFIG = "crates/iroha_config/src/parameters/user.rs"
@@ -66,6 +67,16 @@ FINAL_METADATA = (
     "cryptographic-review.evidence",
     "promotion-record-v4.norito",
 )
+MAX_RELEASE_DIRECTORIES = 16
+MAX_RELEASE_INVENTORY_ENTRIES = len(ARTIFACTS + FINAL_METADATA)
+MAX_MANIFEST_BYTES = 1024 * 1024
+MAX_DIGEST_SIDECAR_BYTES = 65
+MAX_RELEASE_ATTESTATION_BYTES = 1024 * 1024
+MAX_BENCHMARK_EVIDENCE_BYTES = 16 * 1024 * 1024
+MAX_CRYPTOGRAPHIC_REVIEW_BYTES = 1024 * 1024
+MAX_PROMOTION_RECORD_BYTES = 1024 * 1024
+MAX_DECLARED_ARTIFACT_BYTES = 256 * 1024 * 1024
+READ_CHUNK_BYTES = 1024 * 1024
 ROUTE_LITERALS = (
     "/v1/offline/readiness",
     "/v1/offline/top-up",
@@ -158,6 +169,132 @@ def read(relative: str, errors: list[str]) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def read_regular_bounded(path: Path, maximum_bytes: int, label: str) -> bytes:
+    """Read one pinned regular file without trusting path metadata as an allocation size."""
+
+    before = path.lstat()
+    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
+        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
+    if before.st_size <= 0 or before.st_size > maximum_bytes:
+        raise ValueError(f"{label} violates its {maximum_bytes}-byte size limit")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    chunks: list[bytes] = []
+    try:
+        opened = os.fstat(descriptor)
+        identity = (before.st_dev, before.st_ino)
+        if (
+            not os.path.samestat(before, opened)
+            or opened.st_nlink != 1
+            or opened.st_size != before.st_size
+        ):
+            raise ValueError(f"{label} changed while it was opened")
+        size = 0
+        while True:
+            chunk = os.read(descriptor, min(READ_CHUNK_BYTES, maximum_bytes + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > maximum_bytes:
+                raise ValueError(f"{label} exceeds its size limit")
+            chunks.append(chunk)
+        after_open = os.fstat(descriptor)
+        after_path = path.lstat()
+        if (
+            (after_path.st_dev, after_path.st_ino) != identity
+            or not os.path.samestat(before, after_open)
+            or size != before.st_size
+            or after_path.st_size != size
+            or after_path.st_mtime_ns != before.st_mtime_ns
+            or after_path.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError(f"{label} changed while it was read")
+    finally:
+        os.close(descriptor)
+    return b"".join(chunks)
+
+
+def inspect_regular_prefix(
+    path: Path,
+    expected_bytes: int,
+    maximum_bytes: int,
+    prefix_bytes: int,
+    label: str,
+) -> bytes:
+    """Inspect only a bounded prefix while pinning the complete file's identity and size."""
+
+    before = path.lstat()
+    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
+        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
+    if expected_bytes <= 0 or expected_bytes > maximum_bytes or before.st_size != expected_bytes:
+        raise ValueError(f"{label} does not match its bounded declared size")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        if not os.path.samestat(before, opened) or opened.st_nlink != 1:
+            raise ValueError(f"{label} changed while it was opened")
+        prefix = os.read(descriptor, prefix_bytes)
+        after_open = os.fstat(descriptor)
+        after_path = path.lstat()
+        if (
+            len(prefix) != prefix_bytes
+            or not os.path.samestat(before, after_open)
+            or not os.path.samestat(before, after_path)
+            or after_path.st_size != before.st_size
+            or after_path.st_mtime_ns != before.st_mtime_ns
+            or after_path.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError(f"{label} changed while it was inspected")
+        return prefix
+    finally:
+        os.close(descriptor)
+
+
+def evidence_is_non_placeholder(path: Path, maximum_bytes: int, label: str) -> bool:
+    """Scan bounded evidence without retaining the complete file in memory."""
+
+    before = path.lstat()
+    if path.is_symlink() or not path.is_file() or before.st_nlink != 1:
+        raise ValueError(f"{label} must be a singly-linked non-symlink regular file")
+    if before.st_size < 64 or before.st_size > maximum_bytes:
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    placeholder = re.compile(rb"(?:placeholder|synthetic|dummy|todo|not[ -]?reviewed)", re.I)
+    tail = b""
+    size = 0
+    found = False
+    try:
+        opened = os.fstat(descriptor)
+        if not os.path.samestat(before, opened) or opened.st_nlink != 1:
+            raise ValueError(f"{label} changed while it was opened")
+        while True:
+            chunk = os.read(descriptor, min(READ_CHUNK_BYTES, maximum_bytes + 1 - size))
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > maximum_bytes:
+                return False
+            scan = tail + chunk
+            found = found or placeholder.search(scan) is not None
+            tail = scan[-64:]
+        after_open = os.fstat(descriptor)
+        after_path = path.lstat()
+        if (
+            not os.path.samestat(before, after_open)
+            or not os.path.samestat(before, after_path)
+            or size != before.st_size
+            or after_path.st_size != size
+            or after_path.st_mtime_ns != before.st_mtime_ns
+            or after_path.st_ctime_ns != before.st_ctime_ns
+        ):
+            raise ValueError(f"{label} changed while it was scanned")
+    finally:
+        os.close(descriptor)
+    return not found
+
+
 def require(text: str, relative: str, errors: list[str], *needles: str) -> None:
     for needle in needles:
         if needle not in text:
@@ -194,6 +331,7 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
             CORE,
             STEP_TRANSITION,
             RECURSIVE_BACKEND,
+            RECURSION_ADAPTER,
             VALUE_CONTRACT,
             SCHEMA_GOLDEN,
             CONFIG,
@@ -271,8 +409,11 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "connect_norito_kagemusha_recursive_spend_artifact_set_is_installed_v4",
         "connect_norito_kagemusha_recursive_spend_installed_manifest_sha256_v4",
         "installed.validate_live_inventory()?",
-        "installed.authenticated_verifier_artifacts()?",
-        "installed.authenticated_prover_artifacts()?",
+        "from_authenticated_artifact_spool_loader(",
+        "from_candidate_artifact_spool_loader(",
+        "fn authenticated_proving_key_spool(",
+        "fn candidate_proving_key_spool(",
+        "shared_terminal_verifier_v5()",
         '"authenticated-v4-artifact-installation"',
         "connect_norito_kagemusha_recursive_spend_init_v4",
         "connect_norito_kagemusha_recursive_spend_append_v4",
@@ -311,8 +452,27 @@ def static_errors(overrides: dict[str, str] | None = None) -> list[str]:
         "pub struct KagemushaReleaseCatalogV4",
         "pub fn load(policy_path: &Path, artifact_dir: &Path)",
         "exactly eight artifacts",
-        "KagemushaPastaCycleVerifierArtifactsV4::new",
+        "KagemushaPastaCycleOpaqueVerifierV4::from_authenticated_artifact_loader",
+        "DEFAULT_KAGEMUSHA_CATALOG_MAX_DECODED_BYTES_V4",
         "KAGEMUSHA_RECURSIVE_SPEND_RELEASE_MAX_PROMOTION_BYTES_V4",
+    )
+    runtime_profile_validation = texts[RECURSION_ADAPTER].split(
+        "fn validate_kagemusha_profile_protocol_v4<C>(", 1
+    )[-1].split("fn terminal_validate_kagemusha_eq_bootstrap_v4(", 1)[0]
+    forbid(
+        runtime_profile_validation,
+        "runtime Kagemusha protocol validation",
+        errors,
+        "keygen_vk",
+        "kagemusha_bootstrap_verifying_key_v1",
+        "validate_bootstrap_protocol",
+    )
+    require(
+        runtime_profile_validation,
+        "runtime Kagemusha protocol validation",
+        errors,
+        "kagemusha_compiled_protocol_structure_sha256",
+        "KagemushaStepBootstrapV4::decode_authenticated",
     )
     require_pattern(
         texts[CATALOG],
@@ -420,7 +580,10 @@ def strict_json(path: Path) -> dict[str, object]:
             result[key] = value
         return result
 
-    value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=object_pairs)
+    value = json.loads(
+        read_regular_bounded(path, MAX_MANIFEST_BYTES, "manifest JSON").decode("utf-8"),
+        object_pairs_hook=object_pairs,
+    )
     if not isinstance(value, dict):
         raise ValueError("manifest JSON must be an object")
     return value
@@ -459,7 +622,12 @@ def promotion_errors() -> list[str]:
         ]
     policy = Path(policy_text)
     artifact_root = Path(artifact_text)
-    if not policy.is_file() or policy.is_symlink() or policy.stat().st_size == 0:
+    if (
+        not policy.is_file()
+        or policy.is_symlink()
+        or policy.stat().st_size == 0
+        or policy.stat().st_size > 64 * 1024
+    ):
         errors.append("promotion policy must be a nonempty regular file")
     if not artifact_root.is_dir() or artifact_root.is_symlink():
         errors.append("promotion artifact root must be a real directory")
@@ -481,27 +649,53 @@ def promotion_errors() -> list[str]:
         errors.append("promotion requires a locally verifiable signature on HEAD")
     authenticated_verification_allowed = not errors
 
-    directories = sorted(path for path in artifact_root.iterdir())
+    directories = []
+    for path in artifact_root.iterdir():
+        directories.append(path)
+        if len(directories) > MAX_RELEASE_DIRECTORIES:
+            errors.append(
+                f"promotion artifact root exceeds {MAX_RELEASE_DIRECTORIES} releases"
+            )
+            return errors
+    directories.sort()
     if not directories:
         errors.append("promotion artifact root contains no manifest-digest releases")
         return errors
     expected_inventory = set(ARTIFACTS + FINAL_METADATA)
-    placeholder = re.compile(rb"(?:placeholder|synthetic|dummy|todo|not[ -]?reviewed)", re.I)
     for directory in directories:
         directory_error_count = len(errors)
         if not directory.is_dir() or directory.is_symlink() or not re.fullmatch(r"[0-9a-f]{64}", directory.name):
             errors.append(f"noncanonical release entry: {directory.name}")
             continue
-        actual = {path.name for path in directory.iterdir()}
+        actual = set()
+        for path in directory.iterdir():
+            actual.add(path.name)
+            if len(actual) > MAX_RELEASE_INVENTORY_ENTRIES:
+                errors.append(f"{directory.name}: final release inventory is oversized")
+                break
         if actual != expected_inventory:
             errors.append(f"{directory.name}: final release inventory is not exact")
             continue
-        manifest_bytes = (directory / "manifest.norito").read_bytes()
+        try:
+            manifest_bytes = read_regular_bounded(
+                directory / "manifest.norito", MAX_MANIFEST_BYTES, "manifest.norito"
+            )
+        except (OSError, ValueError) as error:
+            errors.append(f"{directory.name}: invalid manifest.norito: {error}")
+            continue
         digest = hashlib.sha256(manifest_bytes).hexdigest()
         if digest != directory.name:
             errors.append(f"{directory.name}: directory does not equal manifest SHA-256")
-        if (directory / "manifest.norito.sha256").read_text(encoding="ascii") != f"{digest}\n":
-            errors.append(f"{directory.name}: manifest digest sidecar is not canonical")
+        try:
+            sidecar = read_regular_bounded(
+                directory / "manifest.norito.sha256",
+                MAX_DIGEST_SIDECAR_BYTES,
+                "manifest digest sidecar",
+            )
+            if sidecar != f"{digest}\n".encode("ascii"):
+                errors.append(f"{directory.name}: manifest digest sidecar is not canonical")
+        except (OSError, ValueError) as error:
+            errors.append(f"{directory.name}: invalid manifest digest sidecar: {error}")
         try:
             manifest = strict_json(directory / "manifest.json")
         except (OSError, UnicodeError, ValueError, json.JSONDecodeError) as error:
@@ -519,19 +713,48 @@ def promotion_errors() -> list[str]:
                     roles.extend(profile["artifacts"])
         if len(roles) != 8:
             errors.append(f"{directory.name}: manifest does not bind exactly eight artifacts")
-        for name in ARTIFACTS:
-            payload = (directory / name).read_bytes()
-            if len(payload) <= 16 or not payload.startswith(b"KRV4KEY\0"):
-                errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
-        for name in (
-            "release-attestation-v4.norito",
-            "physical-device-benchmark.evidence",
-            "cryptographic-review.evidence",
-            "promotion-record-v4.norito",
-        ):
-            payload = (directory / name).read_bytes()
-            if len(payload) < 64 or placeholder.search(payload):
-                errors.append(f"{directory.name}/{name}: missing non-placeholder evidence bytes")
+        declared_artifacts: dict[str, int] = {}
+        for role in roles:
+            if not isinstance(role, dict):
+                continue
+            name = role.get("file_name")
+            size_bytes = role.get("size_bytes")
+            if isinstance(name, str) and isinstance(size_bytes, int) and not isinstance(size_bytes, bool):
+                declared_artifacts[name] = size_bytes
+        if set(declared_artifacts) != set(ARTIFACTS):
+            errors.append(f"{directory.name}: manifest artifact names are not exact")
+        elif sum(declared_artifacts.values()) > MAX_DECLARED_ARTIFACT_BYTES:
+            errors.append(
+                f"{directory.name}: declared artifacts exceed {MAX_DECLARED_ARTIFACT_BYTES} bytes"
+            )
+        else:
+            for name in ARTIFACTS:
+                try:
+                    prefix = inspect_regular_prefix(
+                        directory / name,
+                        declared_artifacts[name],
+                        MAX_DECLARED_ARTIFACT_BYTES,
+                        8,
+                        f"artifact {name}",
+                    )
+                    if prefix != b"KRV4KEY\0":
+                        errors.append(f"{directory.name}/{name}: invalid KRV4 framing")
+                except (OSError, ValueError) as error:
+                    errors.append(f"{directory.name}/{name}: invalid artifact: {error}")
+        evidence_limits = (
+            ("release-attestation-v4.norito", MAX_RELEASE_ATTESTATION_BYTES),
+            ("physical-device-benchmark.evidence", MAX_BENCHMARK_EVIDENCE_BYTES),
+            ("cryptographic-review.evidence", MAX_CRYPTOGRAPHIC_REVIEW_BYTES),
+            ("promotion-record-v4.norito", MAX_PROMOTION_RECORD_BYTES),
+        )
+        for name, maximum in evidence_limits:
+            try:
+                if not evidence_is_non_placeholder(directory / name, maximum, name):
+                    errors.append(
+                        f"{directory.name}/{name}: missing non-placeholder evidence bytes"
+                    )
+            except (OSError, ValueError) as error:
+                errors.append(f"{directory.name}/{name}: invalid evidence: {error}")
         if authenticated_verification_allowed and len(errors) == directory_error_count:
             command = release_verifier_command(directory, policy)
             verified = subprocess.run(

@@ -90,8 +90,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 | اجزاء | حیثیت | نوٹ |
 | ----------- | -------- | ------- |
 | `sorafs_manifest_chunk_store` | ✅ سپورٹ | کیننیکل ہینڈل + عرف کی توثیق کرتا ہے ، Iroha کے ذریعے رپورٹوں کو منتقل کرتا ہے اور `ensure_charter_compliance()` کے ساتھ رجسٹری لیٹر کا اطلاق کرتا ہے۔ |
-| `sorafs_manifest_stub` | ⚠ ریٹائرڈ | سپورٹ سے باہر منشور تعمیر کنندہ ؛ کار/مینی فیسٹ پیکیجنگ کے لئے `iroha app sorafs toolkit pack` استعمال کریں اور A18NI00000059x کو عین مطابق تعی .ن کے ل. رکھیں۔ |
-| `sorafs_provider_advert_stub` | ⚠ ریٹائرڈ | صرف آف لائن توثیق مددگار ؛ فراہم کنندہ اشتہارات کو اشاعت پائپ لائن کے ذریعہ تیار کیا جانا چاہئے اور `/v1/sorafs/providers` کے ذریعے توثیق کی جانی چاہئے۔ |
+| `sorafs_manifest_builder` | ⚠ ریٹائرڈ | سپورٹ سے باہر منشور تعمیر کنندہ ؛ کار/مینی فیسٹ پیکیجنگ کے لئے `iroha app sorafs toolkit pack` استعمال کریں اور A18NI00000059x کو عین مطابق تعی .ن کے ل. رکھیں۔ |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (ڈویلپر آرکسٹریٹر) | ✅ سپورٹ | `chunk_fetch_specs` کو پڑھتا ہے ، `range` صلاحیت پے لوڈ کو سمجھتا ہے ، اور CARV2 آؤٹ پٹ کو جمع کرتا ہے۔ |
 | ایس ڈی کے فکسچر (زنگ/گو/ٹی ایس) | ✅ سپورٹ | `export_vectors` کے ذریعے دوبارہ پیدا ہوا ؛ کیننیکل ہینڈل ہر عرف کی فہرست میں پہلے ظاہر ہوتا ہے اور کونسل کے لفافوں کے ذریعہ اس پر دستخط ہوتے ہیں۔ |
 | گیٹ وے میں پروفائل مذاکرات Torii | ✅ سپورٹ | مکمل `Accept-Chunker` گرائمر کو نافذ کرتا ہے ، `Content-Chunker` ہیڈر شامل ہے ، اور صرف واضح ڈاون گریڈ درخواستوں میں CARV1 پل کو بے نقاب کرتا ہے۔ |
@@ -147,12 +147,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-El manifest stub refleja los mismos datos, lo que es conveniente al automatizar la selección de
+El manifest builder refleja los mismos datos, lo que es conveniente al automatizar la selección de
 `--chunker-profile-id` en pipelines. Ambos CLIs de chunk store también aceptan la forma de handle canónico
 (`--profile=sorafs.sf1@1.0.0`) para que los scripts de build puedan evitar hard-codear IDs numéricos:
 
 ```
-$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_stub--list-chunker-profiles
+$ کارگو رن -پی sorafs_manifest-bin sorafs_manifest_builder--list-chunker-profiles
 کے بعد کے کے لئے کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا کے آیا ، کے آیا کے ایل کے کے لئے کے یا.
   {
     "پروفائل_ آئی ڈی": 1 ،
@@ -218,4 +218,4 @@ HTTP مذاکرات پر انحصار کیے بغیر۔
   فراہم کردہ شواہد کے ذریعے۔
 * `chunker_registry::lookup_by_profile` نے زور دیا ہے کہ ڈسکرپٹر پیرامیٹرز
   حادثاتی تفریق سے بچنے کے لئے `ChunkProfile::DEFAULT` سے میچ کریں۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` کے ذریعہ تیار کردہ منشور میں ریکارڈ میٹا ڈیٹا شامل ہے۔
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_builder` کے ذریعہ تیار کردہ منشور میں ریکارڈ میٹا ڈیٹا شامل ہے۔

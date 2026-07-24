@@ -4,6 +4,11 @@ use norito::json::{Map, Value};
 
 use crate::{PorChunkTree, PorLeaf, PorMerkleTree, PorProof, PorSegment};
 
+const POR_PROOF_MAX_SEGMENT_LEAVES: usize = crate::POR_SEGMENT_SIZE / crate::POR_LEAF_SIZE;
+const POR_PROOF_MAX_CHUNK_SEGMENTS: usize =
+    (4 * 1024 * 1024_usize).div_ceil(crate::POR_SEGMENT_SIZE);
+const POR_PROOF_MAX_CHUNK_ROOTS: usize = 2_048;
+
 /// Convert the full PoR tree into a Norito JSON value (root → chunks → segments → leaves).
 #[must_use]
 pub fn tree_to_value(tree: &PorMerkleTree) -> Value {
@@ -110,6 +115,29 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
     let obj = value
         .as_object()
         .ok_or_else(|| "expected PoR proof JSON object".to_string())?;
+    const FIELDS: &[&str] = &[
+        "payload_len",
+        "chunk_index",
+        "chunk_offset",
+        "chunk_length",
+        "chunk_digest_hex",
+        "chunk_root_hex",
+        "segment_index",
+        "segment_offset",
+        "segment_length",
+        "segment_digest_hex",
+        "leaf_index",
+        "leaf_offset",
+        "leaf_length",
+        "leaf_bytes_hex",
+        "leaf_digest_hex",
+        "segment_leaves_hex",
+        "chunk_segments_hex",
+        "chunk_roots_hex",
+    ];
+    if let Some(field) = obj.keys().find(|field| !FIELDS.contains(&field.as_str())) {
+        return Err(format!("unknown field `{field}` in canonical PoR proof"));
+    }
     let payload_len = expect_u64(obj, "payload_len")?;
     let chunk_index = expect_usize(obj, "chunk_index")?;
     let chunk_offset = expect_u64(obj, "chunk_offset")?;
@@ -123,11 +151,17 @@ pub fn proof_from_value(value: &Value) -> Result<PorProof, String> {
     let leaf_index = expect_usize(obj, "leaf_index")?;
     let leaf_offset = expect_u64(obj, "leaf_offset")?;
     let leaf_length = expect_u32(obj, "leaf_length")?;
-    let leaf_bytes = hex_to_vec(expect_str(obj, "leaf_bytes_hex")?)?;
+    let leaf_bytes_hex = expect_str(obj, "leaf_bytes_hex")?;
+    if leaf_bytes_hex.len() > crate::POR_LEAF_SIZE * 2 {
+        return Err("leaf_bytes_hex exceeds the canonical PoR leaf bound".to_string());
+    }
+    let leaf_bytes = hex_to_vec(leaf_bytes_hex)?;
     let leaf_digest = expect_digest(obj, "leaf_digest_hex")?;
-    let segment_leaves = expect_digest_array(obj, "segment_leaves_hex")?;
-    let chunk_segments = expect_digest_array(obj, "chunk_segments_hex")?;
-    let chunk_roots = expect_digest_array(obj, "chunk_roots_hex")?;
+    let segment_leaves =
+        expect_digest_array(obj, "segment_leaves_hex", POR_PROOF_MAX_SEGMENT_LEAVES)?;
+    let chunk_segments =
+        expect_digest_array(obj, "chunk_segments_hex", POR_PROOF_MAX_CHUNK_SEGMENTS)?;
+    let chunk_roots = expect_digest_array(obj, "chunk_roots_hex", POR_PROOF_MAX_CHUNK_ROOTS)?;
 
     Ok(PorProof {
         payload_len,
@@ -284,11 +318,16 @@ fn expect_digest(map: &Map, key: &str) -> Result<[u8; 32], String> {
     parse_digest_hex(expect_str(map, key)?)
 }
 
-fn expect_digest_array(map: &Map, key: &str) -> Result<Vec<[u8; 32]>, String> {
+fn expect_digest_array(map: &Map, key: &str, maximum: usize) -> Result<Vec<[u8; 32]>, String> {
     let values = map
         .get(key)
         .and_then(Value::as_array)
         .ok_or_else(|| format!("missing or invalid {key} array in PoR proof"))?;
+    if values.len() > maximum {
+        return Err(format!(
+            "{key} exceeds the canonical PoR proof bound of {maximum} entries"
+        ));
+    }
     values
         .iter()
         .map(|value| {
@@ -304,7 +343,7 @@ fn parse_digest_hex(hex: &str) -> Result<[u8; 32], String> {
     let bytes = hex_to_vec(hex)?;
     if bytes.len() != 32 {
         return Err(format!(
-            "expected 32-byte digest, found {} bytes for hex {hex}",
+            "expected 32-byte digest, found {} bytes",
             bytes.len()
         ));
     }
@@ -315,7 +354,13 @@ fn parse_digest_hex(hex: &str) -> Result<[u8; 32], String> {
 
 fn hex_to_vec(hex: &str) -> Result<Vec<u8>, String> {
     if !hex.len().is_multiple_of(2) {
-        return Err(format!("odd-length hex string: {hex}"));
+        return Err("odd-length hexadecimal string".to_string());
+    }
+    if !hex
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("hexadecimal value must use canonical lowercase encoding".to_string());
     }
     let mut out = Vec::with_capacity(hex.len() / 2);
     let bytes = hex.as_bytes();
@@ -331,7 +376,6 @@ fn from_hex_digit(byte: u8) -> Result<u8, String> {
     match byte {
         b'0'..=b'9' => Ok(byte - b'0'),
         b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
         _ => Err(format!("invalid hex digit: {byte}")),
     }
 }
@@ -349,6 +393,84 @@ fn to_hex(bytes: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn canonical_proof_value() -> Value {
+        let payload = (0_u16..512)
+            .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let mut store = crate::ChunkStore::new();
+        store
+            .ingest_bytes(&payload)
+            .expect("ingest canonical PoR JSON fixture");
+        let (_, proof) = store
+            .sample_leaves(1, 11, &payload)
+            .expect("sample canonical PoR JSON fixture")
+            .into_iter()
+            .next()
+            .expect("one canonical PoR JSON sample");
+        proof_to_value(&proof)
+    }
+
+    #[test]
+    fn proof_json_is_closed_canonical_and_self_verifying() {
+        let value = canonical_proof_value();
+        let proof = proof_from_value(&value).expect("parse canonical PoR proof");
+        let root = crate::hash_root(proof.payload_len, &proof.chunk_roots);
+        assert!(proof.verify(&root));
+
+        let mut unknown = value.as_object().expect("proof object").clone();
+        unknown.insert("payload".into(), Value::from("retired"));
+        assert!(
+            proof_from_value(&Value::Object(unknown))
+                .expect_err("unknown nested proof field must fail")
+                .contains("unknown field")
+        );
+
+        let mut uppercase = value.as_object().expect("proof object").clone();
+        uppercase.insert("chunk_digest_hex".into(), Value::from("AA".repeat(32)));
+        assert!(
+            proof_from_value(&Value::Object(uppercase))
+                .expect_err("uppercase proof digest must fail")
+                .contains("canonical lowercase")
+        );
+    }
+
+    #[test]
+    fn proof_json_rejects_leaf_and_digest_array_bombs() {
+        let canonical = canonical_proof_value()
+            .as_object()
+            .expect("proof object")
+            .clone();
+
+        let mut leaf_bomb = canonical.clone();
+        leaf_bomb.insert(
+            "leaf_bytes_hex".into(),
+            Value::from("aa".repeat(crate::POR_LEAF_SIZE + 1)),
+        );
+        assert!(
+            proof_from_value(&Value::Object(leaf_bomb))
+                .expect_err("oversized leaf must fail")
+                .contains("leaf bound")
+        );
+
+        for (field, maximum) in [
+            ("segment_leaves_hex", POR_PROOF_MAX_SEGMENT_LEAVES),
+            ("chunk_segments_hex", POR_PROOF_MAX_CHUNK_SEGMENTS),
+            ("chunk_roots_hex", POR_PROOF_MAX_CHUNK_ROOTS),
+        ] {
+            let mut bomb = canonical.clone();
+            bomb.insert(
+                field.into(),
+                Value::Array(vec![Value::from("11".repeat(32)); maximum + 1]),
+            );
+            let error = proof_from_value(&Value::Object(bomb))
+                .expect_err("oversized digest array must fail");
+            assert!(
+                error.contains(field) && error.contains("bound"),
+                "unexpected {field} bomb error: {error}"
+            );
+        }
+    }
 
     #[test]
     fn parse_proof_spec_accepts_canonical_indices() {

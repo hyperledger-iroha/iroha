@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operadores de dados podem gerar cargas úteis para gerar on-line/gerar cargas úteis `sorafs_manifest_stub capacity {declaration,dispute}` e arranjar Os bytes JSON/Norito são usados no ticket de governança.
+Operadores de dados podem gerar cargas úteis para gerar on-line/gerar cargas úteis `sorafs_manifest_builder capacity {declaration,dispute}` e arranjar Os bytes JSON/Norito são usados no ticket de governança.
 
 ## Assinatura de artefactos
 

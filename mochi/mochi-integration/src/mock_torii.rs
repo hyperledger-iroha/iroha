@@ -216,6 +216,8 @@ impl Default for MockToriiData {
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
+            native_amx_participant_applications: Vec::new(),
+            autonomous_lane_executions: Vec::new(),
         };
 
         let configuration = norito::json!({

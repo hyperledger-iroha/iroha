@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` სკრიპტი იწვევს `sorafs_manifest_stub capacity`-ს ასაგებად:
+`run_cli.sh` სკრიპტი იწვევს `sorafs_manifest_builder capacity`-ს ასაგებად:
 
 - განმსაზღვრელი პროვაიდერის დეკლარაციები კვოტების მოლაპარაკების სტანდარტების ნაკრებისთვის.
 - რეპლიკაციის ბრძანება, რომელიც შეესაბამება მოლაპარაკების სცენარს.

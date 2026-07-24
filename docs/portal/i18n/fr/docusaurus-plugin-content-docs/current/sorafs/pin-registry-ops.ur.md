@@ -125,7 +125,7 @@ groups:
    - `iroha app sorafs providers list` La réplication est une solution de réplication de base de données.
    - Les jauges `torii_sorafs_capacity_*` permettent d'évaluer le succès du GiB et du PoR provisionné.
 3. **Réplication et réaffectation**
-   - Marge du carnet de commandes (`stat="avg"`) 5 époques pour les commandes de livraison et `sorafs_manifest_stub capacity replication-order` pour les commandes de livraison (manifeste/emballage de voiture) `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
+   - Marge du carnet de commandes (`stat="avg"`) 5 époques pour les commandes de livraison et `sorafs_manifest_builder capacity replication-order` pour les commandes de livraison (manifeste/emballage de voiture) `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - Les alias pour les liaisons manifestes et la gouvernance pour les liens (`torii_sorafs_registry_aliases_total` میں غیر متوقع کمی)۔
 4. **نتیجہ دستاویزی بنائیں**
    - Journal des opérations SoraFS avec horodatages et résumés de manifeste et notes d'incidents

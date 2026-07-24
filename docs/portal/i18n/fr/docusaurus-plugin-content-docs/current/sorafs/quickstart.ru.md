@@ -68,11 +68,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Surveillez et postez le manifeste
 
 Объединия план чанков, alias и подписи управления в manifeste с помощью
-`sorafs-manifest-stub`. La commande n'a pas besoin de charger la charge utile de la commande ; avant de mettre
+`sorafs-manifest-builder`. La commande n'a pas besoin de charger la charge utile de la commande ; avant de mettre
 Dans le répertoire, vous devez ouvrir la porte (la CLI est là pour vous dans le texte).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

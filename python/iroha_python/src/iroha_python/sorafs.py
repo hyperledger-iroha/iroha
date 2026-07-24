@@ -67,6 +67,10 @@ __all__ = [
     "ORDERBOOK_OWNER_ACCOUNT_MAX_BYTES_V1",
     "SORAFS_ORDERBOOK_PAYLOAD_KINDS",
     "SORAFS_PDP_PAYLOAD_KINDS",
+    "SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1",
+    "SORAFS_REFERENCE_MAX_INPUT_BYTES_V1",
+    "SORAFS_REFERENCE_MAX_LABEL_BYTES_V1",
+    "SorafsGovernanceDagBlockInput",
     "validate_orderbook_payload",
     "sign_orderbook_payload",
     "derive_orderbook_order_id",
@@ -77,6 +81,8 @@ __all__ = [
     "validate_pdp_commitment_challenge",
     "validate_pdp_challenge_proof",
     "validate_pdp_bundle",
+    "validate_governance_dag_block",
+    "validate_governance_dag_head_chain",
     "SorafsRangeCapability",
     "SorafsStreamBudget",
     "SorafsTransportHint",
@@ -552,6 +558,9 @@ SORAFS_PDP_PAYLOAD_KINDS: Mapping[str, str] = MappingProxyType(
         "PROOF": "proof",
     }
 )
+SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1 = 64
+SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 = 67_108_864
+SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 = 1_024
 
 _ORDERBOOK_KIND_ALIASES: Mapping[str, str] = MappingProxyType(
     {
@@ -595,6 +604,19 @@ def _bytes_payload(value: bytes | bytearray | memoryview, field: str) -> bytes:
     if isinstance(value, (bytes, bytearray)):
         return bytes(value)
     raise TypeError(f"{field} must be bytes-like")
+
+
+@dataclass(frozen=True)
+class SorafsGovernanceDagBlockInput:
+    """One ordered governance DAG block used for signed-head-chain validation."""
+
+    payload: bytes | bytearray | memoryview
+    label: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "payload", _bytes_payload(self.payload, "payload"))
+        if self.label is not None:
+            _governance_reference_label(self.label, "", "label")
 
 
 def _orderbook_owner_account(value: bytes | bytearray | memoryview, field: str) -> bytes:
@@ -725,6 +747,34 @@ def _reference_label(value: Optional[str], fallback: str, field: str) -> str:
         raise TypeError(f"{field} must be a string")
     stripped = value.strip()
     return stripped if stripped else fallback
+
+
+def _governance_reference_label(value: Optional[str], fallback: str, field: str) -> str:
+    label = fallback if value is None else value
+    if not isinstance(label, str):
+        raise TypeError(f"{field} must be a string")
+    if not label or not label.strip():
+        raise ValueError(f"{field} must not be blank")
+    if label.strip() != label:
+        raise ValueError(f"{field} must not contain surrounding whitespace")
+    if not label.isprintable():
+        raise ValueError(f"{field} must not contain control characters")
+    if len(label.encode("utf-8")) > SORAFS_REFERENCE_MAX_LABEL_BYTES_V1:
+        raise ValueError(
+            f"{field} must be at most {SORAFS_REFERENCE_MAX_LABEL_BYTES_V1} UTF-8 bytes"
+        )
+    return label
+
+
+def _governance_reference_aggregate_bytes(context: str, *sizes: int) -> None:
+    total = 0
+    for size in sizes:
+        total += size
+        if total > SORAFS_REFERENCE_MAX_INPUT_BYTES_V1:
+            raise ValueError(
+                f"{context} inputs exceed "
+                f"{SORAFS_REFERENCE_MAX_INPUT_BYTES_V1} aggregate bytes"
+            )
 
 
 def _reference_outcome_from_json(payload: Any, capability: str) -> Dict[str, Any]:
@@ -1046,6 +1096,95 @@ def validate_pdp_bundle(
         _normalize_generated_at_unix(generated_at_unix),
     )
     return _reference_outcome_from_json(payload, "PDP bundle validation")
+
+
+def validate_governance_dag_block(
+    norito_bytes: bytes | bytearray | memoryview,
+    *,
+    label: Optional[str] = None,
+    expected_block_cid: Optional[bytes | bytearray | memoryview] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate one canonical governance DAG block with the Rust reference validator."""
+
+    payload_bytes = _bytes_payload(norito_bytes, "norito_bytes")
+    resolved_label = _governance_reference_label(
+        label,
+        "governance-dag-block.to",
+        "label",
+    )
+    expected_cid = (
+        None
+        if expected_block_cid is None
+        else _bytes_payload(expected_block_cid, "expected_block_cid")
+    )
+    _governance_reference_aggregate_bytes(
+        "governance DAG block validation",
+        len(payload_bytes),
+        len(resolved_label.encode("utf-8")),
+        0 if expected_cid is None else len(expected_cid),
+    )
+    outcome = _crypto.sorafs_validate_governance_dag_block_json(
+        payload_bytes,
+        resolved_label,
+        expected_cid,
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(outcome, "governance DAG block validation")
+
+
+def validate_governance_dag_head_chain(
+    head_bytes: bytes | bytearray | memoryview,
+    blocks: Sequence[SorafsGovernanceDagBlockInput],
+    *,
+    head_label: Optional[str] = None,
+    generated_at_unix: Optional[int] = None,
+) -> Dict[str, Any]:
+    """Validate a signed head against a bounded, ordered contiguous DAG block tail."""
+
+    if isinstance(blocks, (str, bytes, bytearray, memoryview)) or not isinstance(
+        blocks, Sequence
+    ):
+        raise TypeError("blocks must be a sequence of SorafsGovernanceDagBlockInput")
+    if not 1 <= len(blocks) <= SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1:
+        raise ValueError(
+            f"blocks must contain 1..={SORAFS_GOVERNANCE_DAG_MAX_BLOCKS_V1} entries"
+        )
+    head = _bytes_payload(head_bytes, "head_bytes")
+    resolved_head_label = _governance_reference_label(
+        head_label,
+        "governance-dag-head.to",
+        "head_label",
+    )
+    block_payloads: list[bytes] = []
+    block_labels: list[str] = []
+    aggregate_sizes = [len(head), len(resolved_head_label.encode("utf-8"))]
+    for index, block in enumerate(blocks):
+        if not isinstance(block, SorafsGovernanceDagBlockInput):
+            raise TypeError(
+                f"blocks[{index}] must be a SorafsGovernanceDagBlockInput"
+            )
+        payload = _bytes_payload(block.payload, f"blocks[{index}].payload")
+        label = _governance_reference_label(
+            block.label,
+            f"governance-dag-block-{index}.to",
+            f"blocks[{index}].label",
+        )
+        block_payloads.append(payload)
+        block_labels.append(label)
+        aggregate_sizes.extend([len(payload), len(label.encode("utf-8"))])
+    _governance_reference_aggregate_bytes(
+        "governance DAG head-chain validation",
+        *aggregate_sizes,
+    )
+    outcome = _crypto.sorafs_validate_governance_dag_head_chain_json(
+        head,
+        resolved_head_label,
+        block_payloads,
+        block_labels,
+        _normalize_generated_at_unix(generated_at_unix),
+    )
+    return _reference_outcome_from_json(outcome, "governance DAG head-chain validation")
 
 
 # -- Multi-source orchestrator bindings ---------------------------------------------------------
@@ -1463,7 +1602,7 @@ def multi_fetch_local(
     ----------
     plan:
         JSON string (or mapping/path) describing the chunk fetch plan emitted by
-        `sorafs_manifest_stub`.
+        `sorafs_manifest_builder`.
     providers:
         Iterable of :class:`SorafsLocalProviderSpec` definitions. Each entry points at a local
         payload file (tests reuse the shared fixture bundle).

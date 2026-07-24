@@ -57,7 +57,7 @@ Sidebar_label: Добавить чанкера
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Проведите PR-конференцию и зафиксируйте матчи на стадионе «Голден Стэйт».
@@ -90,12 +90,12 @@ Sidebar_label: Добавить чанкера
    - تتطلب الإزالة أو الإصلاحات العاجلة تصويتاً بالأغلبية من المجلس.
    - В TWG он выступил в роли режиссёра в фильме «Старый мир».
 
-## Инструменты для обработки- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub`.
+## Инструменты для обработки- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder`.
   - `--list-profiles` لفحص السجل.
   - `--promote-profile=<handle>` может быть использован в качестве защитного устройства для установки.
   - `--json-out=-` запускается со стандартным стандартным интерфейсом, и его можно использовать для проверки.
 - يتم استدعاء `ensure_charter_compliance()` عند تشغيل الثنائيات ذات الصلة
-  (`manifest_chunk_store`, `provider_advert_stub`). Он был назначен президентом CI и Кейна.
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Он был назначен президентом CI и Кейна.
   Сделайте это в ближайшее время.
 
 ## حفظ السجلات

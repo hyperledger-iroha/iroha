@@ -60,7 +60,7 @@ Sidebar_label: ساحة السوق
 - `CapacityTelemetryV1` يقوم باستعراض اللقطات على مدى فترة (التصوير مقابل GiB المستخدم، والنسخ المتماثل، ونسبة وقت التشغيل/PoR)، ومعدل ضربات القلب رسوم الانتشار. يستخدم الجرانيت المثبت استخدام بيانات التصريح، بنسبة تتراوح بين 0-100%.
 - المساعدون الرئيسيون (`CapacityMetadataEntry`، `PricingScheduleV1`، مدققو الحارة/المهمة/SLA) يحددون التحقق من المفاتيح وتقارير الكمبيوتر، التي يمكن أن تستخدم CI والأدوات النهائية.- `PinProviderRegistry` يقوم بنشر لقطة عامة على السلسلة من خلال `/v1/sorafs/capacity/state`، ومقدمي الإقرارات الخاضعين، وتسجيل دفتر الأستاذ للرسوم لتحديدها Norito JSON.[crates/iroha_torii/src/sorafs/registry.rs:17] 【crates/iroha_torii/src/sorafs/api.rs:64】
 - التحقق من صحة عملية التحقق من مقابض المراقبة الكنسية، ومراقبة الدوبليكات، وحواجز الممرات، والنسخ المتماثلة للحراس، والتحقق توسيع نطاق أجهزة القياس عن بعد لتفعيل التراجع بسرعة في CI.[crates/sorafs_manifest/src/capacity.rs:792]
-- أدوات المشغل: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` تقوم بتحويل المواصفات الدقيقة إلى حمولات Norito القياسية، وbase64 blobs وملخصات JSON، من أجل المشغلين قم بتثبيت التركيبات `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وتركيبات ترتيب النسخ المتماثل ذات التحقق المحلي. 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 التركيبات المرجعية موجودة في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`، `order_v1.to`) وتم إنشاؤه من خلال `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- أدوات المشغل: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` تقوم بتحويل المواصفات الدقيقة إلى حمولات Norito القياسية، وbase64 blobs وملخصات JSON، من أجل المشغلين قم بتثبيت التركيبات `/v1/sorafs/capacity/declare` و`/v1/sorafs/capacity/telemetry` وتركيبات ترتيب النسخ المتماثل ذات التحقق المحلي. 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 التركيبات المرجعية موجودة في `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`، `order_v1.to`) وتم إنشاؤه من خلال `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. طائرة التحكم بالتكامل| زادا | المالك (المالكون) | مساعدة |
 |------|----------|-------|
@@ -140,7 +140,7 @@ Sidebar_label: ساحة السوق
   استمتع بحزم الإدارة.
 
 ### Доказательства نزاع وتقطيع
-- إرسال النزاعات عبر `sorafs_manifest_stub capacity dispute` (الاختبارات:
+- إرسال النزاعات عبر `sorafs_manifest_builder capacity dispute` (الاختبارات:
   `cargo test -p sorafs_car --test capacity_cli`)، لإيقاف الحمولات النافعة.
 - قم بتسجيل `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` والأشياء الأخرى
   سترافوف (`record_capacity_telemetry_penalises_persistent_under_delivery`)، للتأكيد
@@ -149,7 +149,7 @@ Sidebar_label: ساحة السوق
   التصعيد; الحصول على مخالفة الموافقات بشكل مباشر في تقرير التحقق من الصحة.
 
 ### اختبارات SMOUK لموفري خدمات التوصيل والمغادرة
-- إعادة إنشاء المصنوعات اليدوية المعلنة/أجهزة القياس عن بعد من خلال `sorafs_manifest_stub capacity ...` و
+- إعادة إنشاء المصنوعات اليدوية المعلنة/أجهزة القياس عن بعد من خلال `sorafs_manifest_builder capacity ...` و
   قم بتمديد اختبارات CLI قبل البدء (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - قم بالإصلاح عبر Torii (`/v1/sorafs/capacity/declare`)، ثم قم بالإصلاح
   `/v1/sorafs/capacity/state` بالإضافة إلى الشاشة Grafana. اتبع تدفق التدفق في

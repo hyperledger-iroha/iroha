@@ -27,6 +27,7 @@ use iroha_data_model::sorafs::{
 use norito::codec::Encode as NoritoEncode;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 use sorafs_manifest::{
+    MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1, MODERATION_PRIVACY_MAX_METRICS_V1,
     SoraFsAppealFinanceReportV1, SoraFsAppealFinanceSettlementReceiptV1,
     SoraFsModerationBallotGovernanceEventV1,
 };
@@ -40,8 +41,20 @@ const SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.source_payload.v1";
 const POPULATION_DIGEST_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.privacy_aggregate.population.v1";
-const DETERMINISTIC_NOISE_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_aggregate.noise.v1";
+const DISCRETE_LAPLACE_NOISE_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.discrete_laplace.v1";
+const NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.randomness_commitment.v1";
+const PRIVACY_BUDGET_ENTRY_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_budget.entry.v1";
+const NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1: &str = "cycle_randomness_commitment_blake3";
+const PRIVACY_BUDGET_LEDGER_VERSION_V1: u8 = 1;
+const PRIVACY_BUDGET_MAX_POLICIES_V1: usize = 64;
+const PRIVACY_BUDGET_MAX_CHARGES_V1: usize = 4_096;
+const MAX_DISCRETE_LAPLACE_MEAN_SUCCESSES_V1: u128 = 4_096;
+const MAX_DISCRETE_LAPLACE_RANDOM_DRAWS_V1: u64 = 1_048_576;
 const CYCLE_ID_DOMAIN_V1: &[u8] = b"sorafs.node.transparency.privacy_aggregate.cycle_id.v1";
+const CYCLE_PRF_REQUEST_BINDING_DOMAIN_V1: &[u8] =
+    b"sorafs.node.transparency.privacy_aggregate.cycle_prf_request.v1";
 const TRANSPARENCY_LEDGER_ENTRY_ID_DOMAIN_V1: &[u8] =
     b"sorafs.node.transparency.ledger.source_entry_id.v1";
 const RESERVE_SOURCE_PAYLOAD_DIGEST_DOMAIN_V1: &[u8] =
@@ -1042,6 +1055,8 @@ pub struct PrivacyAggregateSourceEvent {
     pub population_label: String,
     /// Optional private selector digest; when absent the label is hashed.
     pub population_digest: Option<[u8; 32]>,
+    /// Digest of the canonical private subject identifier used for clipping.
+    pub subject_digest: [u8; 32],
     /// Raw source metrics for this event, sorted by key.
     pub metrics: Vec<PrivacyAggregateSourceMetric>,
     /// Optional policy digest associated with this event.
@@ -1060,6 +1075,7 @@ impl PrivacyAggregateSourceEvent {
         if let Some(digest) = &self.population_digest {
             require_nonzero32("population_digest", digest)?;
         }
+        require_nonzero32("subject_digest", &self.subject_digest)?;
         if let Some(digest) = &self.policy_digest {
             require_nonzero32("policy_digest", digest)?;
         }
@@ -1074,12 +1090,452 @@ pub struct PrivacyAggregateCycleConfig {
     pub aggregate_id_prefix: String,
     /// Explicit privacy parameters applied to every generated aggregate.
     pub privacy: ModerationPrivacyParametersV1,
-    /// Optional deterministic noise seed. Required when `noise_scale_micros` is present.
-    pub noise_seed: Option<[u8; 32]>,
     /// Optional aggregate policy/configuration digest.
     pub policy_digest: Option<[u8; 32]>,
     /// Public metadata copied into every generated aggregate.
     pub metadata: Vec<ModerationLedgerMetadataV1>,
+}
+
+/// Governed pure-DP composition budget for one policy lineage.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, NoritoSerialize, NoritoDeserialize,
+)]
+pub struct PrivacyCompositionBudgetPolicyV1 {
+    /// Nonzero digest of the governed budget policy.
+    pub budget_id: [u8; 32],
+    /// Reduced numerator of the maximum composed epsilon.
+    pub epsilon_limit_numerator: u64,
+    /// Reduced denominator of the maximum composed epsilon.
+    pub epsilon_limit_denominator: u64,
+    /// Maximum publication charges retained under this policy.
+    pub max_publications: u64,
+}
+
+impl PrivacyCompositionBudgetPolicyV1 {
+    pub(crate) fn validate(&self) -> Result<(), PrivacyCompositionBudgetError> {
+        if self.budget_id.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyCompositionBudgetError::MissingBudgetId);
+        }
+        require_reduced_positive_rational(
+            self.epsilon_limit_numerator,
+            self.epsilon_limit_denominator,
+        )
+        .map_err(|_| PrivacyCompositionBudgetError::InvalidBudgetLimit)?;
+        if self.max_publications == 0
+            || self.max_publications > PRIVACY_BUDGET_MAX_CHARGES_V1 as u64
+        {
+            return Err(PrivacyCompositionBudgetError::InvalidPublicationLimit);
+        }
+        Ok(())
+    }
+}
+
+/// One hash-chained durable composition-budget charge.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PrivacyCompositionBudgetChargeV1 {
+    /// Monotonic sequence within the governed policy lineage.
+    pub sequence: u64,
+    /// Published cycle charged by this record.
+    pub cycle_id: [u8; 16],
+    /// Timestamp at which the publication was prepared.
+    pub charged_at_unix: u64,
+    /// Reduced epsilon numerator charged for this cycle.
+    pub epsilon_numerator: u64,
+    /// Reduced epsilon denominator charged for this cycle.
+    pub epsilon_denominator: u64,
+    /// Reduced cumulative epsilon numerator after this charge.
+    pub cumulative_epsilon_numerator: u64,
+    /// Reduced cumulative epsilon denominator after this charge.
+    pub cumulative_epsilon_denominator: u64,
+    /// Digest of the preceding charge in this policy lineage.
+    pub previous_charge_digest: Option<[u8; 32]>,
+    /// Domain-separated digest of this exact charge.
+    pub charge_digest: [u8; 32],
+}
+
+/// One governed policy lineage in the durable composition-budget ledger.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PrivacyCompositionBudgetChainV1 {
+    /// Exact governed policy applied to every charge in this lineage.
+    pub policy: PrivacyCompositionBudgetPolicyV1,
+    /// Ordered, hash-chained publication charges.
+    pub charges: Vec<PrivacyCompositionBudgetChargeV1>,
+}
+
+/// Durable multi-policy composition-budget ledger.
+#[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+pub struct PrivacyCompositionBudgetLedgerV1 {
+    /// Schema version.
+    pub version: u8,
+    /// Policy lineages sorted by budget id.
+    pub chains: Vec<PrivacyCompositionBudgetChainV1>,
+}
+
+impl Default for PrivacyCompositionBudgetLedgerV1 {
+    fn default() -> Self {
+        Self {
+            version: PRIVACY_BUDGET_LEDGER_VERSION_V1,
+            chains: Vec::new(),
+        }
+    }
+}
+
+/// Fail-closed composition-budget ledger errors.
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub enum PrivacyCompositionBudgetError {
+    /// Budget policy digest is all zero.
+    #[error("privacy composition budget id must be nonzero")]
+    MissingBudgetId,
+    /// Budget limit is zero, non-reduced, or has a zero denominator.
+    #[error("privacy composition budget epsilon limit must be a reduced positive rational")]
+    InvalidBudgetLimit,
+    /// Per-policy publication bound is invalid.
+    #[error("privacy composition budget publication limit is invalid")]
+    InvalidPublicationLimit,
+    /// Ledger schema version is unsupported.
+    #[error("privacy composition budget ledger version is unsupported")]
+    UnsupportedVersion,
+    /// Policy chains are unsorted or duplicated.
+    #[error("privacy composition budget policy chains must be unique and sorted")]
+    PolicyOrder,
+    /// A configured budget id was reused with different policy parameters.
+    #[error("privacy composition budget policy conflicts with the retained lineage")]
+    PolicyConflict,
+    /// Charge epsilon is zero, non-reduced, or has a zero denominator.
+    #[error("privacy composition budget charge epsilon must be a reduced positive rational")]
+    InvalidChargeEpsilon,
+    /// Cycle id is all zero.
+    #[error("privacy composition budget cycle id must be nonzero")]
+    MissingCycleId,
+    /// Charge timestamp is zero.
+    #[error("privacy composition budget charge timestamp must be nonzero")]
+    InvalidChargeTimestamp,
+    /// A cycle was already charged.
+    #[error("privacy composition budget cycle was already charged")]
+    DuplicateCycle,
+    /// Charge sequence, predecessor, cumulative value, or digest is malformed.
+    #[error("privacy composition budget charge chain is invalid")]
+    InvalidChargeChain,
+    /// Rational arithmetic exceeded the bounded V1 representation.
+    #[error("privacy composition budget rational arithmetic overflow")]
+    ArithmeticOverflow,
+    /// The governed epsilon or publication-count budget is exhausted.
+    #[error("privacy composition budget exhausted")]
+    BudgetExhausted,
+    /// The ledger exceeds its bounded number of policy lineages or charges.
+    #[error("privacy composition budget ledger exceeds V1 bounds")]
+    CollectionTooLarge,
+}
+
+impl PrivacyCompositionBudgetLedgerV1 {
+    /// Validate every retained policy lineage and hash-chain link.
+    pub(crate) fn validate(&self) -> Result<(), PrivacyCompositionBudgetError> {
+        if self.version != PRIVACY_BUDGET_LEDGER_VERSION_V1 {
+            return Err(PrivacyCompositionBudgetError::UnsupportedVersion);
+        }
+        if self.chains.len() > PRIVACY_BUDGET_MAX_POLICIES_V1 {
+            return Err(PrivacyCompositionBudgetError::CollectionTooLarge);
+        }
+        let mut previous_budget_id = None;
+        let mut total_charges = 0_usize;
+        let mut all_cycles = BTreeSet::new();
+        for chain in &self.chains {
+            chain.policy.validate()?;
+            if previous_budget_id.is_some_and(|previous| previous >= chain.policy.budget_id) {
+                return Err(PrivacyCompositionBudgetError::PolicyOrder);
+            }
+            previous_budget_id = Some(chain.policy.budget_id);
+            total_charges = total_charges
+                .checked_add(chain.charges.len())
+                .ok_or(PrivacyCompositionBudgetError::CollectionTooLarge)?;
+            if total_charges > PRIVACY_BUDGET_MAX_CHARGES_V1
+                || chain.charges.len() > chain.policy.max_publications as usize
+            {
+                return Err(PrivacyCompositionBudgetError::CollectionTooLarge);
+            }
+            validate_budget_charge_chain(chain, &mut all_cycles)?;
+        }
+        Ok(())
+    }
+
+    /// Append one cycle charge after proving the composed epsilon stays in budget.
+    pub(crate) fn charge(
+        &mut self,
+        policy: PrivacyCompositionBudgetPolicyV1,
+        cycle_id: [u8; 16],
+        charged_at_unix: u64,
+        epsilon_numerator: u64,
+        epsilon_denominator: u64,
+    ) -> Result<PrivacyCompositionBudgetChargeV1, PrivacyCompositionBudgetError> {
+        let mut candidate = self.clone();
+        let charge = candidate.charge_in_place(
+            policy,
+            cycle_id,
+            charged_at_unix,
+            epsilon_numerator,
+            epsilon_denominator,
+        )?;
+        candidate.validate()?;
+        *self = candidate;
+        Ok(charge)
+    }
+
+    fn charge_in_place(
+        &mut self,
+        policy: PrivacyCompositionBudgetPolicyV1,
+        cycle_id: [u8; 16],
+        charged_at_unix: u64,
+        epsilon_numerator: u64,
+        epsilon_denominator: u64,
+    ) -> Result<PrivacyCompositionBudgetChargeV1, PrivacyCompositionBudgetError> {
+        self.validate()?;
+        policy.validate()?;
+        if cycle_id.iter().all(|byte| *byte == 0) {
+            return Err(PrivacyCompositionBudgetError::MissingCycleId);
+        }
+        if charged_at_unix == 0 {
+            return Err(PrivacyCompositionBudgetError::InvalidChargeTimestamp);
+        }
+        require_reduced_positive_rational(epsilon_numerator, epsilon_denominator)
+            .map_err(|_| PrivacyCompositionBudgetError::InvalidChargeEpsilon)?;
+        if self
+            .chains
+            .iter()
+            .flat_map(|chain| chain.charges.iter())
+            .any(|charge| charge.cycle_id == cycle_id)
+        {
+            return Err(PrivacyCompositionBudgetError::DuplicateCycle);
+        }
+
+        let chain_index = match self
+            .chains
+            .binary_search_by_key(&policy.budget_id, |chain| chain.policy.budget_id)
+        {
+            Ok(index) => {
+                if self.chains[index].policy != policy {
+                    return Err(PrivacyCompositionBudgetError::PolicyConflict);
+                }
+                index
+            }
+            Err(index) => {
+                if self.chains.len() >= PRIVACY_BUDGET_MAX_POLICIES_V1 {
+                    return Err(PrivacyCompositionBudgetError::CollectionTooLarge);
+                }
+                self.chains.insert(
+                    index,
+                    PrivacyCompositionBudgetChainV1 {
+                        policy,
+                        charges: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        let total_charges = self
+            .chains
+            .iter()
+            .try_fold(0_usize, |total, chain| {
+                total.checked_add(chain.charges.len())
+            })
+            .ok_or(PrivacyCompositionBudgetError::CollectionTooLarge)?;
+        let chain = &mut self.chains[chain_index];
+        if chain.charges.len() >= chain.policy.max_publications as usize
+            || total_charges >= PRIVACY_BUDGET_MAX_CHARGES_V1
+        {
+            return Err(PrivacyCompositionBudgetError::BudgetExhausted);
+        }
+        let (previous_numerator, previous_denominator) =
+            chain.charges.last().map_or((0, 1), |charge| {
+                (
+                    charge.cumulative_epsilon_numerator,
+                    charge.cumulative_epsilon_denominator,
+                )
+            });
+        let (cumulative_epsilon_numerator, cumulative_epsilon_denominator) = add_rationals(
+            previous_numerator,
+            previous_denominator,
+            epsilon_numerator,
+            epsilon_denominator,
+        )?;
+        if rational_greater_than(
+            cumulative_epsilon_numerator,
+            cumulative_epsilon_denominator,
+            chain.policy.epsilon_limit_numerator,
+            chain.policy.epsilon_limit_denominator,
+        )? {
+            return Err(PrivacyCompositionBudgetError::BudgetExhausted);
+        }
+        let sequence = u64::try_from(chain.charges.len())
+            .map_err(|_| PrivacyCompositionBudgetError::CollectionTooLarge)?
+            .checked_add(1)
+            .ok_or(PrivacyCompositionBudgetError::CollectionTooLarge)?;
+        let previous_charge_digest = chain.charges.last().map(|charge| charge.charge_digest);
+        let mut charge = PrivacyCompositionBudgetChargeV1 {
+            sequence,
+            cycle_id,
+            charged_at_unix,
+            epsilon_numerator,
+            epsilon_denominator,
+            cumulative_epsilon_numerator,
+            cumulative_epsilon_denominator,
+            previous_charge_digest,
+            charge_digest: [0; 32],
+        };
+        charge.charge_digest = budget_charge_digest(chain.policy.budget_id, &charge);
+        chain.charges.push(charge.clone());
+        Ok(charge)
+    }
+}
+
+fn validate_budget_charge_chain(
+    chain: &PrivacyCompositionBudgetChainV1,
+    all_cycles: &mut BTreeSet<[u8; 16]>,
+) -> Result<(), PrivacyCompositionBudgetError> {
+    let mut previous_digest = None;
+    let mut previous_timestamp = 0_u64;
+    let mut cumulative = (0_u64, 1_u64);
+    for (index, charge) in chain.charges.iter().enumerate() {
+        let expected_sequence = u64::try_from(index)
+            .map_err(|_| PrivacyCompositionBudgetError::CollectionTooLarge)?
+            .checked_add(1)
+            .ok_or(PrivacyCompositionBudgetError::CollectionTooLarge)?;
+        if charge.sequence != expected_sequence
+            || charge.cycle_id.iter().all(|byte| *byte == 0)
+            || charge.charged_at_unix == 0
+            || charge.charged_at_unix < previous_timestamp
+            || charge.previous_charge_digest != previous_digest
+            || !all_cycles.insert(charge.cycle_id)
+        {
+            return Err(PrivacyCompositionBudgetError::InvalidChargeChain);
+        }
+        require_reduced_positive_rational(charge.epsilon_numerator, charge.epsilon_denominator)
+            .map_err(|_| PrivacyCompositionBudgetError::InvalidChargeChain)?;
+        cumulative = add_rationals(
+            cumulative.0,
+            cumulative.1,
+            charge.epsilon_numerator,
+            charge.epsilon_denominator,
+        )
+        .map_err(|_| PrivacyCompositionBudgetError::InvalidChargeChain)?;
+        if cumulative
+            != (
+                charge.cumulative_epsilon_numerator,
+                charge.cumulative_epsilon_denominator,
+            )
+            || rational_greater_than(
+                cumulative.0,
+                cumulative.1,
+                chain.policy.epsilon_limit_numerator,
+                chain.policy.epsilon_limit_denominator,
+            )
+            .map_err(|_| PrivacyCompositionBudgetError::InvalidChargeChain)?
+            || budget_charge_digest(chain.policy.budget_id, charge) != charge.charge_digest
+        {
+            return Err(PrivacyCompositionBudgetError::InvalidChargeChain);
+        }
+        previous_digest = Some(charge.charge_digest);
+        previous_timestamp = charge.charged_at_unix;
+    }
+    Ok(())
+}
+
+fn budget_charge_digest(
+    budget_id: [u8; 32],
+    charge: &PrivacyCompositionBudgetChargeV1,
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(PRIVACY_BUDGET_ENTRY_DOMAIN_V1);
+    hasher.update(&budget_id);
+    hasher.update(&charge.sequence.to_le_bytes());
+    hasher.update(&charge.cycle_id);
+    hasher.update(&charge.charged_at_unix.to_le_bytes());
+    hasher.update(&charge.epsilon_numerator.to_le_bytes());
+    hasher.update(&charge.epsilon_denominator.to_le_bytes());
+    hasher.update(&charge.cumulative_epsilon_numerator.to_le_bytes());
+    hasher.update(&charge.cumulative_epsilon_denominator.to_le_bytes());
+    match charge.previous_charge_digest {
+        Some(digest) => {
+            hasher.update(&[1]);
+            hasher.update(&digest);
+        }
+        None => {
+            hasher.update(&[0]);
+        }
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn require_reduced_positive_rational(numerator: u64, denominator: u64) -> Result<(), ()> {
+    if numerator == 0 || denominator == 0 || gcd_u64(numerator, denominator) != 1 {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn add_rationals(
+    left_numerator: u64,
+    left_denominator: u64,
+    right_numerator: u64,
+    right_denominator: u64,
+) -> Result<(u64, u64), PrivacyCompositionBudgetError> {
+    if left_denominator == 0 || right_denominator == 0 {
+        return Err(PrivacyCompositionBudgetError::ArithmeticOverflow);
+    }
+    let numerator = u128::from(left_numerator)
+        .checked_mul(u128::from(right_denominator))
+        .and_then(|left| {
+            u128::from(right_numerator)
+                .checked_mul(u128::from(left_denominator))
+                .and_then(|right| left.checked_add(right))
+        })
+        .ok_or(PrivacyCompositionBudgetError::ArithmeticOverflow)?;
+    let denominator = u128::from(left_denominator)
+        .checked_mul(u128::from(right_denominator))
+        .ok_or(PrivacyCompositionBudgetError::ArithmeticOverflow)?;
+    let divisor = gcd_u128(numerator, denominator);
+    let numerator = numerator / divisor;
+    let denominator = denominator / divisor;
+    Ok((
+        u64::try_from(numerator).map_err(|_| PrivacyCompositionBudgetError::ArithmeticOverflow)?,
+        u64::try_from(denominator)
+            .map_err(|_| PrivacyCompositionBudgetError::ArithmeticOverflow)?,
+    ))
+}
+
+fn rational_greater_than(
+    left_numerator: u64,
+    left_denominator: u64,
+    right_numerator: u64,
+    right_denominator: u64,
+) -> Result<bool, PrivacyCompositionBudgetError> {
+    if left_denominator == 0 || right_denominator == 0 {
+        return Err(PrivacyCompositionBudgetError::ArithmeticOverflow);
+    }
+    let left = u128::from(left_numerator)
+        .checked_mul(u128::from(right_denominator))
+        .ok_or(PrivacyCompositionBudgetError::ArithmeticOverflow)?;
+    let right = u128::from(right_numerator)
+        .checked_mul(u128::from(left_denominator))
+        .ok_or(PrivacyCompositionBudgetError::ArithmeticOverflow)?;
+    Ok(left > right)
+}
+
+const fn gcd_u64(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
+}
+
+const fn gcd_u128(mut left: u128, mut right: u128) -> u128 {
+    while right != 0 {
+        let remainder = left % right;
+        left = right;
+        right = remainder;
+    }
+    left
 }
 
 impl PrivacyAggregateCycleConfig {
@@ -1092,17 +1548,22 @@ impl PrivacyAggregateCycleConfig {
                 message: err.to_string(),
             }
         })?;
-        if privacy.noise_scale_micros.is_some() {
-            let seed = self
-                .noise_seed
-                .as_ref()
-                .ok_or(PrivacyAggregateWorkerError::MissingNoiseSeed)?;
-            require_nonzero32("noise_seed", seed)?;
+        if privacy.per_subject_metric_cap.is_some() {
+            validate_discrete_laplace_resource_policy(privacy)?;
         }
         if let Some(digest) = &self.policy_digest {
             require_nonzero32("policy_digest", digest)?;
         }
         validate_metadata(&self.metadata)?;
+        if self
+            .metadata
+            .iter()
+            .any(|item| item.key == NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
+        {
+            return Err(PrivacyAggregateWorkerError::ReservedMetadataKey {
+                key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+            });
+        }
         Ok(())
     }
 }
@@ -1176,6 +1637,151 @@ pub struct PrivacyAggregateCycleWindow {
     pub due_at_unix: u64,
 }
 
+/// Canonical version of the runtime threshold-PRF request contract.
+pub const PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1: u16 = 1;
+
+/// Runtime-only threshold-PRF request bound to one governed publication window.
+///
+/// The provider must evaluate the request as a single domain-separated input.
+/// The request contains no secret seed material and is never published.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrivacyCyclePrfRequestV1 {
+    version: u16,
+    policy_digest: [u8; 32],
+    cycle_id: [u8; 16],
+    cycle_start_unix: u64,
+    cycle_end_unix: u64,
+    due_at_unix: u64,
+    binding_digest: [u8; 32],
+}
+
+impl PrivacyCyclePrfRequestV1 {
+    /// Construct the canonical request for one exact governed cycle.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the policy digest is zero or the cycle window is
+    /// not a canonical non-empty due window.
+    pub fn new(
+        policy_digest: [u8; 32],
+        window: PrivacyAggregateCycleWindow,
+    ) -> Result<Self, PrivacyCyclePrfRequestErrorV1> {
+        if policy_digest == [0; 32] {
+            return Err(PrivacyCyclePrfRequestErrorV1::MissingPolicyDigest);
+        }
+        if window.cycle_start_unix == 0
+            || window.cycle_end_unix <= window.cycle_start_unix
+            || window.due_at_unix < window.cycle_end_unix
+        {
+            return Err(PrivacyCyclePrfRequestErrorV1::InvalidWindow);
+        }
+        let cycle_id = privacy_aggregate_cycle_id(window);
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(CYCLE_PRF_REQUEST_BINDING_DOMAIN_V1);
+        hasher.update(&PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1.to_le_bytes());
+        hasher.update(&policy_digest);
+        hasher.update(&cycle_id);
+        hasher.update(&window.cycle_start_unix.to_le_bytes());
+        hasher.update(&window.cycle_end_unix.to_le_bytes());
+        hasher.update(&window.due_at_unix.to_le_bytes());
+        Ok(Self {
+            version: PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1,
+            policy_digest,
+            cycle_id,
+            cycle_start_unix: window.cycle_start_unix,
+            cycle_end_unix: window.cycle_end_unix,
+            due_at_unix: window.due_at_unix,
+            binding_digest: *hasher.finalize().as_bytes(),
+        })
+    }
+
+    /// Return the contract version.
+    #[must_use]
+    pub const fn version(&self) -> u16 {
+        self.version
+    }
+
+    /// Return the governed privacy-policy digest.
+    #[must_use]
+    pub const fn policy_digest(&self) -> [u8; 32] {
+        self.policy_digest
+    }
+
+    /// Return the deterministic cycle identifier.
+    #[must_use]
+    pub const fn cycle_id(&self) -> [u8; 16] {
+        self.cycle_id
+    }
+
+    /// Return the inclusive cycle start timestamp.
+    #[must_use]
+    pub const fn cycle_start_unix(&self) -> u64 {
+        self.cycle_start_unix
+    }
+
+    /// Return the exclusive cycle end timestamp.
+    #[must_use]
+    pub const fn cycle_end_unix(&self) -> u64 {
+        self.cycle_end_unix
+    }
+
+    /// Return the timestamp at which this exact cycle became due.
+    #[must_use]
+    pub const fn due_at_unix(&self) -> u64 {
+        self.due_at_unix
+    }
+
+    /// Return the canonical domain-separated request binding.
+    #[must_use]
+    pub const fn binding_digest(&self) -> [u8; 32] {
+        self.binding_digest
+    }
+}
+
+/// Errors constructing a canonical threshold-PRF request.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum PrivacyCyclePrfRequestErrorV1 {
+    /// The governed privacy-policy digest was all zeroes.
+    #[error("privacy cycle PRF request requires a non-zero policy digest")]
+    MissingPolicyDigest,
+    /// The supplied cycle window was empty, zero-based, or due before it ended.
+    #[error("privacy cycle PRF request window is invalid")]
+    InvalidWindow,
+}
+
+/// Stable, payload-free threshold-PRF provider failure classes.
+///
+/// Implementations must retain vendor diagnostics inside their own protected
+/// telemetry boundary and return only one of these fixed classes.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq)]
+pub enum PrivacyCyclePrfProviderErrorV1 {
+    /// The threshold service or required key share is unavailable.
+    #[error("threshold PRF provider unavailable")]
+    Unavailable,
+    /// Runtime authentication or authorization failed.
+    #[error("threshold PRF provider authentication failed")]
+    AuthenticationFailed,
+    /// The provider rejected the request due to a bounded service limit.
+    #[error("threshold PRF provider rate limited")]
+    RateLimited,
+    /// The provider could not complete the request.
+    #[error("threshold PRF provider internal failure")]
+    Internal,
+}
+
+/// Runtime-only provider for hidden threshold-PRF cycle outputs.
+///
+/// Implementations must bind evaluation to [`PrivacyCyclePrfRequestV1`] and
+/// must never expose raw provider diagnostics, key shares, seeds, or outputs
+/// through logs or durable state.
+pub trait PrivacyCyclePrfProviderV1: Send + Sync {
+    /// Derive the hidden 32-byte output for one exact cycle request.
+    fn derive_cycle_output(
+        &self,
+        request: &PrivacyCyclePrfRequestV1,
+    ) -> Result<[u8; 32], PrivacyCyclePrfProviderErrorV1>;
+}
+
 pub(crate) fn privacy_aggregate_cycle_id(window: PrivacyAggregateCycleWindow) -> [u8; 16] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(CYCLE_ID_DOMAIN_V1);
@@ -1196,6 +1802,14 @@ pub enum TransparencyLedgerIngestError {
     MissingText {
         /// Field name.
         field: &'static str,
+    },
+    /// Public text exceeds the canonical V1 byte limit.
+    #[error("privacy aggregate worker field `{field}` exceeds {max} UTF-8 bytes")]
+    TextTooLong {
+        /// Field name.
+        field: &'static str,
+        /// Maximum accepted UTF-8 byte length.
+        max: usize,
     },
     /// Timestamp field is zero or inconsistent.
     #[error("transparency ledger source timestamp `{field}` is invalid")]
@@ -1454,6 +2068,14 @@ pub enum PrivacyAggregateWorkerError {
         /// Field name.
         field: &'static str,
     },
+    /// Public text exceeds the canonical V1 byte bound.
+    #[error("privacy aggregate worker field `{field}` exceeds the {max}-byte limit")]
+    TextTooLong {
+        /// Field name.
+        field: &'static str,
+        /// Maximum accepted UTF-8 byte length.
+        max: usize,
+    },
     /// Timestamp field is zero.
     #[error("privacy aggregate worker timestamp `{field}` must be non-zero")]
     InvalidTimestamp {
@@ -1469,6 +2091,17 @@ pub enum PrivacyAggregateWorkerError {
     /// Source metric list is empty.
     #[error("privacy aggregate source event requires at least one metric")]
     SourceMetricsMissing,
+    /// Source metric list exceeds the canonical V1 collection bound.
+    #[error("privacy aggregate source event has {count} metrics; maximum is {max}")]
+    TooManySourceMetrics {
+        /// Submitted metric count.
+        count: usize,
+        /// Maximum accepted metric count.
+        max: usize,
+    },
+    /// Metric accumulation exceeded the exact V1 integer representation.
+    #[error("privacy aggregate metric arithmetic overflow")]
+    MetricArithmeticOverflow,
     /// Source metric keys are not sorted.
     #[error("privacy aggregate source metric keys must be sorted")]
     SourceMetricKeysUnsorted,
@@ -1493,9 +2126,35 @@ pub enum PrivacyAggregateWorkerError {
         /// Validation detail.
         message: String,
     },
-    /// A noise scale was configured without runtime seed material.
-    #[error("privacy aggregate noise scale requires a runtime noise seed")]
-    MissingNoiseSeed,
+    /// Differential privacy was configured without hidden cycle PRF output.
+    #[error("privacy aggregate differential privacy requires hidden cycle PRF output")]
+    MissingCyclePrfOutput,
+    /// Hidden PRF output was supplied for a policy that does not use DP.
+    #[error(
+        "privacy aggregate cycle PRF output is forbidden when differential privacy is disabled"
+    )]
+    UnexpectedCyclePrfOutput,
+    /// The governed epsilon/cap parameters would exceed the bounded exact sampler policy.
+    #[error(
+        "privacy aggregate exact sampler parameters exceed the bounded resource policy: epsilon={epsilon_numerator}/{epsilon_denominator}, sensitivity={sensitivity}"
+    )]
+    NoiseParametersExceedResourceLimit {
+        /// Governed reduced epsilon numerator.
+        epsilon_numerator: u64,
+        /// Governed reduced epsilon denominator.
+        epsilon_denominator: u64,
+        /// Integer sensitivity equal to the per-subject metric cap.
+        sensitivity: u64,
+    },
+    /// The exact sampler exhausted its fail-closed random-draw budget.
+    #[error("privacy aggregate exact discrete-Laplace sampler exhausted its random-draw budget")]
+    NoiseSamplingLimitExceeded,
+    /// A worker-owned public metadata key was supplied by a caller.
+    #[error("privacy aggregate metadata key `{key}` is reserved for the worker")]
+    ReservedMetadataKey {
+        /// Reserved key.
+        key: &'static str,
+    },
     /// Schedule configuration is invalid.
     #[error("privacy aggregate schedule field `{field}` is invalid")]
     InvalidSchedule {
@@ -1542,9 +2201,18 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
     cycle_end_unix: u64,
     generated_at_unix: u64,
     config: &PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<[u8; 32]>,
     events: &[PrivacyAggregateSourceEvent],
 ) -> Result<Vec<ModerationPrivacyAggregateV1>, PrivacyAggregateWorkerError> {
     config.validate()?;
+    if config.privacy.per_subject_metric_cap.is_some() {
+        let prf_output = cycle_prf_output
+            .as_ref()
+            .ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
+        require_nonzero32("cycle_prf_output", prf_output)?;
+    } else if cycle_prf_output.is_some() {
+        return Err(PrivacyAggregateWorkerError::UnexpectedCyclePrfOutput);
+    }
     if events.is_empty() {
         return Err(PrivacyAggregateWorkerError::NoSourceEvents);
     }
@@ -1588,12 +2256,12 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
     let suppression_threshold = config.privacy.suppression_threshold.unwrap_or(0);
     let suppressed_count = groups
         .values()
-        .filter(|bucket| (bucket.len() as u64) < suppression_threshold)
+        .filter(|bucket| distinct_subject_count(bucket) < suppression_threshold)
         .count() as u64;
     let mut aggregates = Vec::new();
     for (population, mut bucket) in groups {
         bucket.sort_by(|left, right| left.event_id.cmp(&right.event_id));
-        if (bucket.len() as u64) < suppression_threshold {
+        if distinct_subject_count(&bucket) < suppression_threshold {
             continue;
         }
         let aggregate = build_population_aggregate(
@@ -1601,6 +2269,7 @@ pub(crate) fn build_privacy_aggregates_from_source_events(
             cycle_end_unix,
             generated_at_unix,
             config,
+            cycle_prf_output.as_ref(),
             suppressed_count,
             population,
             &bucket,
@@ -1625,46 +2294,42 @@ fn build_population_aggregate(
     cycle_end_unix: u64,
     generated_at_unix: u64,
     config: &PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<&[u8; 32]>,
     suppressed_count: u64,
     population: PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
 ) -> Result<ModerationPrivacyAggregateV1, PrivacyAggregateWorkerError> {
-    let mut metrics = BTreeMap::<String, (String, u128)>::new();
     let policy_digest = resolve_policy_digest(config.policy_digest, events)?;
-    for event in events {
-        for metric in &event.metrics {
-            match metrics.entry(metric.key.clone()) {
-                std::collections::btree_map::Entry::Occupied(mut occupied) => {
-                    if occupied.get().0 != metric.unit {
-                        return Err(PrivacyAggregateWorkerError::ConflictingMetricUnit {
-                            key: metric.key.clone(),
-                        });
-                    }
-                    occupied.get_mut().1 =
-                        occupied.get().1.saturating_add(u128::from(metric.value));
-                }
-                std::collections::btree_map::Entry::Vacant(vacant) => {
-                    vacant.insert((metric.unit.clone(), u128::from(metric.value)));
-                }
-            }
-        }
-    }
+    let metrics = clipped_population_metrics(events, config.privacy.per_subject_metric_cap)?;
+    let source_subject_count = distinct_subject_count(events);
 
     let aggregate_id = aggregate_id(&config.aggregate_id_prefix, &population);
-    let source_payload_digest =
-        source_payload_digest(config, &population, events, suppressed_count, policy_digest);
+    let source_payload_digest = source_payload_digest(
+        config,
+        cycle_prf_output,
+        &population,
+        events,
+        suppressed_count,
+        policy_digest,
+    );
     let published_metrics = metrics
         .into_iter()
         .map(|(key, (unit, value))| {
-            let noised =
-                apply_metric_noise(value, config, &aggregate_id, &key, &source_payload_digest);
-            ModerationPrivacyAggregateMetricV1 {
+            let noised = apply_metric_noise(
+                value,
+                config,
+                cycle_prf_output,
+                &aggregate_id,
+                &key,
+                &source_payload_digest,
+            )?;
+            Ok(ModerationPrivacyAggregateMetricV1 {
                 key,
                 value: noised,
                 unit,
-            }
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, PrivacyAggregateWorkerError>>()?;
 
     let mut privacy = config.privacy;
     privacy.suppressed_count = suppressed_count;
@@ -1678,10 +2343,11 @@ fn build_population_aggregate(
         population_digest: population.digest,
         privacy,
         source_event_count: events.len() as u64,
+        source_subject_count,
         source_payload_digest,
         metrics: published_metrics,
         policy_digest,
-        metadata: config.metadata.clone(),
+        metadata: publication_metadata(config, cycle_prf_output),
     };
     aggregate
         .validate()
@@ -1689,6 +2355,66 @@ fn build_population_aggregate(
             message: err.to_string(),
         })?;
     Ok(aggregate)
+}
+
+fn distinct_subject_count(events: &[PrivacyAggregateSourceEvent]) -> u64 {
+    events
+        .iter()
+        .map(|event| event.subject_digest)
+        .collect::<BTreeSet<_>>()
+        .len() as u64
+}
+
+fn clipped_population_metrics(
+    events: &[PrivacyAggregateSourceEvent],
+    per_subject_metric_cap: Option<u64>,
+) -> Result<BTreeMap<String, (String, u128)>, PrivacyAggregateWorkerError> {
+    let mut units = BTreeMap::<String, String>::new();
+    let mut subject_metrics = BTreeMap::<[u8; 32], BTreeMap<String, u128>>::new();
+    for event in events {
+        let per_subject = subject_metrics.entry(event.subject_digest).or_default();
+        for metric in &event.metrics {
+            match units.entry(metric.key.clone()) {
+                std::collections::btree_map::Entry::Occupied(occupied) => {
+                    if occupied.get() != &metric.unit {
+                        return Err(PrivacyAggregateWorkerError::ConflictingMetricUnit {
+                            key: metric.key.clone(),
+                        });
+                    }
+                }
+                std::collections::btree_map::Entry::Vacant(vacant) => {
+                    vacant.insert(metric.unit.clone());
+                }
+            }
+            let contribution = per_subject.entry(metric.key.clone()).or_default();
+            *contribution = if let Some(cap) = per_subject_metric_cap {
+                (*contribution)
+                    .saturating_add(u128::from(metric.value))
+                    .min(u128::from(cap))
+            } else {
+                (*contribution)
+                    .checked_add(u128::from(metric.value))
+                    .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?
+            };
+        }
+    }
+
+    let mut totals = units
+        .into_iter()
+        .map(|(key, unit)| (key, (unit, 0_u128)))
+        .collect::<BTreeMap<_, _>>();
+    for metrics in subject_metrics.values() {
+        for (key, contribution) in metrics {
+            let total = totals
+                .get_mut(key)
+                .expect("unit inventory is built from the same metric rows");
+            total.1 = total
+                .1
+                .checked_add(*contribution)
+                .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?;
+        }
+    }
+    Ok(totals)
 }
 
 fn resolve_policy_digest(
@@ -1713,44 +2439,202 @@ fn resolve_policy_digest(
 fn apply_metric_noise(
     value: u128,
     config: &PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<&[u8; 32]>,
     aggregate_id: &str,
     metric_key: &str,
     source_payload_digest: &[u8; 32],
-) -> u64 {
-    let Some(scale_micros) = config.privacy.noise_scale_micros else {
-        return value.min(u128::from(u64::MAX)) as u64;
+) -> Result<u64, PrivacyAggregateWorkerError> {
+    let Some(sensitivity) = config.privacy.per_subject_metric_cap else {
+        return u64::try_from(value)
+            .map_err(|_| PrivacyAggregateWorkerError::MetricArithmeticOverflow);
     };
-    let Some(seed) = &config.noise_seed else {
-        return value.min(u128::from(u64::MAX)) as u64;
-    };
-    let bound = scale_micros.div_ceil(1_000_000).max(1);
-    let range = u128::from(bound).saturating_mul(2).saturating_add(1);
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(DETERMINISTIC_NOISE_DOMAIN_V1);
-    hasher.update(seed);
+    let prf_output = cycle_prf_output.ok_or(PrivacyAggregateWorkerError::MissingCyclePrfOutput)?;
+    let epsilon_numerator = config.privacy.epsilon_numerator.ok_or(
+        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+            message: "epsilon_numerator is required for exact discrete-Laplace noise".to_string(),
+        },
+    )?;
+    let epsilon_denominator = config.privacy.epsilon_denominator.ok_or(
+        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+            message: "epsilon_denominator is required for exact discrete-Laplace noise".to_string(),
+        },
+    )?;
+    let mut hasher = blake3::Hasher::new_keyed(prf_output);
+    hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
     hasher.update(source_payload_digest);
-    hasher.update(aggregate_id.as_bytes());
-    hasher.update(metric_key.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest.as_bytes()[..16]);
-    let sample = u128::from_le_bytes(bytes) % range;
-    let negative = sample < u128::from(bound);
-    let magnitude = if negative {
-        u128::from(bound) - sample
+    hash_text(&mut hasher, aggregate_id);
+    hash_text(&mut hasher, metric_key);
+    let mut sampler = ExactNoiseSampler::new(hasher.finalize_xof());
+    let noise =
+        sampler.sample_discrete_laplace(epsilon_numerator, epsilon_denominator, sensitivity)?;
+    let adjusted = if noise.is_negative() {
+        value.saturating_sub(noise.unsigned_abs())
     } else {
-        sample - u128::from(bound)
+        value
+            .checked_add(noise as u128)
+            .ok_or(PrivacyAggregateWorkerError::MetricArithmeticOverflow)?
     };
-    let adjusted = if negative {
-        value.saturating_sub(magnitude)
-    } else {
-        value.saturating_add(magnitude)
-    };
-    adjusted.min(u128::from(u64::MAX)) as u64
+    u64::try_from(adjusted).map_err(|_| PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+}
+
+struct ExactNoiseSampler {
+    reader: blake3::OutputReader,
+    remaining_draws: u64,
+}
+
+impl ExactNoiseSampler {
+    fn new(reader: blake3::OutputReader) -> Self {
+        Self {
+            reader,
+            remaining_draws: MAX_DISCRETE_LAPLACE_RANDOM_DRAWS_V1,
+        }
+    }
+
+    fn sample_discrete_laplace(
+        &mut self,
+        epsilon_numerator: u64,
+        epsilon_denominator: u64,
+        sensitivity: u64,
+    ) -> Result<i128, PrivacyAggregateWorkerError> {
+        validate_discrete_laplace_parameters(epsilon_numerator, epsilon_denominator, sensitivity)?;
+        // Let q = ΔD / (ΔD + N), where ε = N/D and Δ is sensitivity.
+        // The difference of two independent geometric(q) variates is an exact
+        // two-sided geometric (discrete-Laplace) variate. Its privacy loss is
+        // -ln(q) = ln(1 + N/(ΔD)) <= N/(ΔD), so it is conservatively bounded
+        // by the governed rational ε without floating-point approximation.
+        let continuation_numerator =
+            u128::from(sensitivity).saturating_mul(u128::from(epsilon_denominator));
+        let geometric_denominator =
+            continuation_numerator.saturating_add(u128::from(epsilon_numerator));
+        let positive = self.sample_geometric(continuation_numerator, geometric_denominator)?;
+        let negative = self.sample_geometric(continuation_numerator, geometric_denominator)?;
+        Ok(i128::from(positive) - i128::from(negative))
+    }
+
+    fn sample_geometric(
+        &mut self,
+        continuation_numerator: u128,
+        denominator: u128,
+    ) -> Result<u64, PrivacyAggregateWorkerError> {
+        let mut successes = 0_u64;
+        loop {
+            if self.uniform_below(denominator)? >= continuation_numerator {
+                return Ok(successes);
+            }
+            successes = successes
+                .checked_add(1)
+                .ok_or(PrivacyAggregateWorkerError::NoiseSamplingLimitExceeded)?;
+        }
+    }
+
+    fn uniform_below(
+        &mut self,
+        upper_exclusive: u128,
+    ) -> Result<u128, PrivacyAggregateWorkerError> {
+        if upper_exclusive == 0 {
+            return Err(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                message: "exact sampler denominator must be non-zero".to_string(),
+            });
+        }
+        // `wrapping_neg() % upper` equals 2^128 mod `upper`. Rejecting values
+        // below that threshold leaves an exact multiple of `upper` candidates.
+        let rejection_threshold = upper_exclusive.wrapping_neg() % upper_exclusive;
+        loop {
+            if self.remaining_draws == 0 {
+                return Err(PrivacyAggregateWorkerError::NoiseSamplingLimitExceeded);
+            }
+            self.remaining_draws -= 1;
+            let mut bytes = [0_u8; 16];
+            self.reader.fill(&mut bytes);
+            let candidate = u128::from_le_bytes(bytes);
+            if candidate >= rejection_threshold {
+                return Ok(candidate % upper_exclusive);
+            }
+        }
+    }
+}
+
+fn validate_discrete_laplace_resource_policy(
+    privacy: ModerationPrivacyParametersV1,
+) -> Result<(), PrivacyAggregateWorkerError> {
+    let epsilon_numerator =
+        privacy
+            .epsilon_numerator
+            .ok_or(PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+                message: "epsilon_numerator is required for exact discrete-Laplace noise"
+                    .to_string(),
+            })?;
+    let epsilon_denominator = privacy.epsilon_denominator.ok_or(
+        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+            message: "epsilon_denominator is required for exact discrete-Laplace noise".to_string(),
+        },
+    )?;
+    let sensitivity = privacy.per_subject_metric_cap.ok_or(
+        PrivacyAggregateWorkerError::InvalidPrivacyParameters {
+            message: "per_subject_metric_cap is required for exact discrete-Laplace noise"
+                .to_string(),
+        },
+    )?;
+    validate_discrete_laplace_parameters(epsilon_numerator, epsilon_denominator, sensitivity)
+}
+
+fn validate_discrete_laplace_parameters(
+    epsilon_numerator: u64,
+    epsilon_denominator: u64,
+    sensitivity: u64,
+) -> Result<(), PrivacyAggregateWorkerError> {
+    let sensitivity_numerator =
+        u128::from(sensitivity).saturating_mul(u128::from(epsilon_denominator));
+    let maximum_numerator =
+        u128::from(epsilon_numerator).saturating_mul(MAX_DISCRETE_LAPLACE_MEAN_SUCCESSES_V1);
+    if epsilon_numerator == 0
+        || epsilon_denominator == 0
+        || sensitivity == 0
+        || sensitivity_numerator > maximum_numerator
+    {
+        return Err(
+            PrivacyAggregateWorkerError::NoiseParametersExceedResourceLimit {
+                epsilon_numerator,
+                epsilon_denominator,
+                sensitivity,
+            },
+        );
+    }
+    Ok(())
+}
+
+fn noise_randomness_commitment(prf_output: &[u8; 32]) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(NOISE_RANDOMNESS_COMMITMENT_DOMAIN_V1);
+    hasher.update(prf_output);
+    *hasher.finalize().as_bytes()
+}
+
+fn publication_metadata(
+    config: &PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<&[u8; 32]>,
+) -> Vec<ModerationLedgerMetadataV1> {
+    let mut metadata = config.metadata.clone();
+    if let Some(prf_output) = cycle_prf_output {
+        let commitment = ModerationLedgerMetadataV1 {
+            key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
+            value: hex::encode(noise_randomness_commitment(prf_output)),
+        };
+        let index = metadata
+            .binary_search_by(|item| {
+                item.key
+                    .as_str()
+                    .cmp(NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1)
+            })
+            .unwrap_or_else(|index| index);
+        metadata.insert(index, commitment);
+    }
+    metadata
 }
 
 fn source_payload_digest(
     config: &PrivacyAggregateCycleConfig,
+    cycle_prf_output: Option<&[u8; 32]>,
     population: &PopulationKey,
     events: &[PrivacyAggregateSourceEvent],
     suppressed_count: u64,
@@ -1760,8 +2644,8 @@ fn source_payload_digest(
     hasher.update(SOURCE_PAYLOAD_DIGEST_DOMAIN_V1);
     hash_text(&mut hasher, &config.aggregate_id_prefix);
     hash_privacy_parameters(&mut hasher, config.privacy, suppressed_count);
-    if let Some(seed) = &config.noise_seed {
-        hasher.update(seed);
+    if let Some(prf_output) = cycle_prf_output {
+        hasher.update(&noise_randomness_commitment(prf_output));
     }
     if let Some(digest) = &policy_digest {
         hasher.update(digest);
@@ -1772,6 +2656,7 @@ fn source_payload_digest(
     for event in events {
         hash_text(&mut hasher, &event.event_id);
         hasher.update(&event.occurred_at_unix.to_le_bytes());
+        hasher.update(&event.subject_digest);
         if let Some(digest) = &event.policy_digest {
             hasher.update(digest);
         }
@@ -1793,9 +2678,10 @@ fn hash_privacy_parameters(
     privacy.suppressed_count = suppressed_count;
     hasher.update(&privacy.version.to_le_bytes());
     hasher.update(privacy_mode_label(privacy.mode).as_bytes());
-    hash_option_u64(hasher, privacy.epsilon_micros);
+    hash_option_u64(hasher, privacy.epsilon_numerator);
+    hash_option_u64(hasher, privacy.epsilon_denominator);
     hash_option_u64(hasher, privacy.delta_ppb);
-    hash_option_u64(hasher, privacy.noise_scale_micros);
+    hash_option_u64(hasher, privacy.per_subject_metric_cap);
     hash_option_u64(hasher, privacy.suppression_threshold);
     hasher.update(&privacy.suppressed_count.to_le_bytes());
 }
@@ -1834,6 +2720,12 @@ fn validate_source_metrics(
 ) -> Result<(), PrivacyAggregateWorkerError> {
     if metrics.is_empty() {
         return Err(PrivacyAggregateWorkerError::SourceMetricsMissing);
+    }
+    if metrics.len() > MODERATION_PRIVACY_MAX_METRICS_V1 {
+        return Err(PrivacyAggregateWorkerError::TooManySourceMetrics {
+            count: metrics.len(),
+            max: MODERATION_PRIVACY_MAX_METRICS_V1,
+        });
     }
     let mut last_key: Option<&str> = None;
     let mut seen = BTreeSet::new();
@@ -1894,6 +2786,12 @@ fn require_public_text(
 ) -> Result<(), PrivacyAggregateWorkerError> {
     if value.trim().is_empty() || value.contains('\0') {
         return Err(PrivacyAggregateWorkerError::MissingText { field });
+    }
+    if value.len() > MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1 {
+        return Err(PrivacyAggregateWorkerError::TextTooLong {
+            field,
+            max: MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1,
+        });
     }
     Ok(())
 }
@@ -2529,6 +3427,397 @@ mod tests {
             idempotency_key: "policy-1".to_string(),
             observed_at_unix: 1_800_000_085,
         }
+    }
+
+    fn privacy_config() -> PrivacyAggregateCycleConfig {
+        PrivacyAggregateCycleConfig {
+            aggregate_id_prefix: "sfm4c-cycle".to_string(),
+            privacy: ModerationPrivacyParametersV1 {
+                version:
+                    iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+                mode: ModerationPrivacyModeV1::DifferentialPrivacyWithSuppression,
+                epsilon_numerator: Some(4),
+                epsilon_denominator: Some(5),
+                delta_ppb: Some(0),
+                per_subject_metric_cap: Some(1),
+                suppression_threshold: Some(2),
+                suppressed_count: 0,
+            },
+            policy_digest: Some([0xC0; 32]),
+            metadata: vec![ModerationLedgerMetadataV1 {
+                key: "publisher".to_string(),
+                value: "sfm4c-worker".to_string(),
+            }],
+        }
+    }
+
+    fn privacy_event(event_id: &str, occurred_at_unix: u64) -> PrivacyAggregateSourceEvent {
+        PrivacyAggregateSourceEvent {
+            event_id: event_id.to_string(),
+            occurred_at_unix,
+            population_label: "jurisdiction-a".to_string(),
+            population_digest: Some([0xA0; 32]),
+            subject_digest: *blake3::hash(event_id.as_bytes()).as_bytes(),
+            metrics: vec![PrivacyAggregateSourceMetric {
+                key: "moderation_actions".to_string(),
+                value: 1,
+                unit: "count".to_string(),
+            }],
+            policy_digest: Some([0xC0; 32]),
+        }
+    }
+
+    #[test]
+    fn exact_discrete_laplace_is_deterministic_and_context_bound() {
+        fn sample(context: &[u8]) -> i128 {
+            let mut hasher = blake3::Hasher::new_keyed(&[0x5A; 32]);
+            hasher.update(DISCRETE_LAPLACE_NOISE_DOMAIN_V1);
+            hasher.update(context);
+            ExactNoiseSampler::new(hasher.finalize_xof())
+                .sample_discrete_laplace(4, 5, 1)
+                .expect("bounded exact sample")
+        }
+
+        let sample_a = sample(b"aggregate-a/metric-a");
+        assert_eq!(sample_a, sample(b"aggregate-a/metric-a"));
+        assert_ne!(
+            (sample_a, sample(b"aggregate-a/metric-b")),
+            (
+                sample(b"aggregate-b/metric-a"),
+                sample(b"aggregate-b/metric-b")
+            ),
+            "independent contexts must not collapse to one repeated sample pair"
+        );
+    }
+
+    #[test]
+    fn privacy_metrics_clip_each_subject_before_population_sum() {
+        let mut first = privacy_event("event-a", 110);
+        first.metrics[0].value = 9;
+        let mut repeated_subject = privacy_event("event-b", 120);
+        repeated_subject.subject_digest = first.subject_digest;
+        repeated_subject.metrics[0].value = 8;
+        let mut second_subject = privacy_event("event-c", 130);
+        second_subject.metrics[0].value = 7;
+
+        let metrics =
+            clipped_population_metrics(&[first, repeated_subject, second_subject], Some(10))
+                .expect("clip contributions");
+        assert_eq!(
+            metrics.get("moderation_actions"),
+            Some(&("count".to_string(), 17))
+        );
+    }
+
+    #[test]
+    fn suppression_counts_distinct_subjects_not_repeated_events() {
+        let first = privacy_event("event-a", 110);
+        let mut replayed_subject = privacy_event("event-b", 120);
+        replayed_subject.subject_digest = first.subject_digest;
+        let error = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            201,
+            &privacy_config(),
+            Some([0x5A; 32]),
+            &[first, replayed_subject],
+        )
+        .expect_err("one subject cannot satisfy k=2");
+        assert_eq!(error, PrivacyAggregateWorkerError::AllBucketsSuppressed);
+    }
+
+    #[test]
+    fn privacy_source_event_requires_subject_digest() {
+        let mut event = privacy_event("event-a", 110);
+        event.subject_digest = [0; 32];
+        assert_eq!(
+            event.validate(),
+            Err(PrivacyAggregateWorkerError::MissingDigest {
+                field: "subject_digest",
+            })
+        );
+    }
+
+    #[test]
+    fn privacy_source_event_enforces_text_and_metric_bounds() {
+        let mut event = privacy_event("event-a", 110);
+        event.event_id = "x".repeat(MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1 + 1);
+        assert_eq!(
+            event.validate(),
+            Err(PrivacyAggregateWorkerError::TextTooLong {
+                field: "event_id",
+                max: MODERATION_LEDGER_MAX_PUBLIC_TEXT_BYTES_V1,
+            })
+        );
+
+        let mut event = privacy_event("event-a", 110);
+        event.metrics = (0..=MODERATION_PRIVACY_MAX_METRICS_V1)
+            .map(|index| PrivacyAggregateSourceMetric {
+                key: format!("metric-{index:04}"),
+                value: 1,
+                unit: "count".to_string(),
+            })
+            .collect();
+        assert_eq!(
+            event.validate(),
+            Err(PrivacyAggregateWorkerError::TooManySourceMetrics {
+                count: MODERATION_PRIVACY_MAX_METRICS_V1 + 1,
+                max: MODERATION_PRIVACY_MAX_METRICS_V1,
+            })
+        );
+    }
+
+    #[test]
+    fn privacy_metric_overflow_fails_closed() {
+        let mut config = privacy_config();
+        config.privacy = ModerationPrivacyParametersV1 {
+            version:
+                iroha_data_model::sorafs::transparency::MODERATION_PRIVACY_PARAMETERS_VERSION_V1,
+            mode: ModerationPrivacyModeV1::Suppression,
+            epsilon_numerator: None,
+            epsilon_denominator: None,
+            delta_ppb: None,
+            per_subject_metric_cap: None,
+            suppression_threshold: Some(1),
+            suppressed_count: 0,
+        };
+        let mut first = privacy_event("event-a", 110);
+        first.metrics[0].value = u64::MAX;
+        let mut second = privacy_event("event-b", 120);
+        second.metrics[0].value = u64::MAX;
+
+        assert_eq!(
+            build_privacy_aggregates_from_source_events(
+                100,
+                200,
+                201,
+                &config,
+                None,
+                &[first, second],
+            ),
+            Err(PrivacyAggregateWorkerError::MetricArithmeticOverflow)
+        );
+    }
+
+    fn privacy_budget_policy() -> PrivacyCompositionBudgetPolicyV1 {
+        PrivacyCompositionBudgetPolicyV1 {
+            budget_id: [0xD0; 32],
+            epsilon_limit_numerator: 1,
+            epsilon_limit_denominator: 1,
+            max_publications: 4,
+        }
+    }
+
+    #[test]
+    fn privacy_composition_budget_is_durable_hash_chained_and_fail_closed() {
+        let mut ledger = PrivacyCompositionBudgetLedgerV1::default();
+        let first = ledger
+            .charge(privacy_budget_policy(), [0x01; 16], 200, 1, 2)
+            .expect("first budget charge");
+        let second = ledger
+            .charge(privacy_budget_policy(), [0x02; 16], 201, 1, 2)
+            .expect("second budget charge");
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+        assert_eq!(second.previous_charge_digest, Some(first.charge_digest));
+        assert_eq!(
+            (
+                second.cumulative_epsilon_numerator,
+                second.cumulative_epsilon_denominator
+            ),
+            (1, 1)
+        );
+        ledger.validate().expect("ledger validates");
+
+        let encoded = norito::to_bytes(&ledger).expect("budget ledger encodes");
+        let decoded: PrivacyCompositionBudgetLedgerV1 =
+            norito::decode_from_bytes(&encoded).expect("budget ledger decodes");
+        assert_eq!(decoded, ledger);
+        decoded.validate().expect("restored ledger validates");
+
+        let before = ledger.clone();
+        assert_eq!(
+            ledger.charge(privacy_budget_policy(), [0x03; 16], 202, 1, 2),
+            Err(PrivacyCompositionBudgetError::BudgetExhausted)
+        );
+        assert_eq!(ledger, before, "failed charges must be atomic");
+    }
+
+    #[test]
+    fn privacy_composition_budget_rejects_replay_conflict_and_tampering() {
+        let mut ledger = PrivacyCompositionBudgetLedgerV1::default();
+        ledger
+            .charge(privacy_budget_policy(), [0x01; 16], 200, 1, 4)
+            .expect("budget charge");
+        let before = ledger.clone();
+        assert_eq!(
+            ledger.charge(privacy_budget_policy(), [0x01; 16], 201, 1, 4),
+            Err(PrivacyCompositionBudgetError::DuplicateCycle)
+        );
+        assert_eq!(ledger, before);
+
+        let mut conflicting_policy = privacy_budget_policy();
+        conflicting_policy.max_publications = 3;
+        assert_eq!(
+            ledger.charge(conflicting_policy, [0x02; 16], 201, 1, 4),
+            Err(PrivacyCompositionBudgetError::PolicyConflict)
+        );
+        assert_eq!(ledger, before);
+
+        let mut tampered = ledger.clone();
+        tampered.chains[0].charges[0].cumulative_epsilon_numerator = 2;
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyCompositionBudgetError::InvalidChargeChain)
+        );
+        let mut tampered = ledger;
+        tampered.chains[0].charges[0].charge_digest[0] ^= 1;
+        assert_eq!(
+            tampered.validate(),
+            Err(PrivacyCompositionBudgetError::InvalidChargeChain)
+        );
+    }
+
+    #[test]
+    fn privacy_cycle_prf_request_binds_policy_and_exact_window() {
+        let window = PrivacyAggregateCycleWindow {
+            cycle_start_unix: 100,
+            cycle_end_unix: 200,
+            due_at_unix: 210,
+        };
+        let request =
+            PrivacyCyclePrfRequestV1::new([0xC0; 32], window).expect("canonical PRF request");
+
+        assert_eq!(request.version(), PRIVACY_CYCLE_PRF_REQUEST_VERSION_V1);
+        assert_eq!(request.policy_digest(), [0xC0; 32]);
+        assert_eq!(request.cycle_id(), privacy_aggregate_cycle_id(window));
+        assert_eq!(request.cycle_start_unix(), 100);
+        assert_eq!(request.cycle_end_unix(), 200);
+        assert_eq!(request.due_at_unix(), 210);
+
+        let other_policy =
+            PrivacyCyclePrfRequestV1::new([0xC1; 32], window).expect("other policy request");
+        let other_window = PrivacyCyclePrfRequestV1::new(
+            [0xC0; 32],
+            PrivacyAggregateCycleWindow {
+                cycle_start_unix: 200,
+                cycle_end_unix: 300,
+                due_at_unix: 310,
+            },
+        )
+        .expect("other window request");
+        assert_ne!(request.binding_digest(), other_policy.binding_digest());
+        assert_ne!(request.cycle_id(), other_window.cycle_id());
+        assert_ne!(request.binding_digest(), other_window.binding_digest());
+        assert_eq!(
+            PrivacyCyclePrfRequestV1::new([0; 32], window),
+            Err(PrivacyCyclePrfRequestErrorV1::MissingPolicyDigest)
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_publishes_commitment_not_runtime_noise_material() {
+        let events = vec![privacy_event("event-a", 110), privacy_event("event-b", 120)];
+        let config = privacy_config();
+
+        let first = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            201,
+            &config,
+            Some([0x5A; 32]),
+            &events,
+        )
+        .expect("build aggregate");
+        let second = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            201,
+            &config,
+            Some([0x5A; 32]),
+            &events,
+        )
+        .expect("rebuild aggregate");
+
+        assert_eq!(first, second);
+        assert_eq!(first.len(), 1);
+        let aggregate = &first[0];
+        let commitment_hex = hex::encode(noise_randomness_commitment(&[0x5A; 32]));
+        assert!(aggregate.metadata.iter().any(|item| {
+            item.key == NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1 && item.value == commitment_hex
+        }));
+        assert!(
+            aggregate
+                .metadata
+                .iter()
+                .all(|item| item.value != hex::encode([0x5A; 32]))
+        );
+        let encoded = norito::to_bytes(aggregate).expect("encode aggregate");
+        assert!(
+            !encoded
+                .windows(32)
+                .any(|window| window == [0x5A; 32].as_slice()),
+            "runtime threshold-PRF output must not enter the public aggregate"
+        );
+
+        let changed = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            201,
+            &privacy_config(),
+            Some([0x5B; 32]),
+            &events,
+        )
+        .expect("build with changed runtime output");
+        assert_ne!(
+            changed[0].source_payload_digest, aggregate.source_payload_digest,
+            "the public source digest must bind the cycle randomness commitment"
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_sampler_resource_exhaustion_policy() {
+        let mut config = privacy_config();
+        config.privacy.epsilon_numerator = Some(1);
+        config.privacy.epsilon_denominator = Some(10_000);
+
+        let error = build_privacy_aggregates_from_source_events(
+            100,
+            200,
+            201,
+            &config,
+            Some([0x5A; 32]),
+            &[privacy_event("event-a", 110), privacy_event("event-b", 120)],
+        )
+        .expect_err("unbounded expected sampler work must fail");
+
+        assert_eq!(
+            error,
+            PrivacyAggregateWorkerError::NoiseParametersExceedResourceLimit {
+                epsilon_numerator: 1,
+                epsilon_denominator: 10_000,
+                sensitivity: 1,
+            }
+        );
+    }
+
+    #[test]
+    fn privacy_aggregate_rejects_caller_supplied_randomness_commitment() {
+        let mut config = privacy_config();
+        config.metadata = vec![ModerationLedgerMetadataV1 {
+            key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1.to_string(),
+            value: hex::encode([0x11; 32]),
+        }];
+
+        let error = config
+            .validate()
+            .expect_err("worker-owned commitment key must be reserved");
+        assert_eq!(
+            error,
+            PrivacyAggregateWorkerError::ReservedMetadataKey {
+                key: NOISE_RANDOMNESS_COMMITMENT_METADATA_KEY_V1,
+            }
+        );
     }
 
     #[test]

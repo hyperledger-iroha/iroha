@@ -57,7 +57,7 @@ esses sinalizadores com `--por-proof-out` ou `--por-sample-out` para registrar o
 - Assinaturas do conselho e metadados opcionais (por exemplo, IDs de construção).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

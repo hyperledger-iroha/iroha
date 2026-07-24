@@ -97,9 +97,9 @@ Estos comandos mantienen las propuestas alineadas con la carta del registero y p
   дайджест манифеста и проверка PoR с нужными параметрами.
 - `sorafs_manifest_chunk_store --json-out=-` — передать отчет о сохранении фрагментов
   стандартный вывод для автоматического сравнения.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — подтверждение того, что заявлены самолеты CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — подтверждение того, что заявлены самолеты CAR
   вставьте дескриптор canonico под большим псевдонимом.
-- `sorafs_manifest_stub --plan=-` — можно использовать в пищу `chunk_fetch_specs` предыдущий пункт
+- `sorafs_manifest_builder --plan=-` — можно использовать в пищу `chunk_fetch_specs` предыдущий пункт
   проверка смещений/дайджестов после камбио.
 
 Зарегистрируйте данные команд (дайджесты, результаты PoR, хэши манифеста) в папке, которая будет нужна
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generar manifest + CAR y capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reejecutar usando el plan de fetch guardado (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

@@ -64,9 +64,9 @@ digest၊ retention tag နှင့် Norito artefacts များသည် �
 ထိုအထောက်အထားများကို စုဆောင်းရန် ရှိပြီးသားကိရိယာ1. Torii (`iroha app da get-blob --storage-ticket <hex>` မှ manifest အတွဲကို ရယူပါ
    သို့မဟုတ် တူညီသော SDK အကူအညီပေးသူ) ထို့ကြောင့် လူတိုင်းရောက်ရှိသည့် တူညီသောဘိုက်များကို ဟက်ခ်လုပ်ပါ။
    တံခါးပေါက်များ။
-2. လက်မှတ်ထိုးထားသော စာအိတ်ဖြင့် manifest stub verifier ကို ဖွင့်ပါ-
+2. လက်မှတ်ထိုးထားသော စာအိတ်ဖြင့် manifest builder verifier ကို ဖွင့်ပါ-
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

@@ -63,7 +63,7 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
 - Хуваалцсан туслагчид (`PricingScheduleV1`, `PricingScheduleV1`, эгнээ/даалгавар/SLA баталгаажуулагч) нь CI болон доод талын хэрэгслүүдийг дахин ашиглах боломжтойг тодорхойлох түлхүүрийн баталгаажуулалт болон алдааны мэдээг өгдөг.【crates/sorafs_manifest/src/capacity.rs:230
 - `PinProviderRegistry` одоо `/v1/sorafs/capacity/state`-ээр дамжуулан гинжин хэлхээний агшин зуурын зургийг гаргаж, Norito тодорхойлогчийн ард үйлчилгээ үзүүлэгчийн мэдүүлэг болон хураамжийн бүртгэлийн бичилтүүдийг нэгтгэдэг. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Баталгаажуулалтын хамрах хүрээ нь каноник бариулын хэрэгжилт, давхардлыг илрүүлэх, эгнээ тус бүрийн хязгаар, хуулбарлах хуваарилалтын хамгаалалт, телеметрийн хүрээг шалгах дасгалуудыг хийдэг тул регрессүүд CI-д шууд гарч ирдэг.【crates/sorafs_manifest/src/capacity.rs:792】
-- Операторын хэрэгсэл: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` хүний унших боломжтой үзүүлэлтүүдийг каноник Norito ачаалал, base64 blob болон JSON хураангуй болгон хувиргадаг тул операторууд `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, локал засварын захиалгаар хуулбарлах боломжтой. баталгаажуулалт.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Лавлагаа төхөөрөмж нь `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`)-д амьдардаг бөгөөд I000.03NI5-аар үүсгэгддэг.
+- Операторын хэрэгсэл: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` хүний унших боломжтой үзүүлэлтүүдийг каноник Norito ачаалал, base64 blob болон JSON хураангуй болгон хувиргадаг тул операторууд `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry`, локал засварын захиалгаар хуулбарлах боломжтой. баталгаажуулалт.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Лавлагаа төхөөрөмж нь `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`)-д амьдардаг бөгөөд I000.03NI5-аар үүсгэгддэг.
 
 ### 2. Хяналтын хавтгайн интеграци
 
@@ -155,7 +155,7 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
   засаглалын багцуудын хажууд.
 
 ### Маргаан, нотлох баримтыг таслах
-- `sorafs_manifest_stub capacity dispute`-ээр дамжуулан маргаан үүсгэх (туршилт:
+- `sorafs_manifest_builder capacity dispute`-ээр дамжуулан маргаан үүсгэх (туршилт:
   `cargo test -p sorafs_car --test capacity_cli`) тул ачаалал нь каноник хэвээр байна.
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` болон торгуулийг ажиллуул
   Suites (`record_capacity_telemetry_penalises_persistent_under_delivery`) маргааныг нотлох ба
@@ -164,7 +164,7 @@ SF-2c замын газрын зургийн зүйл нь хадгалах га
   Баталгаажуулалтын тайланд анхааруулах зөвшөөрлийг буцааж холбох.
 
 ### Үйлчилгээ үзүүлэгчийн онгоцонд суух, гарах утааны туршилт
-- `sorafs_manifest_stub capacity ...` ашиглан мэдэгдэл/телеметрийн олдворуудыг сэргээж, дахин тоглуулаарай
+- `sorafs_manifest_builder capacity ...` ашиглан мэдэгдэл/телеметрийн олдворуудыг сэргээж, дахин тоглуулаарай
   Илгээхээс өмнө CLI тест хийдэг (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Torii (`/v1/sorafs/capacity/declare`)-ээр илгээж, дараа нь `/v1/sorafs/capacity/state` нэмэх
   Grafana дэлгэцийн агшин. `docs/source/sorafs/capacity_onboarding_runbook.md` дээр гарах урсгалыг дагана уу.

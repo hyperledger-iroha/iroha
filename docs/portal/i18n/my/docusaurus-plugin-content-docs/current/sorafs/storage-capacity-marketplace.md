@@ -63,7 +63,7 @@ SF-2c လမ်းပြမြေပုံ အကြောင်းအရာသ�
 - Shared helpers (`CapacityMetadataEntry`၊ `PricingScheduleV1`၊ lane/assignment/SLA validators) သည် CI နှင့် downstream tooling တို့ကို ပြန်သုံးနိုင်သည်ဟု အဆုံးအဖြတ်ပေးသော သော့အတည်ပြုခြင်းနှင့် အမှားအယွင်းအစီရင်ခံခြင်းကို ပေးပါသည်။【crates/sorafs_manifest/src/capacity.rs:230
 - ယခု `PinProviderRegistry` သည် `/v1/sorafs/capacity/state` မှတစ်ဆင့် ကွင်းဆက်လျှပ်တစ်ပြက်ရိုက်ချက်အား ပံ့ပိုးပေးသူ၏ကြေငြာချက်များနှင့် အဆုံးအဖြတ်ပေးသော Norito ၏နောက်ကွယ်ရှိ အခကြေးငွေစာရင်းစာရွက်များကို ပေါင်းစပ်ထားသည်။ JSON။ 【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - မှန်ကန်သောလွှမ်းခြုံမှုလေ့ကျင့်ခန်းသည် canonical handle enforcement၊ ထပ်နေသောထောက်လှမ်းမှု၊ တစ်လမ်းသွားတစ်လမ်းသွားဘောင်များ၊ ပုံတူကူးချထားသောအစောင့်အကြပ်များနှင့် တယ်လီမီတာအကွာအဝေးစစ်ဆေးမှုများကြောင့် ဆုတ်ယုတ်မှုများသည် CI တွင်ချက်ချင်းပေါ်လာပါသည်။【crates/sorafs_manifest/src/capacity.rs:792】
-- အော်ပရေတာတူးလ်- `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` သည် လူသားဖတ်နိုင်သော specs များကို canonical Norito payloads၊ base64 blobs နှင့် JSON အနှစ်ချုပ်များအဖြစ်သို့ ပြောင်းလဲပေးသည်၊ သို့မှသာ အော်ပရေတာများသည် `/v1/sorafs/capacity/declare`၊ I18NI000000049X အဖြစ်သို့ ပြောင်းလဲကာ ဒေသန္တရအမှာစာများကို ပြုပြင်ပေးနိုင်ပါသည်။ အတည်ပြုချက်။ 【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 ရည်ညွှန်းပစ္စည်းများကို `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`၊ `order_v1.to`) နှင့် I180NI30 မှတဆင့် ထုတ်လုပ်ပါသည်။
+- အော်ပရေတာတူးလ်- `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` သည် လူသားဖတ်နိုင်သော specs များကို canonical Norito payloads၊ base64 blobs နှင့် JSON အနှစ်ချုပ်များအဖြစ်သို့ ပြောင်းလဲပေးသည်၊ သို့မှသာ အော်ပရေတာများသည် `/v1/sorafs/capacity/declare`၊ I18NI000000049X အဖြစ်သို့ ပြောင်းလဲကာ ဒေသန္တရအမှာစာများကို ပြုပြင်ပေးနိုင်ပါသည်။ အတည်ပြုချက်။ 【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 ရည်ညွှန်းပစ္စည်းများကို `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`၊ `order_v1.to`) နှင့် I180NI30 မှတဆင့် ထုတ်လုပ်ပါသည်။
 
 ### 2. Control Plane Integration
 
@@ -155,7 +155,7 @@ SF-2c လမ်းပြမြေပုံ အကြောင်းအရာသ�
   အုပ်ချုပ်ရေးအဖွဲ့တွေနဲ့ တွဲပြီးလုပ်တာပါ။
 
 ### အငြင်းပွားမှုနှင့် ဖြတ်တောက်ခြင်း အထောက်အထား
-- `sorafs_manifest_stub capacity dispute` (စမ်းသပ်မှုများ-
+- `sorafs_manifest_builder capacity dispute` (စမ်းသပ်မှုများ-
   `cargo test -p sorafs_car --test capacity_cli`) ထို့ကြောင့် payload များသည် ပုံမှန်အတိုင်းရှိနေပါသည်။
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` ကို Run ပြီး ပြစ်ဒဏ်ပေးလိုက်ပါ။
   အငြင်းပွားမှုများနှင့်သက်သေပြရန် suites (`record_capacity_telemetry_penalises_persistent_under_delivery`)
@@ -164,7 +164,7 @@ SF-2c လမ်းပြမြေပုံ အကြောင်းအရာသ�
   လင့်ခ်သည် သတိပေးချက်အတည်ပြုချက်များကို အတည်ပြုချက်အစီရင်ခံစာသို့ ပြန်သွားပါ။
 
 ### ဝန်ဆောင်မှုပေးသူ စတင်တက်ရောက်ခြင်းနှင့် မီးခိုးထွက်စစ်ဆေးမှုများ
-- `sorafs_manifest_stub capacity ...` ဖြင့် ကြေငြာချက်/ တယ်လီမီတာ မှတ်တမ်းများကို ပြန်ထုတ်ပြီး ပြန်ဖွင့်ပါ
+- `sorafs_manifest_builder capacity ...` ဖြင့် ကြေငြာချက်/ တယ်လီမီတာ မှတ်တမ်းများကို ပြန်ထုတ်ပြီး ပြန်ဖွင့်ပါ
   မတင်ပြမီ CLI စမ်းသပ်မှုများ (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`)။
 - Torii (`/v1/sorafs/capacity/declare`) မှတစ်ဆင့် တင်ပြပြီးနောက် `/v1/sorafs/capacity/state` အပေါင်းကို ဖမ်းယူပါ။
   Grafana ဖန်သားပြင်ဓာတ်ပုံများ။ `docs/source/sorafs/capacity_onboarding_runbook.md` တွင် ထွက်ပေါက်လမ်းကြောင်းကို လိုက်နာပါ။

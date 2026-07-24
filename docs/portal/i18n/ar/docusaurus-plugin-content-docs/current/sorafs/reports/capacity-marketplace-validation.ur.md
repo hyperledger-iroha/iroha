@@ -59,7 +59,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-يقوم المشغلون الذين `sorafs_manifest_stub capacity {declaration,dispute}` بتسجيل الحمولات النافعة لطلبات الإعداد/الاعتراض بشكل متكرر وإنشاء ملفات وبيانات JSON/Norito بايت في تذكرة الإدارة بالإضافة إلى أرشيف ثابت.
+يقوم المشغلون الذين `sorafs_manifest_builder capacity {declaration,dispute}` بتسجيل الحمولات النافعة لطلبات الإعداد/الاعتراض بشكل متكرر وإنشاء ملفات وبيانات JSON/Norito بايت في تذكرة الإدارة بالإضافة إلى أرشيف ثابت.
 
 ## قطع أثرية لتسجيل الخروج| قطعة أثرية | المسار | بليك2ب-256 |
 |----------|------|-------------|

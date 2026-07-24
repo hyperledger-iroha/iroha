@@ -90,8 +90,8 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 要求はクライアントに明示的に要求します (`Accept-Chunker` + `Accept-Digest`)。|コンポネ |ステータス |メモ |
 |----------|----------|----------|
 | `sorafs_manifest_chunk_store` | ✅ サポート | `--json-out=-` を介して canonico + エイリアスを処理し、`--json-out=-` を介して関連ストリームを処理し、`ensure_charter_compliance()` を介して登録を行うアプリケーションを検証します。 |
-| `sorafs_manifest_stub` | ⚠️レティラード |サポート用のマニフェストのビルダー。 CAR/マニフェストの `iroha app sorafs toolkit pack` パラメータを使用して、確定的な `--plan=-` パラメータを確認してください。 |
-| `sorafs_provider_advert_stub` | ⚠️レティラード |オフラインでの検証のヘルパー。プロバイダーは、`/v1/sorafs/providers` 経由で開発者製品のパイプラインと公開有効性を広告します。 |
+| `sorafs_manifest_builder` | ⚠️レティラード |サポート用のマニフェストのビルダー。 CAR/マニフェストの `iroha app sorafs toolkit pack` パラメータを使用して、確定的な `--plan=-` パラメータを確認してください。 |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (開発者オーケストレーター) | ✅ サポート | Le `chunk_fetch_specs`、容量 `range` のペイロードは CARv2 に準拠しています。 |
 | SDK のフィクスチャ (Rust/Go/TS) | ✅ サポート | `export_vectors` 経由の Regeneradas; o canonico aparece primeiro em cada lista de aliases e e assinado por envelops do conselho を処理します。 |
 |ゲートウェイなしのネゴシアカオ デ パーフィル Torii | ✅ サポート |ヘッダー `Content-Chunker` を含む、`Accept-Chunker` の完全な文法を実装して、CARv1 ブリッジの公開要求を明示的にダウングレードします。 |
@@ -148,12 +148,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-O manifest stub espelha os mesmos dados, o que e conveniente ao automatizar a selecao de
+O manifest builder espelha os mesmos dados, o que e conveniente ao automatizar a selecao de
 `--chunker-profile-id` em pipelines. Ambos os CLIs de chunk store tambem aceitam a forma de handle canonico
 (`--profile=sorafs.sf1@1.0.0`) para que scripts de build evitem hard-codear IDs numericos:
 
 ```
-$ Cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ Cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     「プロファイルID」: 1、
@@ -217,4 +217,4 @@ CARv1+SHA-2 のエクスポート機能の管理:
   オス精巣フォルネシドスを介して。
 * `chunker_registry::lookup_by_profile` は記述子を確認します
   `ChunkProfile::DEFAULT` パラ エビタール ダイバージェンシア アシデンタルに対応します。
-* `iroha app sorafs toolkit pack` および `sorafs_manifest_stub` の製品マニフェストには、レジストリのメタデータが含まれます。
+* `iroha app sorafs toolkit pack` および `sorafs_manifest_builder` の製品マニフェストには、レジストリのメタデータが含まれます。

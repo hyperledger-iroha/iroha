@@ -3,7 +3,8 @@
 Current source ABI: 21. ABI 14 added
 `connect_norito_encode_transfer_instruction_box` for native multisig proposal
 instruction boxes; later additive revisions include the native Kagemusha V2
-surfaces. The archive checksums below are historical and do not establish an
+surfaces and the bounded SoraFS Governance DAG block/head-chain reference
+validators consumed by the C# SDK. The archive checksums below are historical and do not establish an
 ABI-21 artifact. Regenerate, verify, and republish the bridge artifacts before
 cutting an SDK release that depends on the current source surface.
 

@@ -41,14 +41,14 @@ translation_last_reviewed: 2026-02-07
 |-----|------|----------|----------|-------|
 | تركيبات متكررة | م0 | عمليات التشغيل الجافة الرائعة، هضم القطع المحلية الرائعة مع `fixtures/sorafs_chunker`. نشر هذا في `docs/source/sorafs/reports/`. | موفرو التخزين | `determinism-<date>.md` مع النجاح/الفشل. |
 | قم بقراءة المقالة | م1 | يتم دعم `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` عند الانجراف أو الظهور. يتجاوز Dev التنازل عن الحوكمة في العلاقات العامة. | الأدوات مجموعة العمل | سجل CI، يمكنك الحصول على تذكرة التنازل (إذا كان الأمر كذلك). |
-| أعلام التوقع | م1 | يتم اختيار اللاعبين العاديين `sorafs_manifest_stub` مع التوقعات الواضحة للإخراج الثابت: | مستندات CI | البرامج النصية المنسقة مع أعلام التوقع (sm. blok commandы ниje). |
+| أعلام التوقع | م1 | يتم اختيار اللاعبين العاديين `sorafs_manifest_builder` مع التوقعات الواضحة للإخراج الثابت: | مستندات CI | البرامج النصية المنسقة مع أعلام التوقع (sm. blok commandы ниje). |
 | تثبيت التسجيل أولاً | م2 | `sorafs pin propose` و`sorafs pin approve` يتعهدان بتنفيذ البيان؛ يستخدم CLI للترقية `--require-registry`. | عمليات الحوكمة | سجل التدقيق الخاص بـ Registry CLI، والاقتراحات غير الضرورية للقياس عن بعد. |
 | تكافؤ إمكانية الملاحظة | م3 | لوحات المعلومات Prometheus/Grafana تقترح مخزون القطع المتراكم وبيانات التسجيل؛ التنبيهات متضمنة في العمليات عند الطلب. | إمكانية الملاحظة | لوحة التحكم، المعرفات المناسبة للتنبيهات، نتائج GameDay. |
 
 #### منشورات الأوامر القانونية
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

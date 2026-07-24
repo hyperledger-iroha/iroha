@@ -209,7 +209,8 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
             });
     }
     let transfer =
-        iroha_executor_data_model::permission::asset::CanTransferAsset::try_from(permission).ok()?;
+        iroha_executor_data_model::permission::asset::CanTransferAsset::try_from(permission)
+            .ok()?;
     state_transaction
         .world
         .governance_proposals
@@ -223,11 +224,10 @@ pub(crate) fn enacted_validation_fee_payout_runtime_permission_owner(
                 return None;
             };
             let binding = &lifecycle.payout_binding;
-            let wrapper_sbd_asset =
-                iroha_data_model::asset::AssetId::new(
-                    binding.sbd_asset_id.clone(),
-                    binding.treasury_account_id.clone(),
-                );
+            let wrapper_sbd_asset = iroha_data_model::asset::AssetId::new(
+                binding.sbd_asset_id.clone(),
+                binding.treasury_account_id.clone(),
+            );
             (transfer.asset == wrapper_sbd_asset).then(|| binding.pool_vault_account_id.clone())
         })
 }

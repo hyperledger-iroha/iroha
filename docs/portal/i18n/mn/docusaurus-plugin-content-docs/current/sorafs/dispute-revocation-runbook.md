@@ -36,7 +36,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 3. Маргаан мэдүүлэх
 
-1. `sorafs_manifest_stub capacity dispute`-д зориулсан тусгай JSON үүсгэх:
+1. `sorafs_manifest_builder capacity dispute`-д зориулсан тусгай JSON үүсгэх:
 
    ```json
    {
@@ -59,7 +59,7 @@ translation_last_reviewed: 2026-02-07
 2. CLI-г ажиллуулна уу:
 
    ```bash
-   sorafs_manifest_stub capacity dispute \
+   sorafs_manifest_builder capacity dispute \
      --spec=dispute.json \
      --norito-out=dispute.to \
      --base64-out=dispute.b64 \
@@ -76,7 +76,7 @@ translation_last_reviewed: 2026-02-07
 
 1. **Нөхцөл байдлын цонх:** үйлчилгээ үзүүлэгчид удахгүй цуцлагдах тухай мэдэгдэх; бодлого зөвшөөрвөл тогтоогдсон өгөгдлийг нүүлгэн шилжүүлэхийг зөвшөөрөх.
 2. **`ProviderAdmissionRevocationV1` үүсгэх:**
-   - Зөвшөөрөгдсөн шалтгаанаар `sorafs_manifest_stub provider-admission revoke` ашиглана уу.
+   - Зөвшөөрөгдсөн шалтгаанаар `sorafs_manifest_builder provider-admission revoke` ашиглана уу.
    - Гарын үсэг болон хүчингүй болгох тоймыг шалгах.
 3. **Хүчгүй болгохыг нийтлэх:**
    - Хүчингүй болгох хүсэлтээ Torii хаягаар илгээнэ үү.
@@ -91,7 +91,7 @@ translation_last_reviewed: 2026-02-07
 
 ## 6. Лавлах материал
 
-- `sorafs_manifest_stub capacity dispute --help`
+- `sorafs_manifest_builder capacity dispute --help`
 - `docs/source/sorafs/storage_capacity_marketplace.md` (маргааны хэсэг)
 - `docs/source/sorafs/provider_admission_policy.md` (цуцлах ажлын урсгал)
 - Ажиглалтын хяналтын самбар: `SoraFS / Capacity Providers`

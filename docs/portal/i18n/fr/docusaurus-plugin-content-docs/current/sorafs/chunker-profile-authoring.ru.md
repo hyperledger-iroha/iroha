@@ -91,9 +91,9 @@ les luminaires, les outils CLI et la gouvernance automatique peuvent améliorer 
   manifeste digest et PoR проверки с предлагаемыми параметрами.
 - `sorafs_manifest_chunk_store --json-out=-` — vous pouvez ouvrir un magasin de morceaux sur la sortie standard pour
   автоматизированных сравнений.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — подтверждает, что manifestes и CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — подтверждает, что manifestes и CAR
   планы встраивают канонический handle и alias.
-- `sorafs_manifest_stub --plan=-` — avant `chunk_fetch_specs` pour les vérifications
+- `sorafs_manifest_builder --plan=-` — avant `chunk_fetch_specs` pour les vérifications
   offsets/digests après la révision.
 
 Téléchargez votre commande (digests, racines PoR, hachages manifestes) en amont, ce que vous obtenez maintenant
@@ -130,7 +130,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Сгенерировать manifest + CAR и сохранить chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -139,7 +139,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Повторно запустить с сохраненным планом fetch (защищает от устаревших offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

@@ -40,14 +40,14 @@ translation_last_reviewed: 2026-02-07
 |------|------------|-------------|---------|--------|
 |固定排練| M0 |每週進行一次演練，將本地塊摘要與 `fixtures/sorafs_chunker` 進行比較。在 `docs/source/sorafs/reports/` 下發布報告。 |存儲提供商| `determinism-<date>.md` 帶有通過/失敗矩陣。 |
 |強制簽名 | M1 |如果簽名或清單發生偏差，`ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` 會失敗。開發優先權需要 PR 附帶的治理豁免。 |工具工作組 | CI 日誌、豁免票證鏈接（如果適用）。 |
-|期望旗幟| M1 |管道調用 `sorafs_manifest_stub` 並明確期望引腳輸出： |文檔 CI |更新了引用期望標誌的腳本（請參閱下面的命令塊）。 |
+|期望旗幟| M1 |管道調用 `sorafs_manifest_builder` 並明確期望引腳輸出： |文檔 CI |更新了引用期望標誌的腳本（請參閱下面的命令塊）。 |
 |註冊表優先固定| M2| `sorafs pin propose` 和 `sorafs pin approve` 包裝清單提交； CLI 默認為 `--require-registry`。 |治理行動|註冊表 CLI 審核日誌、失敗提案的遙測。 |
 |可觀測性平價 | M3 |當塊庫存與註冊表清單不一致時，Prometheus/Grafana 儀表板會發出警報；警報連接到待命的操作人員。 |可觀察性|儀表板鏈接、警報規則 ID、GameDay 結果。 |
 
 #### 規範發布命令
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

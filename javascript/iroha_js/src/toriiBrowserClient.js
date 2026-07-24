@@ -2124,6 +2124,11 @@ export class ToriiBrowserClient {
     return this._json("GET", "/v1/sumeragi/status", { signal: signalFrom(opts) });
   }
 
+  getSumeragiDiagnostics(options = {}) {
+    const opts = requireObject(options, "getSumeragiDiagnostics options");
+    return this._json("GET", "/v1/sumeragi/diagnostics", { signal: signalFrom(opts) });
+  }
+
   getSumeragiTelemetry(options = {}) {
     const opts = requireObject(options, "getSumeragiTelemetry options");
     return this._json("GET", "/v1/sumeragi/telemetry", { signal: signalFrom(opts) });

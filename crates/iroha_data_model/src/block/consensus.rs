@@ -9,7 +9,7 @@
 use core::{fmt, num::NonZeroU64};
 use std::{string::String, vec::Vec};
 
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Algorithm, Hash, HashOf};
 use iroha_schema::{EnumMeta, EnumVariant, Ident, IntoSchema, MetaMap, Metadata, TypeId};
 use norito::codec::{Decode, DecodeAll, Encode};
 
@@ -1992,6 +1992,17 @@ impl NexusFeeReceipt {
     pub const VERSION: u16 = 2;
 }
 
+/// Native AMX v2 receipt version accepted by live diagnostics clients.
+pub const NATIVE_AMX_RECEIPT_VERSION_V2: u16 = 2;
+/// Maximum number of ordered transaction sources in one grouped Native AMX control.
+pub const NATIVE_AMX_GROUP_SOURCES_MAX: usize = 4_096;
+/// Maximum participant legs after reserving one route-plan slot for the coordinator.
+pub const NATIVE_AMX_PARTICIPANT_LEGS_MAX: usize = 255;
+/// Maximum validators in one Native AMX participant committee.
+pub const NATIVE_AMX_VALIDATORS_MAX: usize = 128;
+/// Canonical compressed BLS-normal proof-of-possession and signature size.
+pub const NATIVE_AMX_BLS_PROOF_BYTES: usize = 96;
+
 /// Phase certified by a native AMX participant committee.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -2004,65 +2015,6 @@ pub enum NativeAmxPhase {
     Prepare,
     /// Participant committed its dataspace-local leg.
     Commit,
-}
-
-/// Canonical native AMX attestation payload signed by participant committees.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxAttestationBodyV1 {
-    /// Hash of the chain identifier that owns this attestation.
-    pub chain_id_hash: Hash,
-    /// Source transaction hash/id.
-    pub source_id: [u8; 32],
-    /// Hash of the canonical transaction entrypoint.
-    pub tx_entrypoint_hash: HashOf<crate::transaction::TransactionEntrypoint>,
-    /// Deterministic digest of the full coordinator/participant routing plan.
-    pub plan_digest: Hash,
-    /// Native AMX phase certified by this body.
-    pub phase: NativeAmxPhase,
-    /// Coordinator lane selected by the routing plan.
-    pub coordinator_lane_id: LaneId,
-    /// Coordinator dataspace selected by the routing plan.
-    pub coordinator_dataspace_id: DataSpaceId,
-    /// Exact active coordinator-lane incarnation at the authority context.
-    pub coordinator_lane_incarnation: Hash,
-    /// Participant lane certified by the committee.
-    pub participant_lane_id: LaneId,
-    /// Participant dataspace certified by the committee.
-    pub participant_dataspace_id: DataSpaceId,
-    /// Exact active participant-lane incarnation at the authority context.
-    pub participant_lane_incarnation: Hash,
-    /// Hash of the exact canonical participant committee that may attest this leg.
-    pub participant_validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Number of validators in the exact participant committee.
-    pub participant_validator_count: u32,
-    /// Minimum number of participant signatures required by the lane quorum policy.
-    pub participant_min_quorum: u32,
-    /// Global/catalog height used to resolve routes, incarnations, committee,
-    /// key activation, and proofs of possession.
-    pub authority_context_height: u64,
-    /// Coordinator lane-local block height that owns the transaction.
-    pub coordinator_lane_block_height: u64,
-    /// Coordinator lane-local consensus view for this exact attestation.
-    pub coordinator_lane_block_view: u64,
-    /// Exact coordinator lane-block proposal authenticated by the request.
-    pub coordinator_proposal_hash: Hash,
-}
-
-impl NativeAmxAttestationBodyV1 {
-    /// Build the domain-separated signature preimage for this attestation body.
-    #[must_use]
-    pub fn signature_preimage(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32 + 256);
-        out.extend_from_slice(b"iroha:native-amx:v1");
-        out.extend_from_slice(
-            &norito::to_bytes(self).expect("native AMX attestation body must encode"),
-        );
-        out
-    }
 }
 
 /// Canonical Sumeragi v2 native AMX attestation payload.
@@ -2142,68 +2094,81 @@ impl NativeAmxAttestationBodyV2 {
         out
     }
 
-    /// Compute the participant-local settlement commitment carried by this body.
-    #[must_use]
-    pub fn computed_participant_settlement_commitment(&self) -> Hash {
-        Hash::from(
-            crate::nexus::compute_settlement_hash(&self.computed_participant_settlement())
-                .expect("native AMX participant settlement must hash"),
-        )
-    }
-
-    /// Build the exact zero-effect participant settlement certified by this body.
-    #[must_use]
-    pub fn computed_participant_settlement(&self) -> LaneBlockCommitment {
-        LaneBlockCommitment {
+    /// Build the exact grouped zero-effect participant settlement certified by this body.
+    ///
+    /// The ordered source group is shared by every receipt in one Native AMX
+    /// control. It must contain this body's source exactly once and remain
+    /// strictly ordered so callers cannot accidentally construct the obsolete
+    /// singleton projection for a grouped control.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the group is empty, oversized, unordered,
+    /// duplicated, or does not contain this body's source exactly once.
+    pub fn computed_grouped_participant_settlement(
+        &self,
+        ordered_sources: &[[u8; 32]],
+    ) -> Result<LaneBlockCommitment, &'static str> {
+        if ordered_sources.is_empty() || ordered_sources.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
+            return Err("Native AMX participant source group is out of bounds");
+        }
+        if ordered_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("Native AMX participant source group must be strictly ordered");
+        }
+        if ordered_sources
+            .iter()
+            .filter(|source| **source == self.source_id)
+            .count()
+            != 1
+        {
+            return Err("Native AMX participant source group must contain the current source once");
+        }
+        let tx_count = u64::try_from(ordered_sources.len())
+            .map_err(|_| "Native AMX participant source group is out of bounds")?;
+        Ok(LaneBlockCommitment {
             block_height: self.participant_lane_block_height,
             lane_id: self.participant_lane_id,
             lane_incarnation: self.participant_lane_incarnation,
             dataspace_id: self.participant_dataspace_id,
-            tx_count: 1,
+            tx_count,
             total_local_amount: Quantity::zero(),
             total_xor_due: Quantity::zero(),
             total_xor_after_haircut: Quantity::zero(),
             total_xor_variance: Quantity::zero(),
             swap_metadata: None,
-            receipts: vec![LaneSettlementReceipt {
-                source_id: self.source_id,
-                local_amount: Quantity::zero(),
-                xor_due: Quantity::zero(),
-                xor_after_haircut: Quantity::zero(),
-                xor_variance: Quantity::zero(),
-                timestamp_ms: self.authority_context_height,
-            }],
+            receipts: ordered_sources
+                .iter()
+                .copied()
+                .map(|source_id| LaneSettlementReceipt {
+                    source_id,
+                    local_amount: Quantity::zero(),
+                    xor_due: Quantity::zero(),
+                    xor_after_haircut: Quantity::zero(),
+                    xor_variance: Quantity::zero(),
+                    timestamp_ms: self.authority_context_height,
+                })
+                .collect(),
             nexus_fee_receipts: Vec::new(),
             native_amx_receipts: Vec::new(),
-        }
+        })
     }
-}
 
-/// Validator-set proof for a native AMX attestation body.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxAttestationQcV1 {
-    /// Body certified by the aggregate signature.
-    pub body: NativeAmxAttestationBodyV1,
-    /// Version of the validator-set hashing scheme.
-    pub validator_set_hash_version: u16,
-    /// Stable hash of the validator set that produced the certificate.
-    pub validator_set_hash: HashOf<Vec<PeerId>>,
-    /// Ordered validator set used when assembling the certificate.
-    pub validator_set: Vec<PeerId>,
-    /// Historical BLS proofs-of-possession aligned exactly with `validator_set`.
+    /// Compute the commitment to an exact grouped participant settlement.
     ///
-    /// Keeping the full aligned vector makes the certificate independently
-    /// verifiable after consensus-key rotation or lane retirement. The signed
-    /// attestation body binds the validator-set hash, count, and quorum.
-    pub validator_set_pops: Vec<Vec<u8>>,
-    /// Compact signer bitmap (LSB-first).
-    pub signers_bitmap: Vec<u8>,
-    /// BLS12-381 aggregate signature bytes (compressed).
-    pub bls_aggregate_signature: Vec<u8>,
+    /// # Errors
+    ///
+    /// Returns the same source-group validation errors as
+    /// [`Self::computed_grouped_participant_settlement`].
+    pub fn computed_grouped_participant_settlement_commitment(
+        &self,
+        ordered_sources: &[[u8; 32]],
+    ) -> Result<Hash, &'static str> {
+        let settlement = self.computed_grouped_participant_settlement(ordered_sources)?;
+        Ok(Hash::from(
+            crate::nexus::compute_settlement_hash(&settlement)
+                .expect("native AMX participant settlement must hash"),
+        ))
+    }
 }
 
 /// Validator-set proof for a context-bound native AMX v2 attestation.
@@ -2230,25 +2195,6 @@ pub struct NativeAmxAttestationQcV2 {
     pub signers_bitmap: Vec<u8>,
     /// BLS12-381 aggregate signature bytes (compressed).
     pub bls_aggregate_signature: Vec<u8>,
-}
-
-/// Per-dataspace native AMX leg committed by the routing-plan coordinator.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
-#[cfg_attr(
-    feature = "json",
-    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-)]
-pub struct NativeAmxLegRecord {
-    /// Participant lane certified by both phase QCs.
-    pub lane_id: LaneId,
-    /// Dataspace participating in the native AMX group.
-    pub dataspace_id: DataSpaceId,
-    /// Exact participant-lane incarnation certified by both phase QCs.
-    pub lane_incarnation: Hash,
-    /// Participant prepare QC.
-    pub prepare_qc: NativeAmxAttestationQcV1,
-    /// Participant commit QC.
-    pub commit_qc: NativeAmxAttestationQcV1,
 }
 
 /// Per-dataspace native AMX v2 leg committed by the routing-plan coordinator.
@@ -2317,6 +2263,25 @@ pub struct NativeAmxReceipt {
     pub coordinator_proposal_hash: Hash,
     /// Prepared and committed dataspace legs.
     pub legs: Vec<NativeAmxLegRecordV2>,
+}
+
+impl NativeAmxLegRecordV2 {
+    /// Return whether this leg needs block-wide mixed-role anchor validation.
+    ///
+    /// A participant proposal that does not contain the current transaction's
+    /// entrypoint can still be valid when it is the exact executable proposal
+    /// for another role in the same block. Stateless receipt validation records
+    /// that condition through this predicate; only authority-aware admission can
+    /// prove the corresponding block-wide anchor.
+    #[must_use]
+    pub fn requires_mixed_role_anchor_validation(&self) -> bool {
+        let entrypoint_hash = Hash::from(self.prepare_qc.body.tx_entrypoint_hash);
+        !self
+            .participant_proposal
+            .descriptor
+            .accepted_transaction_hashes
+            .contains(&entrypoint_hash)
+    }
 }
 
 /// Liquidity profile applied when computing XOR conversions.
@@ -2409,6 +2374,370 @@ pub struct LaneBlockCommitment {
     /// Versioned native AMX receipts committed by coordinator execution.
     #[norito(default)]
     pub native_amx_receipts: Vec<NativeAmxReceipt>,
+}
+
+fn native_amx_nonzero(bytes: &[u8]) -> bool {
+    bytes.iter().any(|byte| *byte != 0)
+}
+
+fn native_amx_expected_quorum(validator_count: usize) -> usize {
+    validator_count.saturating_sub(validator_count.saturating_sub(1) / 3)
+}
+
+fn validate_native_amx_participant_proposal_shape(
+    proposal: &LaneBlockProposalV1,
+) -> Result<(), &'static str> {
+    let descriptor = &proposal.descriptor;
+    let validator_count = usize::try_from(descriptor.validator_count)
+        .map_err(|_| "Native AMX participant descriptor validator count is invalid")?;
+    let min_quorum = usize::try_from(descriptor.min_quorum)
+        .map_err(|_| "Native AMX participant descriptor quorum is invalid")?;
+    if proposal.payload_block_hint.is_some()
+        || descriptor.proposal_height == 0
+        || descriptor.lane_block_height == 0
+        || descriptor.previous_lane_block_height.checked_add(1)
+            != Some(descriptor.lane_block_height)
+        || (descriptor.previous_lane_block_height == 0)
+            != descriptor.previous_lane_block_descriptor_hash.is_none()
+        || descriptor
+            .previous_lane_block_descriptor_hash
+            .is_some_and(|hash| !native_amx_nonzero(hash.as_ref()))
+        || !native_amx_nonzero(descriptor.lane_incarnation.as_ref())
+        || !native_amx_nonzero(descriptor.subject_hash.as_ref())
+        || !native_amx_nonzero(descriptor.payload_ownership_hash.as_ref())
+        || !native_amx_nonzero(descriptor.rbc_instance_hash.as_ref())
+        || !native_amx_nonzero(descriptor.descriptor_hash.as_ref())
+        || !native_amx_nonzero(proposal.proposal_hash.as_ref())
+        || descriptor.qc_mode_tag.trim().is_empty()
+        || descriptor.accepted_candidate_indices.is_empty()
+        || descriptor.accepted_candidate_indices.len() > NATIVE_AMX_GROUP_SOURCES_MAX
+        || descriptor.accepted_candidate_indices.len()
+            != descriptor.accepted_transaction_hashes.len()
+        || descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .any(|hash| !native_amx_nonzero(hash.as_ref()))
+        || descriptor
+            .accepted_candidate_indices
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != descriptor.accepted_candidate_indices.len()
+        || descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            != descriptor.accepted_transaction_hashes.len()
+        || descriptor.validator_set_hash_version != crate::consensus::VALIDATOR_SET_HASH_VERSION_V1
+        || descriptor.validator_set.is_empty()
+        || descriptor.validator_set.len() > NATIVE_AMX_VALIDATORS_MAX
+        || descriptor
+            .validator_set
+            .windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        || descriptor
+            .validator_set
+            .iter()
+            .any(|peer| peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal))
+        || validator_count != descriptor.validator_set.len()
+        || min_quorum != native_amx_expected_quorum(validator_count)
+        || descriptor.validator_set_hash != HashOf::new(&descriptor.validator_set)
+        || descriptor.descriptor_hash != descriptor.computed_descriptor_hash()
+        || proposal.proposal_hash != proposal.computed_proposal_hash()
+    {
+        return Err("Native AMX participant proposal is structurally invalid");
+    }
+    Ok(())
+}
+
+fn validate_native_amx_qc_shape(
+    qc: &NativeAmxAttestationQcV2,
+    expected_phase: NativeAmxPhase,
+) -> Result<(), &'static str> {
+    let body = &qc.body;
+    let validator_count = qc.validator_set.len();
+    let advertised_validator_count = usize::try_from(body.participant_validator_count)
+        .map_err(|_| "Native AMX participant validator count is invalid")?;
+    let advertised_min_quorum = usize::try_from(body.participant_min_quorum)
+        .map_err(|_| "Native AMX participant quorum is invalid")?;
+    let expected_quorum = native_amx_expected_quorum(validator_count);
+    let expected_bitmap_len = validator_count.div_ceil(8);
+    let trailing_bits_clear = qc.signers_bitmap.last().is_none_or(|last| {
+        let used = validator_count % 8;
+        used == 0 || *last & !((1_u8 << used) - 1) == 0
+    });
+    let signer_count = qc
+        .signers_bitmap
+        .iter()
+        .map(|byte| byte.count_ones() as usize)
+        .sum::<usize>();
+    if body.phase != expected_phase
+        || body.round.height == 0
+        || !native_amx_nonzero(body.round.context_id.0.as_ref())
+        || body.authority_context_height != body.round.height
+        || body.planned_coordinator_block_height == 0
+        || !native_amx_nonzero(body.chain_id_hash.as_ref())
+        || !native_amx_nonzero(&body.source_id)
+        || !native_amx_nonzero(body.tx_entrypoint_hash.as_ref())
+        || !native_amx_nonzero(body.plan_digest.as_ref())
+        || !native_amx_nonzero(body.coordinator_lane_incarnation.as_ref())
+        || !native_amx_nonzero(body.participant_lane_incarnation.as_ref())
+        || body.participant_lane_block_height == 0
+        || body.participant_previous_block_height.checked_add(1)
+            != Some(body.participant_lane_block_height)
+        || (body.participant_previous_block_height == 0)
+            != body.participant_previous_block_descriptor_hash.is_none()
+        || body
+            .participant_previous_block_descriptor_hash
+            .is_some_and(|hash| !native_amx_nonzero(hash.as_ref()))
+        || !native_amx_nonzero(body.participant_proposal_hash.as_ref())
+        || !native_amx_nonzero(body.participant_settlement_commitment.as_ref())
+        || !native_amx_nonzero(body.participant_validator_set_hash.as_ref())
+        || !native_amx_nonzero(body.coordinator_proposal_hash.as_ref())
+        || qc.validator_set_hash_version != crate::consensus::VALIDATOR_SET_HASH_VERSION_V1
+        || validator_count == 0
+        || validator_count > NATIVE_AMX_VALIDATORS_MAX
+        || advertised_validator_count != validator_count
+        || advertised_min_quorum != expected_quorum
+        || qc.validator_set.windows(2).any(|pair| pair[0] >= pair[1])
+        || qc
+            .validator_set
+            .iter()
+            .any(|peer| peer.public_key().try_algorithm().ok() != Some(Algorithm::BlsNormal))
+        || qc.validator_set_hash != HashOf::new(&qc.validator_set)
+        || body.participant_validator_set_hash != qc.validator_set_hash
+        || qc.validator_set_pops.len() != validator_count
+        || qc
+            .validator_set_pops
+            .iter()
+            .any(|pop| pop.len() != NATIVE_AMX_BLS_PROOF_BYTES || !native_amx_nonzero(pop))
+        || qc.signers_bitmap.len() != expected_bitmap_len
+        || !trailing_bits_clear
+        || signer_count < expected_quorum
+        || qc.bls_aggregate_signature.len() != NATIVE_AMX_BLS_PROOF_BYTES
+        || !native_amx_nonzero(&qc.bls_aggregate_signature)
+    {
+        return Err("Native AMX participant QC is structurally invalid");
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+fn validate_native_amx_leg_shape(
+    receipt: &NativeAmxReceipt,
+    leg: &NativeAmxLegRecordV2,
+    expected_sources: &[[u8; Hash::LENGTH]],
+    expected_round: super::consensus_v2::ConsensusRound,
+    expected_epoch: u64,
+    expected_entrypoint_hash: Hash,
+) -> Result<(), &'static str> {
+    validate_native_amx_participant_proposal_shape(&leg.participant_proposal)?;
+    validate_native_amx_qc_shape(&leg.prepare_qc, NativeAmxPhase::Prepare)?;
+    validate_native_amx_qc_shape(&leg.commit_qc, NativeAmxPhase::Commit)?;
+
+    let prepare = &leg.prepare_qc;
+    let commit = &leg.commit_qc;
+    let body = &prepare.body;
+    let mut expected_commit_body = *body;
+    expected_commit_body.phase = NativeAmxPhase::Commit;
+    if commit.body != expected_commit_body
+        || prepare.validator_set_hash_version != commit.validator_set_hash_version
+        || prepare.validator_set_hash != commit.validator_set_hash
+        || prepare.validator_set != commit.validator_set
+        || prepare.validator_set_pops != commit.validator_set_pops
+    {
+        return Err("Native AMX prepare and commit certificates disagree");
+    }
+
+    let descriptor = &leg.participant_proposal.descriptor;
+    if body.round != expected_round
+        || body.epoch != expected_epoch
+        || body.chain_id_hash != receipt.chain_id_hash
+        || body.source_id != receipt.source_id
+        || Hash::from(body.tx_entrypoint_hash) != expected_entrypoint_hash
+        || body.plan_digest != receipt.plan_digest
+        || body.coordinator_lane_id != receipt.lane_id
+        || body.coordinator_dataspace_id != receipt.dataspace_id
+        || body.coordinator_lane_incarnation != receipt.lane_incarnation
+        || body.authority_context_height != receipt.authority_context_height
+        || body.planned_coordinator_block_height != receipt.lane_block_height
+        || body.coordinator_lane_block_view != receipt.lane_block_view
+        || body.coordinator_proposal_hash != receipt.coordinator_proposal_hash
+        || body.participant_lane_id != leg.lane_id
+        || body.participant_dataspace_id != leg.dataspace_id
+        || descriptor.lane_id != leg.lane_id
+        || descriptor.dataspace_id != leg.dataspace_id
+        || descriptor.lane_incarnation != body.participant_lane_incarnation
+        || descriptor.proposal_height != body.authority_context_height
+        || descriptor.previous_lane_block_height != body.participant_previous_block_height
+        || descriptor.previous_lane_block_descriptor_hash
+            != body.participant_previous_block_descriptor_hash
+        || descriptor.lane_block_height != body.participant_lane_block_height
+        || descriptor.lane_block_view != body.participant_lane_block_view
+        || leg.participant_proposal.proposal_hash != body.participant_proposal_hash
+        || descriptor.validator_set_hash_version != prepare.validator_set_hash_version
+        || descriptor.validator_set_hash != prepare.validator_set_hash
+        || descriptor.validator_set != prepare.validator_set
+        || descriptor.validator_count != body.participant_validator_count
+        || descriptor.min_quorum != body.participant_min_quorum
+    {
+        return Err("Native AMX participant leg identity is internally inconsistent");
+    }
+
+    let settlement = &leg.participant_settlement;
+    let settlement_hash = crate::nexus::compute_settlement_hash(settlement)
+        .map_err(|_| "Native AMX participant settlement cannot be hashed")?;
+    let settlement_sources_match = settlement.receipts.len() == expected_sources.len()
+        && settlement
+            .receipts
+            .iter()
+            .map(|entry| entry.source_id)
+            .eq(expected_sources.iter().copied());
+    if settlement.receipts.is_empty()
+        || settlement.receipts.len() > NATIVE_AMX_GROUP_SOURCES_MAX
+        || settlement.tx_count != u64::try_from(settlement.receipts.len()).unwrap_or(u64::MAX)
+        || settlement.block_height != body.participant_lane_block_height
+        || settlement.lane_id != leg.lane_id
+        || settlement.dataspace_id != leg.dataspace_id
+        || settlement.lane_incarnation != body.participant_lane_incarnation
+        || !settlement.total_local_amount.is_zero()
+        || !settlement.total_xor_due.is_zero()
+        || !settlement.total_xor_after_haircut.is_zero()
+        || !settlement.total_xor_variance.is_zero()
+        || settlement.swap_metadata.is_some()
+        || !settlement.nexus_fee_receipts.is_empty()
+        || !settlement.native_amx_receipts.is_empty()
+        || settlement
+            .receipts
+            .windows(2)
+            .any(|pair| pair[0].source_id >= pair[1].source_id)
+        || settlement
+            .receipts
+            .iter()
+            .filter(|entry| entry.source_id == receipt.source_id)
+            .count()
+            != 1
+        || settlement.receipts.iter().any(|entry| {
+            !entry.local_amount.is_zero()
+                || !entry.xor_due.is_zero()
+                || !entry.xor_after_haircut.is_zero()
+                || !entry.xor_variance.is_zero()
+                || entry.timestamp_ms != body.authority_context_height
+        })
+        || !settlement_sources_match
+        || settlement_hash != leg.participant_settlement_hash
+        || Hash::from(settlement_hash) != body.participant_settlement_commitment
+    {
+        return Err("Native AMX participant settlement is structurally invalid");
+    }
+
+    let entrypoint_hash = Hash::from(body.tx_entrypoint_hash);
+    let entrypoint_position = descriptor
+        .accepted_transaction_hashes
+        .iter()
+        .position(|hash| *hash == entrypoint_hash);
+    if entrypoint_position.is_some_and(|position| {
+        descriptor.accepted_candidate_indices.len() != settlement.receipts.len()
+            || descriptor.accepted_transaction_hashes.len() != settlement.receipts.len()
+            || settlement
+                .receipts
+                .get(position)
+                .is_none_or(|entry| entry.source_id != body.source_id)
+    }) {
+        return Err("Native AMX participant proposal and grouped settlement are not aligned");
+    }
+
+    let same_route = leg.lane_id == receipt.lane_id && leg.dataspace_id == receipt.dataspace_id;
+    if same_route
+        && (entrypoint_position.is_none()
+            || descriptor.lane_incarnation != receipt.lane_incarnation
+            || descriptor.proposal_height != receipt.authority_context_height
+            || descriptor.lane_block_height != receipt.lane_block_height
+            || descriptor.lane_block_view != receipt.lane_block_view
+            || leg.participant_proposal.proposal_hash != receipt.coordinator_proposal_hash)
+    {
+        return Err("Native AMX same-route leg differs from the coordinator identity");
+    }
+    Ok(())
+}
+
+impl LaneBlockCommitment {
+    /// Validate grouped Native AMX receipt structure without live authority state.
+    ///
+    /// This validates clean-break versions, bounds, ordered source membership,
+    /// participant proposal hashes, prepare/commit identity, committee geometry,
+    /// bitmaps/quorum, 96-byte proof/signature fields, zero-effect settlements,
+    /// and exact same-route coordinator identity. It deliberately does not claim
+    /// that an embedded committee, incarnation, predecessor, proof of possession,
+    /// or aggregate signature is authoritative at its historical height.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when any embedded Native AMX receipt is malformed.
+    pub fn validate_native_amx_receipts(&self) -> Result<(), &'static str> {
+        if self.native_amx_receipts.len() > NATIVE_AMX_GROUP_SOURCES_MAX {
+            return Err("Native AMX receipt group exceeds its source limit");
+        }
+        if self.native_amx_receipts.is_empty() {
+            return Ok(());
+        }
+        let expected_sources = self
+            .native_amx_receipts
+            .iter()
+            .map(|receipt| receipt.source_id)
+            .collect::<Vec<_>>();
+        if expected_sources.windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("Native AMX receipt sources must be strictly ordered");
+        }
+
+        for receipt in &self.native_amx_receipts {
+            if receipt.version != NATIVE_AMX_RECEIPT_VERSION_V2
+                || !native_amx_nonzero(&receipt.source_id)
+                || !native_amx_nonzero(receipt.chain_id_hash.as_ref())
+                || !native_amx_nonzero(receipt.plan_digest.as_ref())
+                || !native_amx_nonzero(receipt.lane_incarnation.as_ref())
+                || receipt.authority_context_height == 0
+                || receipt.lane_block_height == 0
+                || !native_amx_nonzero(receipt.coordinator_proposal_hash.as_ref())
+                || receipt.lane_id != self.lane_id
+                || receipt.dataspace_id != self.dataspace_id
+                || receipt.lane_incarnation != self.lane_incarnation
+                || receipt.lane_block_height != self.block_height
+            {
+                return Err("Native AMX receipt coordinator identity is invalid");
+            }
+            if receipt.legs.is_empty() || receipt.legs.len() > NATIVE_AMX_PARTICIPANT_LEGS_MAX {
+                return Err("Native AMX receipt participant leg count is out of bounds");
+            }
+            let mut routes = std::collections::BTreeSet::new();
+            if receipt
+                .legs
+                .iter()
+                .any(|leg| !routes.insert((leg.lane_id, leg.dataspace_id)))
+            {
+                return Err("Native AMX receipt contains duplicate participant routes");
+            }
+
+            let first_body = &receipt.legs[0].prepare_qc.body;
+            let expected_round = first_body.round;
+            let expected_epoch = first_body.epoch;
+            let expected_entrypoint_hash = Hash::from(first_body.tx_entrypoint_hash);
+            for leg in &receipt.legs {
+                validate_native_amx_leg_shape(
+                    receipt,
+                    leg,
+                    &expected_sources,
+                    expected_round,
+                    expected_epoch,
+                    expected_entrypoint_hash,
+                )?;
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<'a> norito::core::DecodeFromSlice<'a> for LaneSwapMetadata {
@@ -3782,6 +4111,531 @@ pub struct SumeragiPipelineExecutionStatus {
     pub quarantine_executed_total: u64,
 }
 
+/// Maximum number of Native AMX participant-application rows exposed by one
+/// `/v1/sumeragi/diagnostics` response.
+///
+/// The bound matches the compiled maximum number of active execution lanes,
+/// so diagnostics never need to truncate an active route/incarnation while
+/// still refusing an unbounded operator payload.
+pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX: usize = 1_024;
+
+/// Maximum number of grouped Native AMX sources represented by one
+/// participant-application row.
+pub const SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX: u64 = 4_096;
+
+/// Maximum number of autonomous lane-execution rows exposed by one
+/// `/v1/sumeragi/diagnostics` response.
+///
+/// This reuses the core lane-diagnostics suffix bound. The projection retains
+/// identifiers and counters only; executable payload bytes remain in Kura.
+pub const SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX: usize = 128;
+
+/// Highest independently durable autonomous lane-execution stage.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(rename_all = "snake_case")]
+pub enum SumeragiAutonomousLaneExecutionStage {
+    /// Exact queue-reservation bytes are retained by the durable executable payload.
+    ReservationsDurable,
+    /// The producer-authenticated executable payload is durable.
+    ExecutablePayloadDurable,
+    /// A lane availability QC durably proves quorum payload retention.
+    PayloadAvailabilityCertified,
+    /// Prepare and commit lane QCs are durable.
+    LaneCertified,
+    /// The complete authenticated source bundle is durably reconstructible.
+    CertifiedBundleDurable,
+    /// A merge-QC-certified pending sidecar contains the exact source.
+    MergeCandidateDurable,
+    /// The exact source appears in the globally committed merge log.
+    GlobalCarrierCommitted,
+    /// An exact merge application receipt proves Kura and WSV application.
+    KuraWsvApplicationReceiptDurable,
+    /// Durable Queue replay has no exact ownership or unfinished crash barrier.
+    QueueFinalized,
+    /// Durable evidence disagrees for the same lane-local slot.
+    Conflict,
+}
+
+impl SumeragiAutonomousLaneExecutionStage {
+    /// Stable JSON/OpenAPI label used by diagnostics clients.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ReservationsDurable => "reservations_durable",
+            Self::ExecutablePayloadDurable => "executable_payload_durable",
+            Self::PayloadAvailabilityCertified => "payload_availability_certified",
+            Self::LaneCertified => "lane_certified",
+            Self::CertifiedBundleDurable => "certified_bundle_durable",
+            Self::MergeCandidateDurable => "merge_candidate_durable",
+            Self::GlobalCarrierCommitted => "global_carrier_committed",
+            Self::KuraWsvApplicationReceiptDurable => "kura_wsv_application_receipt_durable",
+            Self::QueueFinalized => "queue_finalized",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStage {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStage {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "reservations_durable" => Ok(Self::ReservationsDurable),
+            "executable_payload_durable" => Ok(Self::ExecutablePayloadDurable),
+            "payload_availability_certified" => Ok(Self::PayloadAvailabilityCertified),
+            "lane_certified" => Ok(Self::LaneCertified),
+            "certified_bundle_durable" => Ok(Self::CertifiedBundleDurable),
+            "merge_candidate_durable" => Ok(Self::MergeCandidateDurable),
+            "global_carrier_committed" => Ok(Self::GlobalCarrierCommitted),
+            "kura_wsv_application_receipt_durable" => Ok(Self::KuraWsvApplicationReceiptDurable),
+            "queue_finalized" => Ok(Self::QueueFinalized),
+            "conflict" => Ok(Self::Conflict),
+            other => Err(norito::json::Error::Message(
+                format!("unknown autonomous lane execution stage `{other}`").into(),
+            )),
+        }
+    }
+}
+
+/// Evidence-derived reason that an autonomous lane execution is not advancing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(rename_all = "snake_case")]
+pub enum SumeragiAutonomousLaneExecutionStuckReason {
+    /// The durable executable payload has no matching availability QC.
+    AwaitingPayloadAvailability,
+    /// Available payload bytes have no matching prepare/commit certification.
+    AwaitingLaneCertification,
+    /// Certification exists but the exact complete source bundle cannot be rebuilt.
+    CertifiedBundleUnavailable,
+    /// A complete certified bundle has not entered a merge candidate.
+    AwaitingMergeSelection,
+    /// A certified merge sidecar has not entered the committed merge log.
+    AwaitingGlobalCarrier,
+    /// A committed carrier has no exact durable application receipt yet.
+    AwaitingApplicationReceipt,
+    /// The application receipt is durable, but local Queue replay cannot yet prove finalization.
+    QueueFinalizationUnverifiable,
+    /// Same-height durable identities or cross-stage hashes disagree.
+    EvidenceConflict,
+}
+
+impl SumeragiAutonomousLaneExecutionStuckReason {
+    /// Stable JSON/OpenAPI label used by diagnostics clients.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AwaitingPayloadAvailability => "awaiting_payload_availability",
+            Self::AwaitingLaneCertification => "awaiting_lane_certification",
+            Self::CertifiedBundleUnavailable => "certified_bundle_unavailable",
+            Self::AwaitingMergeSelection => "awaiting_merge_selection",
+            Self::AwaitingGlobalCarrier => "awaiting_global_carrier",
+            Self::AwaitingApplicationReceipt => "awaiting_application_receipt",
+            Self::QueueFinalizationUnverifiable => "queue_finalization_unverifiable",
+            Self::EvidenceConflict => "evidence_conflict",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for SumeragiAutonomousLaneExecutionStuckReason {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for SumeragiAutonomousLaneExecutionStuckReason {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "awaiting_payload_availability" => Ok(Self::AwaitingPayloadAvailability),
+            "awaiting_lane_certification" => Ok(Self::AwaitingLaneCertification),
+            "certified_bundle_unavailable" => Ok(Self::CertifiedBundleUnavailable),
+            "awaiting_merge_selection" => Ok(Self::AwaitingMergeSelection),
+            "awaiting_global_carrier" => Ok(Self::AwaitingGlobalCarrier),
+            "awaiting_application_receipt" => Ok(Self::AwaitingApplicationReceipt),
+            "queue_finalization_unverifiable" => Ok(Self::QueueFinalizationUnverifiable),
+            "evidence_conflict" => Ok(Self::EvidenceConflict),
+            other => Err(norito::json::Error::Message(
+                format!("unknown autonomous lane execution stuck reason `{other}`").into(),
+            )),
+        }
+    }
+}
+
+/// One bounded, payload-free autonomous lane-execution diagnostics row.
+///
+/// Rows are ordered by their complete lane slot and proposal identity. Optional
+/// hashes appear only after the corresponding durable evidence revalidates.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiAutonomousLaneExecution {
+    /// Execution lane.
+    pub lane_id: LaneId,
+    /// Dataspace bound to the lane.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Lane-local block height.
+    pub lane_block_height: u64,
+    /// Lane-local block view.
+    pub lane_block_view: u64,
+    /// Global proposal height that allocated the lane-local slot.
+    pub proposal_height: u64,
+    /// Global proposal view that allocated the lane-local slot.
+    pub proposal_view: u64,
+    /// Exact lane proposal identity.
+    pub proposal_hash: Hash,
+    /// Exact descriptor identity.
+    pub descriptor_hash: Hash,
+    /// Producer-authenticated executable payload digest, when durable.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub executable_payload_hash: Option<Hash>,
+    /// Complete authenticated source-bundle digest, when reconstructible.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub source_bundle_hash: Option<Hash>,
+    /// Merge-ledger entry containing this source, when selected.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub merge_entry_hash: Option<HashOf<crate::merge::MergeLedgerEntry>>,
+    /// Actual canonical carrier height, known only from an application receipt.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub application_block_height: Option<u64>,
+    /// Actual canonical carrier hash, paired with `application_block_height`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub application_block_hash: Option<HashOf<BlockHeader>>,
+    /// Exact number of durable reservation identities.
+    pub reservation_count: u64,
+    /// Exact number of ordered transaction entrypoints.
+    pub transaction_count: u64,
+    /// Highest independently durable stage.
+    pub highest_durable_stage: SumeragiAutonomousLaneExecutionStage,
+    /// Evidence-derived wait/conflict reason, absent only for a proven terminal stage.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub stuck_reason: Option<SumeragiAutonomousLaneExecutionStuckReason>,
+}
+
+impl SumeragiAutonomousLaneExecution {
+    /// Return the canonical ordering key for this row.
+    #[must_use]
+    pub const fn ordering_key(&self) -> (LaneId, DataSpaceId, Hash, u64, u64, u64, u64, Hash) {
+        (
+            self.lane_id,
+            self.dataspace_id,
+            self.lane_incarnation,
+            self.lane_block_height,
+            self.lane_block_view,
+            self.proposal_height,
+            self.proposal_view,
+            self.proposal_hash,
+        )
+    }
+
+    /// Validate bounded counters, paired carrier identity, and stage geometry.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let nonzero = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
+        if self.lane_block_height == 0
+            || self.proposal_height == 0
+            || !nonzero(self.lane_incarnation.as_ref())
+            || !nonzero(self.proposal_hash.as_ref())
+            || !nonzero(self.descriptor_hash.as_ref())
+        {
+            return Err("autonomous lane execution diagnostics identity is malformed");
+        }
+        if self.application_block_height.is_some() != self.application_block_hash.is_some() {
+            return Err("autonomous lane execution carrier height and hash must appear together");
+        }
+        if self.application_block_height == Some(0) {
+            return Err("autonomous lane execution carrier height must be positive");
+        }
+        if self
+            .application_block_hash
+            .is_some_and(|hash| !nonzero(hash.as_ref()))
+        {
+            return Err("autonomous lane execution carrier hash must be non-zero");
+        }
+        let transaction_limit =
+            u64::try_from(crate::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS).unwrap_or(u64::MAX);
+        if self.transaction_count == 0
+            || self.transaction_count > transaction_limit
+            || self.reservation_count > transaction_limit
+            || (self.highest_durable_stage != SumeragiAutonomousLaneExecutionStage::Conflict
+                && self.reservation_count != self.transaction_count)
+        {
+            return Err("autonomous lane execution counters are malformed");
+        }
+        for hash in [self.executable_payload_hash, self.source_bundle_hash] {
+            if hash.is_some_and(|hash| !nonzero(hash.as_ref())) {
+                return Err("autonomous lane execution evidence hash must be non-zero");
+            }
+        }
+        if self
+            .merge_entry_hash
+            .is_some_and(|hash| !nonzero(hash.as_ref()))
+        {
+            return Err("autonomous lane execution merge entry hash must be non-zero");
+        }
+        let expected_reason = match self.highest_durable_stage {
+            SumeragiAutonomousLaneExecutionStage::ReservationsDurable
+            | SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingPayloadAvailability)
+            }
+            SumeragiAutonomousLaneExecutionStage::PayloadAvailabilityCertified => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingLaneCertification)
+            }
+            SumeragiAutonomousLaneExecutionStage::LaneCertified => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::CertifiedBundleUnavailable)
+            }
+            SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection)
+            }
+            SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier)
+            }
+            SumeragiAutonomousLaneExecutionStage::GlobalCarrierCommitted => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingApplicationReceipt)
+            }
+            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable)
+            }
+            SumeragiAutonomousLaneExecutionStage::QueueFinalized => None,
+            SumeragiAutonomousLaneExecutionStage::Conflict => {
+                Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict)
+            }
+        };
+        if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::Conflict
+            && self.stuck_reason
+                != Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict)
+        {
+            return Err("autonomous lane execution conflict requires an evidence-conflict reason");
+        }
+        if self.stuck_reason != expected_reason {
+            return Err("autonomous lane execution stage and stuck reason disagree");
+        }
+        if self.highest_durable_stage == SumeragiAutonomousLaneExecutionStage::Conflict {
+            return Ok(());
+        }
+        let has_payload = self.executable_payload_hash.is_some();
+        let has_bundle = self.source_bundle_hash.is_some();
+        let has_merge = self.merge_entry_hash.is_some();
+        let has_carrier = self.application_block_height.is_some();
+        if matches!(
+            self.highest_durable_stage,
+            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable
+                | SumeragiAutonomousLaneExecutionStage::QueueFinalized
+        ) && !has_carrier
+        {
+            return Err("durable autonomous application stage requires a carrier identity");
+        }
+        let geometry_matches = match self.highest_durable_stage {
+            SumeragiAutonomousLaneExecutionStage::ReservationsDurable => {
+                !has_payload && !has_bundle && !has_merge && !has_carrier
+            }
+            SumeragiAutonomousLaneExecutionStage::ExecutablePayloadDurable
+            | SumeragiAutonomousLaneExecutionStage::PayloadAvailabilityCertified
+            | SumeragiAutonomousLaneExecutionStage::LaneCertified => {
+                has_payload && !has_bundle && !has_merge && !has_carrier
+            }
+            SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable => {
+                has_payload && has_bundle && !has_merge && !has_carrier
+            }
+            SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable
+            | SumeragiAutonomousLaneExecutionStage::GlobalCarrierCommitted => {
+                has_payload && has_bundle && has_merge && !has_carrier
+            }
+            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable
+            | SumeragiAutonomousLaneExecutionStage::QueueFinalized => {
+                has_payload && has_bundle && has_merge && has_carrier
+            }
+            SumeragiAutonomousLaneExecutionStage::Conflict => unreachable!(),
+        };
+        if !geometry_matches {
+            return Err("autonomous lane execution evidence does not match its durable stage");
+        }
+        Ok(())
+    }
+}
+
+/// Durable-application state of one Native AMX participant control.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode)]
+#[norito(rename_all = "snake_case")]
+pub enum SumeragiNativeAmxParticipantApplicationState {
+    /// Participant QCs are certified, but no canonical global carrier is committed yet.
+    CertifiedPendingCarrier,
+    /// A canonical carrier is committed, but its exact durable evidence is incomplete.
+    CommittedEvidencePending,
+    /// The exact application sidecar and replicated WSV frontier revalidate.
+    DurablyApplied,
+    /// Same-height durable evidence contains conflicting authenticated identities.
+    Conflict,
+}
+
+impl SumeragiNativeAmxParticipantApplicationState {
+    /// Stable JSON/OpenAPI label used by diagnostics clients.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CertifiedPendingCarrier => "certified_pending_carrier",
+            Self::CommittedEvidencePending => "committed_evidence_pending",
+            Self::DurablyApplied => "durably_applied",
+            Self::Conflict => "conflict",
+        }
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::FastJsonWrite for SumeragiNativeAmxParticipantApplicationState {
+    fn write_json(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for SumeragiNativeAmxParticipantApplicationState {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        match parser.parse_string()?.as_str() {
+            "certified_pending_carrier" => Ok(Self::CertifiedPendingCarrier),
+            "committed_evidence_pending" => Ok(Self::CommittedEvidencePending),
+            "durably_applied" => Ok(Self::DurablyApplied),
+            "conflict" => Ok(Self::Conflict),
+            other => Err(norito::json::Error::Message(
+                format!("unknown Native AMX participant application state `{other}`").into(),
+            )),
+        }
+    }
+}
+
+/// One bounded Native AMX participant-application diagnostics row.
+///
+/// Rows are ordered by `(lane_id, dataspace_id, lane_incarnation)` in the
+/// containing diagnostics response. The record carries only hashes and
+/// counters; transaction bodies and other unbounded application material stay
+/// in Kura.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SumeragiNativeAmxParticipantApplication {
+    /// Participant lane.
+    pub lane_id: LaneId,
+    /// Participant dataspace.
+    pub dataspace_id: DataSpaceId,
+    /// Exact active lane incarnation.
+    pub lane_incarnation: Hash,
+    /// Participant lane-local height.
+    pub participant_height: u64,
+    /// Participant lane-local view.
+    pub participant_view: u64,
+    /// Immediate predecessor lane-local height.
+    pub predecessor_height: u64,
+    /// Descriptor hash of the predecessor, absent only at the lane genesis frontier.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub predecessor_descriptor_hash: Option<Hash>,
+    /// Descriptor hash certified for this participant height.
+    pub descriptor_hash: Hash,
+    /// Proposal hash certified for this participant height.
+    pub proposal_hash: Hash,
+    /// Zero-effect participant settlement hash certified by both phase QCs.
+    pub settlement_hash: HashOf<LaneBlockCommitment>,
+    /// Number of ordered grouped transaction sources represented by the control.
+    pub source_count: u64,
+    /// Canonical global carrier height, when one is durably identified.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub application_block_height: Option<u64>,
+    /// Canonical global carrier hash, paired with `application_block_height`.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    pub application_block_hash: Option<HashOf<BlockHeader>>,
+    /// Current evidence-derived application state.
+    pub state: SumeragiNativeAmxParticipantApplicationState,
+}
+
+impl SumeragiNativeAmxParticipantApplication {
+    /// Validate geometry, bounded grouping, and optional carrier identity.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the row is malformed or internally
+    /// inconsistent.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let nonzero_hash = |hash: &[u8]| hash.iter().any(|byte| *byte != 0);
+        if !nonzero_hash(self.lane_incarnation.as_ref())
+            || !nonzero_hash(self.descriptor_hash.as_ref())
+            || !nonzero_hash(self.proposal_hash.as_ref())
+            || !nonzero_hash(self.settlement_hash.as_ref())
+        {
+            return Err("Native AMX participant diagnostics hashes must be non-zero");
+        }
+        if self.participant_height == 0
+            || self.predecessor_height.checked_add(1) != Some(self.participant_height)
+        {
+            return Err("Native AMX participant diagnostics predecessor must be contiguous");
+        }
+        if (self.predecessor_height == 0) != self.predecessor_descriptor_hash.is_none() {
+            return Err(
+                "Native AMX participant diagnostics predecessor hash must match its height",
+            );
+        }
+        if self
+            .predecessor_descriptor_hash
+            .is_some_and(|hash| !nonzero_hash(hash.as_ref()))
+        {
+            return Err("Native AMX participant diagnostics predecessor hash must be non-zero");
+        }
+        if !(1..=SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATION_SOURCES_MAX)
+            .contains(&self.source_count)
+        {
+            return Err("Native AMX participant diagnostics source count is out of bounds");
+        }
+        if self.application_block_height.is_some() != self.application_block_hash.is_some() {
+            return Err(
+                "Native AMX participant diagnostics application height and hash must appear together",
+            );
+        }
+        if self.application_block_height == Some(0) {
+            return Err("Native AMX participant diagnostics application height must be positive");
+        }
+        if self
+            .application_block_hash
+            .is_some_and(|hash| !nonzero_hash(hash.as_ref()))
+        {
+            return Err("Native AMX participant diagnostics application hash must be non-zero");
+        }
+        if self.state == SumeragiNativeAmxParticipantApplicationState::DurablyApplied
+            && self.application_block_height.is_none()
+        {
+            return Err(
+                "durably applied Native AMX participant diagnostics require an application block",
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Operator and lane diagnostics returned by `/v1/sumeragi/diagnostics`.
 ///
 /// This payload deliberately excludes reducer phase, height, view, leader,
@@ -3842,6 +4696,78 @@ pub struct SumeragiDiagnosticsStatus {
     pub lane_governance_sealed_aliases: Vec<String>,
     /// Governance manifest readiness per lane.
     pub lane_governance: Vec<SumeragiLaneGovernance>,
+    /// Bounded Native AMX participant-control application evidence.
+    pub native_amx_participant_applications: Vec<SumeragiNativeAmxParticipantApplication>,
+    /// Bounded restart-stable autonomous lane execution stages.
+    #[norito(default)]
+    pub autonomous_lane_executions: Vec<SumeragiAutonomousLaneExecution>,
+}
+
+impl SumeragiDiagnosticsStatus {
+    /// Validate Native AMX receipts embedded directly in diagnostics settlements.
+    ///
+    /// Both top-level lane settlements and relay-contained settlements are
+    /// checked because either vector may be consumed independently by an SDK.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when any embedded receipt group is malformed.
+    pub fn validate_native_amx_receipts(&self) -> Result<(), &'static str> {
+        for settlement in &self.lane_settlement_commitments {
+            settlement.validate_native_amx_receipts()?;
+        }
+        for envelope in &self.lane_relay_envelopes {
+            envelope
+                .settlement_commitment
+                .validate_native_amx_receipts()?;
+        }
+        Ok(())
+    }
+
+    /// Validate bounded, canonical Native AMX participant diagnostics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a stable reason when the vector exceeds its hard cap, a row is
+    /// malformed, or route/incarnation keys are not strictly ordered.
+    pub fn validate_native_amx_participant_applications(&self) -> Result<(), &'static str> {
+        if self.native_amx_participant_applications.len()
+            > SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX
+        {
+            return Err("Native AMX participant diagnostics vector exceeds its hard limit");
+        }
+        let mut previous = None;
+        for row in &self.native_amx_participant_applications {
+            row.validate()?;
+            let key = (row.lane_id, row.dataspace_id, row.lane_incarnation);
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(
+                    "Native AMX participant diagnostics must be strictly ordered by route and incarnation",
+                );
+            }
+            previous = Some(key);
+        }
+        Ok(())
+    }
+
+    /// Validate bounded, canonical autonomous lane-execution diagnostics.
+    pub fn validate_autonomous_lane_executions(&self) -> Result<(), &'static str> {
+        if self.autonomous_lane_executions.len() > SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX {
+            return Err("autonomous lane execution diagnostics vector exceeds its hard limit");
+        }
+        let mut previous = None;
+        for row in &self.autonomous_lane_executions {
+            row.validate()?;
+            let key = row.ordering_key();
+            if previous.is_some_and(|previous| previous >= key) {
+                return Err(
+                    "autonomous lane execution diagnostics must be strictly ordered by exact identity",
+                );
+            }
+            previous = Some(key);
+        }
+        Ok(())
+    }
 }
 
 /// Entry describing a QC snapshot used by `/v1/sumeragi/qc`.
@@ -4215,6 +5141,8 @@ impl_decode_from_slice_via_codec!(NposGenesisParams);
 impl_decode_from_slice_via_codec!(SumeragiMembershipStatus);
 impl_decode_from_slice_via_codec!(SumeragiNposDiagnostics);
 impl_decode_from_slice_via_codec!(SumeragiPipelineExecutionStatus);
+impl_decode_from_slice_via_codec!(SumeragiNativeAmxParticipantApplicationState);
+impl_decode_from_slice_via_codec!(SumeragiNativeAmxParticipantApplication);
 impl_decode_from_slice_via_codec!(SumeragiDiagnosticsStatus);
 impl_decode_from_slice_via_codec!(SumeragiLaneCommitment);
 impl_decode_from_slice_via_codec!(SumeragiDataspaceCommitment);
@@ -4228,9 +5156,6 @@ impl_decode_from_slice_via_codec!(LaneBlockCertificateV1);
 impl_decode_from_slice_via_codec!(SumeragiRuntimeUpgradeHook);
 impl_decode_from_slice_via_codec!(SumeragiLaneGovernance);
 impl_decode_from_slice_via_codec!(NativeAmxPhase);
-impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV1);
-impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV1);
-impl_decode_from_slice_via_codec!(NativeAmxLegRecord);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationBodyV2);
 impl_decode_from_slice_via_codec!(NativeAmxAttestationQcV2);
 impl_decode_from_slice_via_codec!(NativeAmxLegRecordV2);
@@ -4261,7 +5186,7 @@ impl<'a> norito::core::DecodeFromSlice<'a> for LaneSettlementReceipt {
 mod tests {
     use std::num::NonZeroU64;
 
-    use iroha_crypto::{Algorithm, KeyPair, MerkleTree, SignatureOf};
+    use iroha_crypto::{Algorithm, KeyPair, MerkleProof, MerkleTree, SignatureOf};
     use iroha_primitives::{
         bigint::BigInt,
         numeric::{Numeric, Quantity},
@@ -4668,10 +5593,6 @@ mod tests {
         );
     }
 
-    fn sample_entrypoint_hash(seed: u8) -> HashOf<crate::transaction::TransactionEntrypoint> {
-        HashOf::from_untyped_unchecked(Hash::prehashed([seed; Hash::LENGTH]))
-    }
-
     fn sample_native_amx_qc(
         phase: NativeAmxPhase,
         source_id: [u8; 32],
@@ -4748,7 +5669,9 @@ mod tests {
         };
         body.participant_proposal_hash =
             sample_native_amx_participant_proposal(&body, validator_set.clone()).proposal_hash;
-        body.participant_settlement_commitment = body.computed_participant_settlement_commitment();
+        body.participant_settlement_commitment = body
+            .computed_grouped_participant_settlement_commitment(&[body.source_id])
+            .expect("single-source test fixture settlement is valid");
         NativeAmxAttestationQcV2 {
             body,
             validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
@@ -4831,7 +5754,10 @@ mod tests {
             commit_qc.body.participant_proposal_hash,
             participant_proposal.proposal_hash
         );
-        let participant_settlement = prepare_qc.body.computed_participant_settlement();
+        let participant_settlement = prepare_qc
+            .body
+            .computed_grouped_participant_settlement(&[prepare_qc.body.source_id])
+            .expect("single-source test fixture settlement is valid");
         let participant_settlement_hash =
             crate::nexus::compute_settlement_hash(&participant_settlement)
                 .expect("fixture participant settlement hashes");
@@ -4844,6 +5770,425 @@ mod tests {
             prepare_qc,
             commit_qc,
         }
+    }
+
+    fn grouped_native_amx_fixture_document() -> norito::json::Value {
+        norito::json::from_str(include_str!(
+            "../../../../fixtures/sumeragi_v2/native_amx_v2_grouped.json"
+        ))
+        .expect("decode Rust-owned grouped Native AMX fixture document")
+    }
+
+    fn grouped_native_amx_commitment_fixture() -> LaneBlockCommitment {
+        let commitment = grouped_native_amx_fixture_document()
+            .get("golden")
+            .and_then(|golden| golden.get("receipt_group"))
+            .cloned()
+            .expect("grouped Native AMX fixture contains golden receipt group");
+        norito::json::from_value(commitment)
+            .expect("decode Rust-owned grouped Native AMX lane commitment")
+    }
+
+    fn validate_grouped_native_amx_application_evidence(
+        document: &norito::json::Value,
+    ) -> Result<(), &'static str> {
+        use crate::block::consensus_v2::{ExecutionCommitment, NativeAmxApplicationManifestLeafV1};
+
+        let evidence = document
+            .pointer("/golden/application_evidence")
+            .ok_or("fixture is missing application evidence")?;
+        let execution: ExecutionCommitment = norito::json::from_value(
+            evidence
+                .get("execution_commitment")
+                .cloned()
+                .ok_or("fixture is missing execution commitment")?,
+        )
+        .map_err(|_| "execution commitment is malformed")?;
+        execution
+            .validate()
+            .map_err(|_| "execution commitment is invalid")?;
+        let artifacts = evidence
+            .get("manifest_artifacts")
+            .and_then(norito::json::Value::as_array)
+            .ok_or("manifest artifacts are malformed")?;
+        if artifacts.len() != 1 || execution.native_amx_application_manifest_count != 1 {
+            return Err("fixture must contain one separate-participant manifest");
+        }
+        let artifact = &artifacts[0];
+        if artifact
+            .get("version")
+            .and_then(norito::json::Value::as_u64)
+            != Some(1)
+            || artifact
+                .get("manifest_leaf_count")
+                .and_then(norito::json::Value::as_u64)
+                != Some(1)
+            || artifact
+                .get("leaf_index")
+                .and_then(norito::json::Value::as_u64)
+                != Some(0)
+        {
+            return Err("manifest artifact geometry is invalid");
+        }
+        let leaf: NativeAmxApplicationManifestLeafV1 = norito::json::from_value(
+            artifact
+                .get("leaf")
+                .cloned()
+                .ok_or("manifest leaf is missing")?,
+        )
+        .map_err(|_| "manifest leaf is malformed")?;
+        leaf.validate().map_err(|_| "manifest leaf is invalid")?;
+        let leaf_hash = HashOf::new(&leaf);
+        let advertised_leaf_hash: Hash = norito::json::from_value(
+            artifact
+                .get("leaf_hash")
+                .cloned()
+                .ok_or("manifest leaf hash is missing")?,
+        )
+        .map_err(|_| "manifest leaf hash is malformed")?;
+        let manifest_root: Hash = norito::json::from_value(
+            artifact
+                .get("manifest_root")
+                .cloned()
+                .ok_or("manifest root is missing")?,
+        )
+        .map_err(|_| "manifest root is malformed")?;
+        let proof: MerkleProof<NativeAmxApplicationManifestLeafV1> = norito::json::from_value(
+            artifact
+                .get("proof")
+                .cloned()
+                .ok_or("manifest proof is missing")?,
+        )
+        .map_err(|_| "manifest proof is malformed")?;
+        let typed_root =
+            HashOf::<MerkleTree<NativeAmxApplicationManifestLeafV1>>::from_untyped_unchecked(
+                manifest_root,
+            );
+        if Hash::from(leaf_hash) != advertised_leaf_hash
+            || manifest_root != execution.native_amx_application_manifest_root
+            || leaf.executed_block_wire_hash != execution.executed_block_wire_hash
+            || !proof.clone().verify(&leaf_hash, &typed_root, 32)
+        {
+            return Err("manifest proof does not authenticate the leaf");
+        }
+
+        let active = evidence
+            .get("active_lane_incarnations")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .ok_or("active incarnation is missing")?;
+        let active_incarnation: Hash = norito::json::from_value(
+            active
+                .get("lane_incarnation")
+                .cloned()
+                .ok_or("active incarnation hash is missing")?,
+        )
+        .map_err(|_| "active incarnation hash is malformed")?;
+        if active.get("lane_id").and_then(norito::json::Value::as_u64)
+            != Some(u64::from(leaf.lane_id.as_u32()))
+            || active
+                .get("dataspace_id")
+                .and_then(norito::json::Value::as_u64)
+                != Some(leaf.dataspace_id.as_u64())
+            || active_incarnation != leaf.lane_incarnation
+        {
+            return Err("manifest leaf targets a stale incarnation");
+        }
+
+        let commitment: LaneBlockCommitment = norito::json::from_value(
+            document
+                .pointer("/golden/receipt_group")
+                .cloned()
+                .ok_or("receipt group is missing")?,
+        )
+        .map_err(|_| "receipt group is malformed")?;
+        if leaf.lane_id == commitment.lane_id && leaf.dataspace_id == commitment.dataspace_id {
+            return Err("same-route coordinator has separate application evidence");
+        }
+        let carrier_entrypoints: Vec<Hash> = norito::json::from_value(
+            evidence
+                .get("carrier_entrypoint_hashes")
+                .cloned()
+                .ok_or("carrier entrypoints are missing")?,
+        )
+        .map_err(|_| "carrier entrypoints are malformed")?;
+        if leaf.members.len() != commitment.native_amx_receipts.len() {
+            return Err("manifest source count differs from receipt group");
+        }
+        for (member, receipt) in leaf.members.iter().zip(&commitment.native_amx_receipts) {
+            if member.source_id != receipt.source_id {
+                return Err("manifest source order differs from receipt group");
+            }
+            let leg = receipt
+                .legs
+                .iter()
+                .find(|leg| leg.lane_id == leaf.lane_id && leg.dataspace_id == leaf.dataspace_id)
+                .ok_or("manifest participant route is missing from receipt")?;
+            let descriptor = &leg.participant_proposal.descriptor;
+            if descriptor.lane_incarnation != leaf.lane_incarnation
+                || descriptor.lane_block_height != leaf.participant_height
+                || descriptor.lane_block_view != leaf.participant_view
+                || descriptor.previous_lane_block_height != leaf.predecessor_height
+                || descriptor.previous_lane_block_descriptor_hash
+                    != leaf.predecessor_descriptor_hash
+                || descriptor.descriptor_hash != leaf.descriptor_hash
+                || leg.participant_proposal.proposal_hash != leaf.proposal_hash
+                || leg.participant_settlement_hash != leaf.settlement_hash
+                || leg.prepare_qc.body.source_id != member.source_id
+                || leg.prepare_qc.body.tx_entrypoint_hash != member.entrypoint_hash
+                || !descriptor
+                    .accepted_transaction_hashes
+                    .iter()
+                    .all(|hash| carrier_entrypoints.contains(hash))
+            {
+                return Err("manifest participant identity or mixed-role anchor differs");
+            }
+        }
+
+        let diagnostics: SumeragiDiagnosticsStatus = norito::json::from_value(
+            document
+                .pointer("/golden/expected_diagnostics")
+                .cloned()
+                .ok_or("diagnostics projection is missing")?,
+        )
+        .map_err(|_| "diagnostics projection is malformed")?;
+        let row = diagnostics
+            .native_amx_participant_applications
+            .first()
+            .ok_or("diagnostics application row is missing")?;
+        if row.lane_id != leaf.lane_id
+            || row.dataspace_id != leaf.dataspace_id
+            || row.lane_incarnation != leaf.lane_incarnation
+            || row.participant_height != leaf.participant_height
+            || row.participant_view != leaf.participant_view
+            || row.predecessor_height != leaf.predecessor_height
+            || row.predecessor_descriptor_hash != leaf.predecessor_descriptor_hash
+            || row.descriptor_hash != leaf.descriptor_hash
+            || row.proposal_hash != leaf.proposal_hash
+            || row.settlement_hash != leaf.settlement_hash
+            || row.source_count != leaf.members.len() as u64
+            || row.application_block_height != Some(leaf.application_block_height)
+            || row.application_block_hash != Some(leaf.application_block_hash)
+        {
+            return Err("diagnostics row differs from application manifest");
+        }
+        Ok(())
+    }
+
+    fn refresh_native_amx_participant_proposal(leg: &mut NativeAmxLegRecordV2) {
+        leg.participant_proposal.descriptor.descriptor_hash = leg
+            .participant_proposal
+            .descriptor
+            .computed_descriptor_hash();
+        leg.participant_proposal.proposal_hash = leg.participant_proposal.computed_proposal_hash();
+        for qc in [&mut leg.prepare_qc, &mut leg.commit_qc] {
+            qc.body.participant_lane_block_view =
+                leg.participant_proposal.descriptor.lane_block_view;
+            qc.body.participant_proposal_hash = leg.participant_proposal.proposal_hash;
+        }
+    }
+
+    #[test]
+    fn native_amx_grouped_receipt_structure_matches_rust_owned_fixture() {
+        let document = grouped_native_amx_fixture_document();
+        let commitment: LaneBlockCommitment = norito::json::from_value(
+            document
+                .pointer("/golden/receipt_group")
+                .cloned()
+                .expect("fixture contains receipt group"),
+        )
+        .expect("fixture receipt group decodes");
+        commitment
+            .validate_native_amx_receipts()
+            .expect("Rust-owned grouped Native AMX fixture is structurally valid");
+        validate_grouped_native_amx_application_evidence(&document)
+            .expect("Rust-owned Native AMX application evidence is valid");
+
+        for receipt in &commitment.native_amx_receipts {
+            for leg in &receipt.legs {
+                assert!(
+                    !leg.requires_mixed_role_anchor_validation(),
+                    "golden grouped legs contain their exact current entrypoint"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_amx_application_evidence_negative_corpus_fails_closed() {
+        let canonical = grouped_native_amx_fixture_document();
+        let controls = canonical
+            .get("negative_controls")
+            .and_then(norito::json::Value::as_array)
+            .expect("fixture contains negative controls");
+        for control in controls {
+            if control
+                .get("validator")
+                .and_then(norito::json::Value::as_str)
+                != Some("application_evidence")
+            {
+                continue;
+            }
+            let id = control
+                .get("id")
+                .and_then(norito::json::Value::as_str)
+                .expect("control has id");
+            let mut mutated = canonical.clone();
+            for mutation in control
+                .get("mutations")
+                .and_then(norito::json::Value::as_array)
+                .expect("control has mutations")
+            {
+                assert_eq!(
+                    mutation.get("op").and_then(norito::json::Value::as_str),
+                    Some("replace"),
+                    "application evidence control `{id}` uses a bounded replace mutation"
+                );
+                let path = mutation
+                    .get("path")
+                    .and_then(norito::json::Value::as_str)
+                    .expect("mutation has path");
+                let replacement = mutation
+                    .get("value")
+                    .cloned()
+                    .expect("replace mutation has value");
+                *mutated
+                    .pointer_mut(path)
+                    .unwrap_or_else(|| panic!("control `{id}` path resolves")) = replacement;
+            }
+            assert!(
+                validate_grouped_native_amx_application_evidence(&mutated).is_err(),
+                "application evidence negative control `{id}` must fail closed"
+            );
+        }
+    }
+
+    #[test]
+    fn native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift() {
+        let mut unordered = grouped_native_amx_commitment_fixture();
+        unordered.native_amx_receipts.swap(0, 1);
+        assert_eq!(
+            unordered.validate_native_amx_receipts(),
+            Err("Native AMX receipt sources must be strictly ordered")
+        );
+
+        let mut oversized = grouped_native_amx_commitment_fixture();
+        let template = oversized.native_amx_receipts[0].legs[0]
+            .participant_settlement
+            .receipts[0]
+            .clone();
+        oversized.native_amx_receipts[0].legs[0]
+            .participant_settlement
+            .receipts = vec![template; NATIVE_AMX_GROUP_SOURCES_MAX + 1];
+        assert_eq!(
+            oversized.validate_native_amx_receipts(),
+            Err("Native AMX participant settlement is structurally invalid")
+        );
+
+        let mut same_route_drift = grouped_native_amx_commitment_fixture();
+        let receipt = &mut same_route_drift.native_amx_receipts[0];
+        let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| (leg.lane_id, leg.dataspace_id) == coordinator_route)
+            .expect("fixture contains same-route coordinator leg");
+        leg.participant_proposal.descriptor.lane_block_view = leg
+            .participant_proposal
+            .descriptor
+            .lane_block_view
+            .saturating_add(1);
+        refresh_native_amx_participant_proposal(leg);
+        assert_eq!(
+            same_route_drift.validate_native_amx_receipts(),
+            Err("Native AMX same-route leg differs from the coordinator identity")
+        );
+    }
+
+    #[test]
+    fn native_amx_mixed_role_marker_defers_only_separate_participant_anchor() {
+        let mut mixed_role = grouped_native_amx_commitment_fixture();
+        let receipt = &mut mixed_role.native_amx_receipts[0];
+        let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| (leg.lane_id, leg.dataspace_id) != coordinator_route)
+            .expect("fixture contains a separate participant leg");
+        let current_entrypoint = Hash::from(leg.prepare_qc.body.tx_entrypoint_hash);
+        let position = leg
+            .participant_proposal
+            .descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .position(|hash| *hash == current_entrypoint)
+            .expect("fixture participant contains current entrypoint");
+        leg.participant_proposal
+            .descriptor
+            .accepted_transaction_hashes[position] =
+            Hash::new(b"mixed-role executable anchor member");
+        refresh_native_amx_participant_proposal(leg);
+        assert!(leg.requires_mixed_role_anchor_validation());
+        mixed_role
+            .validate_native_amx_receipts()
+            .expect("separate participant may defer exact block-wide anchor validation");
+
+        let mut same_route = grouped_native_amx_commitment_fixture();
+        let receipt = &mut same_route.native_amx_receipts[0];
+        let coordinator_route = (receipt.lane_id, receipt.dataspace_id);
+        let leg = receipt
+            .legs
+            .iter_mut()
+            .find(|leg| (leg.lane_id, leg.dataspace_id) == coordinator_route)
+            .expect("fixture contains same-route coordinator leg");
+        let current_entrypoint = Hash::from(leg.prepare_qc.body.tx_entrypoint_hash);
+        let position = leg
+            .participant_proposal
+            .descriptor
+            .accepted_transaction_hashes
+            .iter()
+            .position(|hash| *hash == current_entrypoint)
+            .expect("fixture coordinator contains current entrypoint");
+        leg.participant_proposal
+            .descriptor
+            .accepted_transaction_hashes[position] =
+            Hash::new(b"invalid same-route mixed-role member");
+        refresh_native_amx_participant_proposal(leg);
+        assert!(leg.requires_mixed_role_anchor_validation());
+        assert_eq!(
+            same_route.validate_native_amx_receipts(),
+            Err("Native AMX same-route leg differs from the coordinator identity")
+        );
+    }
+
+    #[test]
+    fn native_amx_grouped_receipts_reject_qc_and_group_membership_drift() {
+        let mut malformed_bitmap = grouped_native_amx_commitment_fixture();
+        malformed_bitmap.native_amx_receipts[0].legs[0]
+            .prepare_qc
+            .signers_bitmap = vec![0b0000_0011];
+        assert_eq!(
+            malformed_bitmap.validate_native_amx_receipts(),
+            Err("Native AMX participant QC is structurally invalid")
+        );
+
+        let mut duplicate_leg = grouped_native_amx_commitment_fixture();
+        duplicate_leg.native_amx_receipts[0].legs[1] =
+            duplicate_leg.native_amx_receipts[0].legs[0].clone();
+        assert_eq!(
+            duplicate_leg.validate_native_amx_receipts(),
+            Err("Native AMX receipt contains duplicate participant routes")
+        );
+
+        let mut group_drift = grouped_native_amx_commitment_fixture();
+        group_drift.native_amx_receipts[0].legs[0]
+            .participant_settlement
+            .receipts
+            .swap(0, 1);
+        assert_eq!(
+            group_drift.validate_native_amx_receipts(),
+            Err("Native AMX participant settlement is structurally invalid")
+        );
     }
 
     #[test]
@@ -4926,8 +6271,9 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_v2_computed_participant_settlement_is_exact_zero_effect_evidence() {
+    fn native_amx_v2_grouped_participant_settlement_is_exact_zero_effect_evidence() {
         let source_id = [0xC7; 32];
+        let ordered_sources = [[0xC6; 32], source_id];
         let body = sample_native_amx_qc(
             NativeAmxPhase::Prepare,
             source_id,
@@ -4937,7 +6283,9 @@ mod tests {
             sample_roster(),
         )
         .body;
-        let settlement = body.computed_participant_settlement();
+        let settlement = body
+            .computed_grouped_participant_settlement(&ordered_sources)
+            .expect("ordered grouped participant settlement");
 
         assert_eq!(settlement.block_height, body.participant_lane_block_height);
         assert_eq!(settlement.lane_id, body.participant_lane_id);
@@ -4946,7 +6294,7 @@ mod tests {
             body.participant_lane_incarnation
         );
         assert_eq!(settlement.dataspace_id, body.participant_dataspace_id);
-        assert_eq!(settlement.tx_count, 1);
+        assert_eq!(settlement.tx_count, 2);
         assert!(settlement.total_local_amount.is_zero());
         assert!(settlement.total_xor_due.is_zero());
         assert!(settlement.total_xor_after_haircut.is_zero());
@@ -4954,21 +6302,28 @@ mod tests {
         assert!(settlement.swap_metadata.is_none());
         assert!(settlement.nexus_fee_receipts.is_empty());
         assert!(settlement.native_amx_receipts.is_empty());
-        let [receipt] = settlement.receipts.as_slice() else {
-            panic!("computed participant settlement must carry one source receipt");
-        };
-        assert_eq!(receipt.source_id, source_id);
-        assert!(receipt.local_amount.is_zero());
-        assert!(receipt.xor_due.is_zero());
-        assert!(receipt.xor_after_haircut.is_zero());
-        assert!(receipt.xor_variance.is_zero());
-        assert_eq!(receipt.timestamp_ms, body.authority_context_height);
+        assert_eq!(
+            settlement
+                .receipts
+                .iter()
+                .map(|receipt| receipt.source_id)
+                .collect::<Vec<_>>(),
+            ordered_sources
+        );
+        assert!(settlement.receipts.iter().all(|receipt| {
+            receipt.local_amount.is_zero()
+                && receipt.xor_due.is_zero()
+                && receipt.xor_after_haircut.is_zero()
+                && receipt.xor_variance.is_zero()
+                && receipt.timestamp_ms == body.authority_context_height
+        }));
         assert_eq!(
             Hash::from(
                 crate::nexus::compute_settlement_hash(&settlement)
                     .expect("computed participant settlement must hash")
             ),
-            body.computed_participant_settlement_commitment()
+            body.computed_grouped_participant_settlement_commitment(&ordered_sources)
+                .expect("ordered grouped participant commitment")
         );
 
         let encoded = norito::to_bytes(&settlement).expect("encode participant settlement");
@@ -4978,30 +6333,37 @@ mod tests {
     }
 
     #[test]
-    fn native_amx_attestation_preimage_is_domain_separated() {
-        let body = NativeAmxAttestationBodyV1 {
-            chain_id_hash: Hash::new(b"native-amx-model-chain"),
-            source_id: [0x11; 32],
-            tx_entrypoint_hash: sample_entrypoint_hash(0x12),
-            plan_digest: Hash::new(b"plan"),
-            phase: NativeAmxPhase::Prepare,
-            coordinator_lane_id: LaneId::new(1),
-            coordinator_dataspace_id: DataSpaceId::UNIVERSAL,
-            coordinator_lane_incarnation: Hash::new(b"native-amx-model-coordinator"),
-            participant_lane_id: LaneId::new(2),
-            participant_dataspace_id: DataSpaceId::new(2),
-            participant_lane_incarnation: Hash::new(b"native-amx-model-participant"),
-            participant_validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
-            participant_validator_count: 1,
-            participant_min_quorum: 1,
-            authority_context_height: 7,
-            coordinator_lane_block_height: 3,
-            coordinator_lane_block_view: 1,
-            coordinator_proposal_hash: Hash::new(b"native-amx-model-proposal"),
-        };
-        let preimage = body.signature_preimage();
-        assert!(preimage.starts_with(b"iroha:native-amx:v1"));
-        assert!(preimage.len() > b"iroha:native-amx:v1".len());
+    fn native_amx_v2_grouped_participant_settlement_rejects_invalid_source_groups() {
+        let body = sample_native_amx_qc(
+            NativeAmxPhase::Prepare,
+            [0x31; 32],
+            Hash::new(b"v2-invalid-source-group-plan"),
+            (LaneId::new(1), DataSpaceId::new(7)),
+            (LaneId::new(2), DataSpaceId::new(8)),
+            sample_roster(),
+        )
+        .body;
+
+        assert!(body.computed_grouped_participant_settlement(&[]).is_err());
+        assert!(
+            body.computed_grouped_participant_settlement(&[[0x32; 32]])
+                .is_err()
+        );
+        assert!(
+            body.computed_grouped_participant_settlement(&[body.source_id, body.source_id])
+                .is_err()
+        );
+        assert!(
+            body.computed_grouped_participant_settlement(&[[0x32; 32], body.source_id])
+                .is_err()
+        );
+        assert!(
+            body.computed_grouped_participant_settlement(&vec![
+                body.source_id;
+                NATIVE_AMX_GROUP_SOURCES_MAX + 1
+            ])
+            .is_err()
+        );
     }
 
     #[test]
@@ -6314,6 +7676,67 @@ mod tests {
             lane_governance_sealed_total: 0,
             lane_governance_sealed_aliases: Vec::new(),
             lane_governance: Vec::new(),
+            native_amx_participant_applications: Vec::new(),
+            autonomous_lane_executions: Vec::new(),
+        }
+    }
+
+    fn native_amx_participant_application(
+        lane: u32,
+        dataspace: u64,
+    ) -> SumeragiNativeAmxParticipantApplication {
+        SumeragiNativeAmxParticipantApplication {
+            lane_id: LaneId::new(lane),
+            dataspace_id: DataSpaceId::new(dataspace),
+            lane_incarnation: {
+                let mut bytes = b"native-amx-diagnostics-incarnation".to_vec();
+                bytes.extend_from_slice(&lane.to_le_bytes());
+                Hash::new(bytes)
+            },
+            participant_height: 8,
+            participant_view: 1,
+            predecessor_height: 7,
+            predecessor_descriptor_hash: Some(Hash::new(b"native-amx-diagnostics-predecessor")),
+            descriptor_hash: Hash::new(b"native-amx-diagnostics-descriptor"),
+            proposal_hash: Hash::new(b"native-amx-diagnostics-proposal"),
+            settlement_hash: HashOf::from_untyped_unchecked(Hash::new(
+                b"native-amx-diagnostics-settlement",
+            )),
+            source_count: 2,
+            application_block_height: Some(15),
+            application_block_hash: Some(HashOf::from_untyped_unchecked(Hash::new(
+                b"native-amx-diagnostics-application-block",
+            ))),
+            state: SumeragiNativeAmxParticipantApplicationState::DurablyApplied,
+        }
+    }
+
+    fn autonomous_lane_execution(lane: u32, lane_height: u64) -> SumeragiAutonomousLaneExecution {
+        SumeragiAutonomousLaneExecution {
+            lane_id: LaneId::new(lane),
+            dataspace_id: DataSpaceId::new(u64::from(lane)),
+            lane_incarnation: Hash::new(
+                format!("autonomous-diagnostics-incarnation-{lane}").as_bytes(),
+            ),
+            lane_block_height: lane_height,
+            lane_block_view: 0,
+            proposal_height: lane_height,
+            proposal_view: 0,
+            proposal_hash: Hash::new(
+                format!("autonomous-diagnostics-proposal-{lane}-{lane_height}").as_bytes(),
+            ),
+            descriptor_hash: Hash::new(
+                format!("autonomous-diagnostics-descriptor-{lane}-{lane_height}").as_bytes(),
+            ),
+            executable_payload_hash: Some(Hash::new(b"autonomous-diagnostics-payload")),
+            source_bundle_hash: Some(Hash::new(b"autonomous-diagnostics-bundle")),
+            merge_entry_hash: None,
+            application_block_height: None,
+            application_block_hash: None,
+            reservation_count: 2,
+            transaction_count: 2,
+            highest_durable_stage: SumeragiAutonomousLaneExecutionStage::CertifiedBundleDurable,
+            stuck_reason: Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingMergeSelection),
         }
     }
 
@@ -6348,6 +7771,171 @@ mod tests {
             .expect("NPoS diagnostics object")
             .insert("unknown".to_owned(), norito::json::Value::from(true));
         assert!(norito::json::from_value::<SumeragiDiagnosticsStatus>(nested).is_err());
+    }
+
+    #[test]
+    fn native_amx_participant_diagnostics_roundtrip_and_validate() {
+        let mut value = diagnostics(None);
+        value.native_amx_participant_applications = vec![
+            native_amx_participant_application(3, 8),
+            native_amx_participant_application(4, 2),
+        ];
+        value
+            .validate_native_amx_participant_applications()
+            .expect("valid ordered diagnostics");
+
+        let encoded = value.encode();
+        let mut encoded_input = encoded.as_slice();
+        let decoded = SumeragiDiagnosticsStatus::decode_all(&mut encoded_input)
+            .expect("decode diagnostics binary roundtrip");
+        assert_eq!(decoded, value);
+
+        let json = norito::json::to_value(&value).expect("serialize diagnostics JSON");
+        let row = json
+            .get("native_amx_participant_applications")
+            .and_then(norito::json::Value::as_array)
+            .and_then(|rows| rows.first())
+            .and_then(norito::json::Value::as_object)
+            .expect("Native AMX participant diagnostics row");
+        assert_eq!(
+            row.get("state").and_then(norito::json::Value::as_str),
+            Some("durably_applied")
+        );
+        let json_roundtrip: SumeragiDiagnosticsStatus =
+            norito::json::from_value(json).expect("decode diagnostics JSON roundtrip");
+        assert_eq!(json_roundtrip, value);
+    }
+
+    #[test]
+    fn native_amx_participant_diagnostics_reject_bounds_order_and_geometry() {
+        let mut value = diagnostics(None);
+        value.native_amx_participant_applications = vec![
+            native_amx_participant_application(3, 8);
+            SUMERAGI_NATIVE_AMX_PARTICIPANT_APPLICATIONS_MAX
+                + 1
+        ];
+        assert_eq!(
+            value.validate_native_amx_participant_applications(),
+            Err("Native AMX participant diagnostics vector exceeds its hard limit")
+        );
+
+        value.native_amx_participant_applications = vec![
+            native_amx_participant_application(4, 2),
+            native_amx_participant_application(3, 8),
+        ];
+        assert_eq!(
+            value.validate_native_amx_participant_applications(),
+            Err(
+                "Native AMX participant diagnostics must be strictly ordered by route and incarnation"
+            )
+        );
+
+        let mut malformed = native_amx_participant_application(3, 8);
+        malformed.predecessor_height = 6;
+        assert_eq!(
+            malformed.validate(),
+            Err("Native AMX participant diagnostics predecessor must be contiguous")
+        );
+        malformed = native_amx_participant_application(3, 8);
+        malformed.source_count = 4_097;
+        assert_eq!(
+            malformed.validate(),
+            Err("Native AMX participant diagnostics source count is out of bounds")
+        );
+        malformed = native_amx_participant_application(3, 8);
+        malformed.application_block_hash = None;
+        assert_eq!(
+            malformed.validate(),
+            Err(
+                "Native AMX participant diagnostics application height and hash must appear together"
+            )
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_execution_diagnostics_roundtrip_order_and_bound() {
+        let mut value = diagnostics(None);
+        value.autonomous_lane_executions = vec![
+            autonomous_lane_execution(1, 2),
+            autonomous_lane_execution(2, 1),
+        ];
+        value
+            .validate_autonomous_lane_executions()
+            .expect("ordered autonomous execution diagnostics");
+        let encoded = norito::to_bytes(&value).expect("encode diagnostics");
+        let decoded: SumeragiDiagnosticsStatus =
+            norito::decode_from_bytes(&encoded).expect("decode diagnostics");
+        assert_eq!(decoded, value);
+
+        value.autonomous_lane_executions.reverse();
+        assert_eq!(
+            value.validate_autonomous_lane_executions(),
+            Err("autonomous lane execution diagnostics must be strictly ordered by exact identity")
+        );
+
+        value.autonomous_lane_executions = (0..=SUMERAGI_AUTONOMOUS_LANE_EXECUTIONS_MAX)
+            .map(|index| {
+                autonomous_lane_execution(u32::try_from(index).expect("fixture lane fits u32"), 1)
+            })
+            .collect();
+        assert_eq!(
+            value.validate_autonomous_lane_executions(),
+            Err("autonomous lane execution diagnostics vector exceeds its hard limit")
+        );
+    }
+
+    #[test]
+    fn autonomous_lane_execution_conflict_is_explicit_and_fail_closed() {
+        let mut row = autonomous_lane_execution(1, 1);
+        row.transaction_count = 4_097;
+        row.reservation_count = 4_097;
+        assert_eq!(
+            row.validate(),
+            Err("autonomous lane execution counters are malformed")
+        );
+        row.transaction_count = 2;
+        row.reservation_count = 2;
+
+        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::MergeCandidateDurable;
+        row.stuck_reason = Some(SumeragiAutonomousLaneExecutionStuckReason::AwaitingGlobalCarrier);
+        assert_eq!(
+            row.validate(),
+            Err("autonomous lane execution evidence does not match its durable stage")
+        );
+
+        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::Conflict;
+        row.stuck_reason = None;
+        assert_eq!(
+            row.validate(),
+            Err("autonomous lane execution conflict requires an evidence-conflict reason")
+        );
+        row.stuck_reason = Some(SumeragiAutonomousLaneExecutionStuckReason::EvidenceConflict);
+        row.reservation_count = 1;
+        row.validate().expect("explicit conflict row");
+        row.reservation_count = 2;
+
+        row.highest_durable_stage =
+            SumeragiAutonomousLaneExecutionStage::KuraWsvApplicationReceiptDurable;
+        row.stuck_reason =
+            Some(SumeragiAutonomousLaneExecutionStuckReason::QueueFinalizationUnverifiable);
+        assert_eq!(
+            row.validate(),
+            Err("durable autonomous application stage requires a carrier identity")
+        );
+
+        row.merge_entry_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"autonomous-diagnostics-merge-entry",
+        )));
+        row.application_block_height = Some(5);
+        row.application_block_hash = Some(HashOf::from_untyped_unchecked(Hash::new(
+            b"autonomous-diagnostics-carrier",
+        )));
+        row.validate().expect("complete durable application row");
+
+        row.highest_durable_stage = SumeragiAutonomousLaneExecutionStage::QueueFinalized;
+        row.stuck_reason = None;
+        row.validate()
+            .expect("independently proven queue-finalized row");
     }
 
     #[test]

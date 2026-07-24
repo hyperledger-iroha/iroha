@@ -40,14 +40,14 @@ translation_last_reviewed: 2026-02-07
 |------|-----------|-------------|----------|--------|
 | تدريبات المباراة | م0 | ستتم مقارنة عمليات التشغيل الجافة مع هضم القطع المحلية `fixtures/sorafs_chunker`. `docs/source/sorafs/reports/` تقرير شائع . | موفرو التخزين | `determinism-<date>.md` مصفوفة التمرير/الفشل. |
 | فرض التوقيعات | م1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` عندما تفشل في التوقيعات أو تظهر الانجراف. يتجاوز Dev التنازل عن الحوكمة (العلاقات العامة) التي يتم إجراؤها بواسطة منسلك. | الأدوات مجموعة العمل | سجل CI، رابط تذكرة التنازل (اگر لاگو ہو). |
-| أعلام التوقع | م1 | خطوط الأنابيب `sorafs_manifest_stub` توضح التوقعات الصريحة التي تعلق على دبوس المخرجات: | مستندات CI | تحديث البرامج النصية التي تشير إلى علامات التوقع (كتلة الأوامر الجديدة). |
+| أعلام التوقع | م1 | خطوط الأنابيب `sorafs_manifest_builder` توضح التوقعات الصريحة التي تعلق على دبوس المخرجات: | مستندات CI | تحديث البرامج النصية التي تشير إلى علامات التوقع (كتلة الأوامر الجديدة). |
 | تثبيت التسجيل أولاً | م2 | `sorafs pin propose` و`sorafs pin approve` تقديمات البيان تغلف البطاقة؛ CLI الافتراضي `--require-registry` ہے۔ | عمليات الحوكمة | سجل تدقيق سجل سطر الأوامر، المقترحات الفاشلة والقياس عن بعد. |
 | تكافؤ إمكانية الملاحظة | م3 | Prometheus/Grafana تنبيه لوحات المعلومات عند ظهور قوائم جرد القطعة متباينة؛ تنبيهات العمليات عند الطلب. | إمكانية الملاحظة | رابط لوحة المعلومات، معرفات قواعد التنبيه، نتائج GameDay. |
 
 #### أمر النشر القانوني
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

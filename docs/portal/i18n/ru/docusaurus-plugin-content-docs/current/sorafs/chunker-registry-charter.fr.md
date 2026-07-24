@@ -64,7 +64,7 @@ SDK). Она налагает инварианты псевдонимов и п�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Soumettre une PR-контентант, предложение, взаимопонимание детерминизма и т. д.
@@ -101,14 +101,14 @@ SDK). Она налагает инварианты псевдонимов и п�
 
 ## Инструменты Attentes
 
-- `sorafs_manifest_chunk_store` и `sorafs_manifest_stub` открыты:
+- `sorafs_manifest_chunk_store` и `sorafs_manifest_builder` открыты:
   - `--list-profiles` для проверки регистрации.
   - `--promote-profile=<handle>` для создания блока канонических метадонников
     Лоры по продвижению профиля.
   - `--json-out=-` для отображения взаимосвязей со стандартным выводом, позволяющих просматривать журналы
     репродукции.
 - `ensure_charter_compliance()` является вызовом для устранения дефектов в связанных с двоичными задачами проблемах.
-  (`manifest_chunk_store`, `provider_advert_stub`). Les tests CI doivent échouer si
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Les tests CI doivent échouer si
   de nouvelles entrées насильственная хартия.
 
 ## Регистрация

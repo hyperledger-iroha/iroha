@@ -153,7 +153,12 @@ use sorafs_manifest::{
     pin_registry::{
         AliasBindingV1, AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest,
     },
-    sign_orderbook_payload_bytes_ed25519_v1, validate_orderbook_payload_bytes,
+    reference_ffi::{
+        SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1, SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1,
+        SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1,
+    },
+    sign_orderbook_payload_bytes_ed25519_v1, validate_governance_dag_block_bytes,
+    validate_governance_dag_head_chain_bytes, validate_orderbook_payload_bytes,
     validate_pdp_challenge_bytes, validate_pdp_challenge_proof_bytes,
     validate_pdp_commitment_bytes, validate_pdp_commitment_challenge_bytes,
     validate_pdp_commitment_challenge_proof_bytes, validate_pdp_proof_bytes,
@@ -4547,6 +4552,50 @@ fn sorafs_validation_outcome_json(outcome: &ValidationOutcomeV1) -> PyResult<Str
     })
 }
 
+fn validate_sorafs_reference_label_py(label: &str, context: &str) -> PyResult<()> {
+    if label.is_empty() || label.trim().is_empty() {
+        return Err(PyValueError::new_err(format!(
+            "{context} must not be blank"
+        )));
+    }
+    if label.trim() != label {
+        return Err(PyValueError::new_err(format!(
+            "{context} must not contain surrounding whitespace"
+        )));
+    }
+    if label.chars().any(char::is_control) {
+        return Err(PyValueError::new_err(format!(
+            "{context} must not contain control characters"
+        )));
+    }
+    let maximum = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
+    if label.len() > maximum {
+        return Err(PyValueError::new_err(format!(
+            "{context} must be at most {maximum} UTF-8 bytes"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_sorafs_reference_aggregate_bytes_py(
+    context: &str,
+    sizes: impl IntoIterator<Item = usize>,
+) -> PyResult<()> {
+    let maximum = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
+    let mut total = 0usize;
+    for size in sizes {
+        total = total.checked_add(size).ok_or_else(|| {
+            PyValueError::new_err(format!("{context} aggregate byte length overflowed"))
+        })?;
+        if total > maximum {
+            return Err(PyValueError::new_err(format!(
+                "{context} inputs exceed {maximum} aggregate bytes"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn parse_sorafs_orderbook_payload_kind(kind: &str) -> PyResult<OrderbookValidationPayloadKindV1> {
     let normalized = kind.trim().to_ascii_lowercase().replace('_', "-");
     match normalized.as_str() {
@@ -4937,6 +4986,76 @@ fn sorafs_validate_pdp_bundle_json_py(
     sorafs_validation_outcome_json(&outcome)
 }
 
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_governance_dag_block_json")]
+#[pyo3(signature = (norito_bytes, label, expected_block_cid, generated_at_unix))]
+fn sorafs_validate_governance_dag_block_json_py(
+    norito_bytes: &[u8],
+    label: &str,
+    expected_block_cid: Option<&[u8]>,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    validate_sorafs_reference_label_py(label, "label")?;
+    validate_sorafs_reference_aggregate_bytes_py(
+        "governance DAG block validation",
+        [
+            norito_bytes.len(),
+            label.len(),
+            expected_block_cid.map_or(0, <[u8]>::len),
+        ],
+    )?;
+    let expected_block_cid = expected_block_cid.filter(|cid| !cid.is_empty());
+    let outcome = validate_governance_dag_block_bytes(
+        norito_bytes,
+        label.to_owned(),
+        expected_block_cid,
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
+#[pyfunction]
+#[pyo3(name = "sorafs_validate_governance_dag_head_chain_json")]
+fn sorafs_validate_governance_dag_head_chain_json_py(
+    head: &[u8],
+    head_label: &str,
+    block_payloads: Vec<Vec<u8>>,
+    block_labels: Vec<String>,
+    generated_at_unix: u64,
+) -> PyResult<String> {
+    let maximum_blocks = SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 as usize;
+    if block_payloads.is_empty() || block_payloads.len() > maximum_blocks {
+        return Err(PyValueError::new_err(format!(
+            "block_payloads must contain 1..={maximum_blocks} entries"
+        )));
+    }
+    if block_payloads.len() != block_labels.len() {
+        return Err(PyValueError::new_err(
+            "block_payloads and block_labels must contain the same number of entries",
+        ));
+    }
+    validate_sorafs_reference_label_py(head_label, "head_label")?;
+    let mut sizes = Vec::with_capacity(2 + block_payloads.len() * 2);
+    sizes.extend([head.len(), head_label.len()]);
+    for (index, (payload, label)) in block_payloads.iter().zip(&block_labels).enumerate() {
+        validate_sorafs_reference_label_py(label, &format!("block_labels[{index}]"))?;
+        sizes.extend([payload.len(), label.len()]);
+    }
+    validate_sorafs_reference_aggregate_bytes_py("governance DAG head-chain validation", sizes)?;
+    let blocks = block_payloads
+        .iter()
+        .zip(block_labels)
+        .map(|(bytes, label)| (bytes.as_slice(), label))
+        .collect::<Vec<_>>();
+    let outcome = validate_governance_dag_head_chain_bytes(
+        head,
+        head_label.to_owned(),
+        &blocks,
+        generated_at_unix,
+    );
+    sorafs_validation_outcome_json(&outcome)
+}
+
 #[cfg(test)]
 mod sorafs_reference_validation_py_tests {
     use super::*;
@@ -4973,6 +5092,56 @@ mod sorafs_reference_validation_py_tests {
             SorafsPdpPayloadKind::Proof
         );
         assert!(parse_sorafs_pdp_payload_kind("bad-kind").is_err());
+    }
+
+    #[test]
+    fn governance_dag_reference_bounds_are_enforced_before_native_dispatch() {
+        let maximum_label = SORAFS_REFERENCE_FFI_MAX_LABEL_BYTES_V1 as usize;
+        assert!(validate_sorafs_reference_label_py(&"a".repeat(maximum_label), "label").is_ok());
+        assert!(
+            validate_sorafs_reference_label_py(&"a".repeat(maximum_label + 1), "label").is_err()
+        );
+
+        let maximum_input = SORAFS_REFERENCE_FFI_MAX_INPUT_BYTES_V1 as usize;
+        assert!(
+            validate_sorafs_reference_aggregate_bytes_py("governance DAG", [maximum_input]).is_ok()
+        );
+        assert!(
+            validate_sorafs_reference_aggregate_bytes_py("governance DAG", [maximum_input, 1])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn governance_dag_reference_fixtures_have_stable_positive_and_negative_outcomes() {
+        let root =
+            include_bytes!("../../../../fixtures/sorafs_manifest/governance/dag_block_0_v1.to");
+        let child =
+            include_bytes!("../../../../fixtures/sorafs_manifest/governance/dag_block_1_v1.to");
+        let head = include_bytes!("../../../../fixtures/sorafs_manifest/governance/dag_head_v1.to");
+
+        let block_outcome =
+            validate_governance_dag_block_bytes(root, "root.to", None, 1_700_001_234);
+        assert!(block_outcome.is_ok());
+        assert_eq!(block_outcome.generated_at, 1_700_001_234);
+
+        let blocks = [
+            (root.as_slice(), "root.to".to_owned()),
+            (child.as_slice(), "child.to".to_owned()),
+        ];
+        let chain_outcome =
+            validate_governance_dag_head_chain_bytes(head, "head.to", &blocks, 1_700_001_235);
+        assert!(chain_outcome.is_ok());
+        assert_eq!(chain_outcome.generated_at, 1_700_001_235);
+
+        let reordered = [
+            (child.as_slice(), "child.to".to_owned()),
+            (root.as_slice(), "root.to".to_owned()),
+        ];
+        let negative =
+            validate_governance_dag_head_chain_bytes(head, "head.to", &reordered, 1_700_001_236);
+        assert_eq!(negative.status, "Error");
+        assert_eq!(negative.code, "SFS-GOV-006");
     }
 }
 
@@ -19816,6 +19985,14 @@ fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(
         sorafs_validate_pdp_bundle_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_governance_dag_block_json_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        sorafs_validate_governance_dag_head_chain_json_py,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(

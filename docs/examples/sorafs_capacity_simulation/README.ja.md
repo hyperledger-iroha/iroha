@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-01-01
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` は `sorafs_manifest_stub capacity` を呼び出して以下を構築します:
+`run_cli.sh` は `sorafs_manifest_builder capacity` を呼び出して以下を構築します:
 
 - クォータ交渉 fixture セットの決定的 provider 宣言.
 - 交渉シナリオに一致するレプリケーション順序.

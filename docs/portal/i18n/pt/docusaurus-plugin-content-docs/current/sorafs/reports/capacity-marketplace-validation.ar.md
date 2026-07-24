@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Não use cargas úteis para carregar cargas úteis / cargas úteis `sorafs_manifest_stub capacity {declaration,dispute}` e não usar JSON/Norito é um arquivo que está sendo executado.
+Não use cargas úteis para carregar cargas úteis / cargas úteis `sorafs_manifest_builder capacity {declaration,dispute}` e não usar JSON/Norito é um arquivo que está sendo executado.
 
 ## artefatos
 

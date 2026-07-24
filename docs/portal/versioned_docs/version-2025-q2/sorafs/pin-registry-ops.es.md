@@ -116,7 +116,7 @@ groups:
    - Ejecute `iroha app sorafs providers list` y verifique que las capacidades anunciadas coincidan con los requisitos de replicación.
    - Verifique los medidores `torii_sorafs_capacity_*` para confirmar el éxito de GiB y PoR aprovisionados.
 3. **Reasignar replicación**
-   - Emitir nuevos pedidos a través de `sorafs_manifest_stub capacity replication-order` cuando la holgura del trabajo pendiente (`stat="avg"`) cae por debajo de 5 épocas (el manifiesto/empaquetado de CAR usa `iroha app sorafs toolkit pack`).
+   - Emitir nuevos pedidos a través de `sorafs_manifest_builder capacity replication-order` cuando la holgura del trabajo pendiente (`stat="avg"`) cae por debajo de 5 épocas (el manifiesto/empaquetado de CAR usa `iroha app sorafs toolkit pack`).
    - Notificar a la gobernanza si los alias carecen de enlaces de manifiesto activos (`torii_sorafs_registry_aliases_total` cae inesperadamente).
 4. **Resultado del documento**
    - Registre notas de incidentes en el registro de operaciones SoraFS con marcas de tiempo y resúmenes de manifiestos afectados.

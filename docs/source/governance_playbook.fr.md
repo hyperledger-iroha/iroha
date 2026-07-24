@@ -66,7 +66,7 @@ les outils existants pour collecter ces preuves :1. Récupérez le bundle de ma
    les passerelles.
 2. Exécutez le vérificateur de stub de manifeste avec l'enveloppe signée :
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

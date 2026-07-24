@@ -810,6 +810,9 @@ function fakeSumeragiHash(byte) {
   return `hash:${body}#${crc.toString(16).toUpperCase().padStart(4, "0")}`;
 }
 
+const NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT =
+  "hash:45A5D35A09D284480FBA74A402D7F303B82DA0C153FC1E1083AEFC822ED07C2D#7C0F";
+
 function createSumeragiV2Subject(overrides = {}) {
   return {
     parent_block_hash: fakeSumeragiHash(0x31),
@@ -826,6 +829,10 @@ function createSumeragiV2StatusPayload(overrides = {}) {
     post_state_root: fakeSumeragiHash(0x35),
     ordinary_writes_root: fakeSumeragiHash(0x36),
     topup_anchor_count: 0,
+    native_amx_application_manifest_version: 1,
+    native_amx_application_manifest_root:
+      NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
+    native_amx_application_manifest_count: 0,
     executed_block_wire_hash: fakeSumeragiHash(0x37),
   };
   const commitContextId = [fakeSumeragiHash(0x41)];
@@ -937,48 +944,53 @@ function createSumeragiV2StatusPayload(overrides = {}) {
         },
       ],
     },
-    safety_halt: {
-      active: false,
-      reason: null,
-      height: 0,
-      epoch: 0,
-      first_block_hash: null,
-      conflicting_block_hash: null,
-      first_parent_state_root: null,
-      first_post_state_root: null,
-      conflicting_parent_state_root: null,
-      conflicting_post_state_root: null,
+    ...overrides,
+  };
+}
+
+function createSumeragiDiagnosticsPayload(overrides = {}) {
+  return {
+    pipeline_execution: {
+      tx_vertices_total: 1,
+      tx_edges_total: 0,
+      overlay_count_total: 1,
+      overlay_instr_total: 2,
+      overlay_bytes_total: 128,
+      rbc_chunks_total: 1,
+      rbc_bytes_total: 256,
+      detached_prepared_total: 1,
+      detached_merged_total: 1,
+      detached_fallback_total: 0,
+      detached_fallback_fee_postprocessing_total: 0,
+      detached_fallback_user_executor_total: 0,
+      detached_fallback_durable_state_total: 0,
+      detached_fallback_unsupported_instruction_total: 0,
+      detached_fallback_rejected_eval_total: 0,
+      detached_fallback_overlay_error_total: 0,
+      quarantine_executed_total: 0,
     },
+    tx_queue_depth: 3,
+    tx_queue_capacity: 32,
+    tx_queue_retained_bytes: 4096,
+    tx_queue_max_retained_bytes: 65536,
+    tx_queue_saturated: false,
+    tx_queue_saturated_by_count: false,
+    tx_queue_saturated_by_bytes: false,
+    tx_queue_saturated_by_age: false,
+    tx_queue_oldest_queued_age_ms: 25,
+    npos: null,
+    lane_commitments: [],
+    dataspace_commitments: [],
     lane_settlement_commitments: [],
     lane_relay_envelopes: [],
     lane_payload_ownerships: [],
     committed_lane_blocks: [],
     lane_block_sessions: [],
-    local_peer_removed: false,
-    operator: {
-      view_change_install_total: 7,
-      busy_deferral_total: 3,
-      adapter_queues: {
-        ingress_keys: 2,
-        ingress_capacity: 16,
-        deferred_completion: 1,
-        deferred_progress: 2,
-        deferred_progress_capacity: 4,
-        deferred_normal: 3,
-        deferred_normal_capacity: 8,
-      },
-      tx_queue: {
-        tracked_transactions: 5,
-        queued_transactions: 3,
-        capacity: 32,
-        retained_bytes: 4096,
-        max_retained_bytes: 65536,
-        oldest_queued_age_ms: 25,
-        saturated_by_count: false,
-        saturated_by_bytes: false,
-        saturated_by_age: false,
-      },
-    },
+    lane_governance_sealed_total: 0,
+    lane_governance_sealed_aliases: [],
+    lane_governance: [],
+    native_amx_participant_applications: [],
+    autonomous_lane_executions: [],
     ...overrides,
   };
 }
@@ -1040,9 +1052,14 @@ function createNexusFeeReceipt(overrides = {}) {
   };
 }
 
-function createNativeAmxReceipt(overrides = {}) {
-  const transactionHash = fakeSumeragiHash(0x61);
-  const sourceId = "AB".repeat(32);
+function createNativeAmxReceiptFixture(overrides = {}, sourceIndex = 0) {
+  const transactionHashes = [
+    fakeSumeragiHash(0x61),
+    fakeSumeragiHash(0x74),
+  ];
+  const sourceIds = ["AB".repeat(32), "CD".repeat(32)];
+  const transactionHash = transactionHashes[sourceIndex];
+  const sourceId = sourceIds[sourceIndex];
   const previousDescriptorHash = fakeSumeragiHash(0x68);
   const participantProposalHash = fakeSumeragiHash(0x69);
   const participantSettlementHash = fakeSumeragiHash(0x6b);
@@ -1120,8 +1137,8 @@ function createNativeAmxReceipt(overrides = {}) {
             subject_hash: fakeSumeragiHash(0x6d),
             payload_ownership_hash: fakeSumeragiHash(0x6f),
             rbc_instance_hash: fakeSumeragiHash(0x71),
-            accepted_candidate_indices: [0],
-            accepted_transaction_hashes: [transactionHash],
+            accepted_candidate_indices: [0, 1],
+            accepted_transaction_hashes: transactionHashes,
             validator_set_hash_version: 1,
             validator_set_hash: fakeSumeragiHash(0x66),
             validator_set: ["validator-a", "validator-b", "validator-c", "validator-d"],
@@ -1145,7 +1162,7 @@ function createNativeAmxReceipt(overrides = {}) {
           swap_metadata: null,
           receipts: [
             {
-              source_id: sourceId,
+              source_id: sourceIds[0],
               local_amount: "0",
               xor_due: "0",
               xor_after_haircut: "0",
@@ -1171,6 +1188,13 @@ function createNativeAmxReceipt(overrides = {}) {
     ],
     ...overrides,
   };
+}
+
+function createNativeAmxReceiptGroup(firstOverrides = {}) {
+  return [
+    createNativeAmxReceiptFixture(firstOverrides, 0),
+    createNativeAmxReceiptFixture({}, 1),
+  ];
 }
 
 function createLanePayloadOwnership(overrides = {}) {
@@ -11059,46 +11083,426 @@ function sumeragiClientForPayload(payload) {
   });
 }
 
-test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", async () => {
-  const settlement = createLaneSettlementCommitment();
-  const safetyHalt = {
-    active: true,
-    reason: "conflicting_commit_qc",
-    height: 10,
-    epoch: 1,
-    first_block_hash: fakeSumeragiHash(0x71),
-    conflicting_block_hash: fakeSumeragiHash(0x72),
-    first_parent_state_root: fakeSumeragiHash(0x73),
-    first_post_state_root: fakeSumeragiHash(0x74),
-    conflicting_parent_state_root: fakeSumeragiHash(0x75),
-    conflicting_post_state_root: fakeSumeragiHash(0x76),
-  };
-  const relay = {
-    lane_id: settlement.lane_id,
-    lane_incarnation: settlement.lane_incarnation,
-    dataspace_id: settlement.dataspace_id,
-    block_height: settlement.block_height,
-    block_header: { height: settlement.block_height },
-    qc: null,
-    da_commitment_hash: null,
-    lane_block_descriptor_hash: null,
-    settlement_commitment: settlement,
-    settlement_hash: fakeSumeragiHash(0x61),
-    rbc_bytes_total: 256,
-    manifest_root: null,
-    fastpq_proof: {
-      proof_digest: fakeSumeragiHash(0x62),
-      verified_at_height: 10,
+function sumeragiDiagnosticsClientForPayload(payload) {
+  return new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      assert.equal(url, `${BASE_URL}/v1/sumeragi/diagnostics`);
+      return createResponse({
+        status: 200,
+        jsonData: payload,
+        headers: { "content-type": "application/json" },
+      });
     },
-  };
-  const payload = createSumeragiV2StatusPayload({
-    safety_halt: safetyHalt,
-    lane_settlement_commitments: [settlement],
-    lane_relay_envelopes: [relay],
-    lane_payload_ownerships: [createLanePayloadOwnership()],
-    committed_lane_blocks: [createCommittedLaneBlock()],
-    lane_block_sessions: [createLaneBlockSession()],
   });
+}
+
+function sumeragiTypedClientForRawJson(path, textBody, headers = {}) {
+  return new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      assert.equal(url, `${BASE_URL}${path}`);
+      return createResponse({
+        status: 200,
+        jsonData: { response_json_must_not_be_used: true },
+        textBody,
+        headers: {
+          "content-type": "application/json",
+          ...headers,
+        },
+      });
+    },
+  });
+}
+
+function replaceJsonStringPlaceholder(text, placeholder, integerToken) {
+  const needle = JSON.stringify(placeholder);
+  const occurrences = text.split(needle).length - 1;
+  assert(occurrences > 0, `expected at least one ${placeholder} placeholder`);
+  return text.replaceAll(needle, integerToken);
+}
+
+test("getSumeragiStatusTyped preserves exact u64 tokens from the raw HTTP body", async () => {
+  const activeHeight = "__SUMERAGI_ACTIVE_HEIGHT__";
+  const committedHeight = "__SUMERAGI_COMMITTED_HEIGHT__";
+  const maximum = "__SUMERAGI_U64_MAX__";
+  const payload = createSumeragiV2StatusPayload({
+    height: activeHeight,
+    pending_persistence_id: maximum,
+  });
+  payload.last_committed_height = committedHeight;
+  payload.height_context.epoch_end_height = maximum;
+  payload.last_commit_qc.certificate.round.height = committedHeight;
+  payload.last_commit_qc.certificate.proposal_round.height = committedHeight;
+  payload.liveness.prepare_quorums[0].round.height = activeHeight;
+  payload.liveness.prepare_quorums[0].proposal_round.height = activeHeight;
+  payload.liveness.outbound_intents[0].round.height = activeHeight;
+  payload.liveness.outbound_intents[0].proposal_round.height = activeHeight;
+  payload.liveness.last_progress.round.height = activeHeight;
+
+  let text = JSON.stringify(payload);
+  text = replaceJsonStringPlaceholder(
+    text,
+    activeHeight,
+    "9223372036854775808",
+  );
+  text = replaceJsonStringPlaceholder(
+    text,
+    committedHeight,
+    "9223372036854775807",
+  );
+  text = text.replaceAll(JSON.stringify(maximum), "18446744073709551615");
+  assert(!text.includes(maximum));
+
+  const client = sumeragiTypedClientForRawJson("/v1/sumeragi/status", text);
+  const status = await client.getSumeragiStatusTyped();
+  assert.equal(status.height, 9223372036854775808n);
+  assert.equal(status.last_committed_height, 9223372036854775807n);
+  assert.equal(status.pending_persistence_id, 18446744073709551615n);
+  assert.equal(status.height_context.epoch_end_height, 18446744073709551615n);
+  assert.equal(status.leader, 1);
+  assert.equal(typeof status.leader, "number");
+});
+
+test("getSumeragiDiagnosticsTyped preserves Native application u64 boundaries", async () => {
+  const predecessor = "__NATIVE_PREDECESSOR_HEIGHT__";
+  const participant = "__NATIVE_PARTICIPANT_HEIGHT__";
+  const maximum = "__NATIVE_U64_MAX__";
+  const payload = createSumeragiDiagnosticsPayload({
+    pipeline_execution: {
+      ...createSumeragiDiagnosticsPayload().pipeline_execution,
+      tx_vertices_total: maximum,
+    },
+    native_amx_participant_applications: [
+      {
+        lane_id: 3,
+        dataspace_id: maximum,
+        lane_incarnation: fakeSumeragiHash(0x65),
+        participant_height: participant,
+        participant_view: maximum,
+        predecessor_height: predecessor,
+        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+        descriptor_hash: fakeSumeragiHash(0x73),
+        proposal_hash: fakeSumeragiHash(0x69),
+        settlement_hash: fakeSumeragiHash(0x6b),
+        source_count: 4096,
+        application_block_height: maximum,
+        application_block_hash: fakeSumeragiHash(0x79),
+        state: "durably_applied",
+      },
+    ],
+  });
+  let text = JSON.stringify(payload);
+  text = replaceJsonStringPlaceholder(
+    text,
+    predecessor,
+    "9223372036854775807",
+  );
+  text = replaceJsonStringPlaceholder(
+    text,
+    participant,
+    "9223372036854775808",
+  );
+  text = text.replaceAll(JSON.stringify(maximum), "18446744073709551615");
+  assert(!text.includes(maximum));
+
+  const client = sumeragiTypedClientForRawJson(
+    "/v1/sumeragi/diagnostics",
+    text,
+  );
+  const diagnostics = await client.getSumeragiDiagnosticsTyped();
+  const application = diagnostics.native_amx_participant_applications[0];
+  assert.equal(diagnostics.pipeline_execution.tx_vertices_total, 18446744073709551615n);
+  assert.equal(application.dataspace_id, 18446744073709551615n);
+  assert.equal(application.predecessor_height, 9223372036854775807n);
+  assert.equal(application.participant_height, 9223372036854775808n);
+  assert.equal(application.participant_view, 18446744073709551615n);
+  assert.equal(application.application_block_height, 18446744073709551615n);
+  assert.equal(application.source_count, 4096);
+  assert.equal(typeof application.source_count, "number");
+});
+
+test("getSumeragiDiagnosticsTyped preserves exact u64 Native AMX V2 receipt identities", async () => {
+  const authority = "__NATIVE_AUTHORITY_HEIGHT__";
+  const coordinatorHeight = "__NATIVE_COORDINATOR_HEIGHT__";
+  const participantPredecessor = "__NATIVE_PARTICIPANT_PREDECESSOR__";
+  const participantHeight = "__NATIVE_PARTICIPANT_BLOCK_HEIGHT__";
+  const maximum = "__NATIVE_RECEIPT_U64_MAX__";
+  const coordinatorDataspace = "__NATIVE_COORDINATOR_DATASPACE__";
+  const participantDataspace = "__NATIVE_PARTICIPANT_DATASPACE__";
+  const nativeReceipts = [
+    createNativeAmxReceiptFixture({}, 0),
+    createNativeAmxReceiptFixture({}, 1),
+  ];
+  for (const receipt of nativeReceipts) {
+    receipt.dataspace_id = coordinatorDataspace;
+    receipt.authority_context_height = authority;
+    receipt.lane_block_height = coordinatorHeight;
+    receipt.lane_block_view = maximum;
+    for (const leg of receipt.legs) {
+      leg.dataspace_id = participantDataspace;
+      const descriptor = leg.participant_proposal.descriptor;
+      descriptor.dataspace_id = participantDataspace;
+      descriptor.proposal_height = authority;
+      descriptor.previous_lane_block_height = participantPredecessor;
+      descriptor.lane_block_height = participantHeight;
+      descriptor.lane_block_view = maximum;
+      leg.participant_settlement.dataspace_id = participantDataspace;
+      leg.participant_settlement.block_height = participantHeight;
+      for (const settlementReceipt of leg.participant_settlement.receipts) {
+        settlementReceipt.timestamp_ms = authority;
+      }
+      for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+        qc.body.round.height = authority;
+        qc.body.epoch = maximum;
+        qc.body.coordinator_dataspace_id = coordinatorDataspace;
+        qc.body.participant_dataspace_id = participantDataspace;
+        qc.body.participant_previous_block_height = participantPredecessor;
+        qc.body.participant_lane_block_height = participantHeight;
+        qc.body.participant_lane_block_view = maximum;
+        qc.body.authority_context_height = authority;
+        qc.body.planned_coordinator_block_height = coordinatorHeight;
+        qc.body.coordinator_lane_block_view = maximum;
+      }
+    }
+  }
+  const settlement = createLaneSettlementCommitment({
+    block_height: coordinatorHeight,
+    dataspace_id: coordinatorDataspace,
+    tx_count: 2,
+    native_amx_receipts: nativeReceipts,
+  });
+  const payload = createSumeragiDiagnosticsPayload({
+    lane_settlement_commitments: [settlement],
+  });
+  let text = JSON.stringify(payload);
+  const replacements = [
+    [authority, "9223372036854775808"],
+    [coordinatorHeight, "9223372036854775809"],
+    [participantPredecessor, "9223372036854775810"],
+    [participantHeight, "9223372036854775811"],
+    [maximum, "18446744073709551615"],
+    [coordinatorDataspace, "9223372036854775812"],
+    [participantDataspace, "9223372036854775813"],
+  ];
+  for (const [placeholder, token] of replacements) {
+    text = replaceJsonStringPlaceholder(text, placeholder, token);
+  }
+
+  const diagnostics = await sumeragiTypedClientForRawJson(
+    "/v1/sumeragi/diagnostics",
+    text,
+  ).getSumeragiDiagnosticsTyped();
+  const decodedSettlement = diagnostics.lane_settlement_commitments[0];
+  const decodedReceipt = decodedSettlement.native_amx_receipts[0];
+  const decodedLeg = decodedReceipt.legs[0];
+  assert.equal(decodedSettlement.block_height, 9223372036854775809n);
+  assert.equal(decodedSettlement.dataspace_id, 9223372036854775812n);
+  assert.equal(decodedReceipt.authority_context_height, 9223372036854775808n);
+  assert.equal(decodedReceipt.lane_block_view, 18446744073709551615n);
+  assert.equal(decodedLeg.dataspace_id, 9223372036854775813n);
+  assert.equal(
+    decodedLeg.prepare_qc.body.participant_previous_block_height,
+    9223372036854775810n,
+  );
+  assert.equal(
+    decodedLeg.participant_proposal.descriptor.lane_block_height,
+    9223372036854775811n,
+  );
+  assert.equal(decodedLeg.prepare_qc.body.epoch, 18446744073709551615n);
+});
+
+test("getSumeragiDiagnosticsTyped rejects non-u64 Native integer spellings", async () => {
+  const placeholder = "__NATIVE_PARTICIPANT_VIEW__";
+  const payload = createSumeragiDiagnosticsPayload({
+    native_amx_participant_applications: [
+      {
+        lane_id: 3,
+        dataspace_id: 8,
+        lane_incarnation: fakeSumeragiHash(0x65),
+        participant_height: 8,
+        participant_view: placeholder,
+        predecessor_height: 7,
+        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+        descriptor_hash: fakeSumeragiHash(0x73),
+        proposal_hash: fakeSumeragiHash(0x69),
+        settlement_hash: fakeSumeragiHash(0x6b),
+        source_count: 2,
+        application_block_height: 10,
+        application_block_hash: fakeSumeragiHash(0x79),
+        state: "durably_applied",
+      },
+    ],
+  });
+  const template = JSON.stringify(payload);
+  const cases = [
+    ["overflow", "18446744073709551616", /exceeds its protocol bound/],
+    ["negative", "-1", /must be >= 0/],
+    ["negative zero", "-0", /must be an unsigned integer/],
+    ["quoted integer", "\"9223372036854775808\"", /must be an unsigned integer/],
+    ["fraction", "1.5", /must be canonical integers/],
+    ["exponent", "1e3", /must be canonical integers/],
+    ["leading zero", "01", /must not contain leading zeroes/],
+    ["malformed number", "1.", /must be canonical integers/],
+  ];
+  for (const [label, token, pattern] of cases) {
+    const text = replaceJsonStringPlaceholder(template, placeholder, token);
+    const client = sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      text,
+    );
+    await assert.rejects(
+      client.getSumeragiDiagnosticsTyped(),
+      pattern,
+      label,
+    );
+  }
+});
+
+test("typed Sumeragi JSON rejects duplicate keys, trailing input, and oversized bodies", async () => {
+  const valid = JSON.stringify(createSumeragiDiagnosticsPayload());
+  const duplicate = valid.replace(/^\{/u, "{\"tx_queue_depth\":0,");
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      duplicate,
+    ).getSumeragiDiagnosticsTyped(),
+    /duplicate object key "tx_queue_depth"/,
+  );
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      `${valid} false`,
+    ).getSumeragiDiagnosticsTyped(),
+    /trailing input/,
+  );
+  await assert.rejects(
+    sumeragiTypedClientForRawJson(
+      "/v1/sumeragi/diagnostics",
+      valid,
+      { "content-length": String(16 * 1024 * 1024 + 1) },
+    ).getSumeragiDiagnosticsTyped(),
+    /16777216-byte response limit/,
+  );
+  const invalidUtf8Client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        arrayData: new Uint8Array([0xff]),
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    invalidUtf8Client.getSumeragiDiagnosticsTyped(),
+    /must be valid UTF-8/,
+  );
+});
+
+test("getSumeragiDiagnosticsTyped parses bounded native application evidence", async () => {
+  const payload = createSumeragiDiagnosticsPayload({
+    npos: {
+      epoch_length_blocks: 100,
+      vrf_commit_deadline_offset: 20,
+      vrf_reveal_deadline_offset: 40,
+      epoch_seed: Array(32).fill(1),
+      prf_height: 10,
+      prf_view: 2,
+      vrf_penalty_epoch: 1,
+      vrf_committed_no_reveal_total: 0,
+      vrf_no_participation_total: 0,
+      vrf_late_reveals_total: 0,
+    },
+    native_amx_participant_applications: [
+      {
+        lane_id: 3,
+        dataspace_id: 8,
+        lane_incarnation: fakeSumeragiHash(0x65),
+        participant_height: 8,
+        participant_view: 1,
+        predecessor_height: 7,
+        predecessor_descriptor_hash: fakeSumeragiHash(0x68),
+        descriptor_hash: fakeSumeragiHash(0x73),
+        proposal_hash: fakeSumeragiHash(0x69),
+        settlement_hash: fakeSumeragiHash(0x6b),
+        source_count: 2,
+        application_block_height: 10,
+        application_block_hash: fakeSumeragiHash(0x79),
+        state: "durably_applied",
+      },
+    ],
+  });
+
+  const diagnostics = await sumeragiDiagnosticsClientForPayload(payload)
+    .getSumeragiDiagnosticsTyped();
+
+  assert.equal(diagnostics.tx_queue_depth, 3);
+  assert.equal(diagnostics.pipeline_execution.tx_vertices_total, 1);
+  assert.equal(diagnostics.npos.epoch_seed.length, 32);
+  assert.equal(
+    diagnostics.native_amx_participant_applications[0].state,
+    "durably_applied",
+  );
+});
+
+test("getSumeragiDiagnosticsTyped rejects native application evidence above the server bound", async () => {
+  const payload = createSumeragiDiagnosticsPayload({
+    native_amx_participant_applications: Array(1025).fill(null),
+  });
+
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /native_amx_participant_applications exceeds its protocol item bound/,
+  );
+});
+
+test("getSumeragiDiagnosticsTyped parses autonomous execution stages and explicit conflict", async () => {
+  const row = {
+    lane_id: 3, dataspace_id: 8, lane_incarnation: fakeSumeragiHash(0x65),
+    lane_block_height: 8, lane_block_view: 1,
+    proposal_height: 10, proposal_view: 2,
+    proposal_hash: fakeSumeragiHash(0x69),
+    descriptor_hash: fakeSumeragiHash(0x73),
+    executable_payload_hash: fakeSumeragiHash(0x74),
+    source_bundle_hash: fakeSumeragiHash(0x75),
+    merge_entry_hash: fakeSumeragiHash(0x76),
+    application_block_height: 12,
+    application_block_hash: fakeSumeragiHash(0x77),
+    reservation_count: 2, transaction_count: 2,
+    highest_durable_stage: "kura_wsv_application_receipt_durable",
+    stuck_reason: "queue_finalization_unverifiable",
+  };
+  const payload = createSumeragiDiagnosticsPayload({
+    autonomous_lane_executions: [row],
+  });
+  const diagnostics = await sumeragiDiagnosticsClientForPayload(payload)
+    .getSumeragiDiagnosticsTyped();
+  assert.equal(diagnostics.autonomous_lane_executions[0].merge_entry_hash, row.merge_entry_hash);
+
+  payload.autonomous_lane_executions = [row, { ...row }];
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /strictly ordered/,
+  );
+  payload.autonomous_lane_executions = [row];
+  row.reservation_count = 1;
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /reservation and transaction counts disagree/,
+  );
+  row.highest_durable_stage = "conflict";
+  row.stuck_reason = "evidence_conflict";
+  assert.equal(
+    (await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped())
+      .autonomous_lane_executions[0].stuck_reason,
+    "evidence_conflict",
+  );
+  row.stuck_reason = "awaiting_merge_selection";
+  await assert.rejects(
+    sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+    /stage and stuck reason disagree/,
+  );
+});
+
+test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", async () => {
+  const payload = createSumeragiV2StatusPayload();
 
   const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
 
@@ -11112,6 +11516,11 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
   assert.equal(
     status.last_commit_qc.certificate.execution_commitment.executed_block_wire_hash,
     fakeSumeragiHash(0x37),
+  );
+  assert.equal(
+    status.last_commit_qc.certificate.execution_commitment
+      .native_amx_application_manifest_root,
+    NATIVE_AMX_APPLICATION_MANIFEST_EMPTY_ROOT,
   );
   assert.equal(status.last_commit_qc.signed_power, 3);
   assert.equal(status.liveness.generation, 2);
@@ -11131,20 +11540,82 @@ test("getSumeragiStatusTyped validates and normalizes authoritative v2 status", 
     "prepare_vote_admitted",
   );
   assert.equal(status.liveness.blocker.blocker, "prepare_quorum_missing");
-  assert.equal(status.lane_settlement_commitments[0].total_local_amount, "10.25");
-  assert.equal(
-    status.lane_settlement_commitments[0].swap_metadata.liquidity_profile.profile,
-    "Tier1",
-  );
-  assert.equal(status.lane_relay_envelopes[0].settlement_hash, fakeSumeragiHash(0x61));
-  assert.equal(status.lane_payload_ownerships[0].lane_block_descriptor_validator_count, 4);
-  assert.equal(status.committed_lane_blocks[0].commit_qc_signer_count, 3);
-  assert.equal(status.lane_block_sessions[0].has_commit_qc, true);
-  assert.deepEqual(status.safety_halt, safetyHalt);
-  assert.equal(status.operator.tx_queue.queued_transactions, 3);
-  assert.equal(status.local_peer_removed, false);
   assert.equal("mode_tag" in status, false);
-  assert.equal("lane_commitments" in status, false);
+  assert.equal("lane_settlement_commitments" in status, false);
+  assert.equal("operator" in status, false);
+});
+
+test("getSumeragiStatusTyped accepts a non-empty Native AMX application manifest", async () => {
+  const payload = createSumeragiV2StatusPayload();
+  const commitment = payload.last_commit_qc.certificate.execution_commitment;
+  commitment.native_amx_application_manifest_root = fakeSumeragiHash(0x38);
+  commitment.native_amx_application_manifest_count = 1;
+
+  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+
+  assert.equal(
+    status.last_commit_qc.certificate.execution_commitment
+      .native_amx_application_manifest_root,
+    fakeSumeragiHash(0x38),
+  );
+  assert.equal(
+    status.last_commit_qc.certificate.execution_commitment
+      .native_amx_application_manifest_count,
+    1,
+  );
+});
+
+test("getSumeragiStatusTyped rejects invalid Native AMX application manifests", async () => {
+  const mutations = [
+    {
+      mutate: (commitment) => {
+        commitment.native_amx_application_manifest_version = 2;
+      },
+      error: /native_amx_application_manifest_version must equal 1/,
+    },
+    {
+      mutate: (commitment) => {
+        commitment.native_amx_application_manifest_count = 1025;
+      },
+      error: /native_amx_application_manifest_count/,
+    },
+    {
+      mutate: (commitment) => {
+        commitment.native_amx_application_manifest_root = fakeSumeragiHash(0x38);
+      },
+      error: /must be zero exactly for the canonical empty root/,
+    },
+    {
+      mutate: (commitment) => {
+        commitment.native_amx_application_manifest_count = 1;
+      },
+      error: /must be zero exactly for the canonical empty root/,
+    },
+  ];
+
+  for (const { mutate, error } of mutations) {
+    const payload = createSumeragiV2StatusPayload();
+    mutate(payload.last_commit_qc.certificate.execution_commitment);
+    await assert.rejects(
+      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+      error,
+    );
+  }
+});
+
+test("Sumeragi execution commitment declarations expose Native AMX manifest fields", () => {
+  const declarations = readFileSync(new URL("../index.d.ts", import.meta.url), "utf8");
+  const match = declarations.match(
+    /export interface ToriiSumeragiV2ExecutionCommitment \{([\s\S]*?)\n\}/,
+  );
+  assert.ok(match, "missing ToriiSumeragiV2ExecutionCommitment declaration");
+  for (const field of [
+    "native_amx_application_manifest_version: number;",
+    "native_amx_application_manifest_root: string;",
+    "native_amx_application_manifest_count: number;",
+  ]) {
+    assert.match(match[1], new RegExp(field));
+  }
 });
 
 test("getSumeragiStatusTyped preserves carried proposal origins", async () => {
@@ -11565,40 +12036,27 @@ test("getSumeragiStatusTyped rejects inconsistent or under-quorum commits", asyn
   );
 });
 
-test("getSumeragiStatusTyped rejects impossible bounded queue snapshots", async () => {
-  const ingressOverflow = createSumeragiV2StatusPayload();
-  ingressOverflow.operator.adapter_queues.ingress_keys =
-    ingressOverflow.operator.adapter_queues.ingress_capacity + 1;
+test("getSumeragiDiagnosticsTyped rejects impossible queue snapshots", async () => {
+  const depthOverflow = createSumeragiDiagnosticsPayload({
+    tx_queue_depth: 33,
+  });
   await assert.rejects(
-    () => sumeragiClientForPayload(ingressOverflow).getSumeragiStatusTyped(),
-    /adapter_queues occupancy exceeds capacity/,
+    () => sumeragiDiagnosticsClientForPayload(depthOverflow)
+      .getSumeragiDiagnosticsTyped(),
+    /queue depth exceeds capacity/,
   );
 
-  const completionOverflow = createSumeragiV2StatusPayload();
-  completionOverflow.operator.adapter_queues.deferred_completion =
-    completionOverflow.operator.adapter_queues.deferred_progress_capacity + 1;
+  const byteOverflow = createSumeragiDiagnosticsPayload({
+    tx_queue_retained_bytes: 65537,
+  });
   await assert.rejects(
-    () => sumeragiClientForPayload(completionOverflow).getSumeragiStatusTyped(),
-    /adapter_queues occupancy exceeds capacity/,
-  );
-
-  const queueOverflow = createSumeragiV2StatusPayload();
-  queueOverflow.operator.tx_queue.queued_transactions =
-    queueOverflow.operator.tx_queue.tracked_transactions + 1;
-  await assert.rejects(
-    () => sumeragiClientForPayload(queueOverflow).getSumeragiStatusTyped(),
-    /tx_queue occupancy exceeds capacity/,
-  );
-
-  const zeroByteCapacity = createSumeragiV2StatusPayload();
-  zeroByteCapacity.operator.tx_queue.max_retained_bytes = 0;
-  await assert.rejects(
-    () => sumeragiClientForPayload(zeroByteCapacity).getSumeragiStatusTyped(),
-    /max_retained_bytes must be positive/,
+    () => sumeragiDiagnosticsClientForPayload(byteOverflow)
+      .getSumeragiDiagnosticsTyped(),
+    /retained queue bytes exceed/,
   );
 });
 
-test("getSumeragiStatusTyped requires every canonical lane array", async () => {
+test("getSumeragiDiagnosticsTyped requires every canonical lane array", async () => {
   for (const field of [
     "lane_settlement_commitments",
     "lane_relay_envelopes",
@@ -11606,26 +12064,26 @@ test("getSumeragiStatusTyped requires every canonical lane array", async () => {
     "committed_lane_blocks",
     "lane_block_sessions",
   ]) {
-    const payload = createSumeragiV2StatusPayload();
+    const payload = createSumeragiDiagnosticsPayload();
     delete payload[field];
     await assert.rejects(
-      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
-      new RegExp(`${field} must be an array`),
+      () => sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
+      new RegExp(`missing required field ${field}`),
       field,
     );
   }
 });
 
-test("getSumeragiStatusTyped parses exact nested fee and native AMX receipts", async () => {
+test("getSumeragiDiagnosticsTyped parses exact nested fee and native AMX receipts", async () => {
   const settlement = createLaneSettlementCommitment({
     nexus_fee_receipts: [createNexusFeeReceipt()],
-    native_amx_receipts: [createNativeAmxReceipt()],
+    native_amx_receipts: createNativeAmxReceiptGroup(),
   });
-  const payload = createSumeragiV2StatusPayload({
+  const payload = createSumeragiDiagnosticsPayload({
     lane_settlement_commitments: [settlement],
   });
 
-  const status = await sumeragiClientForPayload(payload).getSumeragiStatusTyped();
+  const status = await sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped();
   const parsed = status.lane_settlement_commitments[0];
 
   assert.equal(parsed.nexus_fee_receipts[0].schedule.per_byte_fee, "0.5");
@@ -11648,23 +12106,25 @@ test("getSumeragiStatusTyped parses exact nested fee and native AMX receipts", a
   assert.equal(leg.participant_proposal.descriptor.payload_block_hint, undefined);
 });
 
-test("getSumeragiStatusTyped accepts the canonical first participant-lane block", async () => {
-  const native = createNativeAmxReceipt();
-  const leg = native.legs[0];
-  for (const qc of [leg.prepare_qc, leg.commit_qc]) {
-    qc.body.participant_previous_block_height = 0;
-    qc.body.participant_previous_block_descriptor_hash = null;
-    qc.body.participant_lane_block_height = 1;
+test("getSumeragiDiagnosticsTyped accepts the canonical first participant-lane block", async () => {
+  const nativeGroup = createNativeAmxReceiptGroup();
+  for (const native of nativeGroup) {
+    const leg = native.legs[0];
+    for (const qc of [leg.prepare_qc, leg.commit_qc]) {
+      qc.body.participant_previous_block_height = 0;
+      qc.body.participant_previous_block_descriptor_hash = null;
+      qc.body.participant_lane_block_height = 1;
+    }
+    leg.participant_proposal.descriptor.previous_lane_block_height = 0;
+    delete leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash;
+    leg.participant_proposal.descriptor.lane_block_height = 1;
+    leg.participant_settlement.block_height = 1;
   }
-  leg.participant_proposal.descriptor.previous_lane_block_height = 0;
-  delete leg.participant_proposal.descriptor.previous_lane_block_descriptor_hash;
-  leg.participant_proposal.descriptor.lane_block_height = 1;
-  leg.participant_settlement.block_height = 1;
-  const status = await sumeragiClientForPayload(createSumeragiV2StatusPayload({
+  const status = await sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
     lane_settlement_commitments: [createLaneSettlementCommitment({
-      native_amx_receipts: [native],
+      native_amx_receipts: nativeGroup,
     })],
-  })).getSumeragiStatusTyped();
+  })).getSumeragiDiagnosticsTyped();
 
   const parsedLeg = status.lane_settlement_commitments[0].native_amx_receipts[0].legs[0];
   assert.equal(parsedLeg.prepare_qc.body.participant_previous_block_descriptor_hash, null);
@@ -11677,43 +12137,73 @@ test("getSumeragiStatusTyped accepts the canonical first participant-lane block"
   );
 });
 
-test("getSumeragiStatusTyped accepts mixed-role proposals without the current entrypoint", async () => {
-  const native = createNativeAmxReceipt();
+test("getSumeragiDiagnosticsTyped accepts mixed-role proposals without the current entrypoint", async () => {
+  const nativeGroup = createNativeAmxReceiptGroup();
+  const native = nativeGroup[0];
   const leg = native.legs[0];
-  leg.lane_id = 2;
-  leg.dataspace_id = 7;
-  for (const qc of [leg.prepare_qc, leg.commit_qc]) {
-    qc.body.participant_lane_id = 2;
-    qc.body.participant_dataspace_id = 7;
-    qc.body.participant_lane_incarnation = fakeSumeragiHash(0x51);
-  }
-  leg.participant_proposal.descriptor.lane_id = 2;
-  leg.participant_proposal.descriptor.dataspace_id = 7;
-  leg.participant_proposal.descriptor.lane_incarnation = fakeSumeragiHash(0x51);
   leg.participant_proposal.descriptor.accepted_transaction_hashes = [
-    fakeSumeragiHash(0x77),
+    fakeSumeragiHash(0x74),
   ];
-  leg.participant_settlement.lane_id = 2;
-  leg.participant_settlement.dataspace_id = 7;
-  leg.participant_settlement.lane_incarnation = fakeSumeragiHash(0x51);
-  const status = await sumeragiClientForPayload(createSumeragiV2StatusPayload({
+  leg.participant_proposal.descriptor.accepted_candidate_indices = [1];
+  const status = await sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
     lane_settlement_commitments: [createLaneSettlementCommitment({
-      native_amx_receipts: [native],
+      native_amx_receipts: nativeGroup,
     })],
-  })).getSumeragiStatusTyped();
+  })).getSumeragiDiagnosticsTyped();
 
-  assert.deepEqual(
+  assert.equal(
     status.lane_settlement_commitments[0]
       .native_amx_receipts[0]
       .legs[0]
-      .participant_proposal
-      .descriptor
-      .accepted_transaction_hashes,
-    [fakeSumeragiHash(0x77)],
+      .requires_mixed_role_anchor_validation,
+    true,
   );
 });
 
-test("getSumeragiStatusTyped rejects participant-finality tampering", async () => {
+test("getSumeragiDiagnosticsTyped keeps global and coordinator views independent", async () => {
+  const nativeGroup = createNativeAmxReceiptGroup({ lane_block_view: 9 });
+  nativeGroup[1].lane_block_view = 9;
+  for (const native of nativeGroup) {
+    for (const qc of [native.legs[0].prepare_qc, native.legs[0].commit_qc]) {
+      assert.equal(qc.body.round.view, 2);
+      qc.body.coordinator_lane_block_view = 9;
+    }
+  }
+  const diagnostics = await sumeragiDiagnosticsClientForPayload(
+    createSumeragiDiagnosticsPayload({
+      lane_settlement_commitments: [
+        createLaneSettlementCommitment({ native_amx_receipts: nativeGroup }),
+      ],
+    }),
+  ).getSumeragiDiagnosticsTyped();
+
+  const body = diagnostics.lane_settlement_commitments[0]
+    .native_amx_receipts[0].legs[0].prepare_qc.body;
+  assert.equal(body.round.view, 2);
+  assert.equal(body.coordinator_lane_block_view, 9);
+});
+
+test("getSumeragiDiagnosticsTyped rejects unordered native QC validators", async () => {
+  const native = createNativeAmxReceiptFixture();
+  native.legs[0].prepare_qc.validator_set.splice(
+    0,
+    2,
+    "validator-b",
+    "validator-a",
+  );
+  await assert.rejects(
+    () => sumeragiDiagnosticsClientForPayload(
+      createSumeragiDiagnosticsPayload({
+        lane_settlement_commitments: [
+          createLaneSettlementCommitment({ native_amx_receipts: [native] }),
+        ],
+      }),
+    ).getSumeragiDiagnosticsTyped(),
+    /strictly ordered by validator id/,
+  );
+});
+
+test("getSumeragiDiagnosticsTyped rejects participant-finality tampering", async () => {
   const mutations = [
     (leg) => { leg.future_leg_field = 1; },
     (leg) => { delete leg.participant_settlement_hash; },
@@ -11773,112 +12263,112 @@ test("getSumeragiStatusTyped rejects participant-finality tampering", async () =
   ];
 
   for (const [index, mutate] of mutations.entries()) {
-    const native = createNativeAmxReceipt();
+    const native = createNativeAmxReceiptFixture();
     mutate(native.legs[0]);
-    const payload = createSumeragiV2StatusPayload({
+    const payload = createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [native],
       })],
     });
     await assert.rejects(
-      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+      () => sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
       undefined,
       `participant-finality mutation ${index} must fail closed`,
     );
   }
 });
 
-test("getSumeragiStatusTyped rejects non-canonical settlement scalars and nested fields", async () => {
+test("getSumeragiDiagnosticsTyped rejects non-canonical settlement scalars and nested fields", async () => {
   for (const invalid of [7, "01", "-1", "1.0"]) {
     const settlement = createLaneSettlementCommitment({ total_local_amount: invalid });
-    const payload = createSumeragiV2StatusPayload({
+    const payload = createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [settlement],
     });
     await assert.rejects(
-      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+      () => sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
       /total_local_amount must be a canonical/,
     );
   }
 
   const lowercaseFee = createNexusFeeReceipt({ source_id: "ab".repeat(32) });
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         nexus_fee_receipts: [lowercaseFee],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /source_id must be canonical uppercase 32-byte hex/,
   );
 
   const feeWithUnknownScheduleField = createNexusFeeReceipt();
   feeWithUnknownScheduleField.schedule.legacy_rate = "1";
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         nexus_fee_receipts: [feeWithUnknownScheduleField],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /schedule contains unknown field legacy_rate/,
   );
 
-  const nativeWithUnknownBodyField = createNativeAmxReceipt();
+  const nativeWithUnknownBodyField = createNativeAmxReceiptFixture();
   nativeWithUnknownBodyField.legs[0].prepare_qc.body.legacy_round = 1;
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [nativeWithUnknownBodyField],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /body contains unknown field legacy_round/,
   );
 });
 
-test("getSumeragiStatusTyped rejects nested receipt identity and QC tampering", async () => {
+test("getSumeragiDiagnosticsTyped rejects nested receipt identity and QC tampering", async () => {
   const wrongCoordinate = createNexusFeeReceipt({ block_height: 8 });
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         nexus_fee_receipts: [wrongCoordinate],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /Nexus fee receipt coordinates do not match/,
   );
 
-  const underQuorum = createNativeAmxReceipt();
+  const underQuorum = createNativeAmxReceiptFixture();
   underQuorum.legs[0].prepare_qc.signers_bitmap = [0x03];
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [underQuorum],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /signers_bitmap does not meet quorum/,
   );
 
-  const malformedPop = createNativeAmxReceipt();
+  const malformedPop = createNativeAmxReceiptFixture();
   malformedPop.legs[0].commit_qc.validator_set_pops[0] = Array(95).fill(1);
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [malformedPop],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /validator_set_pops\[0\] must contain exactly 96 byte values/,
   );
 
-  const mismatchedIdentity = createNativeAmxReceipt();
+  const mismatchedIdentity = createNativeAmxReceiptFixture();
   mismatchedIdentity.legs[0].commit_qc.body.plan_digest = fakeSumeragiHash(0x70);
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [mismatchedIdentity],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /prepare and commit identities differ/,
   );
 });
 
-test("getSumeragiStatusTyped enforces bounded lane observability before nested decode", async () => {
+test("getSumeragiDiagnosticsTyped enforces bounded lane observability before nested decode", async () => {
   const oversized = [
     ["lane_settlement_commitments", 129],
     ["lane_relay_envelopes", 65],
@@ -11887,29 +12377,29 @@ test("getSumeragiStatusTyped enforces bounded lane observability before nested d
     ["lane_block_sessions", 129],
   ];
   for (const [field, length] of oversized) {
-    const payload = createSumeragiV2StatusPayload({ [field]: Array(length).fill({}) });
+    const payload = createSumeragiDiagnosticsPayload({ [field]: Array(length).fill({}) });
     await assert.rejects(
-      () => sumeragiClientForPayload(payload).getSumeragiStatusTyped(),
+      () => sumeragiDiagnosticsClientForPayload(payload).getSumeragiDiagnosticsTyped(),
       new RegExp(`${field} exceeds its protocol item bound`),
       field,
     );
   }
 
-  const tooManyLegs = createNativeAmxReceipt();
+  const tooManyLegs = createNativeAmxReceiptFixture();
   tooManyLegs.legs = Array(256).fill(tooManyLegs.legs[0]);
   await assert.rejects(
-    () => sumeragiClientForPayload(createSumeragiV2StatusPayload({
+    () => sumeragiDiagnosticsClientForPayload(createSumeragiDiagnosticsPayload({
       lane_settlement_commitments: [createLaneSettlementCommitment({
         native_amx_receipts: [tooManyLegs],
       })],
-    })).getSumeragiStatusTyped(),
+    })).getSumeragiDiagnosticsTyped(),
     /legs exceeds its protocol item bound/,
   );
 });
 
-test("getSumeragiStatusTyped rejects adversarial lane evidence", async () => {
+test("getSumeragiDiagnosticsTyped rejects adversarial lane evidence", async () => {
   const mismatchedRelaySettlement = createLaneSettlementCommitment();
-  const relayPayload = createSumeragiV2StatusPayload({
+  const relayPayload = createSumeragiDiagnosticsPayload({
     lane_relay_envelopes: [
       {
         lane_id: 3,
@@ -11929,11 +12419,11 @@ test("getSumeragiStatusTyped rejects adversarial lane evidence", async () => {
     ],
   });
   await assert.rejects(
-    () => sumeragiClientForPayload(relayPayload).getSumeragiStatusTyped(),
+    () => sumeragiDiagnosticsClientForPayload(relayPayload).getSumeragiDiagnosticsTyped(),
     /settlement_commitment identity must match its relay/,
   );
 
-  const ownershipPayload = createSumeragiV2StatusPayload({
+  const ownershipPayload = createSumeragiDiagnosticsPayload({
     lane_payload_ownerships: [
       createLanePayloadOwnership({
         accepted_candidate_indices: [1, 1],
@@ -11942,34 +12432,34 @@ test("getSumeragiStatusTyped rejects adversarial lane evidence", async () => {
     ],
   });
   await assert.rejects(
-    () => sumeragiClientForPayload(ownershipPayload).getSumeragiStatusTyped(),
+    () => sumeragiDiagnosticsClientForPayload(ownershipPayload).getSumeragiDiagnosticsTyped(),
     /accepted_candidate_indices must be strictly ordered/,
   );
 
-  const committedPayload = createSumeragiV2StatusPayload({
+  const committedPayload = createSumeragiDiagnosticsPayload({
     committed_lane_blocks: [createCommittedLaneBlock({ commit_qc_signer_count: 2 })],
   });
   await assert.rejects(
-    () => sumeragiClientForPayload(committedPayload).getSumeragiStatusTyped(),
+    () => sumeragiDiagnosticsClientForPayload(committedPayload).getSumeragiDiagnosticsTyped(),
     /impossible certified quorum/,
   );
 
-  const mismatchedPayloadFlag = createSumeragiV2StatusPayload({
+  const mismatchedPayloadFlag = createSumeragiDiagnosticsPayload({
     committed_lane_blocks: [createCommittedLaneBlock({
       execution_status: "awaiting_executable_payload",
       executable_payload_available: true,
     })],
   });
   await assert.rejects(
-    () => sumeragiClientForPayload(mismatchedPayloadFlag).getSumeragiStatusTyped(),
+    () => sumeragiDiagnosticsClientForPayload(mismatchedPayloadFlag).getSumeragiDiagnosticsTyped(),
     /execution_status disagrees with executable_payload_available/,
   );
 
-  const sessionPayload = createSumeragiV2StatusPayload({
+  const sessionPayload = createSumeragiDiagnosticsPayload({
     lane_block_sessions: [createLaneBlockSession({ prepare_vote_count: 5 })],
   });
   await assert.rejects(
-    () => sumeragiClientForPayload(sessionPayload).getSumeragiStatusTyped(),
+    () => sumeragiDiagnosticsClientForPayload(sessionPayload).getSumeragiDiagnosticsTyped(),
     /impossible session quorum counts/,
   );
 });

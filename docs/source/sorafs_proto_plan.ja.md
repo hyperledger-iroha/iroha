@@ -2,9 +2,9 @@
 lang: ja
 direction: ltr
 source: docs/source/sorafs_proto_plan.md
-status: complete
+status: needs-review
 generator: scripts/sync_docs_i18n.py
-source_hash: e5d81629f284ea39ef1503f7671171e95987f5b7c7dc84a2c884c58777aba890
+source_hash: c852321fb75e67e01e0bb7f16eebd5e7333558abc55f3d0c12c0da28562dbe16
 source_last_modified: "2026-06-25T16:58:37+00:00"
 translation_last_reviewed: 2026-01-30
 ---
@@ -125,8 +125,8 @@ Committed fixtures live under:
 Use the active generators and stubs:
 
 ```sh
-cargo run --locked -p sorafs_car --features cli --bin provider_admission_fixtures
-cargo run --locked -p sorafs_car --bin sorafs_manifest_stub -- \
+cargo run --locked -p sorafs_car --features manifest --bin provider_admission_fixtures
+cargo run --locked -p sorafs_car --bin sorafs_manifest_builder -- \
   capacity replication-order --spec fixtures/sorafs_manifest/replication_order/order_v1.json
 cargo run --locked -p sorafs_manifest --bin generate_orderbook_fixtures
 cargo run --locked -p sorafs_manifest --bin generate_por_fixtures

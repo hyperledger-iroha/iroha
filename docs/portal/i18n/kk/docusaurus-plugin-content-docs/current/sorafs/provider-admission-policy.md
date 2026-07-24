@@ -41,7 +41,7 @@ SoraFS Architecture RFC-де сипатталған және қалған жұм
 ## Қабылдау жұмыс процесі
 
 1. **Ұсынысты құру**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` қосыңыз
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` қосыңыз
      `ProviderAdmissionProposalV1` + аттестаттау бумасын шығару.
    - Тексеру: талап етілетін өрістерді қамтамасыз етіңіз, ставка > 0, `profile_id` ішіндегі канондық chunker дескрипті.
 2. **Басқаруды растау**
@@ -61,7 +61,7 @@ SoraFS Architecture RFC-де сипатталған және қалған жұм
 | Аудан | Тапсырма | Ие(лер) | Күй |
 |------|------|----------|--------|
 | Схема | `crates/sorafs_manifest/src/provider_admission.rs` астында `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) анықтаңыз. Валидация көмекшілерімен `sorafs_manifest::provider_admission` жүйесінде жүзеге асырылды.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Сақтау / Басқару | ✅ Аяқталды |
-| CLI құралдары | `sorafs_manifest_stub` ішкі пәрмендерімен кеңейтіңіз: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Құралдар WG | ✅ |
+| CLI құралдары | `sorafs_manifest_builder` ішкі пәрмендерімен кеңейтіңіз: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Құралдар WG | ✅ |
 
 CLI ағыны енді аралық сертификат бумаларын (`--endpoint-attestation-intermediate`) қабылдайды,
 канондық ұсыныс/конверт байттары және `sign`/`verify` кезінде кеңес қолдарын тексереді. Операторлар жасай алады
@@ -70,7 +70,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 
 ### CLI анықтамасы
 
-Әрбір пәрменді `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …` арқылы іске қосыңыз.
+Әрбір пәрменді `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …` арқылы іске қосыңыз.
 
 - `proposal`
   - Қажетті жалаушалар: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
     дайджест пен қолтаңбаларды жинау.
 | Тексеру | Torii, шлюздер және `sorafs-node` пайдаланатын ортақ растаушыны іске қосыңыз. Бірлік + CLI интеграция сынақтарын қамтамасыз етіңіз.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Сақтау | ✅ Аяқталды |
 | Torii интеграциясы | Тақырып тексерушісін Torii жарнаманы енгізу, саясаттан тыс жарнамаларды қабылдамау, телеметрияны шығару. | Networking TL | ✅ Аяқталды | Torii енді басқару конверттерін жүктейді (`torii.sorafs.admission_envelopes_dir`), қабылдау кезінде дайджест/қолтаңба сәйкестіктерін тексереді және рұқсатты анықтайды телеметрия.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api. |#L1
-| Жаңарту | Жаңарту/қайтару схемасын + CLI көмекшілерін қосыңыз, өмірлік цикл нұсқаулығын құжаттарда жариялаңыз (төмендегі runbook және CLI пәрмендерін қараңыз). `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |20.md Сақтау / Басқару | ✅ Аяқталды |
+| Жаңарту | Жаңарту/қайтару схемасын + CLI көмекшілерін қосыңыз, өмірлік цикл нұсқаулығын құжаттарда жариялаңыз (төмендегі runbook және CLI пәрмендерін қараңыз). `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |20.md Сақтау / Басқару | ✅ Аяқталды |
 | Телеметрия | `provider_admission` бақылау тақталарын және ескертулерді анықтаңыз (жаңарту жоқ, конверттің жарамдылық мерзімі). | Бақылау мүмкіндігі | 🟠 Орындалуда | `torii_sorafs_admission_total{result,reason}` есептегіші бар; бақылау тақталары/ескертулер күтілуде.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### Жаңарту және күшін жою Runbook
 
@@ -117,7 +117,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 1. `provider-admission proposal` және `provider-admission sign` арқылы мұрагер ұсыныс/жарнама жұбын құрастырыңыз, `--retention-epoch` көбейтіңіз және талап етілетін үлес/соңғы нүктелерді жаңартыңыз.
 2. Орындау  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
    ```
    Пәрмен өзгермеген мүмкіндік/профиль өрістерін арқылы тексереді
    `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` шығарады және дайджесттерді басып шығарады
-   басқару журналы.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   басқару журналы.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. `torii.sorafs.admission_envelopes_dir` ішіндегі алдыңғы конвертті ауыстырыңыз, Norito/JSON жаңартуын басқару репозиторийіне тапсырыңыз және `docs/source/sorafs/migration_ledger.md` параметріне жаңарту хэш + сақтау дәуірін қосыңыз.
 4. Операторларға жаңа конверттің тірі екендігі туралы хабарлаңыз және қабылдауды растау үшін `torii_sorafs_admission_total{result="accepted",reason="stored"}` бақылаңыз.
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` арқылы канондық құрылғыларды қайта жасаңыз және бекітіңіз; CI (`ci/check_sorafs_fixtures.sh`) Norito шығыстарының тұрақтылығын растайды.
@@ -135,7 +135,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
 #### Төтенше жағдайда жою
 1. Бұзылған конвертті анықтаңыз және кері қайтарып алуды беріңіз:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI ағыны енді аралық сертификат бумаларын (`-
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI `ProviderAdmissionRevocationV1` қол қояды, қолтаңбалар жиынтығын арқылы тексереді
-   `verify_revocation_signatures` және қайтарып алу дайджесті туралы хабарлайды.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
+   `verify_revocation_signatures` және қайтарып алу дайджесті туралы хабарлайды.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48】L
 2. `torii.sorafs.admission_envelopes_dir` ішінен конвертті алып тастаңыз, Norito/JSON күшін жоюды рұқсат беру кэштеріне таратыңыз және басқару хаттамасына хэш себебін жазыңыз.
 3. Кэштер жойылған жарнаманы тастайтынын растау үшін `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` қараңыз; қайтарып алу артефактілерін оқиға ретроспективасында сақтаңыз.
 

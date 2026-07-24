@@ -41,7 +41,7 @@ en tareas de ingeniería trazables.
 ## Flux d'admission
 
 1. **Création de propriété**
-   - CLI : ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - CLI : ajouter `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      producteur `ProviderAdmissionProposalV1` + bundle de attestado.
    - Validation : assurer les champs requis, mise > 0, poignée canónico de chunker en `profile_id`.
 2. **Endoso de gobernanza**
@@ -59,13 +59,13 @@ en tareas de ingeniería trazables.
 ## Zones de mise en œuvre| Zone | Tarée | Propriétaire(s) | État |
 |------|-------|----------|--------|
 | Esquema | Définir `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) sous `crates/sorafs_manifest/src/provider_admission.rs`. Implémenté en `sorafs_manifest::provider_admission` avec des aides de validation.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Stockage / Gouvernance | ✅ Terminé |
-| CLI d'outillage | Extender `sorafs_manifest_stub` avec sous-commandes : `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | GT Outillage | ✅ |
+| CLI d'outillage | Extender `sorafs_manifest_builder` avec sous-commandes : `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | GT Outillage | ✅ |
 
 Le flux de CLI accepte désormais les bundles de certificats intermédiaires (`--endpoint-attestation-intermediate`), émet des octets canoniques de propriété/enveloppe et valide les entreprises du contrat pendant `sign`/`verify`. Les opérateurs peuvent fournir des corps de publicité directement ou réutiliser des publicités d'entreprise, et les archives d'entreprise peuvent combiner `--council-signature-public-key` avec `--council-signature-file` pour faciliter l'automatisation.
 
 ### Référence de CLI
 
-Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.-`proposal`
+Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - Indicateurs requis : `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
     `--jurisdiction-code=<ISO3166-1>`, et au moins un `--endpoint=<kind:host>`.
@@ -101,7 +101,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
     résumé de révocation, écrivez la charge utile Norito via `--revocation-out` et imprimez un rapport JSON
     avec le digest et le conteo de firmas.
 | Vérification | Implémenter le vérificateur partagé utilisé par Torii, les passerelles et `sorafs-node`. Prouvez les essais unitaires + l'intégration de CLI.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Mise en réseau TL / Stockage | ✅ Terminé || Intégration Torii | Câbler le vérificateur lors de l'ingestion de publicités en Torii, rechercher des publicités à des fins politiques et émettre des télémétries. | Réseautage TL | ✅ Terminé | Torii maintenant chargé des enveloppes de gouvernement (`torii.sorafs.admission_envelopes_dir`), vérifier les coïncidences de digestion/entreprise pendant l'ingestion et exposer la télémétrie de admission.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Rénovation | Ajouter un exemple de rénovation/révocation + helpers de CLI, publier le guide du cycle de vie dans la documentation (voir runbook ci-dessous et commandes CLI en `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Stockage / Gouvernance | ✅ Terminé |
+| Rénovation | Ajouter un exemple de rénovation/révocation + helpers de CLI, publier le guide du cycle de vie dans la documentation (voir runbook ci-dessous et commandes CLI en `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Stockage / Gouvernance | ✅ Terminé |
 | Télémétrie | Définir les tableaux de bord/alertes `provider_admission` (rénovation incorrecte, expiration de l'enveloppe). | Observabilité | 🟠 En cours | Le contacteur `torii_sorafs_admission_total{result,reason}` existe ; tableaux de bord/alertes pendantes.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 
 ### Runbook de rénovation et de révocation
@@ -110,7 +110,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 1. Construisez le par propuesta/annonce successeur avec `provider-admission proposal` et `provider-admission sign`, incrémentez `--retention-epoch` et actualisez la mise/les points finaux selon vos besoins.
 2. Exécution
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -120,7 +120,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
    ```
    La commande valide les champs de capacité/perfil sans changement via
    `AdmissionRecord::apply_renewal`, émet `ProviderAdmissionRenewalV1` et imprime des résumés pour le
-   log de gobernanza.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   log de gobernanza.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Remplacez l'enveloppe précédente en `torii.sorafs.admission_envelopes_dir`, confirmez le Norito/JSON de rénovation dans le référentiel d'administration et agrégez le hachage de rénovation + l'époque de rétention à `docs/source/sorafs/migration_ledger.md`.
 4. Avertir les opérateurs que la nouvelle enveloppe est activée et surveillée `torii_sorafs_admission_total{result="accepted",reason="stored"}` pour confirmer l'ingestion.
 5. Régénérer et confirmer les appareils canoniques via `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` ; CI (`ci/check_sorafs_fixtures.sh`) valide les sorties Norito permanentes.
@@ -128,7 +128,7 @@ Exécutez chaque commande via `cargo run -p sorafs_manifest --bin sorafs_manifes
 #### Révocation d'urgence
 1. Identifiez l'enveloppe compromise et émettez une révocation :
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

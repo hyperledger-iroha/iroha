@@ -259,6 +259,8 @@ where
                 .map_err(|_| Error::Synthesis)?;
 
             for (byte_index, assigned) in job.message.iter().enumerate() {
+                #[cfg(not(test))]
+                let _ = byte_index;
                 let virtual_cell = assigned.cell.ok_or(Error::Synthesis)?;
                 let physical_cell = *physical_cells.get(&virtual_cell).ok_or(Error::Synthesis)?;
                 let byte =

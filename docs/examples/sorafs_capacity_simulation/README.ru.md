@@ -28,7 +28,7 @@ translation_last_reviewed: 2026-01-01
 ./analyze.py --artifacts ./artifacts
 ```
 
-Скрипт `run_cli.sh` вызывает `sorafs_manifest_stub capacity` для построения:
+Скрипт `run_cli.sh` вызывает `sorafs_manifest_builder capacity` для построения:
 
 - Детерминированных объявлений провайдеров для набора fixtures переговоров по квотам.
 - Порядка репликации, соответствующего сценарию переговоров.

@@ -84,8 +84,8 @@ Verifique se o `sorafs.sf1@1.0.0` está danificado. يشير "Ponte"
 Você pode usar o CARv1 + SHA-256 para obter mais informações (`Accept-Chunker` + `Accept-Digest`).| المكون | الحالة | Produtos |
 |--------|--------|-----|
 | `sorafs_manifest_chunk_store` | ✅ مدعوم | يتحقق من المقبض المعتمد + البدائل, ويبث التقارير عبر `--json-out=-`, ويفرض ميثاق السجل عبر `ensure_charter_compliance()`. |
-| `sorafs_manifest_stub` | ⚠️ قديم | مُنشئ manifesto قديم؛ Use `iroha app sorafs toolkit pack` para CAR/manifest e `--plan=-` para definir o valor do carro. |
-| `sorafs_provider_advert_stub` | ⚠️ قديم | مساعد تحقق offline فقط؛ يجب إنتاج provedores de anúncios عبر خط أنابيب النشر والتحقق منها عبر `/v1/sorafs/providers`. |
+| `sorafs_manifest_builder` | ⚠️ قديم | مُنشئ manifesto قديم؛ Use `iroha app sorafs toolkit pack` para CAR/manifest e `--plan=-` para definir o valor do carro. |
+| `sorafs_provider_advert` | ✅ Production | Private-key-free two-phase external Ed25519 signing with exact raw-key, reviewed SHA-256 fingerprint, canonical payload, and strict path-identity verification. |
 | `sorafs_fetch` (desenvolvedor orquestrador) | ✅ مدعوم | يقرأ `chunk_fetch_specs` ويفهم حمولة قدرة `range` ويجمع إخراج CARv2. |
 | Luminárias para SDK (Rust/Go/TS) | ✅ مدعوم | `export_vectors`; Não se preocupe, não há necessidade de fazer isso. |
 | Gateway de gateway Torii | ✅ مدعوم | Use o `Accept-Chunker` e o `Content-Chunker` e o Bridge CARv1 para fazer o downgrade. |
@@ -138,12 +138,12 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
 ```
 ```
 
-يعكس manifest stub البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
+يعكس manifest builder البيانات نفسها، وهو مناسب عند برمجة اختيار `--chunker-profile-id` في
 الـ pipelines. كما تقبل CLIs الخاصة بـ chunk store صيغة المقبض المعتمد
 (`--profile=sorafs.sf1@1.0.0`) لتجنب ترميز معرفات رقمية صلبة في سكريبتات البناء:
 
 ```
-$ carga run -p sorafs_manifest --bin sorafs_manifest_stub -- --list-chunker-profiles
+$ carga run -p sorafs_manifest --bin sorafs_manifest_builder -- --list-chunker-profiles
 [
   {
     "perfil_id": 1,
@@ -206,4 +206,4 @@ Não há nenhum resumo do resumo do arquivo.
   `fixtures/sorafs_chunker` e instruções de uso
   `fuzz/sorafs_chunker`. Você pode usar o Rust, o Go e o Node para usá-lo.
 * Use `chunker_registry::lookup_by_profile` para obter informações sobre `ChunkProfile::DEFAULT`.
-* Você pode manifestar os manifestos em `iroha app sorafs toolkit pack` e `sorafs_manifest_stub`.
+* Você pode manifestar os manifestos em `iroha app sorafs toolkit pack` e `sorafs_manifest_builder`.

@@ -28,7 +28,7 @@ Este diretorio entrega os artefatos reproduziveis para a simulacao do mercado de
 ./analyze.py --artifacts ./artifacts
 ```
 
-O script `run_cli.sh` invoca `sorafs_manifest_stub capacity` para construir:
+O script `run_cli.sh` invoca `sorafs_manifest_builder capacity` para construir:
 
 - Declaracoes deterministas de providers para o set de fixtures de negociacao de quotas.
 - Uma ordem de replicacao que corresponde ao cenario de negociacao.

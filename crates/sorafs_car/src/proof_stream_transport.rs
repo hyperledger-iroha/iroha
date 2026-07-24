@@ -5,12 +5,23 @@
 //! logic so callers (CLI, orchestrator, tests) can share a hardened
 //! implementation.
 
-use std::{fmt, io::Read, str};
+use std::{
+    fmt,
+    io::{BufRead, Cursor, Read},
+    str,
+};
 
 use flate2::read::{DeflateDecoder, GzDecoder};
 use thiserror::Error;
 
 use crate::proof_stream::ProofStreamItem;
+
+/// Maximum compressed or decoded bytes accepted for one proof-stream response.
+pub const MAX_PROOF_STREAM_TRANSPORT_BYTES: usize = 16 * 1024 * 1024;
+/// Maximum bytes accepted for one proof-stream NDJSON record, excluding newline.
+pub const MAX_PROOF_STREAM_LINE_BYTES: usize = 256 * 1024;
+/// Maximum proof records accepted in one response.
+pub const MAX_PROOF_STREAM_ITEMS: usize = 1_024;
 
 /// Supported HTTP content-encoding values exposed by proof stream transports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -28,11 +39,11 @@ pub enum ContentEncoding {
 impl ContentEncoding {
     /// Parse a raw `Content-Encoding` header value into a [`ContentEncoding`].
     pub fn parse(label: &str) -> Result<Self, ProofStreamTransportError> {
-        match label.trim().to_ascii_lowercase().as_str() {
-            "" | "identity" => Ok(Self::Identity),
-            "gzip" | "x-gzip" => Ok(Self::Gzip),
+        match label {
+            "identity" => Ok(Self::Identity),
+            "gzip" => Ok(Self::Gzip),
             "deflate" => Ok(Self::Deflate),
-            "zstd" | "zst" => Ok(Self::Zstd),
+            "zstd" => Ok(Self::Zstd),
             other => Err(ProofStreamTransportError::UnsupportedEncoding {
                 encoding: other.to_string(),
             }),
@@ -43,6 +54,13 @@ impl ContentEncoding {
 /// Errors surfaced while decoding proof stream transport payloads.
 #[derive(Debug, Error)]
 pub enum ProofStreamTransportError {
+    /// Reading the decoded transport failed.
+    #[error("failed to read proof stream transport: {source}")]
+    Read {
+        /// Underlying IO failure.
+        #[source]
+        source: std::io::Error,
+    },
     /// Compression scheme advertised by the transport is not supported.
     #[error("unsupported content encoding `{encoding}`")]
     UnsupportedEncoding { encoding: String },
@@ -66,6 +84,35 @@ pub enum ProofStreamTransportError {
         /// Human-readable decoder error.
         message: String,
     },
+    /// Compressed or decoded payload exceeded the fixed transport bound.
+    #[error("proof stream payload exceeds the {limit}-byte transport bound")]
+    PayloadTooLarge {
+        /// Fixed maximum accepted byte length.
+        limit: usize,
+    },
+    /// One NDJSON item exceeded the fixed line bound.
+    #[error("proof stream item at line {line} exceeds the {limit}-byte line bound")]
+    ItemTooLarge {
+        /// One-based line number.
+        line: usize,
+        /// Fixed maximum accepted line length.
+        limit: usize,
+    },
+    /// Stream contained more items than the request protocol permits.
+    #[error("proof stream contains more than {limit} items")]
+    TooManyItems {
+        /// Fixed maximum accepted item count.
+        limit: usize,
+    },
+    /// A line used noncanonical surrounding whitespace.
+    #[error("proof stream item at line {line} contains noncanonical surrounding whitespace")]
+    NonCanonicalLine {
+        /// One-based line number.
+        line: usize,
+    },
+    /// Canonical NDJSON streams must terminate the final item with a newline.
+    #[error("proof stream payload is missing its final newline")]
+    MissingFinalNewline,
     /// Payload did not contain valid UTF-8 text after decompression.
     #[error("proof stream payload contained invalid UTF-8: {source}")]
     InvalidUtf8 {
@@ -89,9 +136,9 @@ pub struct ItemDecodeError {
 }
 
 impl ItemDecodeError {
-    fn new(line: &str, message: &str) -> Self {
+    fn new(line: usize, message: &str) -> Self {
         Self {
-            message: format!("failed to decode proof stream item `{line}`: {message}"),
+            message: format!("failed to decode proof stream item at line {line}: {message}"),
         }
     }
 }
@@ -104,38 +151,188 @@ impl fmt::Display for ItemDecodeError {
 
 impl std::error::Error for ItemDecodeError {}
 
+/// Incremental, resource-bounded decoder for canonical proof-stream NDJSON.
+///
+/// The reader consumes an already decoded transport. It rejects oversized
+/// responses and records before allocating beyond their fixed bounds, requires
+/// exactly one non-empty canonical JSON record per newline, and never includes
+/// response bytes in its errors.
+pub struct ProofStreamNdjsonReader<R> {
+    inner: R,
+    total_bytes: usize,
+    item_count: usize,
+    line_number: usize,
+    finished: bool,
+}
+
+impl<R: BufRead> ProofStreamNdjsonReader<R> {
+    /// Wrap an already decoded proof-stream response.
+    pub fn new(inner: R) -> Self {
+        Self {
+            inner,
+            total_bytes: 0,
+            item_count: 0,
+            line_number: 0,
+            finished: false,
+        }
+    }
+
+    fn read_next(&mut self) -> Result<Option<ProofStreamItem>, ProofStreamTransportError> {
+        let mut line_bytes = Vec::new();
+        let next_line = self.line_number + 1;
+
+        loop {
+            let (consumed, found_newline) = {
+                let available = self
+                    .inner
+                    .fill_buf()
+                    .map_err(|source| ProofStreamTransportError::Read { source })?;
+                if available.is_empty() {
+                    self.finished = true;
+                    if line_bytes.is_empty() {
+                        return Ok(None);
+                    }
+                    return Err(ProofStreamTransportError::MissingFinalNewline);
+                }
+
+                let newline = available.iter().position(|byte| *byte == b'\n');
+                let content_len = newline.unwrap_or(available.len());
+                let consumed = newline.map_or(available.len(), |index| index + 1);
+                let prospective_total = self.total_bytes.checked_add(consumed).ok_or(
+                    ProofStreamTransportError::PayloadTooLarge {
+                        limit: MAX_PROOF_STREAM_TRANSPORT_BYTES,
+                    },
+                )?;
+                if prospective_total > MAX_PROOF_STREAM_TRANSPORT_BYTES {
+                    return Err(ProofStreamTransportError::PayloadTooLarge {
+                        limit: MAX_PROOF_STREAM_TRANSPORT_BYTES,
+                    });
+                }
+                let prospective_line = line_bytes.len().checked_add(content_len).ok_or(
+                    ProofStreamTransportError::ItemTooLarge {
+                        line: next_line,
+                        limit: MAX_PROOF_STREAM_LINE_BYTES,
+                    },
+                )?;
+                if prospective_line > MAX_PROOF_STREAM_LINE_BYTES {
+                    return Err(ProofStreamTransportError::ItemTooLarge {
+                        line: next_line,
+                        limit: MAX_PROOF_STREAM_LINE_BYTES,
+                    });
+                }
+                line_bytes.extend_from_slice(&available[..content_len]);
+                (consumed, newline.is_some())
+            };
+
+            self.total_bytes += consumed;
+            self.inner.consume(consumed);
+
+            if !found_newline {
+                continue;
+            }
+            self.line_number = next_line;
+            if line_bytes.is_empty() {
+                return Err(ProofStreamTransportError::NonCanonicalLine { line: next_line });
+            }
+            if self.item_count >= MAX_PROOF_STREAM_ITEMS {
+                return Err(ProofStreamTransportError::TooManyItems {
+                    limit: MAX_PROOF_STREAM_ITEMS,
+                });
+            }
+
+            let text = str::from_utf8(&line_bytes)
+                .map_err(|source| ProofStreamTransportError::InvalidUtf8 { source })?;
+            let trimmed = text.trim_matches(|ch: char| ch.is_ascii_whitespace());
+            if trimmed != text {
+                return Err(ProofStreamTransportError::NonCanonicalLine { line: next_line });
+            }
+            let item = ProofStreamItem::from_ndjson(text.as_bytes()).map_err(|message| {
+                ProofStreamTransportError::ItemDecode {
+                    source: ItemDecodeError::new(next_line, &message),
+                }
+            })?;
+            self.item_count += 1;
+            return Ok(Some(item));
+        }
+    }
+}
+
+impl<R: BufRead> Iterator for ProofStreamNdjsonReader<R> {
+    type Item = Result<ProofStreamItem, ProofStreamTransportError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.finished {
+            return None;
+        }
+        match self.read_next() {
+            Ok(Some(item)) => Some(Ok(item)),
+            Ok(None) => None,
+            Err(error) => {
+                self.finished = true;
+                Some(Err(error))
+            }
+        }
+    }
+}
+
 /// Decompress a proof stream payload according to the advertised encoding.
 pub fn decode_transport_payload(
     encoding: Option<&str>,
     payload: &[u8],
 ) -> Result<Vec<u8>, ProofStreamTransportError> {
+    if payload.len() > MAX_PROOF_STREAM_TRANSPORT_BYTES {
+        return Err(ProofStreamTransportError::PayloadTooLarge {
+            limit: MAX_PROOF_STREAM_TRANSPORT_BYTES,
+        });
+    }
     match encoding {
         None => Ok(payload.to_vec()),
         Some(label) => match ContentEncoding::parse(label)? {
             ContentEncoding::Identity => Ok(payload.to_vec()),
             ContentEncoding::Gzip => {
-                let mut decoder = GzDecoder::new(payload);
+                let decoder = GzDecoder::new(payload);
                 let mut buffer = Vec::with_capacity(payload.len());
                 decoder
+                    .take((MAX_PROOF_STREAM_TRANSPORT_BYTES + 1) as u64)
                     .read_to_end(&mut buffer)
                     .map_err(|source| ProofStreamTransportError::Gzip { source })?;
-                Ok(buffer)
+                checked_decoded_payload(buffer)
             }
             ContentEncoding::Deflate => {
-                let mut decoder = DeflateDecoder::new(payload);
+                let decoder = DeflateDecoder::new(payload);
                 let mut buffer = Vec::with_capacity(payload.len());
                 decoder
+                    .take((MAX_PROOF_STREAM_TRANSPORT_BYTES + 1) as u64)
                     .read_to_end(&mut buffer)
                     .map_err(|source| ProofStreamTransportError::Deflate { source })?;
-                Ok(buffer)
+                checked_decoded_payload(buffer)
             }
-            ContentEncoding::Zstd => zstd::stream::decode_all(payload).map_err(|source| {
-                ProofStreamTransportError::Zstd {
-                    message: source.to_string(),
-                }
-            }),
+            ContentEncoding::Zstd => {
+                let decoder = zstd::stream::read::Decoder::new(payload).map_err(|source| {
+                    ProofStreamTransportError::Zstd {
+                        message: source.to_string(),
+                    }
+                })?;
+                let mut buffer = Vec::with_capacity(payload.len());
+                decoder
+                    .take((MAX_PROOF_STREAM_TRANSPORT_BYTES + 1) as u64)
+                    .read_to_end(&mut buffer)
+                    .map_err(|source| ProofStreamTransportError::Zstd {
+                        message: source.to_string(),
+                    })?;
+                checked_decoded_payload(buffer)
+            }
         },
     }
+}
+
+fn checked_decoded_payload(payload: Vec<u8>) -> Result<Vec<u8>, ProofStreamTransportError> {
+    if payload.len() > MAX_PROOF_STREAM_TRANSPORT_BYTES {
+        return Err(ProofStreamTransportError::PayloadTooLarge {
+            limit: MAX_PROOF_STREAM_TRANSPORT_BYTES,
+        });
+    }
+    Ok(payload)
 }
 
 /// Decode proof stream items from a (possibly compressed) transport payload.
@@ -147,22 +344,7 @@ pub fn decode_transport_items(
     payload: &[u8],
 ) -> Result<Vec<ProofStreamItem>, ProofStreamTransportError> {
     let decompressed = decode_transport_payload(encoding, payload)?;
-    let mut items = Vec::new();
-    for raw_line in decompressed.split(|byte| *byte == b'\n') {
-        let text = str::from_utf8(raw_line)
-            .map_err(|source| ProofStreamTransportError::InvalidUtf8 { source })?;
-        let trimmed = text.trim_matches(|ch: char| ch.is_ascii_whitespace());
-        if trimmed.is_empty() {
-            continue;
-        }
-        let item = ProofStreamItem::from_ndjson(trimmed.as_bytes()).map_err(|message| {
-            ProofStreamTransportError::ItemDecode {
-                source: ItemDecodeError::new(trimmed, &message),
-            }
-        })?;
-        items.push(item);
-    }
-    Ok(items)
+    ProofStreamNdjsonReader::new(Cursor::new(decompressed)).collect()
 }
 
 #[cfg(test)]
@@ -175,44 +357,85 @@ mod tests {
     };
 
     use super::*;
-    use crate::proof_stream::{ProofKind, ProofStreamItem, VerificationStatus};
+    use crate::proof_stream::ProofStreamItem;
+
+    fn sample_por_proof() -> (usize, crate::PorProof) {
+        let payload = (0_u16..512)
+            .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let mut store = crate::ChunkStore::new();
+        store
+            .ingest_bytes(&payload)
+            .expect("ingest canonical PoR transport fixture");
+        store
+            .sample_leaves(1, 7, &payload)
+            .expect("sample canonical PoR transport fixture")
+            .into_iter()
+            .next()
+            .expect("one canonical PoR transport sample")
+    }
 
     fn sample_items() -> Vec<ProofStreamItem> {
+        let (flat_index, por_proof) = sample_por_proof();
+        let mut por = crate::por_json::sample_to_map(flat_index, &por_proof);
+        por.insert(
+            "manifest_digest_hex".into(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        por.insert(
+            "provider_id_hex".into(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        por.insert("proof_kind".into(), norito::json::Value::from("por"));
+        por.insert("result".into(), norito::json::Value::from("success"));
+        por.insert("latency_ms".into(), norito::json::Value::from(42_u64));
+
+        let challenge_id = "ef".repeat(32);
+        let mut pdp = norito::json::Map::new();
+        pdp.insert(
+            "manifest_digest_hex".into(),
+            norito::json::Value::from("cc".repeat(32)),
+        );
+        pdp.insert(
+            "provider_id_hex".into(),
+            norito::json::Value::from("dd".repeat(32)),
+        );
+        pdp.insert(
+            "outcome_identity_hex".into(),
+            norito::json::Value::from(challenge_id.clone()),
+        );
+        pdp.insert(
+            "outcome_digest_hex".into(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        pdp.insert(
+            "admission_envelope_digest_hex".into(),
+            norito::json::Value::from("ab".repeat(32)),
+        );
+        pdp.insert(
+            "finalized_block_height".into(),
+            norito::json::Value::from(7_u64),
+        );
+        pdp.insert(
+            "finalized_block_hash_hex".into(),
+            norito::json::Value::from("ac".repeat(32)),
+        );
+        pdp.insert(
+            "committed_at_ms".into(),
+            norito::json::Value::from(1_701_000_000_u64),
+        );
+        pdp.insert(
+            "challenge_id_hex".into(),
+            norito::json::Value::from(challenge_id),
+        );
+        pdp.insert("proof_kind".into(), norito::json::Value::from("pdp"));
+        pdp.insert("result".into(), norito::json::Value::from("success"));
+
         vec![
-            ProofStreamItem {
-                manifest_digest_hex: Some("abc123".into()),
-                provider_id_hex: Some("feedbeef".into()),
-                proof_kind: ProofKind::Por,
-                status: VerificationStatus::Success,
-                failure_reason: None,
-                latency_ms: Some(42),
-                deadline_ms: None,
-                sample_index: Some(3),
-                chunk_index: Some(1),
-                segment_index: Some(0),
-                leaf_index: Some(7),
-                tier: None,
-                trace_id: Some("trace-1".into()),
-                por_proof: None,
-                recorded_at_ms: Some(1_701_000_000),
-            },
-            ProofStreamItem {
-                manifest_digest_hex: None,
-                provider_id_hex: None,
-                proof_kind: ProofKind::Potr,
-                status: VerificationStatus::Failure,
-                failure_reason: Some("timeout".into()),
-                latency_ms: Some(1_200),
-                deadline_ms: Some(900),
-                sample_index: None,
-                chunk_index: None,
-                segment_index: None,
-                leaf_index: None,
-                tier: Some(crate::proof_stream::ProofTier::Hot),
-                trace_id: Some("trace-2".into()),
-                por_proof: None,
-                recorded_at_ms: None,
-            },
+            ProofStreamItem::from_json(&norito::json::Value::Object(por))
+                .expect("canonical PoR transport fixture"),
+            ProofStreamItem::from_json(&norito::json::Value::Object(pdp))
+                .expect("canonical PDP transport fixture"),
         ]
     }
 
@@ -268,5 +491,79 @@ mod tests {
         let decoded =
             decode_transport_items(Some("zstd"), &compressed).expect("decode zstd transport");
         assert_eq!(decoded.len(), items.len());
+    }
+
+    #[test]
+    fn content_encoding_rejects_retired_aliases_and_normalization() {
+        for invalid in ["", "x-gzip", "zst", "GZIP", " gzip", "gzip "] {
+            assert!(
+                ContentEncoding::parse(invalid).is_err(),
+                "accepted noncanonical content encoding `{invalid}`"
+            );
+        }
+    }
+
+    #[test]
+    fn decoded_compression_bomb_is_rejected_at_the_fixed_bound() {
+        let expanded = vec![b'x'; MAX_PROOF_STREAM_TRANSPORT_BYTES + 1];
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(&expanded).expect("write bomb payload");
+        let compressed = encoder.finish().expect("finish bomb payload");
+        assert!(compressed.len() < MAX_PROOF_STREAM_TRANSPORT_BYTES);
+
+        let error = decode_transport_payload(Some("gzip"), &compressed)
+            .expect_err("decoded transport bomb must be rejected");
+        assert!(matches!(
+            error,
+            ProofStreamTransportError::PayloadTooLarge { .. }
+        ));
+    }
+
+    #[test]
+    fn transport_rejects_noncanonical_lines_and_missing_final_newline() {
+        let item = encode_items_ndjson(&sample_items()[..1]);
+        let without_newline = &item[..item.len() - 1];
+        assert!(matches!(
+            decode_transport_items(None, without_newline),
+            Err(ProofStreamTransportError::MissingFinalNewline)
+        ));
+
+        let mut padded = vec![b' '];
+        padded.extend_from_slice(&item);
+        assert!(matches!(
+            decode_transport_items(None, &padded),
+            Err(ProofStreamTransportError::NonCanonicalLine { line: 1 })
+        ));
+    }
+
+    #[test]
+    fn transport_rejects_item_and_count_bombs() {
+        let oversized_line = vec![b'x'; MAX_PROOF_STREAM_LINE_BYTES + 1];
+        let mut oversized_payload = oversized_line;
+        oversized_payload.push(b'\n');
+        assert!(matches!(
+            decode_transport_items(None, &oversized_payload),
+            Err(ProofStreamTransportError::ItemTooLarge { line: 1, .. })
+        ));
+
+        let one_item = encode_items_ndjson(&sample_items()[..1]);
+        let mut too_many = Vec::with_capacity(one_item.len() * (MAX_PROOF_STREAM_ITEMS + 1));
+        for _ in 0..=MAX_PROOF_STREAM_ITEMS {
+            too_many.extend_from_slice(&one_item);
+        }
+        assert!(matches!(
+            decode_transport_items(None, &too_many),
+            Err(ProofStreamTransportError::TooManyItems { .. })
+        ));
+    }
+
+    #[test]
+    fn item_decode_errors_do_not_echo_response_payloads() {
+        let payload = b"{\"secret\":\"do-not-log-this\"}\n";
+        let error = decode_transport_items(None, payload)
+            .expect_err("malformed item must fail")
+            .to_string();
+        assert!(error.contains("line 1"));
+        assert!(!error.contains("do-not-log-this"));
     }
 }

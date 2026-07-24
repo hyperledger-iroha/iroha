@@ -19,7 +19,7 @@ descripción: Ejercite el kit de simulación del mercado de capacidad SF-2c con 
 Esta página refleja `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. Guarde las dos copias sincronizadas justo con el conjunto de documentación Sphinx herité soit entièrement migré.
 :::
 
-Este runbook comentario explícito ejecuta el kit de simulación del mercado de capacidad SF-2c y visualiza las métricas resultantes. La negociación de cuotas, la gestión de conmutación por error y la solución de reducción de cuotas se validan con la ayuda de los dispositivos determinados en `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_stub capacity`; utilice `iroha app sorafs toolkit pack` para el flujo de embalaje manifest/CAR.
+Este runbook comentario explícito ejecuta el kit de simulación del mercado de capacidad SF-2c y visualiza las métricas resultantes. La negociación de cuotas, la gestión de conmutación por error y la solución de reducción de cuotas se validan con la ayuda de los dispositivos determinados en `docs/examples/sorafs_capacity_simulation/`. Les payloads de capacité utilisent toujours `sorafs_manifest_builder capacity`; utilice `iroha app sorafs toolkit pack` para el flujo de embalaje manifest/CAR.
 
 ## 1. Generar artefactos CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` encapsula `sorafs_manifest_stub capacity` para editar las cargas útiles Norito, los blobs base64, el cuerpo de solicitudes Torii y los currículums JSON para:- Tres declaraciones de proveedores participantes en el escenario de negociación de cuotas.
+`run_cli.sh` encapsula `sorafs_manifest_builder capacity` para editar las cargas útiles Norito, los blobs base64, el cuerpo de solicitudes Torii y los currículums JSON para:- Tres declaraciones de proveedores participantes en el escenario de negociación de cuotas.
 - Un ordre de replication allouant le manifeste en staging entre ces fournisseurs.
 - Las instantáneas de télémétrie para la línea de base previa, el intervalo de pantalla y la recuperación de conmutación por error.
 - Un payload de litige demandant un slashing après la panne simulée.

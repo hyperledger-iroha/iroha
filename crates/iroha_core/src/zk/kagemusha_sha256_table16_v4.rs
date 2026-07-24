@@ -32,13 +32,10 @@ pub const BLOCK_BYTE_SIZE: usize = 64;
 /// Number of 32-bit words in a SHA-256 digest.
 pub const DIGEST_SIZE: usize = 8;
 /// Number of bytes in one SHA-256 word.
+#[cfg(test)]
 pub const BYTES_PER_WORD: usize = 4;
 /// Number of bits in one byte.
 pub const BITS_PER_BYTE: usize = 8;
-/// Number of bits in one SHA-256 word.
-pub const BITS_PER_WORD: usize = 32;
-/// Number of bits absorbed by one compression.
-pub const BITS_PER_SHA_BLOCK: usize = 512;
 pub(crate) const ROUNDS: usize = 64;
 const STATE: usize = 8;
 

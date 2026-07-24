@@ -36,5 +36,6 @@
   "lane_block_sessions": [],
   "lane_governance_sealed_total": 0,
   "lane_governance_sealed_aliases": [],
-  "lane_governance": []
+  "lane_governance": [],
+  "native_amx_participant_applications": []
 }

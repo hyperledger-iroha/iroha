@@ -64,7 +64,7 @@ SDK)。エルは、不変条件を別名とハンドルの検証に適用しま�
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - さまざまな PR コンテンツの備品、提案、決定主義などの関係
@@ -103,14 +103,14 @@ SDK)。エルは、不変条件を別名とハンドルの検証に適用しま�
 
 ## アテントツール
 
-- `sorafs_manifest_chunk_store` および `sorafs_manifest_stub` 暴露:
+- `sorafs_manifest_chunk_store` および `sorafs_manifest_builder` 暴露:
   - `--list-profiles` 登録検査を行ってください。
   - `--promote-profile=<handle>` は、ブロック ド メタドンネの一般的な使用法を提供します
     プロモーションとプロフィール。
   - `--json-out=-` ストリーマーの関係と標準出力、レビューのログの永続化
     再生産可能。
 - `ensure_charter_compliance()` 問題に関する問題を解決するための呼び出し
-  (`manifest_chunk_store`、`provider_advert_stub`)。 CI のテストをテストします。
+  (`manifest_chunk_store`、`sorafs_provider_advert`)。 CI のテストをテストします。
   de nouvelles entrées 暴力的な la charte。
 
 ## 登録- ストッカーは、`docs/source/sorafs/reports/` に関する決定的な関係を示します。

@@ -19,7 +19,7 @@ descripción: تشغيل مجموعة أدوات محاكاة سوق السعة 
 Utilice el botón `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`. حافظ على تزامن النسختين إلى أن تُنقَل مجموعة توثيق Sphinx القديمة بالكامل.
 :::
 
-يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. Establece una conmutación por error y una reducción de los accesorios de `docs/examples/sorafs_capacity_simulation/`. Para cargas útiles السعة تستخدم `sorafs_manifest_stub capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
+يشرح هذا الدليل كيفية تشغيل مجموعة محاكاة سوق السعة SF-2c وعرض المقاييس الناتجة. Establece una conmutación por error y una reducción de los accesorios de `docs/examples/sorafs_capacity_simulation/`. Para cargas útiles السعة تستخدم `sorafs_manifest_builder capacity`؛ استخدم `iroha app sorafs toolkit pack` لتدفقات تغليف manifest/CAR.
 
 ## 1. إنشاء Artefactos خاصة بالـ CLI
 
@@ -28,7 +28,7 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-Incluye `run_cli.sh` y `sorafs_manifest_stub capacity`, cargas útiles y blobs de Norito en base64 y archivos Torii y JSON. لـ:
+Incluye `run_cli.sh` y `sorafs_manifest_builder capacity`, cargas útiles y blobs de Norito en base64 y archivos Torii y JSON. لـ:
 
 - ثلاث تصريحات لمزوّدين مشاركين في سيناريو تفاوض الحصص.
 - أمر نسخ يوزّع المانيفست المجهز عبر أولئك المزوّدين.

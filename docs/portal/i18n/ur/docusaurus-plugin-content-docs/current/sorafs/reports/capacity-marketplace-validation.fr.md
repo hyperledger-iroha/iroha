@@ -63,7 +63,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-آپریٹرز کو `sorafs_manifest_stub capacity {declaration,dispute}` کے ساتھ جہاز پر سوار/تنازعہ کی درخواست پے لوڈ کو دوبارہ تخلیق کرنا ہوگا اور اس کے نتیجے میں JSON/Norito بائٹس کو گورننس کے ٹکٹ کے ساتھ محفوظ کرنا ہوگا۔
+آپریٹرز کو `sorafs_manifest_builder capacity {declaration,dispute}` کے ساتھ جہاز پر سوار/تنازعہ کی درخواست پے لوڈ کو دوبارہ تخلیق کرنا ہوگا اور اس کے نتیجے میں JSON/Norito بائٹس کو گورننس کے ٹکٹ کے ساتھ محفوظ کرنا ہوگا۔
 
 ## سائن آف آرٹیکٹ
 

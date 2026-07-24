@@ -113,7 +113,7 @@ groups:
    - قم بتثبيت `iroha app sorafs providers list` وتأكد من أن الإمكانات الرائعة تحتاج إلى نسخ متماثلة.
    - التحقق من أجهزة القياس `torii_sorafs_capacity_*` للتحقق من توفير GiB ونجاح PoR.
 3. **تحويل النسخ المتماثل**
-   - شراء قروض جديدة من خلال `sorafs_manifest_stub capacity replication-order`، عند الانتهاء من تراكم الأعمال المتراكمة (`stat="avg"`) بعد 5 سنوات (استخدام بيان التعبئة/استخدام السيارة) `iroha app sorafs toolkit pack`).
+   - شراء قروض جديدة من خلال `sorafs_manifest_builder capacity replication-order`، عند الانتهاء من تراكم الأعمال المتراكمة (`stat="avg"`) بعد 5 سنوات (استخدام بيان التعبئة/استخدام السيارة) `iroha app sorafs toolkit pack`).
    - التحقق من الإدارة، إذا لم تتضمن الأسماء المستعارة بيانات الربط النشطة (العنوان الجديد `torii_sorafs_registry_aliases_total`).
 4. **توثيق النتيجة**
    - قم بكتابة الأحداث في دفتر اليومية العملية SoraFS مع الطابع الزمني وبيانات الملخص.

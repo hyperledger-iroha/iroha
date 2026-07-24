@@ -97,9 +97,9 @@ Os Metadados Devem Aparecer Tanto no Documento de Proposta Quanto Dentro Dos Fix
   дайджест делает манифест и проверяет PoR, как и предлагаемые параметры.
 - `sorafs_manifest_chunk_store --json-out=-` - передача или связь с хранилищем фрагментов для
   стандартный вывод для автоматического сравнения.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - подтверждение деклараций и планов CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` - подтверждение деклараций и планов CAR
   Вставьте или обработайте большинство псевдонимов Canonico.
-- `sorafs_manifest_stub --plan=-` - повторите или `chunk_fetch_specs` передний пункт
+- `sorafs_manifest_builder --plan=-` - повторите или `chunk_fetch_specs` передний пункт
   verificar компенсирует/дайджест в зависимости от ситуации.
 
 Зарегистрируйте команду (обрабатывает, вызывает PoR, хеширует манифест) и предлагает ее
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Gerar manifest + CAR e capturar chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Reexecutar usando o plano de fetch salvo (evita offsets obsoletos)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

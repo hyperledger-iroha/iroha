@@ -61,7 +61,7 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Fixtures، proposal، determinism report، اور registry updates پر مشتمل PR submit کریں۔
@@ -98,12 +98,12 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
 
 ## Tooling expectations
 
-- `sorafs_manifest_chunk_store` اور `sorafs_manifest_stub` expose کرتے ہیں:
+- `sorafs_manifest_chunk_store` اور `sorafs_manifest_builder` expose کرتے ہیں:
   - Registry inspection کے لیے `--list-profiles`.
   - Profile promote کرتے وقت canonical metadata block بنانے کے لیے `--promote-profile=<handle>`.
   - Reports کو stdout پر stream کرنے کے لیے `--json-out=-`، تاکہ reproducible review logs ممکن ہوں۔
 - `ensure_charter_compliance()` relevant binaries کے startup پر چلایا جاتا ہے
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests کو fail ہونا چاہیے اگر
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI tests کو fail ہونا چاہیے اگر
   نئی entries charter کی خلاف ورزی کریں۔
 
 ## Record keeping

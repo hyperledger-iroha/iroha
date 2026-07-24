@@ -66,11 +66,11 @@ cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ## 3. Төҙөү һәм ҡул ҡуйырға манифест
 
 Ҡайһы бер өлөшө планын урап, псевдоним, һәм идара итеү ҡултамғалары ҡулланыу өсөн манифест
-`sorafs-manifest-stub`. Түбәндәге командала бер файл файҙалы йөк күрһәтелә; үтергә
+`sorafs-manifest-builder`. Түбәндәге командала бер файл файҙалы йөк күрһәтелә; үтергә
 каталог юлы ағас ҡаплау өсөн (CLI уны лексикографик йөрөй).
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   /tmp/docs.txt \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=/tmp/docs.manifest \

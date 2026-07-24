@@ -80,7 +80,7 @@ Tarefas:
 |------------|--------|----------------|
 | Servico Torii | Expor `/v1/sorafs/pin` (שלח), `/v1/sorafs/pin/{cid}` (חיפוש), `/v1/sorafs/aliases` (רשימה/כריכה), `/v1/sorafs/replication` (הזמנות/קבלות). Fornecer paginacao + פילטרגם. | Networking TL / Core Infra |
 | אטסטקאו | כולל אפשרויות/hash לעשות רישום ותשובות; Adicionar estrutura de atestacao Norito SDK consumida pelos. | אינפרא ליבה |
-| CLI | Estender `sorafs_manifest_stub` ou um novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
+| CLI | Estender `sorafs_manifest_builder` ou um novo CLI `sorafs_pin` com `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
 | SDK | Gerar bindings de cliente (Rust/Go/TS) a partir do esquema Norito; אדיקיוניר אשכים דה אינטגראקאו. | צוותי SDK |
 
 אופרות:

@@ -420,7 +420,8 @@ impl LaneDrainSigningGuard {
                 return Ok(());
             }
             if existing.intent != body.intent
-                || body.final_lane_block_height <= existing.final_lane_block_height
+                || body.final_frontier.lane_block_height
+                    <= existing.final_frontier.lane_block_height
             {
                 return Err(LaneDrainSigningGuardError::DrainEquivocation);
             }
@@ -461,9 +462,9 @@ fn ensure_drain_covers_commit(
     let Some(highest) = highest_commit_vote else {
         return Ok(());
     };
-    if body.final_lane_block_height < highest.lane_block_height
-        || (body.final_lane_block_height == highest.lane_block_height
-            && body.final_lane_block_descriptor_hash != Some(highest.descriptor_hash))
+    if body.final_frontier.lane_block_height < highest.lane_block_height
+        || (body.final_frontier.lane_block_height == highest.lane_block_height
+            && body.final_frontier.lane_block_descriptor_hash != Some(highest.descriptor_hash))
     {
         return Err(LaneDrainSigningGuardError::DrainFrontierBelowSignedCommit);
     }
@@ -712,7 +713,9 @@ mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, HashOf, KeyPair};
     use iroha_data_model::{
-        consensus::VALIDATOR_SET_HASH_VERSION_V1, merge::LaneDrainIntentV1, peer::PeerId,
+        consensus::VALIDATOR_SET_HASH_VERSION_V1,
+        merge::{LaneDrainFrontierV1, LaneDrainIntentV1},
+        peer::PeerId,
     };
 
     fn incarnation() -> Hash {
@@ -767,18 +770,26 @@ mod tests {
                 dataspace_id: DataSpaceId::new(7),
                 lane_incarnation: incarnation(),
                 close_global_height: 12,
-                initial_merged_lane_height: 4,
-                initial_merged_descriptor_hash: Some(Hash::prehashed([4; Hash::LENGTH])),
+                initial_frontier: LaneDrainFrontierV1::ordinary(
+                    LaneId::new(3),
+                    DataSpaceId::new(7),
+                    incarnation(),
+                    4,
+                    Some(Hash::prehashed([4; Hash::LENGTH])),
+                ),
                 validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
                 validator_set_hash: HashOf::new(&validator_set),
                 validator_set,
                 validator_count: 1,
                 min_quorum: 1,
             },
-            final_lane_block_height: height,
-            final_lane_block_descriptor_hash: Some(Hash::prehashed(
-                [descriptor_byte; Hash::LENGTH],
-            )),
+            final_frontier: LaneDrainFrontierV1::ordinary(
+                LaneId::new(3),
+                DataSpaceId::new(7),
+                incarnation(),
+                height,
+                Some(Hash::prehashed([descriptor_byte; Hash::LENGTH])),
+            ),
         }
     }
 

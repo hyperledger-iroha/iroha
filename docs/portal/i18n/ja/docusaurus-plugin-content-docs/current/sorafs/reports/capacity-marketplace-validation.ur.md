@@ -65,7 +65,7 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-演算子 `sorafs_manifest_stub capacity {declaration,dispute}` オンボーディング/紛争リクエスト ペイロードを生成する 処理を生成する JSON/Norito バイト ガバナンス チケットを生成する٩ے ساتھ アーカイブ کرنا چاہیے۔
+演算子 `sorafs_manifest_builder capacity {declaration,dispute}` オンボーディング/紛争リクエスト ペイロードを生成する 処理を生成する JSON/Norito バイト ガバナンス チケットを生成する٩ے ساتھ アーカイブ کرنا چاہیے۔
 
 ## サインオフアーティファクト
 

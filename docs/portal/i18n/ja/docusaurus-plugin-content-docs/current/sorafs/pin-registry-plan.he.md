@@ -86,7 +86,7 @@ manifest のコミットメントを保持し、pin ポリシーを強制し、T
 |----------------|------|------|
 | Torii サービス | `/v1/sorafs/pin` (submit)、`/v1/sorafs/pin/{cid}` (lookup)、`/v1/sorafs/aliases` (list/bind)、`/v1/sorafs/replication` (orders/receipts) を公開。ページネーション + フィルタを提供。 | Networking TL / Core Infra |
 | アテステーション | レスポンスに registry の高さ/ハッシュを含め、SDK が消費する Norito アテステーション構造体を追加。 | Core Infra |
-| CLI | `sorafs_manifest_stub` 拡張または新 CLI `sorafs_pin` に `pin submit`, `alias bind`, `order issue`, `registry export` を追加。 | Tooling WG |
+| CLI | `sorafs_manifest_builder` 拡張または新 CLI `sorafs_pin` に `pin submit`, `alias bind`, `order issue`, `registry export` を追加。 | Tooling WG |
 | SDK | Norito スキーマからクライアントバインディング (Rust/Go/TS) を生成し、統合テストを追加。 | SDK Teams |
 
 運用:

@@ -119,7 +119,7 @@ groups:
    - `iroha app sorafs providers list` چلائیں اور تصدیق کریں کہ اعلان کردہ صلاحیتیں نقل کی ضروریات کو پورا کرتی ہیں۔
    - فراہمی گیب اور پور کامیابی کی تصدیق کے لئے گیجز `torii_sorafs_capacity_*` چیک کریں۔
 3. ** دوبارہ تقسیم کی نقل **
-   - `sorafs_manifest_stub capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب بیکلاگ اسٹاک (`stat="avg"`) 5 عہدوں سے نیچے گرتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
+   - `sorafs_manifest_builder capacity replication-order` کے ذریعے نئے آرڈر جاری کریں جب بیکلاگ اسٹاک (`stat="avg"`) 5 عہدوں سے نیچے گرتا ہے (مینی فیسٹ/کار پیکیجنگ `iroha app sorafs toolkit pack` استعمال کرتا ہے)۔
    - گورننس کو مطلع کریں اگر عرفی ناموں کے پاس فعال پابند ظاہر نہیں ہوتا ہے (غیر متوقع حادثہ `torii_sorafs_registry_aliases_total`)۔
 4. ** نتیجہ کو دستاویز کریں **
    - ٹائم اسٹیمپ اور ڈائجسٹ مینیفنس کے ساتھ SoraFS آپریشن لاگ پر واقعہ کے نوٹ لکھیں۔

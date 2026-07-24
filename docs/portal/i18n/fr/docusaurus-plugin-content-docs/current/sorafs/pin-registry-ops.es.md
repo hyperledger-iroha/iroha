@@ -125,7 +125,7 @@ groups:
    - Exécutez `iroha app sorafs providers list` et vérifiez que les capacités annoncées correspondent aux exigences de réplication.
    - Réviser les jauges `torii_sorafs_capacity_*` pour confirmer GiB provisionados y exito de PoR.
 3. **Réplication de résignation**
-   - Émettre de nouveaux ordres via `sorafs_manifest_stub capacity replication-order` lorsque l'arriéré (`stat="avg"`) est récupéré depuis 5 époques (le paquet de manifeste/CAR utilise `iroha app sorafs toolkit pack`).
+   - Émettre de nouveaux ordres via `sorafs_manifest_builder capacity replication-order` lorsque l'arriéré (`stat="avg"`) est récupéré depuis 5 époques (le paquet de manifeste/CAR utilise `iroha app sorafs toolkit pack`).
    - Notifier l'administration si les alias sont concernés par les liaisons des actifs manifestes (caídas inesperadas de `torii_sorafs_registry_aliases_total`).
 4. **Résultat documenté**
    - Enregistrer les notes de l'incident dans le journal des opérations de SoraFS avec les horodatages et les résumés des manifestes affectés.

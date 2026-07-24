@@ -54,9 +54,9 @@ the existing tooling to collect that evidence:
 1. Fetch the manifest bundle from Torii (`iroha app da get-blob --storage-ticket <hex>`
    or the equivalent SDK helper) so everyone hashes the same bytes that reached
    the gateways.
-2. Run the manifest stub verifier with the signed envelope:
+2. Run the manifest builder verifier with the signed envelope:
    ```
-   cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json \
+   cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json \
      --manifest-signatures-in=fixtures/sorafs_chunker/manifest_signatures.json \
      --json-out=/tmp/manifest_report.json
    ```

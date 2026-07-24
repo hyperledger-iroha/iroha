@@ -79,8 +79,8 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
 
 - `sorafs_manifest_chunk_store --profile=<handle>` — المعلمات المقترحة عبارة عن بيانات تعريف القطعة وملخص البيان وفحوصات PoR مرة أخرى.
 - `sorafs_manifest_chunk_store --json-out=-` — تقرير مخزن القطع الذي يوفر مقارنات آلية للبث المباشر.
-- `sorafs_manifest_stub --chunker-profile=<handle>` - تأكيد بيانات البطاقة وخطط CAR، المقبض الأساسي والأسماء المستعارة التي تتضمن البطاقة.
-- `sorafs_manifest_stub --plan=-` — تم التحقق من `chunk_fetch_specs` تغيير حجم التغذية بعد التحقق من الإزاحات/الملخصات.
+- `sorafs_manifest_builder --chunker-profile=<handle>` - تأكيد بيانات البطاقة وخطط CAR، المقبض الأساسي والأسماء المستعارة التي تتضمن البطاقة.
+- `sorafs_manifest_builder --plan=-` — تم التحقق من `chunk_fetch_specs` تغيير حجم التغذية بعد التحقق من الإزاحات/الملخصات.
 
 مخرجات الأمر (الملخصات، جذور PoR، التجزئات الواضحة) التي يتم إعادة إنتاجها حرفيًا من قبل المراجعين.
 
@@ -108,7 +108,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # manifest + CAR generate کریں اور chunk fetch specs capture کریں
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -117,7 +117,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # محفوظ fetch plan کے ساتھ دوبارہ چلائیں (stale offsets سے بچاتا ہے)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

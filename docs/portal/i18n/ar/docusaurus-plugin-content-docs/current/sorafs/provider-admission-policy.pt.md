@@ -33,7 +33,7 @@ Tarefas de engenharia rastreaveis.
 | التحقق من نقطة النهاية | يجب أن يتم الإعلان عن كل نقطة نهاية من خلال علاقة شهادة mTLS أو QUIC. | تحديد الحمولة Norito `EndpointAttestationV1` وتخزينها من خلال نقطة النهاية داخل حزمة القبول. |
 
 ## تدفق القبول1. **التفكير في الاقتراح**
-   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...`
+   - سطر الأوامر: إضافة `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...`
      المنتج `ProviderAdmissionProposalV1` + حزمة التحقق.
    - التحقق من صحة: ضمان النطاقات المطلوبة، الحصة > 0، التعامل مع وحدة تقطيع الكنسي في `profile_id`.
 2. ** إندوسو دي غوفرانكا **
@@ -53,14 +53,14 @@ Tarefas de engenharia rastreaveis.
 | المنطقة | طريفة | المالك (المالكون) | الحالة |
 |------|--------|----------|--------|
 | اسكيما | حدد `ProviderAdmissionProposalV1`، `ProviderAdmissionEnvelopeV1`، `EndpointAttestationV1` (Norito) في `crates/sorafs_manifest/src/provider_admission.rs`. تم التنفيذ بواسطة `sorafs_manifest::provider_admission` مع مساعدي التحقق.[F:crates/sorafs_manifest/src/provider_admission.rs#L1] | التخزين / الحوكمة | الخلاصة |
-| فيرامينتاس كلي | Estender `sorafs_manifest_stub` مع الكوماندوز الفرعية: `provider-admission proposal`، `provider-admission sign`، `provider-admission verify`. | الأدوات مجموعة العمل | الخلاصة |تدفق CLI الآن هو حزم الشهادات الوسيطة (`--endpoint-attestation-intermediate`)، قم بإصدارها
+| فيرامينتاس كلي | Estender `sorafs_manifest_builder` مع الكوماندوز الفرعية: `provider-admission proposal`، `provider-admission sign`، `provider-admission verify`. | الأدوات مجموعة العمل | الخلاصة |تدفق CLI الآن هو حزم الشهادات الوسيطة (`--endpoint-attestation-intermediate`)، قم بإصدارها
 البايتات الأساسية للاقتراح/المغلف والمصادقة على التوصيات خلال `sign`/`verify`. مشغلي بودم
 إنشاء مجموعة إعلانات مباشرة أو إعادة استخدام الإعلانات المقتولة، ويمكن استخدام ملفات الاختراق
 Fornecidos ao combinar `--council-signature-public-key` com `--council-signature-file` لتسهيل تشغيل السيارة.
 
 ### مرجع CLI
 
-قم بتنفيذ cada comando عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...`.-`proposal`
+قم بتنفيذ cada comando عبر `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...`.-`proposal`
   - الأعلام المطلوبة: `--provider-id=<hex32>`، `--chunker-profile=<namespace.name@semver>`،
     `--stake-pool-id=<hex32>`، `--stake-amount=<amount>`، `--advert-key=<hex32>`،
     `--jurisdiction-code=<ISO3166-1>`، وأصغر من `--endpoint=<kind:host>`.
@@ -94,7 +94,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
     و`--revoked-at`/`--notes` اختياري. يتم تشغيل CLI والتحقق من ملخص المراجعة وإخراج الحمولة
     Norito عبر `--revocation-out` وأطبع ملخص JSON مع الملخص ورقم الاغتيال.
 | التحقق | قم بتنفيذ أداة التحقق المشتركة المستخدمة من خلال Torii والبوابات و`sorafs-node`. إثبات الوحدويات الوحدوية + تكامل CLI.[F:crates/sorafs_manifest/src/provider_admission.rs#L1][F:crates/iroha_torii/src/sorafs/admission.rs#L1] | الشبكات TL / التخزين | الخلاصة || انتيجراكاو Torii | قم بتمرير أداة التحقق من استيعاب الإعلانات رقم Torii، وتسجيل الإعلانات للمناسبات السياسية، وإصدار القياس عن بعد. | الشبكات TL | الخلاصة | Torii قبل نقل مغلفات الإدارة (`torii.sorafs.admission_envelopes_dir`)، التحقق من مراسلات الملخص/التثبيت أثناء التحميل وعرض القياس عن بعد admissao.[F:crates/iroha_torii/src/sorafs/admission.rs#L1][F:crates/iroha_torii/src/sorafs/discovery.rs#L1][F:crates/iroha_torii/src/sorafs/api.rs#L1] |
-| رينوفاكاو | إضافة أمر التجديد/الإصلاح + مساعدي CLI، نشر دليل حلقة الحياة في مستنداتنا (إصدار دليل التشغيل بعد أوامر CLI em `provider-admission renewal`/`revoke`).[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477][docs/source/sorafs/provider_admission_policy.md:120] | التخزين / الحوكمة | الخلاصة |
+| رينوفاكاو | إضافة أمر التجديد/الإصلاح + مساعدي CLI، نشر دليل حلقة الحياة في مستنداتنا (إصدار دليل التشغيل بعد أوامر CLI em `provider-admission renewal`/`revoke`).[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477][docs/source/sorafs/provider_admission_policy.md:120] | التخزين / الحوكمة | الخلاصة |
 | القياس عن بعد | تحديد لوحات المعلومات/التنبيهات `provider_admission` (renovacao ausente, expiracao deenvelve). | إمكانية الملاحظة | م التقدم | يا كونتادور `torii_sorafs_admission_total{result,reason}` موجود؛ لوحات المعلومات/التنبيهات المعلقة.[F:crates/iroha_telemetry/src/metrics.rs#L3798][F:docs/source/telemetry.md#L614] |
 
 ### Runbook de renovacao e revogacao#### جدول أعمال Renovacao (atualizacoes de حصص/طوبولوجيا)
@@ -102,7 +102,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
    تعزيز `--retention-epoch` وتحديث الحصة/نقاط النهاية المطابقة للضرورة.
 2. نفذ
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -111,7 +111,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
      --notes="stake top-up 2025-03"
    ```
    قم بالقيادة الصالحة لمجال السعة/الملف غير المتغير عبر `AdmissionRecord::apply_renewal`،
-   قم بإصدار `ProviderAdmissionRenewalV1` وقم بطباعة الملخصات لسجل الإدارة.[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477][F:crates/sorafs_manifest/src/provider_admission.rs#L422]
+   قم بإصدار `ProviderAdmissionRenewalV1` وقم بطباعة الملخصات لسجل الإدارة.[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477][F:crates/sorafs_manifest/src/provider_admission.rs#L422]
 3. استبدل المظروف الأمامي بـ `torii.sorafs.admission_envelopes_dir`، ثم أكد تجديد Norito/JSON
    لا يوجد مستودع إدارة وإضافة تجزئة للتجديد + فترة الاحتفاظ إلى `docs/source/sorafs/migration_ledger.md`.
 4. قم بإعلام المشغلين بأن هذا هو ما تقوم بمراقبته
@@ -120,7 +120,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
    CI (`ci/check_sorafs_fixtures.sh`) يؤكد أن Norito موجود دائمًا.#### إعادة النظر في حالات الطوارئ
 1. تحديد المغلف المخترق وإصداره مرة أخرى:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -131,7 +131,7 @@ Fornecidos ao combinar `--council-signature-public-key` com `--council-signature
      --json-out=governance/providers/<id>/revocation.json
    ```
    O CLI assina o `ProviderAdmissionRevocationV1`، التحقق من مجموعة الاغتيالات عبر
-   `verify_revocation_signatures` ويتعلق بملخص التجديد.[crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593][F:crates/sorafs_manifest/src/provider_admission.rs#L486]
+   `verify_revocation_signatures` ويتعلق بملخص التجديد.[crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593][F:crates/sorafs_manifest/src/provider_admission.rs#L486]
 2. قم بإزالة المظروف `torii.sorafs.admission_envelopes_dir`، وقم بتوزيع Norito/JSON لاستعادة ذاكرات التخزين المؤقت
    قم بالقبول وتسجيل التجزئة للدافع على مهام الإدارة.
 3. لاحظ `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` لتأكيد نظام التشغيل

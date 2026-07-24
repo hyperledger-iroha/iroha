@@ -82,6 +82,35 @@ Dashboards and alert rules are versioned under `dashboards/` and documented in
 | `torii_request_failures_total{scheme="norito_rpc"}` | Norito RPC error count. | Alert if 5-minute error ratio >2 %. |
 | `telemetry_redaction_override_total` | Overrides issued for telemetry redaction. | Alert immediately (Sev 2) and require compliance ticket. |
 
+### Multilane lifecycle and application evidence
+
+- Treat `/v1/sumeragi/status` as the authoritative consensus status only.
+  Inspect operational lane evidence through `/v1/sumeragi/diagnostics`.
+  `native_amx_participant_applications` is ordered by route/incarnation and
+  reports `certified_pending_carrier`, `committed_evidence_pending`,
+  `durably_applied`, or `conflict`. A `conflict` row is a Sev 1 condition; do
+  not select either same-height identity manually.
+- Before approving drain or scale-in, require the diagnostics frontier to show
+  no ordinary queue work, live reservation, certified-unmerged autonomous
+  bundle, delayed work, pending merge entry, or unapplied/unverifiable Native
+  control. Native participant controls are routing/settlement evidence only;
+  economic effects become final once through the canonical global carrier.
+- Do not remove lane directories, reservation journals, Native receipts,
+  manifests, latest-index files, or autonomous sidecars by hand. Restart repair
+  reconstructs bounded indexes and missing sidecars from authenticated finality
+  evidence. Malformed, oversized, temporary, unexpected, or symlinked
+  artefacts must remain fail-closed for incident capture.
+- A recreated lane ID must have a new incarnation. After recreation, verify
+  that diagnostics and archive paths contain no active reservation, QC,
+  signing claim, marker, sidecar, or merge row from the retired incarnation
+  before admitting traffic.
+- Production transaction admission requires the durable queue-plan journal.
+  If Torii reports `queue_plan_journal_outcome_unknown`, reconcile the exact
+  transaction hash before retrying; a blind resubmission can obscure which
+  authority owns the durable admission. A journal durability fault blocks
+  drain until restart repair either restores the record or leaves the lane
+  explicitly fail-closed.
+
 ## 4. Incident Response
 
 | Severity | Definition | Required actions |

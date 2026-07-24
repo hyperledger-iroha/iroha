@@ -31,7 +31,7 @@ translator: machine-google-reviewed
 ./analyze.py --artifacts ./artifacts
 ```
 
-`run_cli.sh` սկրիպտը կանչում է `sorafs_manifest_stub capacity`՝ կառուցելու համար.
+`run_cli.sh` սկրիպտը կանչում է `sorafs_manifest_builder capacity`՝ կառուցելու համար.
 
 - Քվոտայի բանակցային փաթեթի որոշիչ մատակարարի հայտարարություններ:
 - Բանակցային սցենարին համապատասխանող կրկնօրինակման կարգ:

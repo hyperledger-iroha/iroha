@@ -78,7 +78,7 @@ Sinov:
 |----------|------|----------|
 | Torii Xizmat | `/v1/sorafs/pin` (yuborish), `/v1/sorafs/pin/{cid}` (qidiruv), `/v1/sorafs/aliases` (roʻyxat/bogʻlash), `/v1/sorafs/replication` (buyurtmalar/kvitansiyalarni) oching. Sahifalar + filtrlashni ta'minlang. | Networking TL / Core Infra |
 | Attestatsiya | Javoblarga registr balandligi/xeshini qo'shing; SDK tomonidan iste'mol qilinadigan Norito attestatsiya tuzilmasini qo'shing. | Yadro infra |
-| CLI | `sorafs_manifest_stub` yoki yangi `sorafs_pin` CLI ni `pin submit`, `alias bind`, `order issue`, `registry export` bilan kengaytiring. | Asboblar WG |
+| CLI | `sorafs_manifest_builder` yoki yangi `sorafs_pin` CLI ni `pin submit`, `alias bind`, `order issue`, `registry export` bilan kengaytiring. | Asboblar WG |
 | SDK | Norito sxemasidan mijoz ulanishlarini (Rust/Go/TS) yaratish; integratsiya testlarini qo'shing. | SDK jamoalari |
 
 Operatsiyalar:

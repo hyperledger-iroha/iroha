@@ -868,6 +868,12 @@ pub mod sorafs {
     }
 
     permission! {
+        /// Permission to govern the authoritative `SoraFS` reserve and rent ledger.
+        #[derive(Copy)]
+        pub struct CanSetSorafsReservePolicy;
+    }
+
+    permission! {
         /// Permission to configure, open, resolve, and finalize authoritative `SoraFS` moderation ballots.
         #[derive(Copy)]
         pub struct CanManageSorafsModeration;
@@ -895,6 +901,21 @@ pub mod sorafs {
         /// Permission to operate `SoraFS` repair tickets for a provider.
         #[derive(Copy)]
         pub struct CanOperateSorafsRepair {
+            /// Provider identifier governed by this permission.
+            pub provider_id: ProviderId,
+        }
+    }
+
+    permission! {
+        /// Permission to activate or rotate governed PDP/PoTR validation keys.
+        #[derive(Copy)]
+        pub struct CanManageSorafsProofOutcomePolicy;
+    }
+
+    permission! {
+        /// Permission to record unsigned scheduler-only proof outcomes for a provider.
+        #[derive(Copy)]
+        pub struct CanRecordSorafsProofOutcome {
             /// Provider identifier governed by this permission.
             pub provider_id: ProviderId,
         }

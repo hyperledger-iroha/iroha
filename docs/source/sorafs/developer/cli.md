@@ -47,21 +47,25 @@ sorafs_cli manifest build \
   summary.
 - The JSON output mirrors the Norito payload for easier diffing in code reviews.
 
-## Sign manifests without long-lived keys
+## Authenticate release artifacts
 
 ```bash
-sorafs_cli manifest sign \
-  --manifest artifacts/video.manifest.to \
-  --bundle-out artifacts/video.manifest.bundle.json \
-  --signature-out artifacts/video.manifest.sig \
-  --identity-token-env SIGSTORE_ID_TOKEN
+scripts/release_sorafs_cli.sh \
+  --manifest artifacts/release/release_manifest.json \
+  --external-signer /run/sorafs-release/ed25519-sign \
+  --signing-public-key /run/sorafs-release/release.ed25519.pub \
+  --trusted-signing-fingerprint "$REVIEWED_SIGNER_SHA256" \
+  --release-manifest-verifier /opt/iroha/bin/sorafs-validate \
+  --trusted-release-manifest-verifier-sha256 "$REVIEWED_VERIFIER_SHA256"
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Perfect for CI: combine with GitHub Actions OIDC by setting
-  `--identity-token-provider=github-actions`.
+- Release authenticity applies to the canonical aggregate release manifest, not
+  an individual content `.to` manifest.
+- The signer adapter may use PKCS#11/HSM keys; private signing material remains
+  runtime-only.
+- The raw 32-byte public key, reviewed fingerprint, native verifier path, and
+  reviewed verifier SHA256 are all mandatory. Cosign/OIDC remains a separate
+  provenance layer.
 
 ## Submit manifests to Torii
 

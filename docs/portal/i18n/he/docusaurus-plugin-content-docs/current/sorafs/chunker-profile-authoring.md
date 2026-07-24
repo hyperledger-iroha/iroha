@@ -87,9 +87,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   digest של manifest ובדיקות PoR עם הפרמטרים המוצעים.
 - `sorafs_manifest_chunk_store --json-out=-` — להזרים את דוח ה-chunk-store ל-stdout לצורכי
   השוואות אוטומטיות.
-- `sorafs_manifest_stub --chunker-profile=<handle>` — לאשר ש-manifests ותכניות CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` — לאשר ש-manifests ותכניות CAR
   מטמיעים את ה-handle הקנוני ואת ה-aliases.
-- `sorafs_manifest_stub --plan=-` — להזין מחדש את `chunk_fetch_specs` הקודם כדי לבדוק
+- `sorafs_manifest_builder --plan=-` — להזין מחדש את `chunk_fetch_specs` הקודם כדי לבדוק
   offsets/digests אחרי שינוי.
 
 רשמו את פלט הפקודות (digests, שורשי PoR, hashes של manifest) בהצעה כדי שמבקרים יוכלו לשחזרם מילה במילה.
@@ -126,7 +126,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # ליצור manifest + CAR וללכוד chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -135,7 +135,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # להריץ שוב עם fetch plan שמור (מגן מפני offsets מיושנים)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

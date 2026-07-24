@@ -35,7 +35,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 ## داخلہ ورک فلو
 
 1. ** تجویز بنائیں **
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal ...` شامل کریں
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal ...` شامل کریں
      `ProviderAdmissionProposalV1` + توثیق پیکیج تیار کرنے کے لئے۔
    - توثیق: مطلوبہ فیلڈز ، اسٹیک> 0 ، اور چنکر ہینڈل کو یقینی بنائیں `profile_id` میں معیاری ہیں۔
 2. ** گورننس کی منظوری **
@@ -54,11 +54,11 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 | ڈومین | ٹاسک | مالک (زبانیں) | حیثیت |
 | -------- | ------- | ---------- | -------- |
 | اسکیما | `ProviderAdmissionProposalV1` ، `ProviderAdmissionEnvelopeV1` ، اور `EndpointAttestationV1` (Norito) کی تعریف `crates/sorafs_manifest/src/provider_admission.rs` کے اندر۔ `sorafs_manifest::provider_admission` کے اندر توثیق ایڈز کے ساتھ نافذ کیا گیا ہے اسٹوریج / گورننس | ✅ مکمل |
-| سی ایل آئی ٹولز | `sorafs_manifest_stub` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ |سی ایل آئی پائپ لائن اب انٹرمیڈیٹ سرٹیفکیٹ پیکیجز (`--endpoint-attestation-intermediate`) کی حمایت کرتی ہے ، تجویز/لفافے کے لئے معیاری بائٹس جاری کرتی ہے ، اور `sign`/`verify` کے دوران بورڈ کے دستخطوں کی تصدیق کرتی ہے۔ آپریٹرز اشتہاری اداروں کو براہ راست فراہم کرسکتے ہیں یا دستخط شدہ اشتہارات کو دوبارہ استعمال کرسکتے ہیں ، اور آسان آٹومیشن کے لئے دستخطی فائلیں `--council-signature-public-key` اور `--council-signature-file` کے امتزاج کے ذریعے پاس کی جاسکتی ہیں۔
+| سی ایل آئی ٹولز | `sorafs_manifest_builder` کو سب کامنڈس کے ساتھ بڑھاؤ: `provider-admission proposal` ، `provider-admission sign` ، `provider-admission verify`۔ | ٹولنگ ڈبلیو جی | ✅ |سی ایل آئی پائپ لائن اب انٹرمیڈیٹ سرٹیفکیٹ پیکیجز (`--endpoint-attestation-intermediate`) کی حمایت کرتی ہے ، تجویز/لفافے کے لئے معیاری بائٹس جاری کرتی ہے ، اور `sign`/`verify` کے دوران بورڈ کے دستخطوں کی تصدیق کرتی ہے۔ آپریٹرز اشتہاری اداروں کو براہ راست فراہم کرسکتے ہیں یا دستخط شدہ اشتہارات کو دوبارہ استعمال کرسکتے ہیں ، اور آسان آٹومیشن کے لئے دستخطی فائلیں `--council-signature-public-key` اور `--council-signature-file` کے امتزاج کے ذریعے پاس کی جاسکتی ہیں۔
 
 ### سی ایل آئی حوالہ
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission ...` کے ذریعے ہر کمانڈ پر عمل کریں۔- `proposal`
   - مطلوبہ جھنڈے: `--provider-id=<hex32>` ، `--chunker-profile=<namespace.name@semver>` ،
     `--stake-pool-id=<hex32>` ، `--stake-amount=<amount>` ، `--advert-key=<hex32>` ،
     `--jurisdiction-code=<ISO3166-1>` ، اور کم از کم ایک `--endpoint=<kind:host>`۔
@@ -95,7 +95,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 1. `provider-admission proposal` اور `provider-admission sign` کا استعمال کرتے ہوئے اس کے بعد کی تجویز/اشتہاری جوڑی بنائیں ، `--retention-epoch` میں اضافہ کریں اور ضرورت کے مطابق اسٹیک/اختتامی نقطہ کو اپ ڈیٹ کریں۔
 2. عمل کریں
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -103,7 +103,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   کمانڈ `AdmissionRecord::apply_renewal` کے ذریعے پاور/فائل فیلڈز کی مستقل مزاجی کی جانچ پڑتال کرتا ہے ، `ProviderAdmissionRenewalV1` کو جاری کرتا ہے ، اور لاگ کے لئے ڈائجسٹ پرنٹ کرتا ہے۔ گورننس۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/provider_admission.rs#l422】
+   کمانڈ `AdmissionRecord::apply_renewal` کے ذریعے پاور/فائل فیلڈز کی مستقل مزاجی کی جانچ پڑتال کرتا ہے ، `ProviderAdmissionRenewalV1` کو جاری کرتا ہے ، اور لاگ کے لئے ڈائجسٹ پرنٹ کرتا ہے۔ گورننس۔ 【کریٹس/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#l477 】【 f: creats/sorafs_manifest/src/provider_admission.rs#l422】
 3. `torii.sorafs.admission_envelopes_dir` میں پچھلے لفافے کو تبدیل کریں ، گورننس ریپوزٹری میں تجدید Norito/JSON انسٹال کریں ، اور `docs/source/sorafs/migration_ledger.md` میں تجدید ہیش + برقرار رکھنے کے دور کو شامل کریں۔
 4. آپریٹرز کو مطلع کریں کہ نیا لفافہ متحرک ہوچکا ہے اور اندراج کی تصدیق کے لئے `torii_sorafs_admission_total{result="accepted",reason="stored"}` کی نگرانی کرتا ہے۔
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` کے ذریعے معیاری فکسچر کو دوبارہ تخلیق کریں اور انسٹال کریں۔ CI (`ci/check_sorafs_fixtures.sh`) Norito آؤٹ پٹ کے استحکام کی جانچ کرتا ہے۔
@@ -111,7 +111,7 @@ SoraFS اور اس کی درخواست میں اسٹوریج فراہم کرنے
 #### ایمرجنسی منسوخی
 1. سمجھوتہ کرنے والے لفافے کی شناخت کریں اور منسوخ جاری کریں:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \

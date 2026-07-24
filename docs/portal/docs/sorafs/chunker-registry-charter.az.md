@@ -61,7 +61,7 @@ SDKs). O, ləqəbi tətbiq edir və yoxlanılan invariantları idarə edir
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_car --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_car --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_car --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Qurğular, təklif, determinizm hesabatı və reyestrdən ibarət PR təqdim edin
@@ -100,14 +100,14 @@ SDKs). O, ləqəbi tətbiq edir və yoxlanılan invariantları idarə edir
 
 ## Alət gözləntiləri
 
-- `sorafs_manifest_chunk_store` və `sorafs_manifest_stub` ifşa edir:
+- `sorafs_manifest_chunk_store` və `sorafs_manifest_builder` ifşa edir:
   - Reyestr yoxlaması üçün `--list-profiles`.
   - `--promote-profile=<handle>` istifadə olunan kanonik metadata blokunu yaratmaq üçün
     profili təbliğ edərkən.
   - Hesabatları stdout-a ötürmək üçün `--json-out=-`, təkrarlana bilən nəzərdən keçirməyə imkan verir
     loglar.
 - `ensure_charter_compliance()` müvafiq ikili fayllarda işə salındıqda çağırılır
-  (`manifest_chunk_store`, `provider_advert_stub`). CI testləri yeni olduqda uğursuz olmalıdır
+  (`manifest_chunk_store`, `sorafs_provider_advert`). CI testləri yeni olduqda uğursuz olmalıdır
   yazılar nizamnaməni pozur.
 
 ## Qeydlərin aparılması

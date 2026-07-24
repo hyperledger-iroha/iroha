@@ -59,7 +59,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
 - Общие helpers (`CapacityMetadataEntry`, `PricingScheduleV1`, валидаторы lane/assignment/SLA) дают детерминированную проверку ключей и репорты ошибок, которые могут переиспользовать CI и downstream tooling.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` теперь публикует on-chain snapshot через `/v1/sorafs/capacity/state`, объединяя декларации providers и записи fee ledger за детерминированным Norito JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Покрытие валидации проверяет соблюдение канонических handles, обнаружение дубликатов, границы по lane, guards назначения репликации и проверки диапазонов телеметрии, чтобы регрессии всплывали сразу в CI.【crates/sorafs_manifest/src/capacity.rs:792】
-- Operator tooling: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` конвертирует человекочитаемые specs в канонические Norito payloads, base64 blobs и JSON summaries, чтобы операторы могли подготовить fixtures `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и replication order fixtures с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Reference fixtures живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_stub -- capacity replication-order`.
+- Operator tooling: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` конвертирует человекочитаемые specs в канонические Norito payloads, base64 blobs и JSON summaries, чтобы операторы могли подготовить fixtures `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` и replication order fixtures с локальной валидацией.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Reference fixtures живут в `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) и генерируются через `cargo run -p sorafs_car --bin sorafs_manifest_builder -- capacity replication-order`.
 
 ### 2. Интеграция control plane
 
@@ -153,7 +153,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   вместе с governance packets.
 
 ### Доказательства dispute и slashing
-- Подавайте disputes через `sorafs_manifest_stub capacity dispute` (tests:
+- Подавайте disputes через `sorafs_manifest_builder capacity dispute` (tests:
   `cargo test -p sorafs_car --test capacity_cli`), чтобы payloads оставались каноничными.
 - Запускайте `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` и наборы
   штрафов (`record_capacity_telemetry_penalises_persistent_under_delivery`), чтобы доказать
@@ -162,7 +162,7 @@ generator: docs/portal/scripts/sync-i18n.mjs
   эскалации; привязывайте approvals strike обратно в validation report.
 
 ### Смоук-тесты онбординга и выхода providers
-- Регенерируйте artefacts деклараций/телеметрии через `sorafs_manifest_stub capacity ...` и
+- Регенерируйте artefacts деклараций/телеметрии через `sorafs_manifest_builder capacity ...` и
   прогоняйте CLI tests перед подачей (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Отправляйте через Torii (`/v1/sorafs/capacity/declare`), затем фиксируйте
   `/v1/sorafs/capacity/state` плюс скриншоты Grafana. Следуйте flow выхода в

@@ -95,9 +95,9 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   manifest digest, PoR ამოწმებს შემოთავაზებული პარამეტრებით.
 - `sorafs_manifest_chunk_store --json-out=-` – სტრიმინგი chunk-store ანგარიში
   stdout ავტომატური შედარებისთვის.
-- `sorafs_manifest_stub --chunker-profile=<handle>` – დაადასტურეთ მანიფესტები და CAR
+- `sorafs_manifest_builder --chunker-profile=<handle>` – დაადასტურეთ მანიფესტები და CAR
   გეგმებში ჩაშენებულია კანონიკური სახელური პლუს მეტსახელები.
-- `sorafs_manifest_stub --plan=-` – მიაწოდეთ წინა `chunk_fetch_specs`
+- `sorafs_manifest_builder --plan=-` – მიაწოდეთ წინა `chunk_fetch_specs`
   ცვლილებების შემდგომი ოფსეტების/დაჯესტების შესამოწმებლად.
 
 ჩაწერეთ ბრძანების გამომავალი (დაიჯესტები, PoR ფესვები, მანიფესტის ჰეშები) წინადადებაში
@@ -138,7 +138,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
   --json-out=- --por-json-out=- fixtures/sorafs_chunker/input.bin
 
 # Generate manifest + CAR and capture chunk fetch specs
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --chunk-fetch-plan-out=chunk_plan.json \
@@ -147,7 +147,7 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --json-out=sf2.report.json
 
 # Re-run using the saved fetch plan (guards against stale offsets)
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
   fixtures/sorafs_chunker/input.bin \
   --chunker-profile=sorafs.sf2@1.0.0 \
   --plan=chunk_plan.json --json-out=-

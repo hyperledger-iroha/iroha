@@ -54,7 +54,7 @@ SDK). یہ alias اور gérer les invariants appliquer کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - Calendrier, proposition, rapport de déterminisme, mises à jour du registre et soumission des relations publiques.
@@ -87,12 +87,12 @@ SDK). یہ alias اور gérer les invariants appliquer کرتی ہے جنہیں
    - Suppression des correctifs et du vote du conseil et de l'approbation du conseil
    - Document sur les étapes d'atténuation des risques du TWG et mise à jour du journal des incidents
 
-## Attentes en matière d'outillage- `sorafs_manifest_chunk_store` et `sorafs_manifest_stub` exposent les détails :
+## Attentes en matière d'outillage- `sorafs_manifest_chunk_store` et `sorafs_manifest_builder` exposent les détails :
   - Inspection du registre کے لیے `--list-profiles`.
   - Le profil favorise le bloc de métadonnées canoniques par `--promote-profile=<handle>`.
   - Rapports sur la sortie standard et le flux de données pour `--json-out=-`, journaux d'examen reproductibles en ligne
 - Fichiers binaires pertinents `ensure_charter_compliance()` pour le démarrage et le démarrage
-  (`manifest_chunk_store`, `provider_advert_stub`). Les tests CI échouent ou échouent
+  (`manifest_chunk_store`, `sorafs_provider_advert`). Les tests CI échouent ou échouent
   Charte des entrées نئی کی خلاف ورزی کریں۔
 
 ## Tenue de registres

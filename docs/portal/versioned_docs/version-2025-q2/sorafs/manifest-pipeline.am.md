@@ -57,7 +57,7 @@ JSON ለመቅዳት እነዚያ ባንዲራዎች ከ `--por-proof-out` ወ�
 - የምክር ቤት ፊርማዎች እና አማራጭ ሜታዳታ (ለምሳሌ የግንባታ መታወቂያዎች)።
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
+cargo run -p sorafs_manifest --bin sorafs-manifest-builder -- \
   ./payload.bin \
   --chunker-profile=sorafs.sf1@1.0.0 \
   --manifest-out=payload.manifest \

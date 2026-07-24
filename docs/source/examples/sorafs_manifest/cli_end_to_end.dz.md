@@ -14,7 +14,7 @@ translator: machine-google-reviewed
 # SoraFS མ་པ་སི་ཨེལ་ཨའི་ མཇུག་ལས་མཇུག་-མཐའ་མཚམས།
 
 དཔེ་འདི་གིས་ ཡིག་ཆ་ཚུ་ SoraFS ལུ་ལག་ལེན་འཐབ་སྟེ་ དཔར་བསྐྲུན་འབད་ཐོག་ལས་ འགྱོཝ་ཨིན།
-`sorafs_manifest_stub` དང་མཉམ་དུ་ གཏན་འབེབས་ཆ་ཤས་སྒྲིག་བཀོད་དང་མཉམ་དུ།
+`sorafs_manifest_builder` དང་མཉམ་དུ་ གཏན་འབེབས་ཆ་ཤས་སྒྲིག་བཀོད་དང་མཉམ་དུ།
 SoraFS བཟོ་བཀོད་ RFC ནང་གསལ་བཀོད་འབད་ཡོདཔ། རྒྱུན་འབབ་འདི་གིས་ རྙིང་མའི་མི་རབས་འདི་ཁྱབ་ཨིན།
 རེ་བ་བརྟག་དཔྱད་དང་ འཐོབ་ཚུགས།
 སྡེ་ཚན་ཚུ་གིས་ CI ནང་ གོམ་པ་གཅིག་སྦེ་ བཙུགས་ཚུགས།
@@ -30,7 +30,7 @@ SoraFS བཟོ་བཀོད་ RFC ནང་གསལ་བཀོད་འ�
 ## གོ་རིམ་༡ པ་ — གསལ་སྟོན་དང་ སི་ཨར་ མཚན་རྟགས་ དེ་ལས་ འཐོབ་ཚུགས་པའི་འཆར་གཞི་བཟོ་ནི།
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-out target/sorafs/docs.manifest_signatures.json \
   --car-out target/sorafs/docs.car \
@@ -91,7 +91,7 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
 གསལ་སྟོན་འདི་ CLI བརྒྱུད་དེ་བཙུགས།
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --plan=target/sorafs/docs.fetch_plan.json \
   --manifest-out target/sorafs/docs.manifest \
   --manifest-signatures-in target/sorafs/docs.manifest_signatures.json \

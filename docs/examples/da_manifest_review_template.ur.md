@@ -31,7 +31,7 @@ CI artefacts کے ساتھ مکمل فائل منسلک کریں۔
 
 ## دستخطوں کی توثیق
 - مینی فیسٹ حاصل کرنے کا سورس / storage ٹکٹ: `<hex>`
-- توثیق کمانڈ/آؤٹ پٹ: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (لاگ اقتباس منسلک؟)
+- توثیق کمانڈ/آؤٹ پٹ: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (لاگ اقتباس منسلک؟)
 - `manifest_blake3` جو ٹول نے رپورٹ کیا: `<digest>`
 - `chunk_digest_sha3_256` جو ٹول نے رپورٹ کیا: `<digest>`
 - کونسل سائنر ملٹی ہیشز:

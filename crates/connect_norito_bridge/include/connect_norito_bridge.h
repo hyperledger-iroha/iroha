@@ -8,6 +8,7 @@
 #ifndef CONNECT_NORITO_BRIDGE_H
 #define CONNECT_NORITO_BRIDGE_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -21,6 +22,7 @@ extern "C" {
 #define CONNECT_NORITO_ERR_KAGEMUSHA_PROVE -311
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_UNAVAILABLE -316
 #define CONNECT_NORITO_ERR_KAGEMUSHA_RECURSIVE_SPEND_V4_ARTIFACT -317
+#define CONNECT_NORITO_ERR_KAGEMUSHA_BUSY -318
 #define CONNECT_NORITO_ERR_SORAFS_REFERENCE -114
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SCAFFOLD -501
 #define CONNECT_NORITO_ERR_DETACHED_TRANSACTION_SIGNATURE -502
@@ -50,6 +52,17 @@ extern "C" {
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_COMMITMENT 1
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_CHALLENGE 2
 #define CONNECT_NORITO_SORAFS_REFERENCE_PDP_KIND_PROOF 3
+#define CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_MAX_BLOCKS_V1 64
+#define CONNECT_NORITO_SORAFS_REFERENCE_GOVERNANCE_DAG_CID_BYTES_V1 32
+#define CONNECT_NORITO_SORAFS_REFERENCE_MAX_INPUT_BYTES_V1 67108864
+#define CONNECT_NORITO_SORAFS_REFERENCE_MAX_LABEL_BYTES_V1 1024
+
+typedef struct ConnectNoritoSorafsReferenceInput {
+  const uint8_t* bytes_ptr;
+  size_t bytes_len;
+  const uint8_t* label_ptr;
+  size_t label_len;
+} ConnectNoritoSorafsReferenceInput;
 
 // ---------------- Bridge ABI ----------------
 uint32_t connect_norito_bridge_abi_version(void);
@@ -993,6 +1006,34 @@ int32_t connect_norito_sorafs_reference_validate_hedging_json(
     uint64_t generated_at,
     uint8_t** out_json_ptr,
     unsigned long* out_json_len);
+
+// Validates one GovernanceDagBlockV1 and returns ValidationOutcomeV1 JSON.
+// expected_block_cid must be empty or exactly 32 bytes.
+// The output must be released with connect_norito_free.
+int32_t connect_norito_sorafs_reference_validate_governance_dag_block_json(
+    const uint8_t* bytes_ptr,
+    size_t bytes_len,
+    const uint8_t* label_ptr,
+    size_t label_len,
+    const uint8_t* expected_block_cid_ptr,
+    size_t expected_block_cid_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    size_t* out_json_len);
+
+// Validates a signed GovernanceDagHeadV1 against an ordered root history or
+// exact checkpoint-anchored tail (at most 64 supplied blocks).
+// The output must be released with connect_norito_free.
+int32_t connect_norito_sorafs_reference_validate_governance_dag_head_chain_json(
+    const uint8_t* head_ptr,
+    size_t head_len,
+    const uint8_t* head_label_ptr,
+    size_t head_label_len,
+    const ConnectNoritoSorafsReferenceInput* blocks_ptr,
+    size_t blocks_len,
+    uint64_t generated_at,
+    uint8_t** out_json_ptr,
+    size_t* out_json_len);
 
 int32_t connect_norito_sorafs_reference_sign_orderbook_payload(
     uint32_t kind,

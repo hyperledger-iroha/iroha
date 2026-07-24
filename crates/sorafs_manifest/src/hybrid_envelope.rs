@@ -3,7 +3,7 @@
 //! This module wires the `iroha_crypto::hybrid` primitives into a Norito-serialisable
 //! envelope so manifests can be sealed with a hybrid X25519 + ML-KEM-768 exchange
 //! and ChaCha20-Poly1305 DEM. Gateways and SDKs use the helpers exposed here as
-//! part of the `sorafs_manifest_stub` CLI and Torii publishing flows to wrap and
+//! part of the `sorafs_manifest_builder` CLI and Torii publishing flows to wrap and
 //! unwrap manifest payloads.
 
 use std::str::FromStr;

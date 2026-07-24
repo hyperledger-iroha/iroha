@@ -27,7 +27,7 @@ Norito ペイロードと CI アーティファクトと一緒に完成版を添
 
 ## 署名検証
 - マニフェスト取得元 / storage チケット: `<hex>`
-- 検証コマンド/出力: `cargo run -p sorafs_car --bin sorafs-manifest-stub -- manifest.json --manifest-signatures-in=manifest_signatures.json` (ログ抜粋を添付?)
+- 検証コマンド/出力: `cargo run -p sorafs_car --bin sorafs-manifest-builder -- manifest.json --manifest-signatures-in=manifest_signatures.json` (ログ抜粋を添付?)
 - `manifest_blake3` (ツール報告): `<digest>`
 - `chunk_digest_sha3_256` (ツール報告): `<digest>`
 - 評議会署名者のマルチハッシュ:

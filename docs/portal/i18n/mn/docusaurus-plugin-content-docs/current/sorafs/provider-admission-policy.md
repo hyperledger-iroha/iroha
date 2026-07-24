@@ -41,7 +41,7 @@ SoraFS Architecture RFC-д тодорхойлсон бөгөөд үлдсэн а
 ## Элсэлтийн ажлын явц
 
 1. **Санал үүсгэх**
-   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` нэмнэ үү
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission proposal …` нэмнэ үү
      `ProviderAdmissionProposalV1` + баталгаажуулалтын багцыг үйлдвэрлэж байна.
    - Баталгаажуулалт: шаардлагатай талбаруудыг баталгаажуулах, гадас > 0, `profile_id` дахь каноник chunker бариул.
 2. **Засаглалын баталгаа**
@@ -61,7 +61,7 @@ SoraFS Architecture RFC-д тодорхойлсон бөгөөд үлдсэн а
 | Талбай | Даалгавар | Эзэмшигч(үүд) | Статус |
 |------|------|----------|--------|
 | Схем | `crates/sorafs_manifest/src/provider_admission.rs` доор `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) гэж тодорхойл. `sorafs_manifest::provider_admission`-д баталгаажуулалтын туслахуудаар хэрэгжүүлсэн.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Хадгалах / Засаглал | ✅ Дууссан |
-| CLI хэрэгсэл | `sorafs_manifest_stub`-г дараах дэд командуудаар сунгана: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Багажны WG | ✅ |
+| CLI хэрэгсэл | `sorafs_manifest_builder`-г дараах дэд командуудаар сунгана: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Багажны WG | ✅ |
 
 CLI урсгал одоо завсрын гэрчилгээний багцуудыг (`--endpoint-attestation-intermediate`) хүлээн авч, ялгаруулдаг
 каноник санал/дугтуйны байт, мөн `sign`/`verify` үед зөвлөлийн гарын үсгийг баталгаажуулдаг. Операторууд чадна
@@ -70,7 +70,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 
 ### CLI лавлагаа
 
-`cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`-ээр команд бүрийг ажиллуул.
+`cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission …`-ээр команд бүрийг ажиллуул.
 
 - `proposal`
   - Шаардлагатай тугнууд: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
@@ -109,7 +109,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
     тойм болон гарын үсгийн тоог авах.
 | Баталгаажуулалт | Torii, гарцууд болон `sorafs-node` ашигладаг хуваалцсан баталгаажуулагчийг хэрэгжүүлнэ үү. Нэгж + CLI интеграцийн тестээр хангах.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Сүлжээний TL / Хадгалах | ✅ Дууссан |
 | Torii интеграци | Баталгаажуулагчийг Torii зар сурталчилгаа руу оруулах, бодлогогүй зар сурталчилгаанаас татгалзах, телеметрийг цацах. | Сүлжээний TL | ✅ Дууссан | Torii одоо засаглалын дугтуйг (`torii.sorafs.admission_envelopes_dir`) ачаалж, залгих явцад хураангуй/гарын үсэг тохирч байгааг шалгаж, хүлээн авалтыг илрүүлдэг. телеметр.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.
-| Шинэчлэл | Шинэчлэх / хүчингүй болгох схем + CLI туслахуудыг нэмж, амьдралын мөчлөгийн удирдамжийг баримт бичигт нийтлэх (доорх runbook болон CLI тушаалуудыг үзнэ үү. `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120 Хадгалах / Засаглал | ✅ Дууссан |
+| Шинэчлэл | Шинэчлэх / хүчингүй болгох схем + CLI туслахуудыг нэмж, амьдралын мөчлөгийн удирдамжийг баримт бичигт нийтлэх (доорх runbook болон CLI тушаалуудыг үзнэ үү. `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md: |120 Хадгалах / Засаглал | ✅ Дууссан |
 | Телеметрийн | `provider_admission` хяналтын самбар ба сэрэмжлүүлгийг (сунгалт байхгүй, дугтуйны хугацаа дууссан) тодорхойлно уу. | Ажиглалт | 🟠 Явж байна | `torii_sorafs_admission_total{result,reason}` тоолуур байгаа; хяналтын самбар/сэрэмжлүүлэг хүлээгдэж байна.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
 ### Шинэчлэх, хүчингүй болгох Runbook
 
@@ -117,7 +117,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 1. `provider-admission proposal` болон `provider-admission sign`-ээр залгамжлагч санал/зар сурталчилгааны хослолыг бүтээж, `--retention-epoch`-ийг нэмэгдүүлж, бооцоо/төгсгөлийн цэгүүдийг шаардлагатай бол шинэчилнэ үү.
 2. Гүйцэтгэх  
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      renewal \
      --previous-envelope=governance/providers/<id>/envelope.to \
      --envelope=governance/providers/<id>/envelope_next.to \
@@ -127,7 +127,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
    ```
    Тус тушаал нь өөрчлөгдөөгүй чадвар/профайлын талбаруудыг дамжуулан баталгаажуулдаг
    `AdmissionRecord::apply_renewal`, `ProviderAdmissionRenewalV1` ялгаруулж, дижестийг хэвлэдэг.
-   засаглалын бүртгэл.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+   засаглалын бүртгэл.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
 3. Өмнөх дугтуйг `torii.sorafs.admission_envelopes_dir`-д сольж, Norito/JSON шинэчлэлтийг засаглалын репозиторт хийж, `docs/source/sorafs/migration_ledger.md`-д шинэчлэх хэш + хадгалах үеийг хавсаргана уу.
 4. Операторуудад шинэ дугтуй ажиллаж байгааг мэдэгдэж, залгисан эсэхийг баталгаажуулахын тулд `torii_sorafs_admission_total{result="accepted",reason="stored"}`-д хяналт тавина.
 5. `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`-ээр дамжуулан каноник бэхэлгээг сэргээн засварлах; CI (`ci/check_sorafs_fixtures.sh`) нь Norito гаралтыг тогтвортой байлгахыг баталгаажуулдаг.
@@ -135,7 +135,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
 #### Яаралтай хүчингүй болгох
 1. Эвдэрсэн дугтуйг тодорхойлж, хүчингүй болгох:
    ```bash
-   cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
+   cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- provider-admission \
      revoke \
      --envelope=governance/providers/<id>/envelope.to \
      --reason="endpoint compromise" \
@@ -146,7 +146,7 @@ CLI урсгал одоо завсрын гэрчилгээний багцууд
      --json-out=governance/providers/<id>/revocation.json
    ```
    CLI нь `ProviderAdmissionRevocationV1`-д гарын үсэг зурж, гарын үсгийн багцыг баталгаажуулна.
-   `verify_revocation_signatures`, мөн хүчингүй болгох тоймыг мэдээлдэг.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48
+   `verify_revocation_signatures`, мөн хүчингүй болгох тоймыг мэдээлдэг.【crates/sorafs_car/src/bin/sorafs_manifest_builder/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#48
 2. `torii.sorafs.admission_envelopes_dir`-аас дугтуйг авч, Norito/JSON-г хүчингүй болгосныг хүлээн авах кэш рүү тарааж, шалтгааны хэшийг удирдлагын протоколд тэмдэглэнэ үү.
 3. `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`-г үзэхийн тулд кэш нь хүчингүй болсон зарыг устгаж байгааг баталгаажуулах; хүчингүй болгох олдворуудыг тохиолдлын эргэн тойронд байлгах.
 

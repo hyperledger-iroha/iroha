@@ -63,7 +63,7 @@ SF-2c жол картасының элементі сақтау орны бас�
 - Ортақ көмекшілер (`CapacityMetadataEntry`, `PricingScheduleV1`, жолақ/тағайындау/SLA валидаторлары) CI және төменгі ағындық құралдар қайта пайдалануға болатын детерминирленген кілт тексеруін және қате туралы есеп береді.【crates/sorafs_manifest/src/capacity.rs:230】
 - `PinProviderRegistry` енді `/v1/sorafs/capacity/state` арқылы тізбектегі суретті көрсетеді, Norito детерминирленген артындағы провайдер декларациялары мен төлем журналының жазбаларын біріктіреді. JSON.【crates/iroha_torii/src/sorafs/registry.rs:17】【crates/iroha_torii/src/sorafs/api.rs:64】
 - Валидацияны қамту жаттығулары канондық өңдеуді орындауды, қайталануды анықтауды, әр жолдағы шекараларды, репликация тағайындау қорғаушыларын және телеметрия диапазонын тексереді, осылайша регрессиялар CI ішінде бірден пайда болады.【crates/sorafs_manifest/src/capacity.rs:792】
-- Оператор құралдары: `sorafs_manifest_stub capacity {declaration, telemetry, replication-order}` адам оқи алатын сипаттамаларды канондық Norito пайдалы жүктемелеріне, base64 блобтарына және JSON қорытындыларына түрлендіреді, осылайша операторлар `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` және репликацияны жергілікті түзету тәртібімен реттей алады. validation.【crates/sorafs_car/src/bin/sorafs_manifest_stub/capacity.rs:1】 Анықтамалық қондырғылар `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ішінде жұмыс істейді және I000.08NI арқылы жасалады.
+- Оператор құралдары: `sorafs_manifest_builder capacity {declaration, telemetry, replication-order}` адам оқи алатын сипаттамаларды канондық Norito пайдалы жүктемелеріне, base64 блобтарына және JSON қорытындыларына түрлендіреді, осылайша операторлар `/v1/sorafs/capacity/declare`, `/v1/sorafs/capacity/telemetry` және репликацияны жергілікті түзету тәртібімен реттей алады. validation.【crates/sorafs_car/src/bin/sorafs_manifest_builder/capacity.rs:1】 Анықтамалық қондырғылар `fixtures/sorafs_manifest/replication_order/` (`order_v1.json`, `order_v1.to`) ішінде жұмыс істейді және I000.08NI арқылы жасалады.
 
 ### 2. Басқару жазықтығының интеграциясы
 
@@ -155,7 +155,7 @@ SF-2c жол картасының элементі сақтау орны бас�
   басқару пакеттерімен қатар.
 
 ### Дау және дәлелдемелерді кесу
-- `sorafs_manifest_stub capacity dispute` арқылы файл даулары (сынақтар:
+- `sorafs_manifest_builder capacity dispute` арқылы файл даулары (сынақтар:
   `cargo test -p sorafs_car --test capacity_cli`) сондықтан пайдалы жүктемелер канондық болып қалады.
 - `cargo test -p iroha_core -- capacity_dispute_replay_is_deterministic` және айыппұлды іске қосыңыз
   люкс (`record_capacity_telemetry_penalises_persistent_under_delivery`) дауларды дәлелдеу және
@@ -164,7 +164,7 @@ SF-2c жол картасының элементі сақтау орны бас�
   сілтеме ескертулерін растауларды тексеру есебіне қайта қосыңыз.
 
 ### Провайдердің түтінге отырғызу және шығу сынақтары
-- `sorafs_manifest_stub capacity ...` көмегімен декларация/телеметриялық артефактілерді қалпына келтіріп, қайта ойнатыңыз
+- `sorafs_manifest_builder capacity ...` көмегімен декларация/телеметриялық артефактілерді қалпына келтіріп, қайта ойнатыңыз
   жіберу алдында CLI сынақтары (`cargo test -p sorafs_car --test capacity_cli -- capacity_declaration`).
 - Torii (`/v1/sorafs/capacity/declare`) арқылы жіберіңіз, содан кейін `/v1/sorafs/capacity/state` плюс суретін түсіріңіз
   Grafana скриншоттары. `docs/source/sorafs/capacity_onboarding_runbook.md` ішіндегі шығу ағынын орындаңыз.

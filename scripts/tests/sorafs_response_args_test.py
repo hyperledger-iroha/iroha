@@ -13,6 +13,7 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 from sorafs_response_args import (  # noqa: E402
+    ARGFILE_CHANGED_DIAGNOSTIC,
     ARGFILE_INSPECTION_DIAGNOSTIC,
     ARGFILE_MISSING_DIAGNOSTIC,
     ARGFILE_PARENT_INSPECTION_DIAGNOSTIC,
@@ -274,8 +275,8 @@ def test_response_file_read_failure_is_stable_value_error(
     args_file.write_text("--dry-run\n", encoding="utf-8")
     original_open = os.open
 
-    def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == args_file:
+    def open_path(path: str | Path, flags: int, *args, **kwargs):
+        if path == args_file.name and kwargs.get("dir_fd") is not None:
             raise RuntimeError("argfile read denied")
         return original_open(path, flags, *args, **kwargs)
 
@@ -300,8 +301,8 @@ def test_response_file_read_failure_sanitizes_malformed_error(
     original_open = os.open
     bad_message = "argfile read denied\nsecret"
 
-    def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == args_file:
+    def open_path(path: str | Path, flags: int, *args, **kwargs):
+        if path == args_file.name and kwargs.get("dir_fd") is not None:
             raise RuntimeError(bad_message)
         return original_open(path, flags, *args, **kwargs)
 
@@ -326,8 +327,8 @@ def test_response_file_read_uses_no_follow_open_flags(
     original_open = os.open
     captured: dict[str, int] = {}
 
-    def open_path(path: Path, flags: int, *args, **kwargs):
-        if path == args_file:
+    def open_path(path: str | Path, flags: int, *args, **kwargs):
+        if path == args_file.name and kwargs.get("dir_fd") is not None:
             captured["flags"] = flags
         return original_open(path, flags, *args, **kwargs)
 
@@ -339,6 +340,68 @@ def test_response_file_read_uses_no_follow_open_flags(
     assert captured["flags"] & os.O_RDONLY == os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
         assert captured["flags"] & os.O_NOFOLLOW
+
+
+def test_response_file_parent_swap_during_read_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    live_parent = tmp_path / "live"
+    pinned_parent = tmp_path / "pinned"
+    live_parent.mkdir()
+    args_file = live_parent / "reviewed.args"
+    args_file.write_text("--trusted reviewed\n", encoding="utf-8")
+    original_read = os.read
+    swapped = False
+
+    def swap_parent_then_read(fd: int, size: int) -> bytes:
+        nonlocal swapped
+        if not swapped:
+            live_parent.rename(pinned_parent)
+            live_parent.mkdir()
+            (live_parent / "reviewed.args").write_text(
+                "--attacker substituted\n",
+                encoding="utf-8",
+            )
+            swapped = True
+        return original_read(fd, size)
+
+    monkeypatch.setattr(os, "read", swap_parent_then_read)
+    try:
+        expand_response_args([f"@{args_file}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == ARGFILE_CHANGED_DIAGNOSTIC
+        assert "trusted" not in str(error)
+        assert "attacker" not in str(error)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("parent-swapped response file was accepted")
+
+
+def test_response_file_rejects_hardlinks_and_writable_inputs(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.args"
+    source.write_text("--dry-run\n", encoding="utf-8")
+    hardlink = tmp_path / "hardlink.args"
+    os.link(source, hardlink)
+    try:
+        expand_response_args([f"@{hardlink}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == "@ARGFILE must not be hardlinked"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("hardlinked response file was accepted")
+
+    source.unlink()
+    hardlink.unlink()
+    writable = tmp_path / "writable.args"
+    writable.write_text("--dry-run\n", encoding="utf-8")
+    writable.chmod(0o666)
+    try:
+        expand_response_args([f"@{writable}"], EvidenceArgumentParser())
+    except ValueError as error:
+        assert str(error) == "@ARGFILE must not be group- or world-writable"
+    else:  # pragma: no cover - defensive
+        raise AssertionError("writable response file was accepted")
 
 
 def test_response_file_non_utf8_bytes_fail_stably(tmp_path: Path) -> None:

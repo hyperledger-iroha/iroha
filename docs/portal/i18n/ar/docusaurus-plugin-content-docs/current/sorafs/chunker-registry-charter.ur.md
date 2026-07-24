@@ -54,7 +54,7 @@ Sidebar_label: ميثاق تسجيل Chunker
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
        --promote-profile=<handle> --json-out=-
-     cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
+     cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- \
        --chunker-profile=<handle> --json-out=-
      ```
    - المباريات والاقتراح وتقرير الحتمية وتحديثات التسجيل تتضمن تقديم العلاقات العامة.
@@ -87,12 +87,12 @@ Sidebar_label: ميثاق تسجيل Chunker
    - إزالة أو الإصلاحات العاجلة من خلال تصويت المجلس وموافقة الأغلبية.
    - وثيقة TWG لخطوات تخفيف المخاطر وتحديث سجل الحوادث.
 
-## توقعات الأدوات- `sorafs_manifest_chunk_store` و `sorafs_manifest_stub` يعرض البطاقة:
+## توقعات الأدوات- `sorafs_manifest_chunk_store` و `sorafs_manifest_builder` يعرض البطاقة:
   - فحص التسجيل لـ `--list-profiles`.
   - الترويج للملف الشخصي لكرتے وقت كتلة البيانات التعريفية الأساسية بنانے کے لیے `--promote-profile=<handle>`.
   - التقارير القياسية للدفق لـ `--json-out=-`، حتى سجلات المراجعة القابلة للتكرار قد تكون كذلك.
 - `ensure_charter_compliance()` الثنائيات ذات الصلة لبدء التشغيل
-  (`manifest_chunk_store`، `provider_advert_stub`). قد تفشل اختبارات CI مرة أخرى
+  (`manifest_chunk_store`، `sorafs_provider_advert`). قد تفشل اختبارات CI مرة أخرى
   ميثاق الإدخالات الجديد يخالف قواعد اللعبة.
 
 ## حفظ السجلات

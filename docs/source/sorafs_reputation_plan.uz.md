@@ -4,7 +4,7 @@ direction: ltr
 source: docs/source/sorafs_reputation_plan.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 1dbaf6dee5c0c11435896b12ed1a22f3b2785cceaa08a28be0f876c87679549d
+source_hash: 66761ca9f53d9f58fe9b175d4ba4863fef78ac1efc186f6e53202c64b62000e4
 source_last_modified: 2026-07-05T01:12:33.279909+00:00
 translation_last_reviewed: 2026-07-05
 source_mtime: 2026-07-05T01:12:33.279909+00:00

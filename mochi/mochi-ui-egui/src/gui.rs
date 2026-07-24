@@ -14333,6 +14333,8 @@ mod tests {
                     allowed_ids: vec!["alpha-upgrade".to_owned()],
                 }),
             }],
+            native_amx_participant_applications: Vec::new(),
+            autonomous_lane_executions: Vec::new(),
         }
     }
 

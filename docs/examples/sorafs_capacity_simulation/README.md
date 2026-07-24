@@ -19,7 +19,7 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+The `run_cli.sh` script invokes `sorafs_manifest_builder capacity` to build:
 
 - Deterministic provider declarations for the quota negotiation fixture set.
 - A replication order matching the negotiation scenario.

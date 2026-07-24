@@ -43,14 +43,14 @@ SoraFS پر مبنی اشاعت کے لئے نمونے۔
 | ----- | ------ | ---------- | ---- | ------- |
 | ریہرسل فکسچر | M0 | `fixtures/sorafs_chunker` کے ساتھ مقامی حصہ ڈائجسٹوں کا موازنہ کرنے والے ہفتہ وار خشک رنز۔ رپورٹ کو `docs/source/sorafs/reports/` پر شائع کریں۔ | اسٹوریج فراہم کرنے والے | `determinism-<date>.md` پاس/فیل میٹرکس کے ساتھ۔ |
 | دستخطوں کو نافذ کریں | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` گر جاتا ہے جب دستخط یا ظاہر ہوتا ہے۔ دیو اوور رائڈس کے لئے PR میں چھوٹ گورننس کی ضرورت ہوتی ہے۔ | ٹولنگ ڈبلیو جی | CI لاگ ، چھوٹ کے ٹکٹ سے لنک کریں (اگر قابل اطلاق ہو)۔ |
-| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_stub` کو آؤٹ پٹ کے لئے واضح توقعات کے ساتھ کال کریں: | دستاویزات CI | توقع کے جھنڈوں کے حوالے سے اسکرپٹس کو تازہ ترین بنایا گیا (نیچے کمانڈ بلاک دیکھیں)۔ |
+| توقع کے جھنڈے | M1 | پائپ لائنز `sorafs_manifest_builder` کو آؤٹ پٹ کے لئے واضح توقعات کے ساتھ کال کریں: | دستاویزات CI | توقع کے جھنڈوں کے حوالے سے اسکرپٹس کو تازہ ترین بنایا گیا (نیچے کمانڈ بلاک دیکھیں)۔ |
 | رجسٹری فرسٹ پننگ | ایم 2 | `sorafs pin propose` اور `sorafs pin approve` لپیٹ ڈسپیچ مینی فیسٹ ؛ CLI `--require-registry` پر ڈیفالٹ ہوتا ہے۔ | گورننس اوپس | رجسٹری سی ایل آئی آڈٹ لاگ ، ناکام پیش کشوں کا ٹیلی میٹری۔ |
 | مشاہدہ کی برابری | M3 | ڈیش بورڈز Prometheus/Grafana نے حصہ انوینٹری اور رجسٹری کے ظاہر ہونے کے مابین تضادات کے بارے میں انتباہ کیا ہے۔ انتباہات او پی ایس آن کال سے منسلک ہیں۔ | مشاہدہ | ڈیش بورڈ سے لنک ، الرٹ کے قواعد کے آئی ڈی ، گیم ڈے کے نتائج۔ |
 
 #### کیننیکل پبلشنگ کمانڈ
 
 ```bash
-cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
+cargo run -p sorafs_manifest --bin sorafs_manifest_builder -- docs/book \
   --manifest-out artifacts/docs/book/2025-11-01/docs.manifest \
   --manifest-signatures-out artifacts/docs/book/2025-11-01/docs.manifest_signatures.json \
   --car-out artifacts/docs/book/2025-11-01/docs.car \

@@ -80,7 +80,7 @@ Testicules :
 |------------|--------|-----------------|
 | Servico Torii | Expor `/v1/sorafs/pin` (soumettre), `/v1/sorafs/pin/{cid}` (recherche), `/v1/sorafs/aliases` (liste/liaison), `/v1/sorafs/replication` (commandes/reçus). Fornecer paginacao + filtragem. | Mise en réseau TL / Core Infra |
 | Atestacao | Inclut la hauteur/le hachage du registre dans les réponses ; ajouter une structure de certification Norito utilisée pour les SDK. | Infrastructure de base |
-| CLI | Estender `sorafs_manifest_stub` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
+| CLI | Estender `sorafs_manifest_builder` ou une nouvelle CLI `sorafs_pin` avec `pin submit`, `alias bind`, `order issue`, `registry export`. | GT Outillage |
 | SDK | Créer des liaisons client (Rust/Go/TS) à partir du schéma Norito ; ajouter des testicules d'intégration. | Équipes SDK |
 
 Opéras :
