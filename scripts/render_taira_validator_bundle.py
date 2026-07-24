@@ -483,15 +483,22 @@ def render_genesis_template(
         transaction["topology"] = []
 
     registered_accounts: set[str] = set()
-    for transaction in transactions:
+    for transaction_index, transaction in enumerate(transactions):
         instructions = transaction.get("instructions", [])
         if not isinstance(instructions, list):
             raise ValueError(
                 f"base genesis {base_genesis_path} contains a non-array instructions field"
             )
-        for instruction in instructions:
-            if not isinstance(instruction, dict):
+        for instruction_index, instruction in enumerate(instructions):
+            if isinstance(instruction, str) and instruction:
                 continue
+            if not isinstance(instruction, dict) or len(instruction) != 1:
+                raise ValueError(
+                    f"base genesis {base_genesis_path} transaction "
+                    f"{transaction_index} instruction {instruction_index} must be "
+                    "a single-key structured instruction object or a non-empty "
+                    "canonical base64 instruction string"
+                )
             account = instruction.get("Register", {}).get("Account")
             if isinstance(account, dict) and isinstance(account.get("id"), str):
                 registered_accounts.add(account["id"])

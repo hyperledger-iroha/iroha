@@ -27,6 +27,10 @@ TAIRA_CITIZEN_ID = (
 TAIRA_GENESIS_DEPLOYER_ID = (
     "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A"
 )
+TAIRA_GAS_ASSET_ID = "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
+TAIRA_CONSENSUS_FINGERPRINT = (
+    "0x21591690e3c4d51fb3b81425aa8b9986eb417cc6a211dcfb8bce51c7600a6a7e"
+)
 TAIRA_FEE_SPONSOR_SELECTORS = [
     "iroha.log",
     "iroha.register",
@@ -177,6 +181,53 @@ def test_checked_in_taira_genesis_contract_deployment_gate_is_release_pinned() -
         not in selector_wire_ids
     )
     assert "iroha.custom" not in selector_wire_ids
+
+
+def test_checked_in_taira_genesis_gas_parameters_are_structured_parameters() -> None:
+    genesis = json.loads(TAIRA_GENESIS_PATH.read_text(encoding="utf-8"))
+    custom = genesis["transactions"][0]["parameters"]["custom"]
+
+    assert genesis["consensus_fingerprint"] == TAIRA_CONSENSUS_FINGERPRINT
+    assert {
+        key: custom[key]
+        for key in (
+            "ivm_gas_limit_per_block",
+            "ivm_gas_accepted_assets",
+            "ivm_gas_units_per_gas",
+        )
+    } == {
+        "ivm_gas_limit_per_block": {
+            "id": "ivm_gas_limit_per_block",
+            "payload": 50_000_000,
+        },
+        "ivm_gas_accepted_assets": {
+            "id": "ivm_gas_accepted_assets",
+            "payload": [TAIRA_GAS_ASSET_ID],
+        },
+        "ivm_gas_units_per_gas": {
+            "id": "ivm_gas_units_per_gas",
+            "payload": [
+                {
+                    "asset": TAIRA_GAS_ASSET_ID,
+                    "units_per_gas": 0,
+                    "twap_local_per_xor": "1",
+                    "liquidity_profile": "tier1",
+                    "volatility_class": "stable",
+                }
+            ],
+        },
+    }
+    assert all(
+        isinstance(instruction, dict) and len(instruction) == 1
+        for instruction in _genesis_instructions(genesis)
+    )
+    assert {
+        key: custom["sumeragi_npos_parameters"]["payload"][key]
+        for key in ("min_self_bond", "min_nomination_bond")
+    } == {
+        "min_self_bond": "1000",
+        "min_nomination_bond": "1",
+    }
 
 
 BASE_CONFIG = """# baseline
@@ -450,6 +501,56 @@ def test_genesis_renderer_preserves_fresh_contract_deployment_gate(
     assert _contract_deployment_gate_projection(
         rendered
     ) == _contract_deployment_gate_projection(checked_in)
+    assert (
+        rendered["transactions"][0]["parameters"]["custom"]
+        == checked_in["transactions"][0]["parameters"]["custom"]
+    )
+
+
+def test_genesis_renderer_rejects_merged_instruction_objects(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    base_genesis_path = tmp_path / "genesis.json"
+    output_dir = tmp_path / "out"
+    _write_roster(roster_path)
+    validators = MODULE.load_roster(roster_path)
+    base_genesis_path.write_text(
+        json.dumps(
+            {
+                "sumeragi_v2": {
+                    "da_layout": {},
+                    "nexus_amx_context_hash": "01" * 32,
+                },
+                "transactions": [
+                    {
+                        "instructions": [
+                            {
+                                "Register": {"Domain": {"id": "test.universal"}},
+                                "ivm_gas_limit_per_block": {
+                                    "id": "ivm_gas_limit_per_block",
+                                    "payload": 50_000_000,
+                                },
+                            }
+                        ],
+                        "ivm_triggers": [],
+                        "topology": [],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.render_genesis_template(
+            base_genesis_path,
+            validators,
+            output_dir,
+        )
+    except ValueError as error:
+        assert "transaction 0 instruction 0" in str(error)
+        assert "single-key structured instruction object" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("renderer accepted a merged genesis instruction object")
 
 
 def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
