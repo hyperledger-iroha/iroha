@@ -889,8 +889,10 @@ explicit production builder; single-source construction is labelled as a test
 fixture.
 `ci/run_native_amx_v2_grouped_sdk_parity.sh` source-binds the exact fixture and
 OpenAPI, Python, JavaScript source/distribution, Swift, Kotlin, and Java
-consumers. Closure remains open until refreshed OpenAPI snapshots and every
-language consumer replay the same generated corpus in the release gate.
+consumers. Fresh standalone runs passed OpenAPI `4/4`, JavaScript `37/37`,
+Kotlin `6/6`, Java `5/5`, and the Python 3.12 harness `35/35`. Closure remains
+open until a rebuilt ABI-21 Swift bridge passes the same corpus and one release
+gate archives every language consumer together.
 
 **Closure condition.** Generate one canonical grouped fixture and negative
 corpus from Rust and consume the exact files in OpenAPI, Python, JavaScript,
@@ -964,8 +966,9 @@ reservation duplication, base-state mismatch, bounded fetches, and every
 persistence crash boundary. Tests that exercise only `#[cfg(test)]` producer
 helpers do not close a live-path obligation.
 
-The release runner now inventories 58 exact, non-ignored multilane focus tests
-across `iroha_core`, `iroha_data_model`, and the integration support library.
+The release runner now inventories 113 exact, non-ignored multilane focus
+tests: 54 core multilane tests, 35 core queue-journal tests, seven in
+`iroha_data_model`, 15 in Torii, and two in the integration support library.
 That source inventory is not a passing test transcript; the full focused rerun
 and archived receipt remain required.
 
@@ -983,15 +986,17 @@ configuration, tool-version, result, and source hashes. Existing generic
 Sumeragi models are not substitutes for these multilane models.
 
 A 2026-07-24 source-bound checkpoint for source manifest
-`18dde0eab85c1617e3f585f403c9a409690360aba9e38d22c8506514034c4b7d`
+`182a281fc46ed6d99dc010f444707dfcfaf3aae3cfe9f4b7a71d1b1090e690b9`
 passed direct pinned TLC positives (autoscale `14/14`; Native `1,121`
 generated/`304` distinct; autonomous `294` generated/`169` distinct), all
 `27/27` named mutation witnesses, all three Apalache v0.52.2 typecheck/positive
-bounds, and `8/8` runner negative controls. The evidence TSV SHA-256 is
-`47fb9fef5690a5424196b0a6a7bbc3105ca84ce24f79eeadd9014893fa702050`.
-This is supporting bounded evidence, not gate closure: the umbrella formal
-preflight could not run because the pinned TLAPM standard library was absent,
-and no clean aggregate release receipt was archived.
+bounds, and `8/8` runner negative controls. The three-result Apalache evidence
+TSV SHA-256 is
+`f4cbd74f82376523cb3cfb0cc0d08699293378974866424891a175c3e121343b`.
+This is supporting bounded evidence, not gate closure: the checksum-pinned
+TLAPM standard library was installed for the rerun, but no clean aggregate
+release receipt was archived, and bounded checks are not deductive proof
+evidence.
 
 ### G-4P — four-peer DA/RBC lifecycle suites
 
@@ -1047,9 +1052,11 @@ grouped corpus. Archive the corpus hash and per-SDK results. No SDK may skip a
 negative or substitute a hand-authored fixture.
 
 The Rust generator, 34-control grouped corpus, six-surface parity harness, and
-fixture/suite source-hash binding are present. Refreshed OpenAPI snapshots and
-one archived release replay of every required surface are not yet recorded, so
-neither `ML-API-04` closure nor this gate advances.
+fixture/suite source-hash binding are present. Standalone OpenAPI, JavaScript,
+Kotlin, Java, and Python runs are fresh and passing; Swift remains open because
+the materialized XCFramework is ABI 19 and must be rebuilt at ABI 21 after the
+atomic-publication fix. One archived release replay of every required surface
+is not yet recorded, so neither `ML-API-04` closure nor this gate advances.
 
 ### G-FINAL — clean release validation
 
@@ -1108,6 +1115,18 @@ diagnostics must be added here or mapped to a ledger row before release.
   reservations, relay leases, and settlement accounting. It changes the
   economic fee-sponsor policy, not the safety or durability of multilane
   reservation/carrier ownership. It is therefore outside this ledger.
+- **Authority-paid receipt settlement:** the TODO on
+  `reject_authority_lane_relay_burn_fee` in
+  `crates/iroha_core/src/executor.rs` concerns adding a proof-bound authority
+  spend lease to the fee subsystem. Although a future lease would be consumed
+  by admission, reservations, execution, and merge settlement, authority
+  payment is not an admitted first-release receipt-settlement mode: the
+  supported exact-sponsor path fails closed before receipt creation or balance
+  mutation, as pinned by
+  `receipt_settled_quote_rejects_authority_payer_with_sponsor_remediation` and
+  `receipt_settled_execution_rejects_authority_before_recording_receipt`. This
+  is deferred fee-policy functionality, not a gap in multilane reservation or
+  carrier ownership, and is outside this ledger.
 - **Generic Sumeragi equivocation penalties:** the TODO in the
   `reducer::Effect::ReportEquivocation` adapter branch in
   `crates/iroha_core/src/sumeragi/v2.rs` concerns retaining a complete
@@ -1122,6 +1141,16 @@ diagnostics must be added here or mapped to a ledger row before release.
   reservations, autonomous merge carriers, Native participant evidence,
   autoscale, drain, or retirement and is therefore outside this multilane
   closure ledger.
+- **Generic causal-scheduler projection and liveness:** the TODO on
+  `production_fresh_causal_successors` in
+  `crates/iroha_sumeragi_core/src/verus_proofs.rs`, mirrored in
+  `crates/iroha_sumeragi_core/VERIFICATION.md`, concerns the machine-checked
+  production effect-to-TLA candidate identity/ownership mapping and
+  Completion-capacity product-rank proof needed for temporal liveness. It is a
+  generic scheduler-refinement obligation, already recorded as
+  `specified_unproved` in `docs/formal/sumeragi_v2/PROOF.md`; it does not model
+  lane reservations, autonomous merge carriers, Native participant evidence,
+  autoscale, drain, or retirement and is outside this multilane ledger.
 
 Out-of-scope classification means these TODOs do not block multilane closure.
 It does not mark them implemented, safe for removal, or release-evidenced.

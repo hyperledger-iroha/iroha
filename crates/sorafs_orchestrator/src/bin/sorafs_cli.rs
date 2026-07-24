@@ -74,9 +74,7 @@ use sorafs_car::{
     gateway::{GatewayFetchConfig, GatewayFetchContext, GatewayProviderInput},
     multi_fetch::{ProviderMetadata, RangeCapability, StreamBudget},
     policy::{PolicyEvidenceValidator, run_honey_probe},
-    proof_stream::{
-        ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamSummary, ProofTier,
-    },
+    proof_stream::{ProofKind, ProofStreamItem, ProofStreamMetrics, ProofStreamSummary, ProofTier},
     proof_stream_transport::ProofStreamNdjsonReader,
     scoreboard::{Eligibility, TelemetrySnapshot},
     taikai::{BundleRequest, BundleSummary, bundle_segment, load_extra_metadata},
@@ -92,9 +90,9 @@ use sorafs_manifest::{
     ManifestBuilder, ManifestV1, PinPolicy, PorChallengeOutcome, PorChallengeStatusV1,
     PorReportIsoWeek, PorWeeklyReportV1, ProofStreamHttpRequestV1, ProofStreamRequestV1,
     ReputationMerkleProofV1, ReputationSnapshotV1, SignedReputationSnapshotV1, StorageClass,
-    ValidationOutcomeV1,
-    chunker_registry as manifest_chunker_registry, governance_dag_block_cid_v1,
-    validate_governance_dag_head_against_chain_v1, validate_governance_log_node_bytes,
+    ValidationOutcomeV1, chunker_registry as manifest_chunker_registry,
+    governance_dag_block_cid_v1, validate_governance_dag_head_against_chain_v1,
+    validate_governance_log_node_bytes,
 };
 use sorafs_orchestrator::{
     AnonymityPolicy, FetchSession, OrchestratorConfig, RolloutPhase, TransportPolicy,
@@ -17209,7 +17207,10 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
 
     let proof_kind = proof_kind_arg
         .as_deref()
-        .map(ProofKind::parse)
+        .map(|raw| {
+            ProofKind::parse(raw)
+                .map_err(|_| "unsupported proof kind; expected `por`, `pdp`, or `potr`".to_string())
+        })
         .transpose()?
         .unwrap_or_default();
     let deadline_ms_arg = deadline_ms;
@@ -17288,7 +17289,14 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             (None, None, Some(deadline))
         }
     };
-    let tier = tier_arg.as_deref().map(ProofTier::parse).transpose()?;
+    let tier = tier_arg
+        .as_deref()
+        .map(|raw| {
+            ProofTier::parse(raw).map_err(|_| {
+                "unsupported proof tier; expected `hot`, `warm`, or `archive`".to_string()
+            })
+        })
+        .transpose()?;
     let orchestrator_job_id_hex = orchestrator_job_id_hex
         .map(|value| {
             let bytes = parse_fixed_hex_bytes::<16>(&value, "--orchestrator-job-id-hex")?;
@@ -17298,6 +17306,11 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             Ok(hex_encode(bytes))
         })
         .transpose()?;
+    if matches!(proof_kind, ProofKind::Potr) && orchestrator_job_id_hex.is_none() {
+        return Err(
+            "`--orchestrator-job-id-hex=HEX16` is required when `--proof-kind=potr`".to_string(),
+        );
+    }
 
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
@@ -17326,19 +17339,30 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
         )
     };
 
-    let request = ProofStreamRequest {
-        manifest_digest_hex: manifest_digest_hex.clone(),
-        provider_id_hex: provider_id.clone(),
+    let request_model = ProofStreamRequestV1 {
+        manifest_digest: *manifest_digest.as_bytes(),
+        provider_id: parse_digest_hex(&provider_id)
+            .map_err(|error| format!("invalid canonical provider id: {error}"))?,
         proof_kind,
-        challenge_id_hex: challenge_id_hex.clone(),
+        challenge_id: challenge_id_hex
+            .as_deref()
+            .map(parse_digest_hex)
+            .transpose()
+            .map_err(|error| format!("invalid canonical challenge id: {error}"))?,
         sample_count,
-        sample_seed,
         deadline_ms,
-        tier,
+        sample_seed,
         nonce,
-        orchestrator_job_id_hex,
+        orchestrator_job_id: orchestrator_job_id_hex
+            .as_deref()
+            .map(|raw| parse_fixed_hex_bytes::<16>(raw, "orchestrator job id"))
+            .transpose()?,
+        tier,
     };
-    let request_body = request.to_json_bytes()?;
+    let request = ProofStreamHttpRequestV1::new(request_model)
+        .map_err(|error| format!("invalid proof stream request: {error}"))?;
+    let request_body = to_vec(&request)
+        .map_err(|error| format!("failed to encode canonical proof stream request: {error}"))?;
 
     let client = HttpClient::builder()
         .build()
@@ -17403,27 +17427,28 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     let reader = BufReader::new(response);
     let mut metrics = ProofStreamMetrics::default();
     let mut failure_samples: Vec<ProofStreamItem> = Vec::new();
+    let mut verification_failure_samples: Vec<Value> = Vec::new();
     const FAILURE_SAMPLE_LIMIT: usize = 5;
 
     for item in ProofStreamNdjsonReader::new(reader) {
-        let mut item =
+        let item =
             item.map_err(|err| format!("gateway returned an invalid proof stream: {err}"))?;
-        if item.manifest_digest_hex != manifest_digest_hex {
+        if item.manifest_digest_hex() != manifest_digest_hex.as_str() {
             return Err("proof stream item manifest digest does not match the request".to_string());
         }
-        if item.provider_id_hex != provider_id {
+        if item.provider_id_hex() != provider_id.as_str() {
             return Err("proof stream item provider id does not match the request".to_string());
         }
-        if item.proof_kind != proof_kind {
+        if item.proof_kind() != proof_kind {
             return Err(format!(
                 "proof stream item kind `{}` does not match requested `{}`",
-                item.proof_kind.as_str(),
+                item.proof_kind().as_str(),
                 proof_kind.as_str()
             ));
         }
         match proof_kind {
             ProofKind::Por => {
-                if item.challenge_id_hex.is_some() || item.deadline_ms.is_some() {
+                if item.challenge_id_hex().is_some() || item.deadline_ms().is_some() {
                     return Err(
                         "PoR proof stream item contains fields reserved for PDP or PoTR"
                             .to_string(),
@@ -17431,57 +17456,83 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
                 }
             }
             ProofKind::Pdp => {
-                if item.challenge_id_hex.as_deref() != challenge_id_hex.as_deref() {
+                if item.challenge_id_hex() != challenge_id_hex.as_deref() {
                     return Err(
                         "PDP proof stream item challenge id does not match the request".to_string(),
                     );
                 }
-                if item.deadline_ms.is_some() {
+                if item.deadline_ms().is_some() {
                     return Err("PDP proof stream item contains a PoTR deadline".to_string());
                 }
             }
             ProofKind::Potr => {
-                if item.challenge_id_hex.is_some() {
+                if item.challenge_id_hex().is_some() {
                     return Err("PoTR proof stream item contains a PDP challenge id".to_string());
                 }
-                if item.deadline_ms != deadline_ms {
+                if item.deadline_ms() != deadline_ms {
                     return Err(
                         "PoTR proof stream item deadline does not match the request".to_string()
                     );
                 }
+                let response_request_id = item
+                    .potr_receipt()
+                    .and_then(|receipt| receipt.request_id)
+                    .map(hex_encode);
+                if response_request_id.as_deref() != orchestrator_job_id_hex.as_deref() {
+                    return Err(
+                        "PoTR signed receipt request id does not match the requested orchestrator job"
+                            .to_string(),
+                    );
+                }
             }
         }
-        let canonical_event = if emit_events {
-            Some(
-                norito::json::to_string(&item.to_json())
-                    .map_err(|err| format!("failed to encode proof stream event: {err}"))?,
-            )
-        } else {
-            None
-        };
-        if let Some(root) = expected_root.as_ref()
-            && matches!(item.proof_kind, ProofKind::Por)
+        let local_verification_failed = if let Some(root) = expected_root.as_ref()
+            && matches!(item.proof_kind(), ProofKind::Por)
         {
             verification_attempts += 1;
-            let verified = item
-                .por_proof
-                .as_ref()
-                .map(|proof| proof.verify(root))
-                .unwrap_or(false);
-            if !verified {
+            let verified = item.por_proof().is_some_and(|proof| proof.verify(root));
+            if verified {
+                false
+            } else {
                 verification_failures += 1;
-                if failure_samples.len() < FAILURE_SAMPLE_LIMIT {
-                    failure_samples.push(item.clone());
+                if verification_failure_samples.len() < FAILURE_SAMPLE_LIMIT {
+                    let mut sample = Map::new();
+                    sample.insert(
+                        "manifest_digest_hex".into(),
+                        Value::from(item.manifest_digest_hex()),
+                    );
+                    sample.insert(
+                        "provider_id_hex".into(),
+                        Value::from(item.provider_id_hex()),
+                    );
+                    sample.insert("expected_root_hex".into(), Value::from(hex_encode(root)));
+                    sample.insert("reason".into(), Value::from("local_verification_failed"));
+                    if let Some(index) = item.sample_index() {
+                        sample.insert("leaf_index_flat".into(), Value::from(u64::from(index)));
+                    }
+                    if let Some(index) = item.chunk_index() {
+                        sample.insert("chunk_index".into(), Value::from(u64::from(index)));
+                    }
+                    if let Some(index) = item.segment_index() {
+                        sample.insert("segment_index".into(), Value::from(u64::from(index)));
+                    }
+                    if let Some(index) = item.leaf_index() {
+                        sample.insert("leaf_index".into(), Value::from(u64::from(index)));
+                    }
+                    verification_failure_samples.push(Value::Object(sample));
                 }
-                item.failure_reason
-                    .get_or_insert_with(|| "local_verification_failed".to_string());
+                true
             }
-        }
+        } else {
+            false
+        };
         metrics.record(&item);
-        if item.status.is_failure() && failure_samples.len() < FAILURE_SAMPLE_LIMIT {
+        if item.status().is_failure() && failure_samples.len() < FAILURE_SAMPLE_LIMIT {
             failure_samples.push(item.clone());
         }
-        if let Some(event) = canonical_event {
+        if emit_events && !local_verification_failed {
+            let event = norito::json::to_string(&item.to_json())
+                .map_err(|err| format!("failed to encode proof stream event: {err}"))?;
             println!("{event}");
         }
     }
@@ -17530,9 +17581,15 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
     if let Some(tier) = tier {
         summary_map.insert("requested_tier".into(), Value::from(tier.as_str()));
     }
+    if let Some(job_id) = orchestrator_job_id_hex {
+        summary_map.insert(
+            "requested_orchestrator_job_id_hex".into(),
+            Value::from(job_id),
+        );
+    }
     summary_map.insert(
         "nonce_b64".into(),
-        Value::from(BASE64_STANDARD.encode(request.nonce)),
+        Value::from(BASE64_STANDARD.encode(nonce)),
     );
     summary_map.insert("metrics".into(), summary.metrics.to_json());
     let failure_budget = max_failures.unwrap_or(0);
@@ -17552,9 +17609,19 @@ fn proof_stream(raw_args: Vec<String>) -> Result<(), String> {
             Value::from(verification_attempts),
         );
         summary_map.insert(
+            "verification_successes".into(),
+            Value::from(verification_attempts.saturating_sub(verification_failures)),
+        );
+        summary_map.insert(
             "verification_failures".into(),
             Value::from(verification_failures),
         );
+        if !verification_failure_samples.is_empty() {
+            summary_map.insert(
+                "verification_failure_samples".into(),
+                Value::Array(verification_failure_samples),
+            );
+        }
     }
     if !failure_samples.is_empty() {
         let sample_json = failure_samples

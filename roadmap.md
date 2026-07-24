@@ -13,13 +13,20 @@ automatic lifecycle, diagnostics, SDK model, and versioned-wire paths mapped by
 The former autonomous `execution_batch.is_none()` exclusion and its in-scope
 TODO are gone; no remaining lane/autoscale/merge/Native multilane TODO was
 found. This is source implementation closure, not release completion.
+The deferred authority-paid receipt-settlement spend lease and generic Verus
+effect-to-TLA scheduler-ownership/completion-rank proof are explicitly
+classified outside the multilane closure ledger.
 
 The remaining work is evidence-driven and must stay in order:
 
-- Finish `G-UNIT` with a fresh archived run of all 58 source-bound focused
-  tests, then refresh OpenAPI and complete the exact Rust-owned 34-control
-  corpus replay across OpenAPI, both Python surfaces, JavaScript
-  source/distribution, Swift, Kotlin, and Java for `ML-API-04`/`G-SDK`.
+- Finish `G-UNIT` with a fresh archived run of all 113 source-bound focused
+  tests (54 core multilane tests, 35 core queue-journal tests, seven
+  `iroha_data_model` tests, 15 Torii tests, and two integration-support-library
+  tests), then complete and archive the exact Rust-owned 34-control corpus
+  replay across OpenAPI, both Python
+  surfaces, JavaScript source/distribution, Swift, Kotlin, and Java for
+  `ML-API-04`/`G-SDK`. The standalone OpenAPI replay is already fresh at
+  `4/4`; it is not the remaining SDK blocker.
 - Complete the mandatory unskipped real-network `G-4P` expansion, drain,
   archive, recreation, Native rotation/pruning, and autonomous carrier suites.
 - Run the strict `G-12P` 10/10 deterministic-seed corridor and two-hour rotating
@@ -30,11 +37,11 @@ The remaining work is evidence-driven and must stay in order:
   formatting, SDK, formal, and legacy-codec gates for `G-FINAL`.
 
 Fresh bounded formal support is available for source manifest
-`18dde0eab85c1617e3f585f403c9a409690360aba9e38d22c8506514034c4b7d`:
+`182a281fc46ed6d99dc010f444707dfcfaf3aae3cfe9f4b7a71d1b1090e690b9`:
 direct TLC positives, all 27 named mutations, and all three Apalache v0.52.2
-bounds passed. `G-FORMAL` remains open until the missing pinned TLAPM standard
-library permits the umbrella preflight and a clean aggregate release receipt
-archives the result.
+bounds passed after installing the checksum-pinned TLAPM standard library.
+`G-FORMAL` remains open until a clean aggregate release receipt archives the
+result; these bounded model checks are not deductive proof evidence.
 
 ## SoraFS V1 production closure
 
@@ -494,10 +501,12 @@ fixed provider and stake-pool identifiers must be exactly 32 lowercase hex bytes
 instead of being left-padded, and capability payloads, endpoint metadata,
 signing keys, public keys, and signatures must be lowercase even-length
 prefix-free hex before any advert/report/key output is opened.
-`sorafs_cli manifest sign` now shares that fail-closed boundary for
-`--issued-at`, rejects pre-epoch host clocks as operator-visible errors, and
-returns a normal missing-digest diagnostic if required chunk digest resolution
-regresses before bundle or signature generation.
+The release CLI now rejects the retired local manifest-authentication
+subcommands at dispatch and emits no bundle, signature, or token request.
+Content manifest construction remains unsigned; production release
+authentication is exclusively the canonical aggregate-manifest flow through
+`scripts/release_manifest_signing.py`, an external Ed25519/HSM signer, a
+governed raw public key and reviewed fingerprint, and a pinned native verifier.
 The DA reconstruction harness now keeps fixture replay inputs fail-closed too:
 text manifest files must be canonical lowercase, even-length, prefix-free,
 whitespace-free hex before Norito decoding, and `--chunk-template` renders are
@@ -717,21 +726,15 @@ proof summary digest, one valid policy digest, one valid provider-roster digest,
 and one valid repair-handoff digest before proof-summary-bound, policy-bound,
 provider-roster-bound, or repair-handoff metadata can satisfy final promotion.
 
-The following direct-WSV paragraphs describe retained compatibility and test
-machinery. The first-release Sumeragi V2 live path neither synthesizes nor signs
-autonomous lane execution batches: merge selection filters every candidate
-carrying `execution_batch`. The autonomous Kura/State payload, reservation, and
-execution helpers remain fail-closed scaffolding, while historical embedded
-batches continue to validate and replay deterministically.
-
-Re-enabling autonomous execution is outstanding work, not rollout evidence. It
-requires a reachable producer and a coordinated candidate/queue/wire/session
-design that carries one durable reservation identity from queue selection
-through availability and merge QC, canonical carrier application, and crash
-recovery. Until then, certified standalone artifacts may block unsafe
-retirement but are not executable production merge sources.
-Relay-settlement candidates remain live and are the only merge candidates
-synthesized and signed by the first-release runtime.
+The following direct-WSV paragraphs retain historical compatibility context.
+The earlier first-release scaffold neither synthesized nor signed autonomous
+lane execution batches and filtered candidates carrying `execution_batch`.
+That exclusion has since been removed: the live runner schedules autonomous
+lane work, carries one durable reservation identity through availability and
+merge certification, and applies it only through the canonical global carrier.
+Historical embedded batches continue to validate and replay deterministically.
+Relay-settlement and autonomous candidates are both live merge sources; neither
+permits a participant lane to mutate WSV independently.
 
 Nexus autoscale scale-in now preserves certified standalone lane-block
 progress. Managed retire candidates are skipped when their current
@@ -739,12 +742,11 @@ lane/dataspace has a valid certified lane-block sidecar without a matching
 application receipt, and committed lifecycle validation rechecks that invariant
 before publishing lane geometry so late certified progress cannot be destroyed
 by a staged scale-in. Production lane QCs never apply WSV effects directly.
-For live relay-settlement entries and other non-execution history, missing full
-entries are fetched from merge-QC signers with bounded authenticated chunks
-while the authoritative carrier remains pending. Embedded historical
-`execution_batch` entries validate and replay only from canonical full entries
-already durable in Kura; first-release sidecar responders do not serve that
-retired form. Kura publishes the full entry, sparse carrier record, and
+For live relay-settlement and autonomous entries, missing full entries are
+fetched from merge-QC signers with bounded authenticated chunks while the
+authoritative carrier remains pending. Generic authenticated sidecar responders
+serve the canonical bytes for either form, subject to the same request and
+committee bounds. Kura publishes the full entry, sparse carrier record, and
 canonical block through one rollback-safe boundary before State becomes
 visible. Legacy direct-preflight/marker artifacts remain
 fail-closed cleanup evidence for old stores and tests, but no production path
@@ -926,22 +928,21 @@ evidence with the final post-prune queue snapshot, keeping rollout telemetry
 accurate across that recovery transition. Startup status also merges the latest
 durable application-receipted certified sidecar per active lane with the
 in-memory pending queue, so restarted peers keep publishing applied
-committed-lane evidence for both canonical block receipts and direct execution
-receipts even when already receipted sessions are skipped by execution
-hydration.
+committed-lane evidence for canonical block receipts and historical
+direct-execution receipts even when already receipted sessions are skipped by
+execution hydration.
 The independent-lane data model, deterministic merge execution/replay,
 compact-carrier recovery, transaction inclusion proofs, and fail-closed
-validation are implemented. Autonomous local production is not a completed
-first-release path: live code does not yet carry one queue reservation identity
-through candidate selection, payload handoff, availability/NewView collection,
-Kura persistence, and global application, and drain-vote collection remains
-retired. Remaining work is that coordinated queue/candidate/wire/session
-implementation followed by a four-or-more-peer V2 Nexus corridor covering
-global view changes, exact-view merge-carrier failover, Kura-before-WSV and
-certificate-before-receipt restart boundaries, and lane retire/recreate/reset
-cycles. No direct lane-state application fallback is planned. `lane_block_view`
-remains intentionally coupled to the locked global proposal view;
-independently paced lane views are future work.
+validation are implemented. The former first-release gap in autonomous local
+production is closed in source: one queue reservation identity now survives
+candidate selection, payload handoff, availability/NewView collection, Kura
+persistence, and global application, and drain-vote collection is active.
+Release evidence is still required from the four-or-more-peer V2 Nexus
+corridor covering global view changes, exact-view merge-carrier failover,
+Kura-before-WSV and certificate-before-receipt restart boundaries, and lane
+retire/recreate/reset cycles. No direct lane-state application fallback is
+planned. `lane_block_view` remains intentionally coupled to the locked global
+proposal view; independently paced lane views are future work.
 
 Kagemusha online-to-offline top-up and redemption now use the typed V2 wire
 requests directly at `/v1/offline/top-up` and `/v1/offline/redeem`. Torii has no
@@ -18736,15 +18737,16 @@ operator-provided rollout bundles.
   evidence, stricter committed-history quorum checks, proposal-readiness
   deferral for unapplied lane blocks, Kura sidecar recovery from local canonical
   block bodies, and lane/dataspace-preserving ownership status. The remaining
-  blocker is DvP lane-block application liveness under the 12-peer localnet:
-  route probes can still stall before committed/applied lane-block convergence,
-  with one DS lane split between executable-payload wait and canonical
-  application while the other DS lane has no committed lane-block row. The
-  default 10-iteration paired-swap soak still remains a stress/liveness refresh
-  item; the latest default run before the quorum-history hardening exited `ok`
-  with only 3/10 soak iterations passing. Older full-soak evidence remains the
-  2026-07-03 Nexus consensus metadata snapshot with a 10/10 paired-swap soak
-  and rollback verification. The
+  historical pre-fix blocker was DvP lane-block application liveness under the
+  12-peer localnet: route probes could stall before committed/applied
+  lane-block convergence, with one DS lane split between executable-payload
+  wait and canonical application while the other DS lane had no committed
+  lane-block row. The source-side recovery and bounded stage diagnostics have
+  since been corrected. A fresh strict 10/10 deterministic-seed rerun and
+  two-hour rotating-fault soak remain mandatory; the pre-fix default run that
+  exited `ok` with only 3/10 iterations is not release evidence. Older
+  full-soak evidence remains the 2026-07-03 Nexus consensus metadata snapshot
+  with a 10/10 paired-swap soak and rollback verification. The
   feature-gated
   STARK cross-dataspace localnet fixture now uses the same canonical dataspace
   catalog and has non-ignored `zk-stark` genesis pre-execution coverage, while
@@ -19421,11 +19423,13 @@ operator-provided rollout bundles.
   remaining checkpoint for this corridor is keeping the broadened strict soak
   in regression rotation while release packaging and operator runbooks
   converge.
-- Continue native AMX hardening beyond the implemented attestation data model,
-  control-plane message handling, deterministic per-leg vote cache,
-  proposer-side prepare/commit gating, 4-peer convergence proof,
-  queue-journal restart replay, and routing-plan projection with longer-running
-  soak, fault injection, and independent participant-lane finality work.
+- Continue Native AMX release evidence beyond the implemented attestation data
+  model, durable participant-application evidence, deterministic per-leg vote
+  cache, proposer-side prepare/commit gating, queue-journal restart replay, and
+  routing-plan projection. Required work is longer-running soak, fault
+  injection, validator rotation, pruning, and carrier-application evidence;
+  participant controls remain control-only and never create independent WSV
+  finality.
 - Keep SCCP bridge submission permissionless while requiring outbound message
   records to originate from verified IVM-proved overlays, route allowlists to
   be deployment-governed, and production activation to wait for all advertised
@@ -25932,7 +25936,7 @@ runtime premise on the final signed source.
   7,826-obligation induction and 565-obligation downstream Core receipt is
   historical evidence for the superseded transition relation and cannot
   promote the current source;
-- execute the fresh source-sealed 515-test, 38-module, 61-leg pre-network
+- execute the fresh source-sealed 515-test, 38-module, 71-leg pre-network
   corridor. Its proposal-origin additions cover strict same-round TC
   upgrade/replay, exact locked-Commit recovery ownership, multi-carrier ingress,
   and persistence failure. Its final six regressions cover canonical view-zero

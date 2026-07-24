@@ -10,8 +10,8 @@ use crate::sorafs::{
     orderbook::OrderbookAdmissionPolicyV1,
     pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
     pop_registry::PopIssuerPolicyV1,
-    proof_ledger::ProofOutcomeSignerPolicyV1,
     pricing::{PricingScheduleRecord, ProviderCreditRecord},
+    proof_ledger::ProofOutcomeSignerPolicyV1,
     reserve::{
         ReserveAuthorityPolicyV1, ReserveLifecycleStage, ReserveMovementKindV1,
         ReserveProviderTermsV1,
@@ -715,6 +715,55 @@ isi! {
 
 impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
 
+/// Canonical PDP proof material accepted by the chain-authoritative outcome journal.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsPdpProofOutcomeSubmissionV1 {
+    /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub archive_payload: Vec<u8>,
+}
+
+/// Canonical PoTR proof material accepted by the chain-authoritative outcome journal.
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    norito::codec::Encode,
+    norito::codec::Decode,
+    iroha_schema::IntoSchema,
+)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[norito(deny_unknown_fields)]
+pub struct SorafsPotrProofOutcomeSubmissionV1 {
+    /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
+    pub receipt_payload: Vec<u8>,
+    /// Council-verified admission envelope captured during receipt validation.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub admission_envelope_digest: [u8; 32],
+}
+
 /// Existing canonical proof material accepted by the chain-authoritative outcome journal.
 #[derive(
     Debug,
@@ -733,24 +782,20 @@ impl crate::seal::Instruction for SubmitSorafsRepairAppeal {}
 )]
 #[cfg_attr(
     feature = "json",
-    norito(tag = "proof_kind", content = "value", rename_all = "snake_case")
+    norito(
+        tag = "proof_kind",
+        content = "value",
+        rename_all = "snake_case",
+        deny_unknown_fields
+    )
 )]
 pub enum SorafsProofOutcomeSubmissionV1 {
-    /// Exact canonical `sorafs_manifest::PdpGovernanceArchiveV1` bytes.
-    Pdp {
-        /// Terminal archive produced by the authenticated PDP provider protocol.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
-        archive_payload: Vec<u8>,
-    },
-    /// Exact canonical dual-signed `sorafs_manifest::PotrReceiptV1` bytes.
-    Potr {
-        /// Final receipt produced by the authenticated PoTR tracker.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::base64_vec"))]
-        receipt_payload: Vec<u8>,
-        /// Council-verified admission envelope captured during receipt validation.
-        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
-        admission_envelope_digest: [u8; 32],
-    },
+    /// Exact canonical PDP terminal archive and authentication material.
+    #[codec(index = 0)]
+    Pdp(SorafsPdpProofOutcomeSubmissionV1),
+    /// Exact canonical dual-signed PoTR receipt and admission binding.
+    #[codec(index = 1)]
+    Potr(SorafsPotrProofOutcomeSubmissionV1),
 }
 
 isi! {
@@ -2064,6 +2109,21 @@ mod tests {
         }
     }
 
+    fn proof_outcome_signer_policy() -> ProofOutcomeSignerPolicyV1 {
+        ProofOutcomeSignerPolicyV1 {
+            version: crate::sorafs::proof_ledger::PROOF_OUTCOME_SIGNER_POLICY_VERSION_V1,
+            provider_id: provider(0x74),
+            revision: 1,
+            predecessor_digest: None,
+            admission_envelope_digest: [0x75; 32],
+            pdp_public_key: [0x76; 32],
+            potr_mldsa_public_key: vec![0x77, 0x78],
+            gateway_public_key: [0x79; 32],
+            valid_from_unix: 1_000,
+            valid_until_unix: 2_000,
+        }
+    }
+
     fn moderation_appeal_intake() -> ModerationAppealIntakeV1 {
         let appellant = owner();
         ModerationAppealIntakeV1 {
@@ -2130,6 +2190,90 @@ mod tests {
             norito::json::from_value(value).expect("register pin manifest decode");
 
         assert_eq!(decoded, manifest);
+    }
+
+    #[cfg(feature = "json")]
+    #[test]
+    fn proof_outcome_submission_json_is_tagged_exact_and_fail_closed() {
+        let pdp = SorafsProofOutcomeSubmissionV1::Pdp(SorafsPdpProofOutcomeSubmissionV1 {
+            archive_payload: vec![0, 1, 2],
+        });
+        let expected_pdp: norito::json::Value =
+            norito::json::from_str(r#"{"proof_kind":"pdp","value":{"archive_payload":"AAEC"}}"#)
+                .expect("valid expected PDP JSON");
+        assert_eq!(
+            norito::json::to_value(&pdp).expect("encode PDP submission"),
+            expected_pdp
+        );
+        assert_eq!(
+            norito::json::from_value::<SorafsProofOutcomeSubmissionV1>(expected_pdp)
+                .expect("decode PDP submission"),
+            pdp
+        );
+
+        let potr = SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
+            receipt_payload: vec![4, 5],
+            admission_envelope_digest: [7; 32],
+        });
+        let expected_potr: norito::json::Value = norito::json::from_str(&format!(
+            r#"{{"proof_kind":"potr","value":{{"receipt_payload":"BAU=","admission_envelope_digest":[{}]}}}}"#,
+            std::iter::repeat_n("7", 32).collect::<Vec<_>>().join(",")
+        ))
+        .expect("valid expected PoTR JSON");
+        assert_eq!(
+            norito::json::to_value(&potr).expect("encode PoTR submission"),
+            expected_potr
+        );
+        assert_eq!(
+            norito::json::from_value::<SorafsProofOutcomeSubmissionV1>(expected_potr)
+                .expect("decode PoTR submission"),
+            potr
+        );
+
+        for malformed in [
+            r#"{"proof_kind":"unknown","value":{"archive_payload":"AAEC"}}"#,
+            r#"{"proof_kind":"pdp","value":{"archive_payload":"***"}}"#,
+            r#"{"proof_kind":"potr","value":{"receipt_payload":"BAU="}}"#,
+            r#"{"proof_kind":"potr","value":{"receipt_payload":"BAU=","admission_envelope_digest":[7]}}"#,
+            r#"{"proof_kind":"pdp","value":{"archive_payload":"AAEC","receipt_payload":"BAU="}}"#,
+            r#"{"proof_kind":"pdp","proof_kind":"potr","value":{"archive_payload":"AAEC"}}"#,
+            r#"{"proof_kind":"pdp","value":{"archive_payload":"AAEC","archive_payload":"AAEC"}}"#,
+        ] {
+            assert!(
+                norito::json::from_str::<SorafsProofOutcomeSubmissionV1>(malformed).is_err(),
+                "malformed proof-outcome JSON must fail closed: {malformed}"
+            );
+        }
+    }
+
+    #[test]
+    fn proof_outcome_submission_schema_references_explicit_payloads() {
+        use core::any::TypeId;
+
+        use iroha_schema::{IntoSchema as _, Metadata};
+
+        let schema = SorafsProofOutcomeSubmissionV1::schema();
+        let Metadata::Enum(metadata) = schema
+            .get::<SorafsProofOutcomeSubmissionV1>()
+            .expect("proof-outcome enum schema")
+        else {
+            panic!("proof-outcome schema must be an enum");
+        };
+        assert_eq!(metadata.variants.len(), 2);
+        assert_eq!(metadata.variants[0].tag, "pdp");
+        assert_eq!(metadata.variants[0].discriminant, 0);
+        assert_eq!(
+            metadata.variants[0].ty,
+            Some(TypeId::of::<SorafsPdpProofOutcomeSubmissionV1>())
+        );
+        assert_eq!(metadata.variants[1].tag, "potr");
+        assert_eq!(metadata.variants[1].discriminant, 1);
+        assert_eq!(
+            metadata.variants[1].ty,
+            Some(TypeId::of::<SorafsPotrProofOutcomeSubmissionV1>())
+        );
+        assert!(schema.contains_key::<SorafsPdpProofOutcomeSubmissionV1>());
+        assert!(schema.contains_key::<SorafsPotrProofOutcomeSubmissionV1>());
     }
 
     #[test]
@@ -2286,6 +2430,20 @@ mod tests {
             [0x73; 32],
             "provider evidence".to_owned(),
             "appeal-1".to_owned(),
+        ));
+        assert_slice_roundtrip(SetSorafsProofOutcomeSignerPolicy::new(
+            proof_outcome_signer_policy(),
+        ));
+        assert_slice_roundtrip(SubmitSorafsProofOutcome::new(
+            SorafsProofOutcomeSubmissionV1::Pdp(SorafsPdpProofOutcomeSubmissionV1 {
+                archive_payload: vec![0x74, 0x75],
+            }),
+        ));
+        assert_slice_roundtrip(SubmitSorafsProofOutcome::new(
+            SorafsProofOutcomeSubmissionV1::Potr(SorafsPotrProofOutcomeSubmissionV1 {
+                receipt_payload: vec![0x76, 0x77],
+                admission_envelope_digest: [0x78; 32],
+            }),
         ));
         assert_slice_roundtrip(SetSorafsModerationPolicy::new(moderation_policy()));
         assert_slice_roundtrip(SubmitSorafsModerationAppeal::new(moderation_appeal_intake()));
@@ -2498,6 +2656,27 @@ mod tests {
                 "provider evidence".to_owned(),
                 "appeal-1".to_owned(),
             ),
+        );
+        assert_registry_decodes(
+            &registry,
+            SetSorafsProofOutcomeSignerPolicy::new(proof_outcome_signer_policy()),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Pdp(
+                SorafsPdpProofOutcomeSubmissionV1 {
+                    archive_payload: vec![0x74, 0x75],
+                },
+            )),
+        );
+        assert_registry_decodes(
+            &registry,
+            SubmitSorafsProofOutcome::new(SorafsProofOutcomeSubmissionV1::Potr(
+                SorafsPotrProofOutcomeSubmissionV1 {
+                    receipt_payload: vec![0x76, 0x77],
+                    admission_envelope_digest: [0x78; 32],
+                },
+            )),
         );
         assert_registry_decodes(
             &registry,

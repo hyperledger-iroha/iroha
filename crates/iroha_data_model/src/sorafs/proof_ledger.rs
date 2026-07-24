@@ -11,10 +11,7 @@ use norito::codec::{Decode, Encode};
 
 use crate::{
     account::AccountId,
-    sorafs::{
-        capacity::ProviderId,
-        pin_registry::ManifestDigest,
-    },
+    sorafs::{capacity::ProviderId, pin_registry::ManifestDigest},
 };
 
 /// First-release proof-outcome projection version.
@@ -315,6 +312,19 @@ pub struct ProofOutcomeFinalizedCursorV1 {
     /// Finalized block hash resolved from that same immutable state view.
     #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
     pub block_hash: [u8; 32],
+}
+
+/// One authoritative proof outcome anchored to finalized chain state.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ProofOutcomeFinalizedRecordV1 {
+    /// Finalized state anchor at which the outcome was read.
+    pub finalized_cursor: ProofOutcomeFinalizedCursorV1,
+    /// Chain-authoritative PDP or PoTR outcome.
+    pub outcome: ProofOutcomeRecordV1,
 }
 
 /// Exclusive cursor for one committed proof-outcome event.

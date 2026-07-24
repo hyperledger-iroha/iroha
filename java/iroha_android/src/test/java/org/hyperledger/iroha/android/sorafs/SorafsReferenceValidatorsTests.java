@@ -345,6 +345,85 @@ public final class SorafsReferenceValidatorsTests {
         SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
             head, new byte[][] {second, first}, null, null, 123L);
     assert reordered.contains("\"status\": \"Error\"") : reordered;
+
+    final String blockSignatureOutcome =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_bad_signature_v1.to"),
+            "dag_block_bad_signature_v1.to",
+            null,
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_bad_signature_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(blockSignatureOutcome) : blockSignatureOutcome;
+
+    final String trailingBytesOutcome =
+        SorafsReferenceValidators.validateGovernanceDagBlockJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_trailing_bytes_v1.to"),
+            "dag_block_trailing_bytes_v1.to",
+            null,
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_trailing_bytes_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(trailingBytesOutcome) : trailingBytesOutcome;
+
+    final String headSignatureOutcome =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_signature_v1.to"),
+            new byte[][] {first, second},
+            "dag_head_bad_signature_v1.to",
+            new String[] {"dag_block_0_v1.to", "dag_block_1_v1.to"},
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_signature_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(headSignatureOutcome) : headSignatureOutcome;
+
+    final String predecessorOutcome =
+        SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_predecessor_v1.to"),
+            new byte[][] {
+              first,
+              fixture(
+                  "sorafs_manifest",
+                  "governance",
+                  "dag_block_1_bad_predecessor_v1.to")
+            },
+            "dag_head_bad_predecessor_v1.to",
+            new String[] {
+              "dag_block_0_v1.to",
+              "dag_block_1_bad_predecessor_v1.to"
+            },
+            123L);
+    assert new String(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_predecessor_validation_outcome_v1.json"),
+            StandardCharsets.UTF_8)
+        .equals(predecessorOutcome) : predecessorOutcome;
   }
 
   private static void signsOrderbookFixtureWhenNativeBridgeIsAvailable() throws IOException {
@@ -486,7 +565,8 @@ public final class SorafsReferenceValidatorsTests {
         new Path[] {
           cwd.resolve(relative),
           cwd.resolve("..").resolve(relative),
-          cwd.resolve("..").resolve("..").resolve(relative)
+          cwd.resolve("..").resolve("..").resolve(relative),
+          cwd.resolve("..").resolve("..").resolve("..").resolve(relative)
         };
     for (final Path candidate : candidates) {
       final Path normalized = candidate.toAbsolutePath().normalize();

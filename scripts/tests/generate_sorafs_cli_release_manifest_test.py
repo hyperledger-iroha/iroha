@@ -184,7 +184,45 @@ def test_manifest_rejects_symlink_and_hardlink_candidates(tmp_path: Path) -> Non
         _build(candidates)
     symlink.unlink()
 
+    directory_symlink = candidate / "linked-directory"
+    directory_symlink.symlink_to(
+        candidate / "platform-archive",
+        target_is_directory=True,
+    )
+    with pytest.raises(release_manifest.ManifestError, match="symlink"):
+        _build(candidates)
+    directory_symlink.unlink()
+
     hardlink = candidate / "hardlinked"
     os.link(candidate / "sorafs_cli", hardlink)
     with pytest.raises(release_manifest.ManifestError, match="hard link"):
+        _build(candidates)
+
+
+def test_manifest_candidate_discovery_enforces_depth_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _write_candidates(candidates)
+    target = release_manifest.TARGETS[0]
+    candidate = candidates / f"sorafs-cli-{VERSION}-{target}"
+    (candidate / "platform-archive/too-deep").mkdir()
+    monkeypatch.setattr(release_manifest, "MAX_CANDIDATE_TREE_DEPTH", 1)
+
+    with pytest.raises(release_manifest.ManifestError, match="depth limit"):
+        _build(candidates)
+
+
+def test_manifest_candidate_discovery_enforces_entry_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidates = tmp_path / "candidates"
+    candidates.mkdir()
+    _write_candidates(candidates)
+    monkeypatch.setattr(release_manifest, "MAX_ENTRIES_PER_TARGET", 3)
+
+    with pytest.raises(release_manifest.ManifestError, match="3-entry limit"):
         _build(candidates)

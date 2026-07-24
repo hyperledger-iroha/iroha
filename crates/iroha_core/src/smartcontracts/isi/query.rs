@@ -1031,7 +1031,8 @@ fn preflight_singular_source_materialization(
         SingularQueryBox::FindSorafsReservePolicy(_)
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
-        | SingularQueryBox::FindSorafsReserveAppealById(_) => {
+        | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveEvents(_) => {
             return Err(reject_unbounded("SoraFS reserve query"));
         }
         SingularQueryBox::FindSorafsPopIssuerPolicy(_)
@@ -1048,6 +1049,10 @@ fn preflight_singular_source_materialization(
         | SingularQueryBox::FindSorafsRepairStatus(_)
         | SingularQueryBox::FindSorafsRepairEvents(_) => {
             return Err(reject_unbounded("SoraFS repair query"));
+        }
+        SingularQueryBox::FindSorafsProofOutcome(_)
+        | SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {
+            return Err(reject_unbounded("SoraFS proof-outcome query"));
         }
         SingularQueryBox::FindSorafsModerationPolicy(_)
         | SingularQueryBox::FindSorafsModerationAppeal(_)
@@ -1240,6 +1245,9 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindSorafsReserveAppealById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindSorafsReserveEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindSorafsPopIssuerPolicy(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
@@ -1271,6 +1279,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsRepairEvents(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsProofOutcome(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindSorafsProofOutcomeEvents(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
             SingularQueryBox::FindSorafsModerationPolicy(q) => {
@@ -6969,6 +6983,96 @@ mod tests {
         )
         .expect_err("unindexed aliases must fail closed without scanning accounts");
         assert!(matches!(error, Error::Conversion(_)));
+    }
+
+    #[test]
+    fn proof_outcome_singular_query_is_dispatched_but_metered_ivm_fails_closed() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = || {
+            SingularQueryBox::FindSorafsProofOutcomeEvents(
+                iroha_data_model::query::sorafs::prelude::FindSorafsProofOutcomeEvents {
+                    expected_finalized_cursor: None,
+                    after: None,
+                    limit: 1,
+                },
+            )
+        };
+        let view = state.view();
+
+        let preflight_error = preflight_singular_source_materialization(
+            &query(),
+            &view,
+            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        )
+        .expect_err("metered IVM query must reject decode-heavy materialization");
+        assert!(
+            matches!(
+                &preflight_error,
+                Error::Conversion(message)
+                    if message.contains("SoraFS proof-outcome query")
+            ),
+            "unexpected preflight error: {preflight_error}"
+        );
+
+        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
+            .expect_err("empty test state has no finalized anchor");
+        assert!(
+            matches!(
+                &dispatch_error,
+                Error::Conversion(message)
+                    if message.contains("require at least one committed block")
+            ),
+            "unexpected dispatch error: {dispatch_error}"
+        );
+    }
+
+    #[test]
+    fn proof_outcome_lookup_is_dispatched_but_metered_ivm_fails_closed() {
+        let state = State::new_for_testing(
+            World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = || {
+            SingularQueryBox::FindSorafsProofOutcome(
+                iroha_data_model::query::sorafs::prelude::FindSorafsProofOutcome {
+                    kind: iroha_data_model::sorafs::proof_ledger::ProofOutcomeKindV1::Pdp,
+                    identity_digest: [0x51; 32],
+                    expected_finalized_cursor: None,
+                },
+            )
+        };
+        let view = state.view();
+
+        let preflight_error = preflight_singular_source_materialization(
+            &query(),
+            &view,
+            Some(QueryExecutionBudget::from_weighted_limit(1_000_000, 1, 1)),
+        )
+        .expect_err("metered IVM lookup must reject decode-heavy materialization");
+        assert!(
+            matches!(
+                &preflight_error,
+                Error::Conversion(message)
+                    if message.contains("SoraFS proof-outcome query")
+            ),
+            "unexpected preflight error: {preflight_error}"
+        );
+
+        let dispatch_error = ExecuteSingularQuery::execute(query(), &view)
+            .expect_err("empty test state has no finalized anchor");
+        assert!(
+            matches!(
+                &dispatch_error,
+                Error::Conversion(message)
+                    if message.contains("require at least one committed block")
+            ),
+            "unexpected dispatch error: {dispatch_error}"
+        );
     }
 
     #[test]

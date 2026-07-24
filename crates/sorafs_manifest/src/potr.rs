@@ -13,6 +13,8 @@ pub const POTR_RECEIPT_VERSION_V1: u8 = 1;
 pub const POTR_RECEIPT_SIGNATURE_DOMAIN_V1: &[u8] = b"sorafs.potr.receipt.signature.v1\0";
 /// Domain separator used to derive the authoritative signed-receipt identity.
 pub const POTR_RECEIPT_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.potr.receipt.digest.v1\0";
+/// Domain separator used to derive the authoritative PoTR request-scope identity.
+pub const POTR_REQUEST_SCOPE_DOMAIN_V1: &[u8] = b"sorafs.potr.request-scope.v1\0";
 /// Maximum UTF-8 byte length accepted for an optional receipt note.
 pub const POTR_RECEIPT_MAX_NOTE_BYTES_V1: usize = 1_024;
 
@@ -413,13 +415,30 @@ impl PotrReceiptV1 {
         let request_id = self
             .request_id
             .ok_or(PotrReceiptValidationError::MissingRequestId)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"sorafs.potr.request-scope.v1\0");
-        hasher.update(&self.manifest_digest);
-        hasher.update(&self.provider_id);
-        hasher.update(&request_id);
-        Ok(*hasher.finalize().as_bytes())
+        Ok(potr_request_scope_digest_v1(
+            self.manifest_digest,
+            self.provider_id,
+            request_id,
+        ))
     }
+}
+
+/// Derive the authoritative exactly-once identity for one PoTR request scope.
+///
+/// Gateways can compute this identity before a receipt exists, while
+/// validators recompute the same bytes from the final signed receipt.
+#[must_use]
+pub fn potr_request_scope_digest_v1(
+    manifest_digest: [u8; 32],
+    provider_id: [u8; 32],
+    request_id: [u8; 16],
+) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(POTR_REQUEST_SCOPE_DOMAIN_V1);
+    hasher.update(&manifest_digest);
+    hasher.update(&provider_id);
+    hasher.update(&request_id);
+    *hasher.finalize().as_bytes()
 }
 
 /// Outcome classification for PoTR receipts.
@@ -925,6 +944,15 @@ mod tests {
         let digest = receipt.signed_receipt_digest().expect("signed digest");
         assert_ne!(digest, [0; 32]);
         let scope = receipt.request_scope_digest().expect("request scope");
+        assert_eq!(
+            scope,
+            potr_request_scope_digest_v1(
+                receipt.manifest_digest,
+                receipt.provider_id,
+                receipt.request_id.expect("fixture request id"),
+            ),
+            "pre-receipt request-scope derivation must match the signed receipt"
+        );
 
         let mut replay = receipt.clone();
         replay.recorded_at_ms = replay.recorded_at_ms.saturating_add(1);

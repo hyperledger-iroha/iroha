@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,10 @@ _MAX_SCALED_XOR = (
 
 def _fixture(path: Path) -> bytes:
     return path.read_bytes()
+
+
+def _governance_outcome_fixture(name: str) -> dict[str, object]:
+    return json.loads((_GOVERNANCE_FIXTURES / name).read_text(encoding="utf-8"))
 
 
 def _pdp_fixtures() -> tuple[bytes, bytes, bytes]:
@@ -620,6 +625,61 @@ def test_validate_governance_dag_head_chain_rejects_reordered_blocks() -> None:
         "governance-dag-block-0.to",
         "governance-dag-block-1.to",
     ]
+
+
+def test_governance_dag_negative_vectors_match_reference_outcomes() -> None:
+    root = _fixture(_GOVERNANCE_FIXTURES / "dag_block_0_v1.to")
+    child = _fixture(_GOVERNANCE_FIXTURES / "dag_block_1_v1.to")
+
+    block_signature_outcome = validate_governance_dag_block(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_block_bad_signature_v1.to"),
+        label="dag_block_bad_signature_v1.to",
+        generated_at_unix=123,
+    )
+    assert block_signature_outcome == _governance_outcome_fixture(
+        "dag_block_bad_signature_validation_outcome_v1.json"
+    )
+
+    trailing_bytes_outcome = validate_governance_dag_block(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_block_trailing_bytes_v1.to"),
+        label="dag_block_trailing_bytes_v1.to",
+        generated_at_unix=123,
+    )
+    assert trailing_bytes_outcome == _governance_outcome_fixture(
+        "dag_block_trailing_bytes_validation_outcome_v1.json"
+    )
+
+    head_signature_outcome = validate_governance_dag_head_chain(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_head_bad_signature_v1.to"),
+        [
+            SorafsGovernanceDagBlockInput(root, "dag_block_0_v1.to"),
+            SorafsGovernanceDagBlockInput(child, "dag_block_1_v1.to"),
+        ],
+        head_label="dag_head_bad_signature_v1.to",
+        generated_at_unix=123,
+    )
+    assert head_signature_outcome == _governance_outcome_fixture(
+        "dag_head_bad_signature_validation_outcome_v1.json"
+    )
+
+    predecessor_outcome = validate_governance_dag_head_chain(
+        _fixture(_GOVERNANCE_FIXTURES / "dag_head_bad_predecessor_v1.to"),
+        [
+            SorafsGovernanceDagBlockInput(root, "dag_block_0_v1.to"),
+            SorafsGovernanceDagBlockInput(
+                _fixture(
+                    _GOVERNANCE_FIXTURES
+                    / "dag_block_1_bad_predecessor_v1.to"
+                ),
+                "dag_block_1_bad_predecessor_v1.to",
+            ),
+        ],
+        head_label="dag_head_bad_predecessor_v1.to",
+        generated_at_unix=123,
+    )
+    assert predecessor_outcome == _governance_outcome_fixture(
+        "dag_head_bad_predecessor_validation_outcome_v1.json"
+    )
 
 
 def test_governance_dag_wrappers_enforce_labels_and_block_count() -> None:

@@ -201,6 +201,7 @@ pub fn impl_derive_visit(emitter: &mut Emitter, input: &syn::DeriveInput) -> Tok
         "fn visit_find_sorafs_reserve_provider_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveProviderById)",
         "fn visit_find_sorafs_reserve_movement_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveMovementById)",
         "fn visit_find_sorafs_reserve_appeal_by_id(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveAppealById)",
+        "fn visit_find_sorafs_reserve_events(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsReserveEvents)",
         "fn visit_find_sorafs_moderation_policy(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationPolicy)",
         "fn visit_find_sorafs_moderation_juror_eligibility(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationJurorEligibility)",
         "fn visit_find_sorafs_moderation_case(operation: &::iroha_executor::data_model::query::sorafs::prelude::FindSorafsModerationCase)",

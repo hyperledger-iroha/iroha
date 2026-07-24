@@ -1,6 +1,9 @@
 //! Storage configuration helpers for the embedded SoraFS worker.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use iroha_config::parameters::actual;
 use iroha_data_model::{
@@ -580,6 +583,8 @@ pub struct RuntimeRetentionPolicy {
     event_history_limit: usize,
     state_entry_limit: usize,
     checkpoint_max_bytes: u64,
+    proof_outcome_forwarder_interval: Duration,
+    proof_outcome_max_attempts: u32,
 }
 
 impl RuntimeRetentionPolicy {
@@ -591,10 +596,13 @@ impl RuntimeRetentionPolicy {
         checkpoint_max_bytes: u64,
     ) -> Self {
         let event_history_limit = event_history_limit.max(1);
+        let defaults = actual::SorafsRuntimeRetention::default();
         Self {
             event_history_limit,
             state_entry_limit: state_entry_limit.max(event_history_limit),
             checkpoint_max_bytes: checkpoint_max_bytes.max(1),
+            proof_outcome_forwarder_interval: defaults.proof_outcome_forwarder_interval,
+            proof_outcome_max_attempts: defaults.proof_outcome_max_attempts.max(1),
         }
     }
 
@@ -615,15 +623,30 @@ impl RuntimeRetentionPolicy {
     pub fn checkpoint_max_bytes(self) -> u64 {
         self.checkpoint_max_bytes
     }
+
+    /// Finalized reconciliation cadence for durable proof-outcome delivery.
+    #[must_use]
+    pub fn proof_outcome_forwarder_interval(self) -> Duration {
+        self.proof_outcome_forwarder_interval
+    }
+
+    /// Submission attempts allowed for one exact proof-outcome transaction.
+    #[must_use]
+    pub fn proof_outcome_max_attempts(self) -> u32 {
+        self.proof_outcome_max_attempts
+    }
 }
 
 impl From<actual::SorafsRuntimeRetention> for RuntimeRetentionPolicy {
     fn from(policy: actual::SorafsRuntimeRetention) -> Self {
-        Self::new(
+        let mut resolved = Self::new(
             policy.event_history_limit,
             policy.state_entry_limit,
             policy.checkpoint_max_bytes.0,
-        )
+        );
+        resolved.proof_outcome_forwarder_interval = policy.proof_outcome_forwarder_interval;
+        resolved.proof_outcome_max_attempts = policy.proof_outcome_max_attempts.max(1);
+        resolved
     }
 }
 
@@ -1384,6 +1407,8 @@ mod tests {
             event_history_limit: 17,
             state_entry_limit: 23,
             checkpoint_max_bytes: iroha_config::base::util::Bytes(4_096),
+            proof_outcome_forwarder_interval: Duration::from_millis(250),
+            proof_outcome_max_attempts: 5,
         };
         actual.alias = Some("tenant.alpha".into());
         actual.adverts = actual::SorafsAdvertOverrides {
@@ -1446,10 +1471,14 @@ mod tests {
                 terminal_retention_secs: 7_200,
             }
         );
+        assert_eq!(cfg.runtime_retention().event_history_limit(), 17);
+        assert_eq!(cfg.runtime_retention().state_entry_limit(), 23);
+        assert_eq!(cfg.runtime_retention().checkpoint_max_bytes(), 4_096);
         assert_eq!(
-            cfg.runtime_retention(),
-            RuntimeRetentionPolicy::new(17, 23, 4_096)
+            cfg.runtime_retention().proof_outcome_forwarder_interval(),
+            Duration::from_millis(250)
         );
+        assert_eq!(cfg.runtime_retention().proof_outcome_max_attempts(), 5);
         assert_eq!(cfg.alias(), Some(&"tenant.alpha".to_string()));
         let adverts = cfg.adverts();
         assert_eq!(
@@ -1531,10 +1560,13 @@ mod tests {
 
     #[test]
     fn runtime_retention_clamps_zero_safety_ceilings() {
+        let policy = RuntimeRetentionPolicy::new(0, 0, 0);
+        assert_eq!(policy, RuntimeRetentionPolicy::new(1, 1, 1));
         assert_eq!(
-            RuntimeRetentionPolicy::new(0, 0, 0),
-            RuntimeRetentionPolicy::new(1, 1, 1)
+            policy.proof_outcome_forwarder_interval(),
+            Duration::from_secs(1)
         );
+        assert_eq!(policy.proof_outcome_max_attempts(), 8);
     }
 
     #[test]

@@ -2891,30 +2891,15 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
     let manifest_digest_hex = hex_encode(manifest.digest().expect("manifest digest").as_bytes());
     let provider_id_hex = "11".repeat(32);
 
-    let success_item = norito::json!({
-        "manifest_digest_hex": (manifest_digest_hex.clone()),
-        "provider_id_hex": (provider_id_hex.clone()),
-        "proof_kind": "por",
-        "result": "success",
-        "latency_ms": 42,
-        "leaf_index_flat": 0,
-        "chunk_index": 0
-    });
-    let failure_item = norito::json!({
-        "manifest_digest_hex": manifest_digest_hex,
-        "provider_id_hex": (provider_id_hex.clone()),
-        "proof_kind": "por",
-        "result": "failure",
-        "latency_ms": 75,
-        "leaf_index_flat": 1,
-        "chunk_index": 1,
-        "failure_reason": "invalid_proof"
-    });
+    let success_item = canonical_por_stream_item(&manifest_digest_hex, &provider_id_hex, 42, 7);
+    let second_success_item =
+        canonical_por_stream_item(&manifest_digest_hex, &provider_id_hex, 75, 8);
     let success_line = String::from_utf8(to_vec(&success_item).expect("success json encode"))
         .expect("success json utf8");
-    let failure_line = String::from_utf8(to_vec(&failure_item).expect("failure json encode"))
-        .expect("failure json utf8");
-    let response_body = format!("{success_line}\n{failure_line}\n");
+    let second_success_line =
+        String::from_utf8(to_vec(&second_success_item).expect("second success json encode"))
+            .expect("second success json utf8");
+    let response_body = format!("{success_line}\n{second_success_line}\n");
 
     let server = MockServer::start();
     let mock = server.mock(move |when, then| {
@@ -2953,30 +2938,18 @@ fn proof_stream_consumes_ndjson_and_reports_metrics() {
     assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(2));
     assert_eq!(
         metrics.get("success_total").and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         metrics.get("failure_total").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     let reason_counts = metrics
         .get("failure_by_reason")
         .and_then(Value::as_object)
         .expect("failure map");
-    assert_eq!(
-        reason_counts.get("invalid_proof").and_then(Value::as_u64),
-        Some(1)
-    );
-
-    let samples = summary
-        .get("failure_samples")
-        .and_then(Value::as_array)
-        .expect("failure samples array");
-    assert_eq!(samples.len(), 1);
-    assert_eq!(
-        samples[0].get("failure_reason").and_then(Value::as_str),
-        Some("invalid_proof")
-    );
+    assert!(reason_counts.is_empty());
+    assert!(summary.get("failure_samples").is_none());
 }
 
 #[test]
@@ -2985,9 +2958,9 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
     let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
     let manifest_hex = manifest_digest_hex(&manifest_path).expect("manifest digest");
     let provider_id_hex = "22".repeat(32);
-    let ndjson = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"por\",\"result\":\"success\",\"latency_ms\":42}}\n{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"por\",\"result\":\"failure\",\"failure_reason\":\"invalid_proof\",\"latency_ms\":105}}\n"
-    );
+    let first_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 9);
+    let second_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 105, 10);
+    let ndjson = format!("{first_line}\n{second_line}\n");
 
     let server = MockServer::start();
     let mock = server.mock(move |when, then| {
@@ -3030,11 +3003,11 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
     assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(2));
     assert_eq!(
         metrics.get("success_total").and_then(Value::as_u64),
-        Some(1)
+        Some(2)
     );
     assert_eq!(
         metrics.get("failure_total").and_then(Value::as_u64),
-        Some(1)
+        Some(0)
     );
     let failure_breakdown = summary
         .get("metrics")
@@ -3042,12 +3015,7 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
         .and_then(|metrics| metrics.get("failure_by_reason"))
         .and_then(Value::as_object)
         .expect("failure breakdown object");
-    assert_eq!(
-        failure_breakdown
-            .get("invalid_proof")
-            .and_then(Value::as_u64),
-        Some(1)
-    );
+    assert!(failure_breakdown.is_empty());
     if let Some(avg) = metrics
         .get("latency_ms")
         .and_then(Value::as_object)
@@ -3091,9 +3059,7 @@ fn proof_stream_transport_boundary_is_bounded_canonical_and_payload_free() {
     let (manifest_path, _plan_path) = prepare_manifest_artifacts(tempdir.path());
     let manifest_hex = manifest_digest_hex(&manifest_path).expect("manifest digest");
     let provider_id_hex = "24".repeat(32);
-    let valid_line = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"por\",\"result\":\"success\"}}"
-    );
+    let valid_line = canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 11);
     let server = MockServer::start();
 
     let empty = server.mock(|when, then| {
@@ -4626,6 +4592,139 @@ fn manifest_digest_hex(path: &Path) -> Result<String, Box<dyn std::error::Error>
     Ok(hex_encode(digest.as_bytes()))
 }
 
+fn canonical_por_stream_item(
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    latency_ms: u32,
+    sample_seed: u64,
+) -> Value {
+    let payload = (0_u16..512)
+        .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+        .collect::<Vec<_>>();
+    let mut store = ChunkStore::new();
+    store
+        .ingest_bytes(&payload)
+        .expect("ingest canonical PoR stream fixture");
+    let (flat_index, proof) = store
+        .sample_leaves(1, sample_seed, &payload)
+        .expect("sample canonical PoR stream fixture")
+        .into_iter()
+        .next()
+        .expect("one canonical PoR stream sample");
+    let mut map = sample_to_map(flat_index, &proof);
+    map.insert(
+        "manifest_digest_hex".into(),
+        Value::from(manifest_digest_hex),
+    );
+    map.insert("provider_id_hex".into(), Value::from(provider_id_hex));
+    map.insert("proof_kind".into(), Value::from("por"));
+    map.insert("result".into(), Value::from("success"));
+    map.insert("latency_ms".into(), Value::from(u64::from(latency_ms)));
+    Value::Object(map)
+}
+
+fn canonical_por_stream_line(
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    latency_ms: u32,
+    sample_seed: u64,
+) -> String {
+    norito::json::to_string(&canonical_por_stream_item(
+        manifest_digest_hex,
+        provider_id_hex,
+        latency_ms,
+        sample_seed,
+    ))
+    .expect("encode canonical PoR stream fixture")
+}
+
+fn assert_local_por_verification_failure_summary(
+    stdout: &[u8],
+    manifest_digest_hex: &str,
+    provider_id_hex: &str,
+    expected_root_hex: &str,
+) {
+    let rendered = std::str::from_utf8(stdout).expect("proof-stream stdout utf8");
+    let summary: Value = norito::json::from_str(rendered.trim()).expect(
+        "local verification failure must suppress the canonical event and emit one summary",
+    );
+    let metrics = summary
+        .get("metrics")
+        .and_then(Value::as_object)
+        .expect("gateway outcome metrics");
+    assert_eq!(metrics.get("item_total").and_then(Value::as_u64), Some(1));
+    assert_eq!(
+        metrics.get("success_total").and_then(Value::as_u64),
+        Some(1),
+        "the canonical gateway outcome remains a success"
+    );
+    assert_eq!(
+        metrics.get("failure_total").and_then(Value::as_u64),
+        Some(0),
+        "local root mismatches are not gateway failure rows"
+    );
+    assert_eq!(
+        summary.get("verification_total").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        summary
+            .get("verification_successes")
+            .and_then(Value::as_u64),
+        Some(0)
+    );
+    assert_eq!(
+        summary.get("verification_failures").and_then(Value::as_u64),
+        Some(1)
+    );
+    assert!(
+        summary.get("failure_samples").is_none(),
+        "canonical failure_samples must never contain a successful PoR row"
+    );
+
+    let samples = summary
+        .get("verification_failure_samples")
+        .and_then(Value::as_array)
+        .expect("out-of-band local verification samples");
+    assert_eq!(samples.len(), 1);
+    let sample = samples[0]
+        .as_object()
+        .expect("local verification sample object");
+    assert_eq!(
+        sample.get("manifest_digest_hex").and_then(Value::as_str),
+        Some(manifest_digest_hex)
+    );
+    assert_eq!(
+        sample.get("provider_id_hex").and_then(Value::as_str),
+        Some(provider_id_hex)
+    );
+    assert_eq!(
+        sample.get("expected_root_hex").and_then(Value::as_str),
+        Some(expected_root_hex)
+    );
+    assert_eq!(
+        sample.get("reason").and_then(Value::as_str),
+        Some("local_verification_failed")
+    );
+    for index in [
+        "leaf_index_flat",
+        "chunk_index",
+        "segment_index",
+        "leaf_index",
+    ] {
+        assert!(
+            sample.get(index).and_then(Value::as_u64).is_some(),
+            "local verification sample must identify `{index}`"
+        );
+    }
+    for canonical_row_field in ["result", "failure_reason", "proof"] {
+        assert!(
+            !sample.contains_key(canonical_row_field),
+            "out-of-band verification sample must not masquerade as a canonical row"
+        );
+    }
+}
+
 fn signed_potr_receipt_b64(
     manifest_digest_hex: &str,
     provider_id_hex: &str,
@@ -4673,6 +4772,46 @@ fn signed_potr_receipt_b64(
     BASE64_STANDARD.encode(to_bytes(&signed).expect("encode signed fixture PoTR receipt"))
 }
 
+fn committed_proof_provenance_fragment(
+    outcome_identity_hex: &str,
+    outcome_digest_hex: &str,
+    committed_at_ms: u64,
+) -> String {
+    format!(
+        concat!(
+            "\"outcome_identity_hex\":\"{outcome_identity_hex}\",",
+            "\"outcome_digest_hex\":\"{outcome_digest_hex}\",",
+            "\"admission_envelope_digest_hex\":\"{}\",",
+            "\"finalized_block_height\":17,",
+            "\"finalized_block_hash_hex\":\"{}\",",
+            "\"committed_at_ms\":{committed_at_ms}"
+        ),
+        "ad".repeat(32),
+        "fe".repeat(32),
+    )
+}
+
+fn signed_potr_receipt_provenance(receipt_b64: &str) -> (String, String, u64) {
+    let bytes = BASE64_STANDARD
+        .decode(receipt_b64)
+        .expect("decode signed fixture PoTR receipt");
+    let receipt: PotrReceiptV1 =
+        decode_from_bytes(&bytes).expect("decode signed fixture PoTR receipt");
+    (
+        hex_encode(
+            receipt
+                .request_scope_digest()
+                .expect("derive fixture request scope"),
+        ),
+        hex_encode(
+            receipt
+                .signed_receipt_digest()
+                .expect("digest signed fixture receipt"),
+        ),
+        receipt.recorded_at_ms.saturating_add(5),
+    )
+}
+
 #[test]
 fn proof_stream_pdp_requests_bind_governed_challenge() -> Result<(), Box<dyn std::error::Error>> {
     let tempdir = tempdir()?;
@@ -4680,8 +4819,13 @@ fn proof_stream_pdp_requests_bind_governed_challenge() -> Result<(), Box<dyn std
     let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x11u8; 32]);
     let challenge_id_hex = hex_encode([0x12u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x13; 32]),
+        1_700_000_000_000,
+    );
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"success\"}}\n"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"success\"}}\n"
     );
     let challenge_request_fragment = format!("\"challenge_id_hex\":\"{challenge_id_hex}\"");
 
@@ -4900,6 +5044,7 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
     let deadline_ms: u32 = 45_000;
     let latency_ms: u32 = 120;
     let request_tag: u8 = 1;
+    let request_id_hex = hex_encode([request_tag; 16]);
     let receipt_b64 = signed_potr_receipt_b64(
         &manifest_hex,
         &provider_id_hex,
@@ -4911,17 +5056,28 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
     );
     let recorded_at_ms =
         1_700_000_000_000_u64 + u64::from(request_tag) * 1_000_000 + u64::from(latency_ms) + 5;
+    let (outcome_identity_hex, outcome_digest_hex, committed_at_ms) =
+        signed_potr_receipt_provenance(&receipt_b64);
+    let provenance = committed_proof_provenance_fragment(
+        &outcome_identity_hex,
+        &outcome_digest_hex,
+        committed_at_ms,
+    );
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":{latency_ms},\"deadline_ms\":{deadline_ms},\"tier\":\"hot\",\"recorded_at_ms\":{recorded_at_ms},\"receipt_b64\":\"{receipt_b64}\"}}\n"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":{latency_ms},\"deadline_ms\":{deadline_ms},\"tier\":\"hot\",\"recorded_at_ms\":{recorded_at_ms},\"receipt_b64\":\"{receipt_b64}\"}}\n"
     );
 
     let server = MockServer::start();
+    let request_id_hex_for_mock = request_id_hex.clone();
     let mock = server.mock(move |when, then| {
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
             .body_includes("\"proof_kind\":\"potr\"")
-            .body_includes(format!("\"deadline_ms\":{}", deadline_ms));
+            .body_includes(format!("\"deadline_ms\":{}", deadline_ms))
+            .body_includes(format!(
+                "\"orchestrator_job_id_hex\":\"{request_id_hex_for_mock}\""
+            ));
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
             .body(response_body.clone());
@@ -4935,6 +5091,7 @@ fn proof_stream_potr_requests_require_deadline() -> Result<(), Box<dyn std::erro
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=potr")
         .arg(format!("--deadline-ms={deadline_ms}"))
+        .arg(format!("--orchestrator-job-id-hex={request_id_hex}"))
         .assert()
         .success();
 
@@ -4981,8 +5138,13 @@ fn proof_stream_fails_when_gateway_reports_failure() -> Result<(), Box<dyn std::
     let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x33u8; 32]);
     let challenge_id_hex = hex_encode([0x34u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x35; 32]),
+        1_700_000_000_000,
+    );
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"timeout\"}}\n"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"storage_unavailable\"}}\n"
     );
 
     let server = MockServer::start();
@@ -5022,8 +5184,13 @@ fn proof_stream_respects_max_failures_override() -> Result<(), Box<dyn std::erro
     let manifest_hex = manifest_digest_hex(&manifest_path)?;
     let provider_id_hex = hex_encode([0x44u8; 32]);
     let challenge_id_hex = hex_encode([0x45u8; 32]);
+    let provenance = committed_proof_provenance_fragment(
+        &challenge_id_hex,
+        &hex_encode([0x46; 32]),
+        1_700_000_000_000,
+    );
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"timeout\"}}\n"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"challenge_id_hex\":\"{challenge_id_hex}\",\"proof_kind\":\"pdp\",\"result\":\"failure\",\"failure_reason\":\"storage_unavailable\"}}\n"
     );
 
     let server = MockServer::start();
@@ -5060,7 +5227,8 @@ fn proof_stream_verification_failures_trigger_exit() -> Result<(), Box<dyn std::
     let provider_id_hex = hex_encode([0x55u8; 32]);
     let root_hex = hex_encode([0xAAu8; 32]);
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"por\",\"result\":\"success\",\"latency_ms\":42}}\n"
+        "{}\n",
+        canonical_por_stream_line(&manifest_hex, &provider_id_hex, 42, 12)
     );
 
     let server = MockServer::start();
@@ -5080,8 +5248,15 @@ fn proof_stream_verification_failures_trigger_exit() -> Result<(), Box<dyn std::
         .arg(format!("--torii-url={}", server.base_url()))
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg(format!("--por-root-hex={root_hex}"))
+        .arg("--emit-events=true")
         .assert()
         .failure();
+    assert_local_por_verification_failure_summary(
+        &assert.get_output().stdout,
+        &manifest_hex,
+        &provider_id_hex,
+        &root_hex,
+    );
     let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
     assert!(
         stderr.contains("local verification failures"),
@@ -5100,7 +5275,8 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
     let provider_id_hex = hex_encode([0x66u8; 32]);
     let root_hex = hex_encode([0xBBu8; 32]);
     let response_body = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"por\",\"result\":\"success\",\"latency_ms\":37}}\n"
+        "{}\n",
+        canonical_por_stream_line(&manifest_hex, &provider_id_hex, 37, 13)
     );
 
     let server = MockServer::start();
@@ -5113,7 +5289,7 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
             .body(response_body.clone());
     });
 
-    sorafs_cli_cmd()
+    let assert = sorafs_cli_cmd()
         .arg("proof")
         .arg("stream")
         .arg(format!("--manifest={}", manifest_path.display()))
@@ -5121,8 +5297,15 @@ fn proof_stream_verification_budget_allows_overrides() -> Result<(), Box<dyn std
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg(format!("--por-root-hex={root_hex}"))
         .arg("--max-verification-failures=1")
+        .arg("--emit-events=true")
         .assert()
         .success();
+    assert_local_por_verification_failure_summary(
+        &assert.get_output().stdout,
+        &manifest_hex,
+        &provider_id_hex,
+        &root_hex,
+    );
     mock.assert();
     Ok(())
 }
@@ -5135,25 +5318,9 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         write_proof_stream_manifest(tempdir.path(), "stream_potr_summary_manifest.to");
     let provider_id_hex = hex_encode([0x22u8; 32]);
     let manifest_hex = manifest_digest_hex(&manifest_path)?;
-    let trace_id = [0x44u8; 16];
-    let trace_hex = hex_encode(trace_id);
-    let success_latency_ms = 45_000;
-    let success_tag: u8 = 2;
-    let success_receipt_b64 = signed_potr_receipt_b64(
-        &manifest_hex,
-        &provider_id_hex,
-        90_000,
-        success_latency_ms,
-        PotrStatus::Success,
-        success_tag,
-        Some(trace_id),
-    );
-    let success_recorded_at_ms = 1_700_000_000_000_u64
-        + u64::from(success_tag) * 1_000_000
-        + u64::from(success_latency_ms)
-        + 5;
     let failure_latency_ms = 120_000;
     let failure_tag: u8 = 3;
+    let request_id_hex = hex_encode([failure_tag; 16]);
     let failure_receipt_b64 = signed_potr_receipt_b64(
         &manifest_hex,
         &provider_id_hex,
@@ -5167,12 +5334,16 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         + u64::from(failure_tag) * 1_000_000
         + u64::from(failure_latency_ms)
         + 5;
-
-    let success_line = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"success\",\"latency_ms\":{success_latency_ms},\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":{success_recorded_at_ms},\"trace_id\":\"{trace_hex}\",\"receipt_b64\":\"{success_receipt_b64}\"}}"
+    let (outcome_identity_hex, outcome_digest_hex, committed_at_ms) =
+        signed_potr_receipt_provenance(&failure_receipt_b64);
+    let provenance = committed_proof_provenance_fragment(
+        &outcome_identity_hex,
+        &outcome_digest_hex,
+        committed_at_ms,
     );
+
     let failure_line = format!(
-        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":{failure_latency_ms},\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":{failure_recorded_at_ms},\"receipt_b64\":\"{failure_receipt_b64}\"}}"
+        "{{\"manifest_digest_hex\":\"{manifest_hex}\",\"provider_id_hex\":\"{provider_id_hex}\",{provenance},\"proof_kind\":\"potr\",\"result\":\"failure\",\"failure_reason\":\"missed_deadline\",\"latency_ms\":{failure_latency_ms},\"deadline_ms\":90000,\"tier\":\"hot\",\"recorded_at_ms\":{failure_recorded_at_ms},\"receipt_b64\":\"{failure_receipt_b64}\"}}"
     );
 
     let server = MockServer::start();
@@ -5180,10 +5351,11 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         when.method(POST)
             .path("/v1/sorafs/proof/stream")
             .header("Content-Type", "application/json")
-            .body_includes("\"proof_kind\":\"potr\"");
+            .body_includes("\"proof_kind\":\"potr\"")
+            .body_includes(format!("\"orchestrator_job_id_hex\":\"{request_id_hex}\""));
         then.status(200)
             .header("Content-Type", "application/x-ndjson")
-            .body(format!("{success_line}\n{failure_line}\n"));
+            .body(format!("{failure_line}\n"));
     });
 
     let assert = sorafs_cli_cmd()
@@ -5194,6 +5366,7 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         .arg(format!("--provider-id-hex={provider_id_hex}"))
         .arg("--proof-kind=potr")
         .arg("--deadline-ms=90000")
+        .arg(format!("--orchestrator-job-id-hex={request_id_hex}"))
         .arg("--max-failures=1")
         .assert()
         .success();
@@ -5206,7 +5379,7 @@ fn proof_stream_potr_stream_summary_includes_failure_reason()
         .expect("metrics object");
     assert_eq!(
         metrics.get("success_total").and_then(Value::as_u64),
-        Some(1),
+        Some(0),
         "success count"
     );
     assert_eq!(
@@ -5260,6 +5433,33 @@ fn proof_stream_potr_without_deadline_errors() -> Result<(), Box<dyn std::error:
     assert!(
         stderr.contains("`--deadline-ms` is required"),
         "stderr should mention missing deadline, got: {stderr}"
+    );
+    Ok(())
+}
+
+#[test]
+fn proof_stream_potr_without_request_scope_job_id_errors() -> Result<(), Box<dyn std::error::Error>>
+{
+    let tempdir = tempdir()?;
+    let manifest_path =
+        write_proof_stream_manifest(tempdir.path(), "stream_potr_missing_job_id.to");
+    let provider_id_hex = hex_encode([0x33u8; 32]);
+
+    let assert = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("stream")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg("--torii-url=http://example.com/")
+        .arg(format!("--provider-id-hex={provider_id_hex}"))
+        .arg("--proof-kind=potr")
+        .arg("--deadline-ms=90000")
+        .assert()
+        .failure();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone())?;
+    assert!(
+        stderr.contains("`--orchestrator-job-id-hex=HEX16` is required"),
+        "stderr should mention missing request-scope job id, got: {stderr}"
     );
     Ok(())
 }

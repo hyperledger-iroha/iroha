@@ -1612,6 +1612,47 @@ required_multilane_core_focus_tests=(
   state::tests::certified_autoscale_scale_in_rechecks_late_unrepaired_direct_application_marker
   state::tests::autonomous_lane_diagnostic_same_identity_drift_is_conflict
   state::tests::autonomous_lane_diagnostic_certified_payload_without_bundle_reports_exact_stall
+  torii_proxy::tests::torii_transaction_admission_wire_indexes_are_stable
+  torii_proxy::tests::torii_proxy_v3_envelope_roundtrips_exact_request
+  torii_proxy::tests::historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v3
+  torii_proxy::tests::legacy_v2_submit_bool_wire_cannot_be_accepted_as_v3
+)
+required_multilane_queue_journal_focus_tests=(
+  queue::journal::tests::v2_journal_replays_puts_and_exact_removes
+  queue::journal::tests::strict_put_success_is_live_and_healthy
+  queue::journal::tests::strict_put_preflights_cleanup_capacity_before_writing
+  queue::journal::tests::strict_put_prewrite_failure_is_definitely_not_live_and_healthy
+  queue::journal::tests::put_sync_failure_with_durable_cleanup_is_definitely_not_live
+  queue::journal::tests::put_parent_sync_failure_with_durable_cleanup_is_definitely_not_live
+  queue::journal::tests::partial_put_is_definitely_not_live_but_faults_until_repair
+  queue::journal::tests::cleanup_prewrite_failure_is_indeterminate_and_replays_put
+  queue::journal::tests::cleanup_partial_write_is_indeterminate_and_repairs_to_put
+  queue::journal::tests::cleanup_after_full_write_is_still_reported_indeterminate
+  queue::journal::tests::cleanup_sync_failure_is_indeterminate_even_when_replay_is_removed
+  queue::journal::tests::cleanup_parent_sync_failure_is_indeterminate_after_file_sync
+  queue::journal::tests::general_parent_sync_failure_poisoned_until_restart_recovery
+  queue::journal::tests::every_recognizable_terminal_v2_prefix_is_repaired_before_append
+  queue::journal::tests::truncate_file_sync_then_parent_failure_is_restart_idempotent
+  queue::journal::tests::nonempty_legacy_v1_layout_fails_closed_without_rewrite
+  queue::journal::tests::complete_corruption_and_unsupported_versions_fail_without_truncation
+  queue::journal::tests::oversized_declared_frame_and_file_fail_before_allocation
+  queue::journal::tests::replay_enforces_live_record_bound
+  queue::journal::tests::replay_applies_live_bound_to_final_set_not_transient_put_prefix
+  queue::journal::tests::compaction_preserves_live_fifo_order_and_uses_v2_frames
+  queue::journal::tests::compaction_failure_after_temp_creation_poisoned_and_restart_rejects_temp
+  queue::journal::tests::compaction_rename_then_parent_failure_recovers_replacement_on_restart
+  queue::journal::tests::symlinked_journal_and_stale_compaction_temp_are_rejected
+  queue::tests::queue_plan_journal_replays_matching_plan_after_restart
+  queue::tests::strict_queue_plan_journal_admission_replays_exact_transaction_after_restart
+  queue::tests::strict_queue_plan_journal_rejects_when_uninstalled_or_explicitly_disabled
+  queue::tests::journal_enabled_optional_admission_faults_never_acknowledge_and_recover_zero_or_one_owner
+  queue::tests::strict_queue_plan_journal_write_failure_rejects_without_live_record
+  queue::tests::strict_queue_plan_journal_sync_failure_rejects_and_tombstones_put
+  queue::tests::strict_queue_plan_journal_cleanup_prewrite_failure_is_unknown_and_replays_exact_put
+  queue::tests::strict_queue_plan_journal_rollback_sync_failure_is_indeterminate_and_faults_queue
+  queue::tests::queue_plan_journal_replay_tombstones_malformed_committed_expired_and_rejected_records
+  queue::tests::lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff
+  queue::tests::lane_pending_work_rechecks_durability_fault_after_queue_lock_handoff
 )
 required_multilane_data_model_focus_tests=(
   block::consensus::tests::native_amx_grouped_receipts_reject_order_bounds_and_same_route_drift
@@ -1622,13 +1663,32 @@ required_multilane_data_model_focus_tests=(
   block::consensus::tests::autonomous_lane_execution_conflict_is_explicit_and_fail_closed
   block::consensus_v2::tests::execution_commitment_enforces_native_amx_manifest_shape_and_bound
 )
+required_multilane_torii_focus_tests=(
+  tests_runtime_handlers::torii_proxy_v3_roundtrip_and_forwarding_preserve_transaction_admission
+  tests_runtime_handlers::queue_plan_synced_reconciliation_hash_matches_accepted_queue_identity
+  tests_runtime_handlers::incoming_submit_deferred_reaches_ordinary_queue_without_plan_journal
+  tests_runtime_handlers::incoming_submit_queue_plan_synced_without_journal_is_stably_unavailable
+  tests_runtime_handlers::incoming_submit_queue_plan_synced_succeeds_with_installed_journal
+  tests_runtime_handlers::incoming_torii_proxy_rejects_v2_schema_before_dispatch
+  tests_runtime_handlers::queue_plan_outcome_unknown_survives_both_retryable_completion_orders
+  tests_runtime_handlers::queue_plan_outcome_unknown_dominates_nonretryable_failure_in_both_completion_orders
+  tests_runtime_handlers::queue_plan_outcome_unknown_rejects_forged_reconciliation_hash
+  tests_runtime_handlers::queue_plan_synced_post_dispatch_loss_is_exactly_indeterminate_for_each_transport
+  tests_runtime_handlers::queue_plan_synced_p2p_missing_network_is_pre_dispatch
+  tests_runtime_handlers::queue_plan_synced_p2p_post_dispatch_channel_loss_is_indeterminate
+  tests_runtime_handlers::queue_plan_synced_http_connect_loss_is_pre_dispatch_and_body_loss_is_post_dispatch
+  tests_runtime_handlers::queue_plan_synced_before_dispatch_failure_remains_definitely_unavailable
+  tests_queue_metadata::queue_plan_journal_outcome_unknown_has_stable_code_and_exact_hash
+)
 required_multilane_integration_lib_focus_tests=(
   sandbox::tests::sandboxed_network_start_helper_preserves_optional_developer_skip
   sandbox::tests::sandboxed_network_start_helper_fails_required_release_scenario
 )
-readonly expected_multilane_focus_test_count=59
+readonly expected_multilane_focus_test_count=113
 if (( ${#required_multilane_core_focus_tests[@]}
+    + ${#required_multilane_queue_journal_focus_tests[@]}
     + ${#required_multilane_data_model_focus_tests[@]}
+    + ${#required_multilane_torii_focus_tests[@]}
     + ${#required_multilane_integration_lib_focus_tests[@]}
     != expected_multilane_focus_test_count )); then
   echo "expected exactly ${expected_multilane_focus_test_count} multilane focus tests" >&2
@@ -1644,6 +1704,16 @@ for required_test in "${required_multilane_core_focus_tests[@]}"; do
     exit 1
   fi
 done
+for required_test in "${required_multilane_queue_journal_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$production_unit_list"; then
+    echo "missing required multilane queue-journal focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$production_ignored_unit_list"; then
+    echo "required multilane queue-journal focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
 for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
   if ! grep -Fqx -- "${required_test}: test" <<<"$production_data_model_unit_list"; then
     echo "missing required multilane iroha_data_model focus test: ${required_test}" >&2
@@ -1651,6 +1721,22 @@ for required_test in "${required_multilane_data_model_focus_tests[@]}"; do
   fi
   if grep -Fqx -- "${required_test}: test" <<<"$production_data_model_ignored_unit_list"; then
     echo "required multilane iroha_data_model focus test is ignored: ${required_test}" >&2
+    exit 1
+  fi
+done
+multilane_torii_unit_list="$(
+  cargo test --locked --offline -p iroha_torii --lib -- --list
+)"
+multilane_torii_ignored_unit_list="$(
+  cargo test --locked --offline -p iroha_torii --lib -- --list --ignored
+)"
+for required_test in "${required_multilane_torii_focus_tests[@]}"; do
+  if ! grep -Fqx -- "${required_test}: test" <<<"$multilane_torii_unit_list"; then
+    echo "missing required multilane iroha_torii focus test: ${required_test}" >&2
+    exit 1
+  fi
+  if grep -Fqx -- "${required_test}: test" <<<"$multilane_torii_ignored_unit_list"; then
+    echo "required multilane iroha_torii focus test is ignored: ${required_test}" >&2
     exit 1
   fi
 done

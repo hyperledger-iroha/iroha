@@ -773,7 +773,11 @@ public static class SoraFsReferenceValidators
 
         public bool HasGovernanceDagSymbols()
         {
-            if (!NativeLibrary.TryLoad(LibraryName, out var handle))
+            if (!NativeLibrary.TryLoad(
+                    LibraryName,
+                    typeof(SoraFsReferenceValidators).Assembly,
+                    null,
+                    out var handle))
             {
                 return false;
             }

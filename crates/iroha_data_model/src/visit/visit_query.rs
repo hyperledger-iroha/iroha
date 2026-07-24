@@ -81,6 +81,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_reserve_provider_by_id(FindSorafsReserveProviderById),
         visit_find_sorafs_reserve_movement_by_id(FindSorafsReserveMovementById),
         visit_find_sorafs_reserve_appeal_by_id(FindSorafsReserveAppealById),
+        visit_find_sorafs_reserve_events(FindSorafsReserveEvents),
         visit_find_sorafs_pop_issuer_policy(FindSorafsPopIssuerPolicy),
         visit_find_sorafs_pop_credential_commitment_by_digest(FindSorafsPopCredentialCommitmentByDigest),
         visit_find_sorafs_pop_commitment_root_by_version(FindSorafsPopCommitmentRootByVersion),
@@ -92,6 +93,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_sorafs_repair_tasks(FindSorafsRepairTasks),
         visit_find_sorafs_repair_status(FindSorafsRepairStatus),
         visit_find_sorafs_repair_events(FindSorafsRepairEvents),
+        visit_find_sorafs_proof_outcome(FindSorafsProofOutcome),
         visit_find_sorafs_proof_outcome_events(FindSorafsProofOutcomeEvents),
         visit_find_sorafs_moderation_policy(FindSorafsModerationPolicy),
         visit_find_sorafs_moderation_appeal(FindSorafsModerationAppeal),
@@ -292,6 +294,9 @@ macro_rules! query_visitors {
             visit_find_sorafs_reserve_appeal_by_id(
                 &$crate::query::sorafs::prelude::FindSorafsReserveAppealById
             ),
+            visit_find_sorafs_reserve_events(
+                &$crate::query::sorafs::prelude::FindSorafsReserveEvents
+            ),
             visit_find_sorafs_pop_issuer_policy(
                 &$crate::query::sorafs::prelude::FindSorafsPopIssuerPolicy
             ),
@@ -324,6 +329,9 @@ macro_rules! query_visitors {
             ),
             visit_find_sorafs_repair_events(
                 &$crate::query::sorafs::prelude::FindSorafsRepairEvents
+            ),
+            visit_find_sorafs_proof_outcome(
+                &$crate::query::sorafs::prelude::FindSorafsProofOutcome
             ),
             visit_find_sorafs_proof_outcome_events(
                 &$crate::query::sorafs::prelude::FindSorafsProofOutcomeEvents
@@ -499,6 +507,7 @@ mod tests {
             SingularQueryBox::FindSorafsReserveProviderById(_) => {}
             SingularQueryBox::FindSorafsReserveMovementById(_) => {}
             SingularQueryBox::FindSorafsReserveAppealById(_) => {}
+            SingularQueryBox::FindSorafsReserveEvents(_) => {}
             SingularQueryBox::FindSorafsPopIssuerPolicy(_) => {}
             SingularQueryBox::FindSorafsPopCredentialCommitmentByDigest(_) => {}
             SingularQueryBox::FindSorafsPopCommitmentRootByVersion(_) => {}
@@ -510,6 +519,7 @@ mod tests {
             SingularQueryBox::FindSorafsRepairTasks(_) => {}
             SingularQueryBox::FindSorafsRepairStatus(_) => {}
             SingularQueryBox::FindSorafsRepairEvents(_) => {}
+            SingularQueryBox::FindSorafsProofOutcome(_) => {}
             SingularQueryBox::FindSorafsProofOutcomeEvents(_) => {}
             SingularQueryBox::FindSorafsModerationPolicy(_) => {}
             SingularQueryBox::FindSorafsModerationAppeal(_) => {}
@@ -658,6 +668,13 @@ mod tests {
             SingularQueryBox::FindTriggerById(
                 crate::query::trigger::prelude::FindTriggerById::new(
                     "demo_trigger".parse().expect("valid trigger id"),
+                ),
+            ),
+            SingularQueryBox::FindSorafsProofOutcome(
+                crate::query::sorafs::prelude::FindSorafsProofOutcome::new(
+                    crate::sorafs::proof_ledger::ProofOutcomeKindV1::Pdp,
+                    [0x51; 32],
+                    None,
                 ),
             ),
             SingularQueryBox::FindDomainById(crate::query::domain::prelude::FindDomainById::new(

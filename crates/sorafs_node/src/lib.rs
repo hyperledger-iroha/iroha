@@ -21,6 +21,7 @@ pub mod pdp_provider;
 pub mod pop_credentials;
 pub mod por;
 pub mod potr;
+pub mod proof_outcome_forwarder;
 mod reconciliation;
 pub mod repair;
 mod reserve;
@@ -89,6 +90,12 @@ pub use por::{
 pub use potr::{
     POTR_EXPORT_MAX_RECORDS_V1, POTR_RECEIPT_MAX_CANONICAL_BYTES_V1,
     POTR_TRACKER_CHECKPOINT_FILE_NAME_V1, PotrReceiptStatusV1, PotrRecordOutcome, PotrTrackerError,
+};
+pub use proof_outcome_forwarder::{
+    PROOF_OUTCOME_OUTBOX_DEFAULT_MAX_ATTEMPTS_V1, PROOF_OUTCOME_OUTBOX_MAX_SCAN_ITEMS_V1,
+    ProofOutcomeDeadLetterReasonV1, ProofOutcomeDeadLetterV1, ProofOutcomeDeliveryStateV1,
+    ProofOutcomeEnqueueResultV1, ProofOutcomeOutbox, ProofOutcomeOutboxError,
+    ProofOutcomeOutboxPolicyV1, ProofOutcomePendingDeliveryV1,
 };
 pub use reserve::{
     ReserveAppealDecision, ReserveAppealOutcome, ReserveAppealRecord, ReserveAppealRequest,
@@ -2274,6 +2281,7 @@ pub struct NodeHandle {
     schedulers: StorageSchedulersRuntime,
     por: PorTracker,
     potr: PotrTracker,
+    proof_outcome_outbox: ProofOutcomeOutbox,
     por_history: Arc<RwLock<HashMap<PorHistoryKey, PorHistoryEntry>>>,
     storage: Option<Arc<StorageBackend>>,
     pdp_provider: Option<PdpProviderProtocol>,
@@ -3809,6 +3817,17 @@ pub enum NodeInitError {
         /// Validation or I/O diagnostic.
         message: String,
     },
+    /// The durable proof-outcome transaction outbox could not be opened or validated.
+    #[error(
+        "failed to initialise SoraFS proof-outcome outbox `{path}`: {message}",
+        path = path.display()
+    )]
+    ProofOutcomeOutbox {
+        /// Configured storage root containing the delivery checkpoint.
+        path: PathBuf,
+        /// Validation or I/O diagnostic.
+        message: String,
+    },
     /// A durable runtime checkpoint could not be read, decoded, or validated.
     #[error(
         "failed to restore SoraFS {component} checkpoint `{path}`: {message}",
@@ -4081,6 +4100,13 @@ impl PdpTerminalHandoff for NodeHandle {
                 "encode PDP governance archive handoff: {error}"
             ))
         })?;
+        self.proof_outcome_outbox
+            .enqueue_pdp(archive)
+            .map_err(|error| {
+                pdp_provider::PdpExternalHandoffError(format!(
+                    "persist PDP proof-outcome delivery: {error}"
+                ))
+            })?;
         self.enqueue_governance_outbox(GovernanceOutboxKindV1::PdpArchive, bytes.clone())
             .map_err(|error| pdp_provider::PdpExternalHandoffError(error.to_string()))?;
         self.flush_governance_outbox()
@@ -4111,6 +4137,23 @@ impl PdpTerminalHandoff for NodeHandle {
 }
 
 impl potr::PotrLatencyRepairHandoff for NodeHandle {
+    fn enqueue_proof_outcome(
+        &self,
+        source_identity: [u8; 32],
+        receipt: &PotrReceiptV1,
+        admission_envelope_digest: [u8; 32],
+    ) -> Result<[u8; 32], potr::PotrRepairHandoffError> {
+        if receipt.signed_receipt_digest().ok() != Some(source_identity) {
+            return Err(potr::PotrRepairHandoffError(
+                "PoTR proof-outcome source identity does not match the signed receipt".to_owned(),
+            ));
+        }
+        self.proof_outcome_outbox
+            .enqueue_potr(receipt, admission_envelope_digest)
+            .map(ProofOutcomeEnqueueResultV1::operation_id)
+            .map_err(|error| potr::PotrRepairHandoffError(error.to_string()))
+    }
+
     fn enqueue_latency_repair(
         &self,
         source_identity: [u8; 32],
@@ -4409,6 +4452,28 @@ impl NodeHandle {
             })
             .transpose()?
             .unwrap_or_default();
+        let proof_outcome_outbox_state_dir = config.data_dir().join("proof-outcome-forwarder");
+        let proof_outcome_outbox_policy = ProofOutcomeOutboxPolicyV1 {
+            max_pending: state_entry_limit,
+            max_completed: state_entry_limit,
+            max_dead_letters: state_entry_limit,
+            max_attempts: config.runtime_retention().proof_outcome_max_attempts(),
+            checkpoint_max_bytes: config.runtime_retention().checkpoint_max_bytes(),
+        };
+        let proof_outcome_outbox = if storage.is_some() {
+            ProofOutcomeOutbox::open(&proof_outcome_outbox_state_dir, proof_outcome_outbox_policy)
+                .map_err(|error| NodeInitError::ProofOutcomeOutbox {
+                path: proof_outcome_outbox_state_dir.clone(),
+                message: error.to_string(),
+            })?
+        } else {
+            ProofOutcomeOutbox::in_memory(proof_outcome_outbox_policy).map_err(|error| {
+                NodeInitError::ProofOutcomeOutbox {
+                    path: proof_outcome_outbox_state_dir.clone(),
+                    message: error.to_string(),
+                }
+            })?
+        };
         let runtime_checkpoint_initialization = if storage.is_some() {
             Some(inspect_runtime_checkpoint_initialization(
                 config.data_dir(),
@@ -4480,6 +4545,7 @@ impl NodeHandle {
             schedulers,
             por: PorTracker::with_entry_limit(state_entry_limit),
             potr,
+            proof_outcome_outbox,
             por_history: Arc::new(RwLock::new(HashMap::new())),
             storage,
             pdp_provider,
@@ -4614,12 +4680,20 @@ impl NodeHandle {
                         err,
                     )
                 })?;
-            // Resume PoTR repair effects only after the repair manager and the
-            // auxiliary event/intention checkpoint have both been restored.
-            // The signed receipt itself was committed independently before any
-            // handoff, and its digest is the idempotency identity on replay.
+            // Resume PDP and PoTR ledger-delivery/repair effects only after
+            // their durable protocol checkpoints, outboxes, and auxiliary
+            // state have been restored. Canonical source identities remain
+            // stable across every replay.
+            if let Some(pdp_provider) = node.pdp_provider.as_ref() {
+                pdp_provider
+                    .resume_handoffs(&node, state_entry_limit)
+                    .map_err(|error| NodeInitError::PdpProvider {
+                        path: pdp_provider_state_dir.clone(),
+                        message: error.to_string(),
+                    })?;
+            }
             node.potr
-                .resume_latency_repairs(&node)
+                .resume_terminal_handoffs(&node)
                 .map_err(|error| NodeInitError::Potr {
                     path: potr_state_dir.clone(),
                     message: error.to_string(),
@@ -4670,6 +4744,115 @@ impl NodeHandle {
     #[must_use]
     pub fn pdp_provider_protocol(&self) -> Option<&PdpProviderProtocol> {
         self.pdp_provider.as_ref()
+    }
+
+    /// Return pending proof-outcome deliveries in stable sequence order.
+    pub fn pending_proof_outcome_deliveries(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomePendingDeliveryV1>, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.pending(limit)
+    }
+
+    /// Return payload-free terminal proof-outcome deliveries for operator reconciliation.
+    pub fn proof_outcome_dead_letters(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<ProofOutcomeDeadLetterV1>, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.dead_letters(limit)
+    }
+
+    /// Restore one explicitly selected proof-outcome dead letter for governed replay.
+    pub fn retry_proof_outcome_dead_letter(
+        &self,
+        operation_id: [u8; 32],
+        expected_outcome_digest: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .retry_dead_letter(operation_id, expected_outcome_digest)
+    }
+
+    /// Durably claim one proof outcome for isolated runtime signing.
+    pub fn claim_proof_outcome_for_signing(
+        &self,
+        operation_id: [u8; 32],
+        baseline_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<ProofOutcomePendingDeliveryV1, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .claim_for_signing(operation_id, baseline_finalized_cursor)
+    }
+
+    /// Persist an exact signed proof-outcome transaction before queue exposure.
+    pub fn store_signed_proof_outcome_transaction(
+        &self,
+        operation_id: [u8; 32],
+        transaction: iroha_data_model::transaction::SignedTransaction,
+    ) -> Result<[u8; 32], ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .store_signed_transaction(operation_id, transaction)
+    }
+
+    /// Release an isolated proof-outcome signing claim after signer failure.
+    pub fn release_proof_outcome_signing_claim(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .release_signing_claim(operation_id)
+    }
+
+    /// Mark a durable signed proof-outcome transaction ambiguous before submission.
+    pub fn begin_proof_outcome_submission(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<iroha_data_model::transaction::SignedTransaction, ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.begin_submission(operation_id)
+    }
+
+    /// Record that an exact proof-outcome transaction is pending or applied.
+    pub fn mark_proof_outcome_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.mark_submitted(operation_id)
+    }
+
+    /// Record a proof-outcome queue failure known to precede submission.
+    pub fn mark_proof_outcome_not_submitted(
+        &self,
+        operation_id: [u8; 32],
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox.mark_not_submitted(operation_id)
+    }
+
+    /// Permit retry after finalized absence of the exact proof outcome and transaction.
+    pub fn mark_proof_outcome_finalized_absent(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_finalized_absent(operation_id, observed_finalized_cursor)
+    }
+
+    /// Reconcile one exact finalized proof outcome.
+    pub fn mark_proof_outcome_finalized(
+        &self,
+        operation_id: [u8; 32],
+        finalized: &iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_finalized(operation_id, finalized)
+    }
+
+    /// Dead-letter one exact rejected or expired proof-outcome transaction.
+    pub fn mark_proof_outcome_transaction_rejected(
+        &self,
+        operation_id: [u8; 32],
+        observed_finalized_cursor: iroha_data_model::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1,
+    ) -> Result<(), ProofOutcomeOutboxError> {
+        self.proof_outcome_outbox
+            .mark_transaction_rejected(operation_id, observed_finalized_cursor)
     }
 
     /// Returns a reference to the repair scheduler configuration.

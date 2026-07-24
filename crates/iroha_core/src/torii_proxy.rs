@@ -10,10 +10,8 @@ use iroha_data_model::{
 };
 use norito::codec::{Decode, Encode};
 
-/// Schema version for peer-to-peer Torii proxy requests.
-pub const TORII_PROXY_REQUEST_VERSION_V1: u16 = 1;
-/// Schema version for bounded multi-hop peer-to-peer Torii proxy requests.
-pub const TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
+/// Schema version for Torii proxy requests with an explicit transaction admission mode.
+pub const TORII_PROXY_REQUEST_VERSION_V3: u16 = 3;
 /// Schema version for peer-to-peer Torii proxy responses.
 pub const TORII_PROXY_RESPONSE_VERSION_V1: u16 = 1;
 
@@ -531,17 +529,32 @@ pub struct ToriiHostedHttpProxyRequestV1 {
     pub remote_ip: Option<String>,
 }
 
-/// Canonical Torii request body forwarded over the P2P control plane.
+/// Queue admission durability requested for a proxied transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode)]
+pub enum ToriiProxyTransactionAdmissionV1 {
+    /// Acknowledge after ordinary queue admission without a synchronous queue-plan barrier.
+    #[codec(index = 0)]
+    Deferred,
+    /// Acknowledge only after the exact queue-plan record crosses its durability boundary.
+    #[codec(index = 1)]
+    QueuePlanSynced,
+}
+
+/// Canonical version-2 Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub enum ToriiProxyRequestKindV1 {
+pub enum ToriiProxyRequestKindV2 {
     /// Submit a signed transaction to the authoritative lane validator.
+    #[codec(index = 0)]
     SubmitTransaction {
         /// Original transaction entrypoint from the client.
         transaction: TransactionEntrypoint,
         /// Full routing plan resolved by the ingress node.
         expected_plan: ToriiRoutingPlanHintV1,
+        /// Durability boundary the route-owning peer must satisfy before acknowledging.
+        admission: ToriiProxyTransactionAdmissionV1,
     },
     /// Execute a signed query on the authoritative lane validator.
+    #[codec(index = 1)]
     SignedQuery {
         /// Norito-encoded signed query from the client.
         query_bytes: Vec<u8>,
@@ -551,6 +564,7 @@ pub enum ToriiProxyRequestKindV1 {
         response_format: ToriiProxyResponseFormatV1,
     },
     /// Exhaust a client-signed query on one exact authoritative route.
+    #[codec(index = 2)]
     SignedQueryRouteScan {
         /// Original versioned Norito-encoded signed query from the client.
         query_bytes: Vec<u8>,
@@ -560,6 +574,7 @@ pub enum ToriiProxyRequestKindV1 {
         response_format: ToriiProxyResponseFormatV1,
     },
     /// Execute a client-signed query fanout coordinated by the Nexus/default route.
+    #[codec(index = 3)]
     SignedQueryFanout {
         /// Original versioned Norito-encoded signed query from the client.
         query_bytes: Vec<u8>,
@@ -567,16 +582,19 @@ pub enum ToriiProxyRequestKindV1 {
         response_format: ToriiProxyResponseFormatV1,
     },
     /// Execute a routed Torii read endpoint on the authoritative peer.
+    #[codec(index = 4)]
     Read(ToriiReadProxyRequestV1),
     /// Execute an App API read fanout coordinated by the Nexus/default route.
+    #[codec(index = 5)]
     ReadFanout(ToriiReadFanoutProxyRequestV1),
     /// Proxy a Soracloud public hosted-HTTP request to a peer with a local healthy Inrou target.
+    #[codec(index = 6)]
     HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 
-/// P2P Torii proxy request sent from ingress to an authoritative peer.
+/// Version-3 P2P Torii proxy request sent from ingress to an authoritative peer.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
-pub struct ToriiProxyRequestV2 {
+pub struct ToriiProxyRequestV3 {
     /// Version of the proxy request envelope.
     pub schema_version: u16,
     /// Correlation id selected by the ingress node.
@@ -588,7 +606,7 @@ pub struct ToriiProxyRequestV2 {
     /// Peer ids already traversed by the request to prevent proxy loops.
     pub visited_peer_ids: Vec<PeerId>,
     /// Canonical request to execute on the authoritative peer.
-    pub request: ToriiProxyRequestKindV1,
+    pub request: ToriiProxyRequestKindV2,
 }
 
 /// One HTTP header preserved across the Torii proxy response snapshot.
@@ -627,6 +645,65 @@ mod tests {
     use super::*;
     use crate::queue::{RouteLeg, RouteLegRole, RoutingDecision, RoutingPlan};
 
+    const LEGACY_TORII_PROXY_REQUEST_VERSION_V2: u16 = 2;
+
+    /// Frozen test-only copy of the checked-in V2 Submit body.
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    enum HistoricalToriiProxyRequestKindV1 {
+        #[codec(index = 0)]
+        SubmitTransaction {
+            transaction: TransactionEntrypoint,
+            expected_plan: ToriiRoutingPlanHintV1,
+        },
+    }
+
+    /// Frozen test-only copy of the checked-in V2 request envelope.
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV2")]
+    struct HistoricalToriiProxyRequestV2 {
+        schema_version: u16,
+        request_id: Hash,
+        hop_count: u8,
+        max_hops: u8,
+        visited_peer_ids: Vec<PeerId>,
+        request: HistoricalToriiProxyRequestKindV1,
+    }
+
+    /// Frozen test-only carrier for the checked-in V2 request at the original
+    /// `NetworkMessage::ToriiProxyRequest` discriminant.
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    #[norito(schema_name = "iroha_core::NetworkMessage")]
+    enum HistoricalNetworkMessage {
+        #[codec(index = 19)]
+        ToriiProxyRequest(Box<HistoricalToriiProxyRequestV2>),
+    }
+
+    /// Frozen test-only copy of the transient V2-plus-boolean Submit body.
+    ///
+    /// This shape never was the checked-in V2 contract, but keeping it as an
+    /// additional negative control proves that a one-byte boolean cannot be
+    /// interpreted as the four-byte V3 admission discriminant.
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    enum TransientBoolToriiProxyRequestKindV1 {
+        #[codec(index = 0)]
+        SubmitTransaction {
+            transaction: TransactionEntrypoint,
+            expected_plan: ToriiRoutingPlanHintV1,
+            strict_durable: bool,
+        },
+    }
+
+    #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+    #[norito(schema_name = "iroha_core::torii_proxy::ToriiProxyRequestV2")]
+    struct TransientBoolToriiProxyRequestV2 {
+        schema_version: u16,
+        request_id: Hash,
+        hop_count: u8,
+        max_hops: u8,
+        visited_peer_ids: Vec<PeerId>,
+        request: TransientBoolToriiProxyRequestKindV1,
+    }
+
     fn torii_read_endpoint_wire_index(endpoint: ToriiReadEndpointV1) -> u32 {
         let encoded = norito::codec::Encode::encode(&endpoint);
         assert_eq!(
@@ -635,6 +712,198 @@ mod tests {
             "ToriiReadEndpointV1 should encode as a u32 variant index"
         );
         u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
+    }
+
+    fn torii_transaction_admission_wire_index(admission: ToriiProxyTransactionAdmissionV1) -> u32 {
+        let encoded = norito::codec::Encode::encode(&admission);
+        assert_eq!(
+            encoded.len(),
+            4,
+            "ToriiProxyTransactionAdmissionV1 should encode as a u32 variant index"
+        );
+        u32::from_le_bytes(encoded.try_into().expect("four-byte variant index"))
+    }
+
+    #[test]
+    fn torii_transaction_admission_wire_indexes_are_stable() {
+        assert_eq!(
+            torii_transaction_admission_wire_index(ToriiProxyTransactionAdmissionV1::Deferred),
+            0
+        );
+        assert_eq!(
+            torii_transaction_admission_wire_index(
+                ToriiProxyTransactionAdmissionV1::QueuePlanSynced
+            ),
+            1
+        );
+    }
+
+    #[test]
+    fn torii_proxy_v3_envelope_roundtrips_exact_request() {
+        let request = ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
+            request_id: Hash::new(b"torii-proxy-v3-roundtrip"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
+                endpoint: ToriiReadEndpointV1::AccountsList,
+                expected_route: ToriiRouteHintV1 {
+                    lane_id: LaneId::new(3),
+                    dataspace_id: DataSpaceId::new(9),
+                },
+                path_args: Vec::new(),
+                query_string: None,
+                body: Vec::new(),
+                response_format: ToriiProxyResponseFormatV1::Json,
+            }),
+        };
+
+        let encoded = norito::to_bytes(&request).expect("encode V3 Torii proxy request");
+        let decoded = norito::decode_from_bytes::<ToriiProxyRequestV3>(&encoded)
+            .expect("decode V3 Torii proxy request");
+        assert_eq!(decoded, request);
+    }
+
+    fn historical_v2_submit_fixture() -> HistoricalToriiProxyRequestV2 {
+        let keypair =
+            iroha_crypto::KeyPair::from_seed(vec![0x70; 32], iroha_crypto::Algorithm::Ed25519);
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let mut transaction_builder =
+            iroha_data_model::transaction::signed::TransactionBuilder::new(
+                "torii-proxy-historical-v2-fixture"
+                    .parse()
+                    .expect("fixture chain id"),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
+        transaction_builder.set_creation_time(std::time::Duration::from_millis(41));
+        let transaction =
+            TransactionEntrypoint::External(transaction_builder.sign(keypair.private_key()));
+        HistoricalToriiProxyRequestV2 {
+            schema_version: LEGACY_TORII_PROXY_REQUEST_VERSION_V2,
+            request_id: Hash::new(b"historical-v2-submit"),
+            hop_count: 1,
+            max_hops: 3,
+            visited_peer_ids: Vec::new(),
+            request: HistoricalToriiProxyRequestKindV1::SubmitTransaction {
+                transaction,
+                expected_plan: ToriiRoutingPlanHintV1::from(RoutingPlan::single(
+                    RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+                )),
+            },
+        }
+    }
+
+    #[test]
+    fn historical_v2_submit_and_network_carrier_cannot_be_accepted_as_v3() {
+        let historical = historical_v2_submit_fixture();
+        let historical_bytes =
+            norito::to_bytes(&historical).expect("encode checked-in historical V2 Submit fixture");
+        assert_eq!(
+            &historical_bytes[6..22],
+            norito::core::schema_hash_for_name("iroha_core::torii_proxy::ToriiProxyRequestV2")
+                .as_slice(),
+            "fixture must carry the checked-in V2 envelope schema"
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<HistoricalToriiProxyRequestV2>(&historical_bytes)
+                .expect("decode checked-in historical V2 Submit fixture"),
+            historical
+        );
+        assert!(
+            norito::decode_from_bytes::<ToriiProxyRequestV3>(&historical_bytes).is_err(),
+            "the checked-in V2 request must not decode as a V3 request"
+        );
+
+        let historical_network = HistoricalNetworkMessage::ToriiProxyRequest(Box::new(historical));
+        let historical_network_bytes = norito::to_bytes(&historical_network)
+            .expect("encode checked-in historical V2 network carrier");
+        assert_eq!(
+            &historical_network_bytes[6..22],
+            <crate::NetworkMessage as norito::NoritoSerialize>::schema_hash().as_slice(),
+            "the frozen carrier must use the production NetworkMessage schema"
+        );
+        assert_eq!(
+            norito::decode_from_bytes::<HistoricalNetworkMessage>(&historical_network_bytes)
+                .expect("decode checked-in historical V2 network carrier"),
+            historical_network
+        );
+        assert!(
+            norito::decode_from_bytes::<crate::NetworkMessage>(&historical_network_bytes).is_err(),
+            "the live NetworkMessage decoder must reject a nested V2 request before dispatch"
+        );
+    }
+
+    #[test]
+    fn legacy_v2_submit_bool_wire_cannot_be_accepted_as_v3() {
+        let keypair =
+            iroha_crypto::KeyPair::from_seed(vec![0x71; 32], iroha_crypto::Algorithm::Ed25519);
+        let authority = iroha_data_model::account::AccountId::new(keypair.public_key().clone());
+        let mut transaction_builder =
+            iroha_data_model::transaction::signed::TransactionBuilder::new(
+                "torii-proxy-legacy-v2-fixture"
+                    .parse()
+                    .expect("fixture chain id"),
+                authority,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            );
+        transaction_builder.set_creation_time(std::time::Duration::from_millis(42));
+        let transaction =
+            TransactionEntrypoint::External(transaction_builder.sign(keypair.private_key()));
+        let expected_plan = ToriiRoutingPlanHintV1::from(RoutingPlan::single(
+            RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL),
+        ));
+
+        for strict_durable in [false, true] {
+            let legacy = TransientBoolToriiProxyRequestV2 {
+                schema_version: LEGACY_TORII_PROXY_REQUEST_VERSION_V2,
+                request_id: Hash::new(if strict_durable {
+                    &b"legacy-v2-strict-submit"[..]
+                } else {
+                    &b"legacy-v2-deferred-submit"[..]
+                }),
+                hop_count: 1,
+                max_hops: 3,
+                visited_peer_ids: Vec::new(),
+                request: TransientBoolToriiProxyRequestKindV1::SubmitTransaction {
+                    transaction: transaction.clone(),
+                    expected_plan: expected_plan.clone(),
+                    strict_durable,
+                },
+            };
+            let legacy_bytes =
+                norito::to_bytes(&legacy).expect("encode frozen legacy V2 Submit fixture");
+            assert_eq!(
+                &legacy_bytes[6..22],
+                norito::core::schema_hash_for_name("iroha_core::torii_proxy::ToriiProxyRequestV2")
+                    .as_slice(),
+                "fixture must carry the historical V2 envelope schema"
+            );
+            assert_eq!(
+                legacy_bytes.last().copied(),
+                Some(u8::from(strict_durable)),
+                "historical Submit must end in its one-byte strict_durable field"
+            );
+            assert_eq!(
+                norito::decode_from_bytes::<TransientBoolToriiProxyRequestV2>(&legacy_bytes)
+                    .expect("decode frozen legacy V2 Submit fixture"),
+                legacy
+            );
+            assert!(
+                norito::decode_from_bytes::<ToriiProxyRequestV3>(&legacy_bytes).is_err(),
+                "the genuine V2 frame must not decode as a V3 request"
+            );
+
+            let mut relabeled_as_v3 = legacy_bytes;
+            relabeled_as_v3[6..22]
+                .copy_from_slice(&<ToriiProxyRequestV3 as norito::NoritoSerialize>::schema_hash());
+            assert!(
+                norito::decode_from_bytes::<ToriiProxyRequestV3>(&relabeled_as_v3).is_err(),
+                "even a V3 schema label must not turn the legacy one-byte bool payload into the \
+                 four-byte V3 admission enum; no compatibility fallback is permitted"
+            );
+        }
     }
 
     #[test]

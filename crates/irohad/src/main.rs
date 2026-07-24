@@ -5045,8 +5045,8 @@ mod network_relay_tests {
             message::{BlockMessage, BlockMessageWire},
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -6112,13 +6112,13 @@ mod network_relay_tests {
     }
 
     fn torii_proxy_request_msg() -> iroha_core::NetworkMessage {
-        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::prehashed([0x41; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,
@@ -8087,47 +8087,43 @@ impl Iroha {
             "lane queue reservation journal installed"
         );
 
-        if config.queue.plan_journal_enabled {
-            let journal_path = config
-                .kura
-                .store_dir
-                .resolve_relative_path()
-                .join("queue_plan_journal.norito");
-            let replayable = queue
-                .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
-                .map_err(|err| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to open queue plan journal {}: {err}",
-                        journal_path.display()
-                    ))
-                })?;
-            let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+        if !config.queue.plan_journal_enabled {
+            return Err(Report::new(StartError::InitKura).attach(
+                "queue.plan_journal_enabled=false is unsupported: production transaction \
+                 acknowledgement requires durable pending-plan recovery",
+            ));
+        }
+        let journal_path = config
+            .kura
+            .store_dir
+            .resolve_relative_path()
+            .join("queue_plan_journal.norito");
+        let replayable = queue
+            .install_plan_journal(&journal_path, config.queue.plan_journal_max_bytes, true)
+            .map_err(|err| {
                 Report::new(StartError::InitKura).attach(format!(
-                    "failed to replay queue plan journal {}: {err}",
+                    "failed to open queue plan journal {}: {err}",
                     journal_path.display()
                 ))
             })?;
-            iroha_logger::info!(
-                path = %journal_path.display(),
-                replayable,
-                records = replay_summary.records,
-                replayed = replay_summary.replayed,
-                tombstoned_committed = replay_summary.tombstoned_committed,
-                tombstoned_expired = replay_summary.tombstoned_expired,
-                tombstoned_stale = replay_summary.tombstoned_stale,
-                tombstoned_malformed = replay_summary.tombstoned_malformed,
-                rejected = replay_summary.rejected,
-                "queue plan journal installed"
-            );
-        } else {
-            queue
-                .finalize_plan_journal_startup_disabled()
-                .map_err(|err| {
-                    Report::new(StartError::InitKura).attach(format!(
-                        "failed to finalize disabled queue plan journal startup: {err}"
-                    ))
-                })?;
-        }
+        let replay_summary = queue.replay_plan_journal(&state).map_err(|err| {
+            Report::new(StartError::InitKura).attach(format!(
+                "failed to replay queue plan journal {}: {err}",
+                journal_path.display()
+            ))
+        })?;
+        iroha_logger::info!(
+            path = %journal_path.display(),
+            replayable,
+            records = replay_summary.records,
+            replayed = replay_summary.replayed,
+            tombstoned_committed = replay_summary.tombstoned_committed,
+            tombstoned_expired = replay_summary.tombstoned_expired,
+            tombstoned_stale = replay_summary.tombstoned_stale,
+            tombstoned_malformed = replay_summary.tombstoned_malformed,
+            rejected = replay_summary.rejected,
+            "queue plan journal installed"
+        );
 
         let compliance_policy_digest = state
             .lane_compliance_engine()
@@ -9056,6 +9052,12 @@ impl Iroha {
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
+            // The standard launcher uses the runtime-only node key adapter.
+            // The worker fails closed before signing unless finalized
+            // governance grants this account the exact provider-scoped
+            // CanRecordSorafsProofOutcome permission. Deployments can replace
+            // this adapter with a PKCS#11/HSM implementation at this boundary.
+            .with_sorafs_proof_outcome_signer(Arc::new(config.common.key_pair.clone()))
             .with_torii_proxy_bridge_signer(config.common.key_pair.clone())
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -13335,8 +13337,8 @@ mod tests {
     mod relay_ingress {
         use super::*;
         use iroha_core::torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         };
@@ -13350,13 +13352,13 @@ mod tests {
                 dataspace_id: DataSpaceId::new(0),
             };
             let request =
-                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
-                    schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+                iroha_core::NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
+                    schema_version: TORII_PROXY_REQUEST_VERSION_V3,
                     request_id: Hash::new(b"torii-proxy-request"),
                     hop_count: 1,
                     max_hops: 3,
                     visited_peer_ids: Vec::new(),
-                    request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+                    request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
                         endpoint: ToriiReadEndpointV1::AccountsList,
                         expected_route: route,
                         path_args: Vec::new(),

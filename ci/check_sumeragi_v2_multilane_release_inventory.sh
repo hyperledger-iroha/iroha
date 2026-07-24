@@ -72,6 +72,9 @@ require_exact_token \
   "readonly native_amx_grouped_parity_harness=\"${grouped_parity_harness}\""
 require_exact_token \
   "$release_runner" \
+  "readonly expected_multilane_focus_test_count=113"
+require_exact_token \
+  "$release_runner" \
   "  readonly expected_corridor_leg_count=71"
 require_exact_token \
   "$release_runner" \

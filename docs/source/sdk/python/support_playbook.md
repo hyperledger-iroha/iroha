@@ -68,10 +68,16 @@ Before distributing artefacts outside engineering:
 2. **Fixture parity:** `scripts/check_python_fixtures.py --json-out artifacts/python/fixture_status.json`.
    Keep the rotation metadata (`scripts/python_fixture_regen.sh`) alongside the JSON.
 3. **Release smoke:** Execute `make python-release-smoke`, which delegates to
-   `python/iroha_python/scripts/release_smoke.sh`. Preserve
-   `dist/release_artifacts.json`, `SHA256SUMS`, Sigstore bundles, and the changelog preview.
-4. **Provenance:** Attach Sigstore/OIDC evidence when available; for short-lived
-   keys, note the `ephemeral_signature` flag in the manifest.
+   `python/iroha_python/scripts/release_smoke.sh`. Preserve the console
+   transcript and use `PYTHON_RELEASE_SMOKE_KEEP_DIST=1` when the protected
+   release job must retain the exact wheel/source-distribution candidates. The
+   harness performs no signing and emits no release manifest.
+4. **Authentication and provenance:** Bind the reviewed package checksums into
+   the canonical aggregate release manifest, authenticate it with the external
+   Ed25519/PKCS#11-HSM signer, and pass
+   `scripts/release_manifest_signing.py verify` with the governed fingerprint
+   and pinned native verifier. Attach OIDC/cosign provenance only after that
+   boundary; it cannot replace manifest authentication.
 5. **Docs & status:** Update `status.md` with the release summary, fixture age,
    and support window; refresh README/localised quickstarts when instructions change.
 

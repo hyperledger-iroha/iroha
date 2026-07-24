@@ -137,7 +137,8 @@ pub use sorafs::{
     visit_find_sorafs_pop_revocation_publication_by_version, visit_find_sorafs_repair_events,
     visit_find_sorafs_repair_status, visit_find_sorafs_repair_task, visit_find_sorafs_repair_tasks,
     visit_find_sorafs_reserve_appeal_by_id, visit_find_sorafs_reserve_movement_by_id,
-    visit_find_sorafs_reserve_policy, visit_find_sorafs_reserve_provider_by_id,
+    visit_find_sorafs_reserve_events, visit_find_sorafs_reserve_policy,
+    visit_find_sorafs_reserve_provider_by_id,
 };
 /// Re-export staking visitor helpers used by the default executor.
 pub use staking::{
@@ -1853,7 +1854,7 @@ pub mod sorafs {
         FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
         FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
         FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
-        FindSorafsReservePolicy, FindSorafsReserveProviderById,
+        FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
     };
 
     /// Authoritative repair tasks are public operational state.
@@ -2052,6 +2053,14 @@ pub mod sorafs {
     pub fn visit_find_sorafs_reserve_appeal_by_id<V: Execute + Visit + ?Sized>(
         executor: &mut V,
         _query: &FindSorafsReserveAppealById,
+    ) {
+        visit_reserve_read(executor);
+    }
+
+    /// Validate permission to list committed authoritative reserve events.
+    pub fn visit_find_sorafs_reserve_events<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        _query: &FindSorafsReserveEvents,
     ) {
         visit_reserve_read(executor);
     }
@@ -5555,6 +5564,7 @@ mod sorafs_permission_tests {
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
+            FindSorafsReserveEvents,
         },
         sorafs::{
             capacity::{
@@ -5568,6 +5578,7 @@ mod sorafs_permission_tests {
             pin_registry::{ManifestAliasBinding, ManifestDigest, ReplicationOrderId},
             pop_registry::{POP_ISSUER_POLICY_VERSION_V1, PopIssuerPolicyV1},
             pricing::{PricingScheduleRecord, ProviderCreditRecord},
+            reserve::ReserveFinalizedCursorV1,
         },
     };
     use iroha_executor_data_model::permission::sorafs::{
@@ -5575,7 +5586,7 @@ mod sorafs_permission_tests {
         CanFileSorafsCapacityDispute, CanIssueSorafsReplicationOrder, CanManageSorafsModeration,
         CanManageSorafsPopRegistry, CanOperateSorafsPopIssuer, CanRegisterSorafsPin,
         CanRegisterSorafsProviderOwner, CanRetireSorafsPin, CanSetSorafsPricing,
-        CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
+        CanSetSorafsReservePolicy, CanUnregisterSorafsProviderOwner, CanUpsertSorafsProviderCredit,
     };
     use iroha_executor_data_model::permission::{
         domain::CanRegisterDomain, parameter::CanSetParameters, sccp::CanManageSccpGovernance,
@@ -6369,6 +6380,27 @@ mod sorafs_permission_tests {
         FindSorafsOrderbookEvents::new(None, None, 10),
         sorafs::visit_find_sorafs_orderbook_events
     );
+
+    #[test]
+    fn reserve_event_page_query_requires_governance_permission() {
+        let query = FindSorafsReserveEvents::new(
+            Some(ReserveFinalizedCursorV1 {
+                height: 2,
+                block_hash: [0x72; 32],
+            }),
+            None,
+            10,
+        );
+        assert_denied_without_permission(
+            query,
+            sorafs::visit_find_sorafs_reserve_events,
+        );
+        assert_allowed_with_permission(
+            query,
+            PermissionObject::from(CanSetSorafsReservePolicy),
+            sorafs::visit_find_sorafs_reserve_events,
+        );
+    }
 
     #[test]
     fn sccp_and_generic_parameter_permissions_are_separated() {

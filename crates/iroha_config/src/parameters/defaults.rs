@@ -1294,6 +1294,12 @@ pub mod sorafs {
         pub const RUNTIME_STATE_ENTRY_LIMIT: usize = 65_536;
         /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes<u64> = Bytes(64 * 1024 * 1024);
+        /// Finalized reconciliation cadence for durable proof-outcome delivery.
+        pub const RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS: std::num::NonZeroU64 =
+            nonzero_ext::nonzero!(1_000_u64);
+        /// Submission attempts allowed for one exact proof-outcome transaction.
+        pub const RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS: std::num::NonZeroU32 =
+            nonzero_ext::nonzero!(8_u32);
         /// Default telemetry alias advertised by the node.
         pub fn alias() -> Option<String> {
             None

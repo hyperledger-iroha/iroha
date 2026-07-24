@@ -6674,7 +6674,7 @@ pub fn sorafs_validate_governance_dag_block_json(
         [
             bytes.len(),
             label.len(),
-            expected_block_cid.as_ref().map_or(0, Uint8Array::len),
+            expected_block_cid.as_ref().map_or(0, |cid| cid.len()),
         ],
     )?;
     let expected_block_cid = expected_block_cid.as_ref().and_then(|cid| {

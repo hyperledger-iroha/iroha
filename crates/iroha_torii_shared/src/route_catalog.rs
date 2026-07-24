@@ -4147,11 +4147,11 @@ pub mod contracts_and_verification_keys {
         SORAFS_AUDIT_REPAIR_HEARTBEAT_POST => app_post("contracts.sorafs_audit_repair_heartbeat_post", "/v1/sorafs/audit/repair/heartbeat");
         SORAFS_AUDIT_REPAIR_COMPLETE_POST => app_post("contracts.sorafs_audit_repair_complete_post", "/v1/sorafs/audit/repair/complete");
         SORAFS_AUDIT_REPAIR_FAIL_POST => app_post("contracts.sorafs_audit_repair_fail_post", "/v1/sorafs/audit/repair/fail");
+        SORAFS_AUDIT_REPAIR_APPEAL_POST => app_post("contracts.sorafs_audit_repair_appeal_post", "/v1/sorafs/audit/repair/appeal");
         SORAFS_AUDIT_REPAIR_STATUS_GET => app_get("contracts.sorafs_audit_repair_status_get", "/v1/sorafs/audit/repair/status");
-        SORAFS_AUDIT_REPAIR_STATUS_BY_MANIFEST_HEX_GET => app_get("contracts.sorafs_audit_repair_status_by_manifest_hex_get", "/v1/sorafs/audit/repair/status/{manifest_hex}");
+        SORAFS_AUDIT_REPAIR_TASKS_GET => app_get("contracts.sorafs_audit_repair_tasks_get", "/v1/sorafs/audit/repair/tasks");
+        SORAFS_AUDIT_REPAIR_TASKS_BY_TICKET_ID_GET => app_get("contracts.sorafs_audit_repair_tasks_by_ticket_id_get", "/v1/sorafs/audit/repair/tasks/{ticket_id}");
         SORAFS_AUDIT_REPAIR_EVENTS_GET => app_get("contracts.sorafs_audit_repair_events_get", "/v1/sorafs/audit/repair/events");
-        SORAFS_AUDIT_REPAIR_EVENTS_STREAM_GET => app_protocol_get("contracts.sorafs_audit_repair_events_stream_get", "/v1/sorafs/audit/repair/events/stream");
-        SORAFS_AUDIT_REPAIR_EVENTS_WS_GET => app_protocol_get("contracts.sorafs_audit_repair_events_ws_get", "/v1/sorafs/audit/repair/events/ws");
         ZK_VK_BY_BACKEND_BY_NAME_GET => app_get("contracts.zk_vk_by_backend_by_name_get", "/v1/zk/vk/{backend}/{name}");
         ZK_VK_GET => app_get("contracts.zk_vk_get", "/v1/zk/vk");
         ZK_PROOFS_GET => app_get("contracts.zk_proofs_get", "/v1/zk/proofs");
@@ -4887,11 +4887,11 @@ pub const CATALOGED_ROUTES: &[RouteDescriptor] = &[
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_HEARTBEAT_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_COMPLETE_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_FAIL_POST,
+    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_APPEAL_POST,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_GET,
-    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_STATUS_BY_MANIFEST_HEX_GET,
+    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_GET,
+    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_TASKS_BY_TICKET_ID_GET,
     contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_GET,
-    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_STREAM_GET,
-    contracts_and_verification_keys::SORAFS_AUDIT_REPAIR_EVENTS_WS_GET,
     contracts_and_verification_keys::ZK_VK_BY_BACKEND_BY_NAME_GET,
     contracts_and_verification_keys::ZK_VK_GET,
     contracts_and_verification_keys::ZK_PROOFS_GET,

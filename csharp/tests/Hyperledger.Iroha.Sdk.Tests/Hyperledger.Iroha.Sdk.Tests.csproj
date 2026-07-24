@@ -34,6 +34,15 @@
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_1_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_1_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_head_v1.to" CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_head_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_bad_signature_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_bad_signature_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_block_bad_signature_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_block_trailing_bytes_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_head_bad_signature_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_bad_signature_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_head_bad_signature_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_block_1_bad_predecessor_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.to" Link="Fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_v1.to" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../../fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_validation_outcome_v1.json" Link="Fixtures/sorafs_manifest/governance/dag_head_bad_predecessor_validation_outcome_v1.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

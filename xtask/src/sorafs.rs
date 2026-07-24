@@ -5413,6 +5413,7 @@ fn capability_label(cap: CapabilityType) -> &'static str {
         CapabilityType::QuicNoise => "quic_noise",
         CapabilityType::SoraNetHybridPq => "soranet_pq",
         CapabilityType::ChunkRangeFetch => "chunk_range_fetch",
+        CapabilityType::PotrMlDsa => "potr_mldsa",
         CapabilityType::VendorReserved => "vendor_reserved",
     }
 }
@@ -11372,7 +11373,10 @@ mod tests {
 
         let err = gateway_tls_renew(options).expect_err("missing ACME backend must fail closed");
         assert!(err.to_string().contains("runtime-injected provider client"));
-        assert!(!bundle_dir.exists(), "failed renewal must not write key material");
+        assert!(
+            !bundle_dir.exists(),
+            "failed renewal must not write key material"
+        );
     }
 
     #[test]

@@ -358,9 +358,9 @@ pub use por::{
 };
 pub use potr::{
     POTR_RECEIPT_DIGEST_DOMAIN_V1, POTR_RECEIPT_MAX_NOTE_BYTES_V1,
-    POTR_RECEIPT_SIGNATURE_DOMAIN_V1, POTR_RECEIPT_VERSION_V1, PotrReceiptSigningError,
-    PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm, PotrSignatureV1, PotrStatus,
-    sign_potr_receipt_v1,
+    POTR_RECEIPT_SIGNATURE_DOMAIN_V1, POTR_RECEIPT_VERSION_V1, POTR_REQUEST_SCOPE_DOMAIN_V1,
+    PotrReceiptSigningError, PotrReceiptV1, PotrReceiptValidationError, PotrSignatureAlgorithm,
+    PotrSignatureV1, PotrStatus, potr_request_scope_digest_v1, sign_potr_receipt_v1,
 };
 pub use pricing::signed::{
     GOVERNED_PRICING_MANIFEST_VERSION_V1, GovernedPricingError, GovernedPricingManifestV1,

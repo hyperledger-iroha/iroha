@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -80,6 +82,127 @@ FORBIDDEN_RELEASE_DOCUMENT_CLAIMS: dict[str, tuple[str, ...]] = {
         "invokes the script above",
     ),
 }
+RELEASE_AUTH_ROOT_DOCUMENTS: tuple[str, ...] = (
+    "CHANGELOG.md",
+    "roadmap.md",
+    "status.md",
+)
+RELEASE_AUTH_DOCUMENT_EXTENSIONS = frozenset({".md", ".mdx", ".org"})
+MAX_RELEASE_AUTH_TREE_ENTRIES = 65_536
+MAX_RELEASE_AUTH_TREE_DEPTH = 16
+MAX_RELEASE_AUTH_DOCUMENTS = 60_000
+RELEASE_AUTH_FORBIDDEN_PATTERNS: tuple[
+    tuple[str, tuple[tuple[str, ...], ...], re.Pattern[str]], ...
+] = (
+    (
+        "retired local manifest-authentication command",
+        (("sorafs_cli",), ("manifest",)),
+        re.compile(
+            r"\bsorafs_cli(?:\.exe)?\s+manifest\s+"
+            r"(?:sign|verify-signature)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "retired identity-token signing option",
+        (("--identity-token-",),),
+        re.compile(
+            r"--identity-token-(?:provider|audience|env|file)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "retired ci_sample authentication artifact",
+        (("fixtures/sorafs_manifest/ci_sample/manifest.",),),
+        re.compile(
+            r"fixtures/sorafs_manifest/ci_sample/manifest\."
+            r"(?:bundle\.json|sig|sign\.summary\.json|verify\.summary\.json)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "retired local manifest-authentication artifact",
+        (("manifest.",),),
+        re.compile(
+            r"\bmanifest\."
+            r"(?:bundle\.json|sign\.summary\.json|verify\.summary\.json)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "generic OpenSSL/RSA signing command",
+        (("openssl",), ("-sign", "genrsa", "genpkey")),
+        re.compile(
+            r"(?m)^[^\n]*\bopenssl[a-z0-9_]*\b(?:\.exe)?[^\n]*"
+            r"(?:\bgenrsa\b|\bgenpkey\b|(?:^|\s)-sign(?:=|\s|$))[^\n]*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "OIDC-derived local Ed25519 signing material",
+        (
+            ("oidc", "jwt", "identity token", "identity-token"),
+            ("deriv", "seed", "ephemeral"),
+            ("ed25519", "key"),
+        ),
+        re.compile(
+            r"(?m)^[^\n]*(?:"
+            r"(?:oidc|jwt|identity[ -]?token)[^\n]{0,200}"
+            r"(?:deriv(?:e|ed|ation)|seed|ephemeral)[^\n]{0,200}"
+            r"(?:ed25519|key)"
+            r"|"
+            r"(?:deriv(?:e|ed|ation)|seed)[^\n]{0,200}"
+            r"(?:ed25519|key)[^\n]{0,200}"
+            r"(?:oidc|jwt|identity[ -]?token)"
+            r")[^\n]*$",
+            re.IGNORECASE,
+        ),
+    ),
+)
+RELEASE_AUTH_HISTORICAL_FINDINGS: dict[str, tuple[str, ...]] = {
+    "docs/source/sorafs/reports/sf6_security_review.md": (
+        "The retired CLI path derived an ephemeral key from unverified OIDC token bytes",
+        "Removed that CLI surface and all production callers",
+    ),
+    "docs/portal/docs/sorafs/reports/sf6-security-review.md": (
+        "The retired CLI path derived an ephemeral key from unverified OIDC token bytes",
+        "Removed that CLI surface and all production callers",
+    ),
+}
+PACKAGE_RELEASE_SMOKE_SCRIPT = "python/iroha_python/scripts/release_smoke.sh"
+PACKAGE_RELEASE_SMOKE_REQUIRED_MARKERS: tuple[str, ...] = (
+    'PYTHON_RELEASE_SMOKE_KEEP_DIST',
+    'python -m build',
+    'pip install "${WHEEL}"',
+    'assert hasattr(sdk, "ToriiClient")',
+    'python/iroha_python/scripts/run_norito_rpc_smoke.sh',
+    'python -m twine check',
+    '--dry-run',
+    'scripts/release_manifest_signing.py',
+)
+PACKAGE_RELEASE_SMOKE_FORBIDDEN_MARKERS: tuple[str, ...] = (
+    "openssl",
+    "cosign",
+    ".sigstore",
+    "--signing-key",
+    "--manifest-out",
+    "--require-sigstore",
+    "--skip-sigstore",
+    "--sigstore-token-env",
+    "--cosign-bin",
+    "PYTHON_RELEASE_SIGNING_KEY",
+    "PYTHON_RELEASE_SIGSTORE",
+    "SIGSTORE_ID_TOKEN",
+    "release_artifacts.json",
+    "CHANGELOG_PREVIEW.md",
+    "SHA256SUMS",
+    "sign-blob",
+)
+GENERIC_OPENSSL_SIGNER_RE = re.compile(
+    r"(?m)^[^\n]*\bopenssl[a-z0-9_]*\b(?:\.exe)?[^\n]*"
+    r"(?:\bgenrsa\b|\bgenpkey\b|(?:^|\s)-sign(?:=|\s|$))[^\n]*$",
+    re.IGNORECASE,
+)
 WORKFLOWS: dict[str, tuple[str, ...]] = {
     ".github/workflows/sorafs-cli-release.yml": (
         '"sorafs-cli-v*"',
@@ -111,6 +234,11 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         '- "scripts/tests/generate_release_manifest_test.py"',
         '- "scripts/tests/generate_sorafs_cli_release_manifest_test.py"',
         '- "scripts/tests/publish_plan_test.py"',
+        '- "scripts/tests/check_sorafs_rollout_gate_contract_test.py"',
+        '- "python/iroha_python/scripts/release_smoke.sh"',
+        '- "python/iroha_python/README.md"',
+        '- "docs/source/sdk/python/release_automation*.md"',
+        '- "docs/source/sdk/python/support_playbook*.md"',
         '- "docs/source/sorafs_release_pipeline_plan*.md"',
         '- "docs/source/release_dual_track_automation_plan*.md"',
         '- "docs/source/release_dual_track_runbook*.md"',
@@ -209,6 +337,179 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
     ),
 }
+
+
+def _release_auth_document_paths(root: Path) -> tuple[str, ...]:
+    """Return a bounded, no-follow release-auth document inventory."""
+
+    paths = list(RELEASE_AUTH_ROOT_DOCUMENTS)
+    docs_root = root / "docs"
+    try:
+        docs_metadata = docs_root.lstat()
+    except OSError as error:
+        raise ValueError("docs: release-auth documentation tree is missing") from error
+    if stat.S_ISLNK(docs_metadata.st_mode) or not stat.S_ISDIR(docs_metadata.st_mode):
+        raise ValueError("docs: release-auth documentation tree is missing")
+
+    pending: list[tuple[Path, tuple[str, ...], os.stat_result]] = [
+        (docs_root, (), docs_metadata)
+    ]
+    visited_entries = 0
+    document_count = 0
+    while pending:
+        directory, prefix, expected_metadata = pending.pop()
+        relative_directory = "/".join(("docs", *prefix))
+        try:
+            observed_metadata = directory.lstat()
+        except OSError as error:
+            raise ValueError(
+                f"{relative_directory}: release-auth documentation directory "
+                "changed during enumeration"
+            ) from error
+        if (
+            stat.S_ISLNK(observed_metadata.st_mode)
+            or not stat.S_ISDIR(observed_metadata.st_mode)
+            or (observed_metadata.st_dev, observed_metadata.st_ino)
+            != (expected_metadata.st_dev, expected_metadata.st_ino)
+        ):
+            raise ValueError(
+                f"{relative_directory}: release-auth documentation directory "
+                "changed during enumeration"
+            )
+        try:
+            with os.scandir(directory) as iterator:
+                entries = sorted(iterator, key=lambda entry: entry.name)
+        except OSError as error:
+            raise ValueError(
+                f"{relative_directory}: release-auth documentation directory "
+                "cannot be enumerated safely"
+            ) from error
+
+        for entry in entries:
+            visited_entries += 1
+            if visited_entries > MAX_RELEASE_AUTH_TREE_ENTRIES:
+                raise ValueError(
+                    "docs: release-auth documentation tree exceeds its entry limit"
+                )
+            entry_prefix = (*prefix, entry.name)
+            relative = "/".join(("docs", *entry_prefix))
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as error:
+                raise ValueError(
+                    f"{relative}: release-auth documentation entry changed "
+                    "during enumeration"
+                ) from error
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ValueError(
+                    f"{relative}: release-auth documentation paths must not "
+                    "contain symlinks"
+                )
+            if stat.S_ISDIR(metadata.st_mode):
+                if len(entry_prefix) > MAX_RELEASE_AUTH_TREE_DEPTH:
+                    raise ValueError(
+                        "docs: release-auth documentation tree exceeds its depth limit"
+                    )
+                pending.append((directory / entry.name, entry_prefix, metadata))
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(
+                    f"{relative}: release-auth documentation tree contains a "
+                    "non-regular entry"
+                )
+            if Path(entry.name).suffix.lower() not in RELEASE_AUTH_DOCUMENT_EXTENSIONS:
+                continue
+            if metadata.st_nlink != 1:
+                raise ValueError(
+                    f"{relative}: release-auth documents must not be hard linked"
+                )
+            document_count += 1
+            if document_count > MAX_RELEASE_AUTH_DOCUMENTS:
+                raise ValueError(
+                    "docs: release-auth documentation tree exceeds its document limit"
+                )
+            paths.append(relative)
+    return tuple(sorted(paths))
+
+
+def _historical_release_auth_finding_is_allowed(
+    relative: str,
+    finding: str,
+    match_name: str,
+) -> bool:
+    """Allow only the reviewed SF-6 finding that documents the removed design."""
+
+    if match_name != "OIDC-derived local Ed25519 signing material":
+        return False
+    markers = RELEASE_AUTH_HISTORICAL_FINDINGS.get(relative)
+    return markers is not None and all(marker in finding for marker in markers)
+
+
+def _validate_release_auth_document_tree(root: Path) -> list[str]:
+    """Reject retired or competing release-authentication guidance everywhere."""
+
+    errors: list[str] = []
+    for relative in _release_auth_document_paths(root):
+        path = _require_regular_repo_file(root, relative)
+        try:
+            source = _read_bytes_no_follow(path).decode("utf-8")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{relative}: release-auth document must be UTF-8"
+            ) from error
+        lowered_source = source.lower()
+        for match_name, prefilter_groups, pattern in RELEASE_AUTH_FORBIDDEN_PATTERNS:
+            if not all(
+                any(needle in lowered_source for needle in group)
+                for group in prefilter_groups
+            ):
+                continue
+            for match in pattern.finditer(source):
+                finding = match.group(0)
+                if _historical_release_auth_finding_is_allowed(
+                    relative,
+                    finding,
+                    match_name,
+                ):
+                    continue
+                line_number = source.count("\n", 0, match.start()) + 1
+                errors.append(
+                    f"{relative}:{line_number}: forbidden release-auth documentation "
+                    f"reference ({match_name})"
+                )
+    return errors
+
+
+def _validate_package_release_smoke(root: Path) -> list[str]:
+    """Keep the Python release harness smoke-only and signer-free."""
+
+    path = _require_regular_repo_file(root, PACKAGE_RELEASE_SMOKE_SCRIPT)
+    try:
+        source = _read_bytes_no_follow(path).decode("utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(
+            f"{PACKAGE_RELEASE_SMOKE_SCRIPT}: package release smoke must be UTF-8"
+        ) from error
+    errors: list[str] = []
+    for marker in PACKAGE_RELEASE_SMOKE_REQUIRED_MARKERS:
+        if marker not in source:
+            errors.append(
+                f"{PACKAGE_RELEASE_SMOKE_SCRIPT}: missing package-smoke contract "
+                f"marker `{marker}`"
+            )
+    lowered_source = source.lower()
+    for marker in PACKAGE_RELEASE_SMOKE_FORBIDDEN_MARKERS:
+        if marker.lower() in lowered_source:
+            errors.append(
+                f"{PACKAGE_RELEASE_SMOKE_SCRIPT}: signing/provenance marker "
+                f"`{marker}` is forbidden in the smoke harness"
+            )
+    if GENERIC_OPENSSL_SIGNER_RE.search(source) is not None:
+        errors.append(
+            f"{PACKAGE_RELEASE_SMOKE_SCRIPT}: generic OpenSSL/RSA signing is "
+            "forbidden in the smoke harness"
+        )
+    return errors
 
 
 def _workflow_job(source: str, name: str) -> str | None:
@@ -629,6 +930,8 @@ def validate_release_automation(root: Path) -> dict[str, Any]:
                 errors.append(
                     f"{relative}: stale release-document claim `{stale_claim}`"
                 )
+    errors.extend(_validate_release_auth_document_tree(root))
+    errors.extend(_validate_package_release_smoke(root))
     if errors:
         raise ValueError("; ".join(errors))
     return {

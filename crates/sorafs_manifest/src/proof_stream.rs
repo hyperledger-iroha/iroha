@@ -3,7 +3,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use norito::{
     derive::{NoritoDeserialize, NoritoSerialize},
-    json::{self, JsonDeserialize as _, JsonSerialize as _, Map, Value},
+    json::{self, Map, Value},
 };
 use thiserror::Error;
 
@@ -34,6 +34,9 @@ pub struct ProofStreamRequestV1 {
     /// Client-supplied nonce to guard against replay.
     pub nonce: [u8; 16],
     /// Orchestrator job identifier (UUID bytes).
+    ///
+    /// This is mandatory for PoTR because the manifest, provider, and job
+    /// identifier derive the chain-authoritative request-scope identity.
     pub orchestrator_job_id: Option<[u8; 16]>,
     /// Tier hint for PDP/PoTR (hot/warm/archive).
     pub tier: Option<ProofStreamTier>,
@@ -62,6 +65,9 @@ impl ProofStreamRequestV1 {
                 if self.challenge_id.is_some() {
                     return Err(ProofStreamRequestError::UnexpectedChallengeId);
                 }
+                if self.orchestrator_job_id.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedOrchestratorJobId);
+                }
                 let count = self
                     .sample_count
                     .ok_or(ProofStreamRequestError::MissingSampleCount)?;
@@ -82,6 +88,9 @@ impl ProofStreamRequestV1 {
                 if challenge_id.iter().all(|&byte| byte == 0) {
                     return Err(ProofStreamRequestError::InvalidChallengeId);
                 }
+                if self.orchestrator_job_id.is_some() {
+                    return Err(ProofStreamRequestError::UnexpectedOrchestratorJobId);
+                }
                 if self.sample_count.is_some() {
                     return Err(ProofStreamRequestError::UnexpectedSampleCount);
                 }
@@ -95,6 +104,9 @@ impl ProofStreamRequestV1 {
             ProofStreamKind::Potr => {
                 if self.challenge_id.is_some() {
                     return Err(ProofStreamRequestError::UnexpectedChallengeId);
+                }
+                if self.orchestrator_job_id.is_none() {
+                    return Err(ProofStreamRequestError::MissingOrchestratorJobId);
                 }
                 let deadline = self
                     .deadline_ms
@@ -206,6 +218,10 @@ pub enum ProofStreamRequestError {
     InvalidNonce,
     #[error("orchestrator job id must be non-zero when supplied")]
     InvalidOrchestratorJobId,
+    #[error("PoTR requests require a non-zero orchestrator job id")]
+    MissingOrchestratorJobId,
+    #[error("orchestrator job id is reserved for PoTR requests")]
+    UnexpectedOrchestratorJobId,
     #[error("PDP requests require a non-zero governed challenge id")]
     MissingChallengeId,
     #[error("challenge id must be non-zero")]
@@ -324,10 +340,7 @@ impl ProofStreamHttpRequestV1 {
             "orchestrator_job_id_hex",
             "tier",
         ];
-        if object
-            .keys()
-            .any(|field| !FIELDS.contains(&field.as_str()))
-        {
+        if object.keys().any(|field| !FIELDS.contains(&field.as_str())) {
             return Err(ProofStreamHttpRequestError::UnknownField);
         }
 
@@ -532,7 +545,7 @@ mod tests {
             deadline_ms: None,
             sample_seed: Some(42),
             nonce: [0x33; 16],
-            orchestrator_job_id: Some([0x44; 16]),
+            orchestrator_job_id: None,
             tier: Some(ProofStreamTier::Hot),
         }
     }
@@ -579,6 +592,7 @@ mod tests {
         request.proof_kind = ProofStreamKind::Potr;
         request.sample_count = None;
         request.sample_seed = None;
+        request.orchestrator_job_id = Some([0x44; 16]);
         assert_eq!(
             request.validate(),
             Err(ProofStreamRequestError::MissingDeadlineMs)
@@ -589,6 +603,27 @@ mod tests {
             Err(ProofStreamRequestError::ZeroDeadlineMs)
         );
         request.deadline_ms = Some(90_000);
+        assert_eq!(request.validate(), Ok(()));
+    }
+
+    #[test]
+    fn potr_requires_an_exact_request_scope_job_id() {
+        let mut request = base_request();
+        request.proof_kind = ProofStreamKind::Potr;
+        request.sample_count = None;
+        request.sample_seed = None;
+        request.deadline_ms = Some(90_000);
+        request.orchestrator_job_id = None;
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::MissingOrchestratorJobId)
+        );
+        request.orchestrator_job_id = Some([0; 16]);
+        assert_eq!(
+            request.validate(),
+            Err(ProofStreamRequestError::InvalidOrchestratorJobId)
+        );
+        request.orchestrator_job_id = Some([0x44; 16]);
         assert_eq!(request.validate(), Ok(()));
     }
 
@@ -630,6 +665,27 @@ mod tests {
     }
 
     #[test]
+    fn por_and_pdp_reject_potr_request_scope_ids() {
+        let mut por = base_request();
+        por.orchestrator_job_id = Some([0x44; 16]);
+        assert_eq!(
+            por.validate(),
+            Err(ProofStreamRequestError::UnexpectedOrchestratorJobId)
+        );
+
+        let mut pdp = base_request();
+        pdp.proof_kind = ProofStreamKind::Pdp;
+        pdp.challenge_id = Some([0x55; 32]);
+        pdp.sample_count = None;
+        pdp.sample_seed = None;
+        pdp.orchestrator_job_id = Some([0x44; 16]);
+        assert_eq!(
+            pdp.validate(),
+            Err(ProofStreamRequestError::UnexpectedOrchestratorJobId)
+        );
+    }
+
+    #[test]
     fn zero_nonce_rejected() {
         let mut request = base_request();
         request.nonce = [0u8; 16];
@@ -649,7 +705,7 @@ mod tests {
         let obj = value
             .as_object()
             .expect("proof stream request should serialize to JSON object");
-        assert_eq!(obj.len(), 8);
+        assert_eq!(obj.len(), 7);
         assert_eq!(
             obj.get("proof_kind").and_then(Value::as_str),
             Some("por"),
@@ -718,10 +774,7 @@ mod tests {
         let base = base.as_object().expect("object");
 
         let mut uppercase = base.clone();
-        uppercase.insert(
-            "manifest_digest_hex".into(),
-            Value::from("AB".repeat(32)),
-        );
+        uppercase.insert("manifest_digest_hex".into(), Value::from("AB".repeat(32)));
         assert_eq!(
             ProofStreamHttpRequestV1::from_json_value(&Value::Object(uppercase)),
             Err(ProofStreamHttpRequestError::NonCanonicalHex(
@@ -777,10 +830,7 @@ mod tests {
         );
 
         let mut overflow = base.clone();
-        overflow.insert(
-            "sample_count".into(),
-            Value::from(u64::from(u32::MAX) + 1),
-        );
+        overflow.insert("sample_count".into(), Value::from(u64::from(u32::MAX) + 1));
         assert_eq!(
             ProofStreamHttpRequestV1::from_json_value(&Value::Object(overflow)),
             Err(ProofStreamHttpRequestError::IntegerOutOfRange(

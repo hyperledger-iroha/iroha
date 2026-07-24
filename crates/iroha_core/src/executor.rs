@@ -236,7 +236,8 @@ fn validate_builtin_initial_query_permission(
         SingularQueryBox::FindSorafsReservePolicy(_)
         | SingularQueryBox::FindSorafsReserveProviderById(_)
         | SingularQueryBox::FindSorafsReserveMovementById(_)
-        | SingularQueryBox::FindSorafsReserveAppealById(_) => {
+        | SingularQueryBox::FindSorafsReserveAppealById(_)
+        | SingularQueryBox::FindSorafsReserveEvents(_) => {
             let can_set_reserve_policy: Permission =
                 executor_permission::sorafs::CanSetSorafsReservePolicy.into();
             if authority_has_permission(world, authority, &can_set_reserve_policy)? {
@@ -19799,6 +19800,7 @@ seiyaku IdentityRequired {
         use iroha_data_model::query::sorafs::prelude::{
             FindSorafsModerationEvents, FindSorafsModerationJurorEligibility,
             FindSorafsModerationSnapshot, FindSorafsOrderbookPolicy,
+            FindSorafsReserveEvents,
         };
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -19814,6 +19816,8 @@ seiyaku IdentityRequired {
         let mut state_transaction = block.transaction();
         let executor = super::Executor::Initial;
         let orderbook = QueryRequest::Singular(FindSorafsOrderbookPolicy.into());
+        let reserve_events =
+            QueryRequest::Singular(FindSorafsReserveEvents::new(None, None, 16).into());
         let own_eligibility = QueryRequest::Singular(
             FindSorafsModerationJurorEligibility::new(
                 "case-1".to_owned(),
@@ -19853,6 +19857,15 @@ seiyaku IdentityRequired {
             )
             .expect_err("orderbook state must not be public under the Initial executor");
         assert!(matches!(orderbook_error, ValidationFail::NotPermitted(_)));
+        let reserve_error = executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reserve_events,
+            )
+            .expect_err("reserve committed events must remain governance-readable");
+        assert!(matches!(reserve_error, ValidationFail::NotPermitted(_)));
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,
@@ -19892,6 +19905,7 @@ seiyaku IdentityRequired {
             ALICE_ID.clone(),
             BTreeSet::from([
                 Permission::from(executor_permission::sorafs::CanSetSorafsPricing),
+                Permission::from(executor_permission::sorafs::CanSetSorafsReservePolicy),
                 Permission::from(executor_permission::sorafs::CanManageSorafsModeration),
             ]),
         );
@@ -19903,6 +19917,14 @@ seiyaku IdentityRequired {
                 &orderbook,
             )
             .expect("pricing operators must be able to read orderbook state");
+        executor
+            .validate_query_with_world_parts(
+                &state_transaction.world,
+                Some(latest_block.clone()),
+                &ALICE_ID,
+                &reserve_events,
+            )
+            .expect("reserve governors must be able to read committed reserve events");
         executor
             .validate_query_with_world_parts(
                 &state_transaction.world,

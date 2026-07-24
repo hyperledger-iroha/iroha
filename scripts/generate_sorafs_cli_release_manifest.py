@@ -18,6 +18,8 @@ SCHEMA = "sorafs.cli.release-manifest.v1"
 MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024
 MAX_RELEASE_MANIFEST_BYTES = 1024 * 1024
 MAX_FILES_PER_TARGET = 1024
+MAX_ENTRIES_PER_TARGET = 2048
+MAX_CANDIDATE_TREE_DEPTH = 16
 MAX_TOTAL_FILES = 4096
 TARGETS = (
     "x86_64-unknown-linux-gnu",
@@ -117,33 +119,101 @@ def _read_bounded_regular(path: Path, label: str, limit: int) -> bytes:
 
 
 def _candidate_files(candidate_dir: Path, target: str) -> list[Path]:
-    if candidate_dir.is_symlink() or not candidate_dir.is_dir():
-        raise ManifestError(f"candidate directory for {target} must be a real directory")
-    files: list[Path] = []
-    for path in sorted(
-        candidate_dir.rglob("*"),
-        key=lambda item: item.relative_to(candidate_dir).as_posix(),
+    try:
+        candidate_metadata = candidate_dir.lstat()
+    except OSError as exc:
+        raise ManifestError(
+            f"cannot inspect candidate directory for {target}: {exc}"
+        ) from exc
+    if stat.S_ISLNK(candidate_metadata.st_mode) or not stat.S_ISDIR(
+        candidate_metadata.st_mode
     ):
-        relative = path.relative_to(candidate_dir).as_posix()
-        metadata = path.lstat()
-        if stat.S_ISLNK(metadata.st_mode):
-            raise ManifestError(f"candidate path must not be a symlink: {relative}")
-        if stat.S_ISDIR(metadata.st_mode):
-            continue
-        if not stat.S_ISREG(metadata.st_mode):
-            raise ManifestError(f"candidate path must be a regular file: {relative}")
-        if metadata.st_nlink != 1:
+        raise ManifestError(f"candidate directory for {target} must be a real directory")
+
+    files: list[Path] = []
+    pending: list[tuple[Path, tuple[str, ...], os.stat_result]] = [
+        (candidate_dir, (), candidate_metadata)
+    ]
+    visited_entries = 0
+    while pending:
+        directory, prefix, expected_metadata = pending.pop()
+        relative_directory = "/".join(prefix) if prefix else "."
+        try:
+            observed_metadata = directory.lstat()
+        except OSError as exc:
             raise ManifestError(
-                f"candidate path must have exactly one hard link: {relative}"
-            )
-        files.append(path)
-        if len(files) > MAX_FILES_PER_TARGET:
+                f"candidate directory changed during enumeration: "
+                f"{relative_directory}"
+            ) from exc
+        if (
+            stat.S_ISLNK(observed_metadata.st_mode)
+            or not stat.S_ISDIR(observed_metadata.st_mode)
+            or (observed_metadata.st_dev, observed_metadata.st_ino)
+            != (expected_metadata.st_dev, expected_metadata.st_ino)
+        ):
             raise ManifestError(
-                f"candidate for {target} exceeds the {MAX_FILES_PER_TARGET}-file limit"
+                f"candidate directory changed during enumeration: "
+                f"{relative_directory}"
             )
+        try:
+            entries = []
+            with os.scandir(directory) as iterator:
+                for entry in iterator:
+                    visited_entries += 1
+                    if visited_entries > MAX_ENTRIES_PER_TARGET:
+                        raise ManifestError(
+                            f"candidate for {target} exceeds the "
+                            f"{MAX_ENTRIES_PER_TARGET}-entry limit"
+                        )
+                    entries.append(entry)
+        except OSError as exc:
+            raise ManifestError(
+                f"candidate directory cannot be enumerated safely: "
+                f"{relative_directory}"
+            ) from exc
+        entries.sort(key=lambda entry: entry.name)
+
+        for entry in entries:
+            entry_prefix = (*prefix, entry.name)
+            relative = "/".join(entry_prefix)
+            try:
+                metadata = entry.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ManifestError(
+                    f"candidate path changed during enumeration: {relative}"
+                ) from exc
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ManifestError(
+                    f"candidate path must not be a symlink: {relative}"
+                )
+            if len(entry_prefix) > MAX_CANDIDATE_TREE_DEPTH:
+                raise ManifestError(
+                    f"candidate for {target} exceeds the "
+                    f"{MAX_CANDIDATE_TREE_DEPTH}-level depth limit"
+                )
+            if stat.S_ISDIR(metadata.st_mode):
+                pending.append((directory / entry.name, entry_prefix, metadata))
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ManifestError(
+                    f"candidate path must be a regular file: {relative}"
+                )
+            if metadata.st_nlink != 1:
+                raise ManifestError(
+                    f"candidate path must have exactly one hard link: {relative}"
+                )
+            files.append(directory / entry.name)
+            if len(files) > MAX_FILES_PER_TARGET:
+                raise ManifestError(
+                    f"candidate for {target} exceeds the "
+                    f"{MAX_FILES_PER_TARGET}-file limit"
+                )
     if not files:
         raise ManifestError(f"candidate for {target} is empty")
-    return files
+    return sorted(
+        files,
+        key=lambda path: path.relative_to(candidate_dir).as_posix(),
+    )
 
 
 def _parse_checksums(payload: bytes, target: str) -> dict[str, str]:

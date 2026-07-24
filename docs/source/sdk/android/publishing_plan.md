@@ -87,14 +87,20 @@ environment variables:
 CI jobs can upload `artifacts/android/reports/<version>/` directly to satisfy
 the AND9 evidence requirement without custom copying logic.
 
-### Signing (Sigstore)
+### Provenance (Sigstore)
 
-Pass `ANDROID_PUBLISH_SIGN=1` to sign staged artefacts with Sigstore (keyless by
-default). The helper uses `cosign` unless you override it via
+Pass `ANDROID_PUBLISH_SIGN=1` to attach OIDC/cosign provenance to staged
+artefacts. The helper uses `cosign` unless you override it via
 `ANDROID_PUBLISH_COSIGN_BIN` (or the standard `COSIGN` env var) and pulls the
 identity token from `ANDROID_PUBLISH_SIGSTORE_TOKEN_ENV` (defaults to
 `SIGSTORE_ID_TOKEN` when present). Sigstore bundles land alongside the staged
 artefacts so governance reviewers can verify without re-fetching from Maven.
+They are provenance only: include the Android artifacts in the canonical
+aggregate release manifest and authenticate that manifest with the external
+Ed25519/PKCS#11-HSM signer. Production promotion must pass
+`scripts/release_manifest_signing.py verify` with the independently reviewed
+raw-key fingerprint and pinned native-verifier digest; no OIDC token, embedded
+key, or generic OpenSSL/RSA signature can replace that boundary.
 
 ## Dependency Manifest Format
 

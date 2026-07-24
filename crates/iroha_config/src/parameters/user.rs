@@ -19057,6 +19057,12 @@ pub struct SorafsRuntimeRetentionConfig {
     /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
     #[config(default = "defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES")]
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Finalized reconciliation cadence for durable proof-outcome delivery.
+    #[config(default = "defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS")]
+    pub proof_outcome_forwarder_interval_ms: NonZeroU64,
+    /// Submission attempts allowed for one exact proof-outcome transaction.
+    #[config(default = "defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS")]
+    pub proof_outcome_max_attempts: NonZeroU32,
 }
 
 impl Default for SorafsRuntimeRetentionConfig {
@@ -19065,6 +19071,10 @@ impl Default for SorafsRuntimeRetentionConfig {
             event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
             state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
             checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
+            proof_outcome_forwarder_interval_ms:
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS,
+            proof_outcome_max_attempts:
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS,
         }
     }
 }
@@ -19075,6 +19085,10 @@ impl SorafsRuntimeRetentionConfig {
             event_history_limit: self.event_history_limit.max(1),
             state_entry_limit: self.state_entry_limit.max(1),
             checkpoint_max_bytes: Bytes(self.checkpoint_max_bytes.0.max(1)),
+            proof_outcome_forwarder_interval: Duration::from_millis(
+                self.proof_outcome_forwarder_interval_ms.get(),
+            ),
+            proof_outcome_max_attempts: self.proof_outcome_max_attempts.get(),
         }
     }
 }

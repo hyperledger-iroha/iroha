@@ -488,6 +488,11 @@ mod model {
     #[derive(
         Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    #[norito(tag = "kind", content = "detail", rename_all = "snake_case")]
     pub enum SorafsReserveLedgerEventKind {
         /// A policy revision was activated.
         PolicyActivated,
@@ -528,6 +533,10 @@ mod model {
         Encode,
         iroha_schema::IntoSchema,
     )]
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
     #[getset(get = "pub")]
     pub struct SorafsReserveLedgerEvent {
         /// Transition category.
@@ -535,8 +544,13 @@ mod model {
         /// Provider affected by the transition, absent for policy activation.
         pub provider_id: Option<crate::sorafs::capacity::ProviderId>,
         /// Movement or appeal identifier, when the transition has one.
+        #[cfg_attr(
+            feature = "json",
+            norito(with = "crate::json_helpers::fixed_bytes::option")
+        )]
         pub operation_id: Option<[u8; 32]>,
         /// Active policy digest used by the transition.
+        #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
         pub policy_digest: [u8; 32],
         /// Resulting provider revision, or zero for policy activation.
         pub provider_revision: u64,

@@ -15,6 +15,7 @@ cargo fmt --all -- --check
 echo "[sorafs-release] shell syntax checks"
 bash -n scripts/release_sorafs_cli.sh scripts/package_sorafs_validate_release.sh \
   scripts/build_release_bundle.sh scripts/build_release_image.sh \
+  python/iroha_python/scripts/release_smoke.sh \
   scripts/tests/release_manifest_signing_test.sh \
   ci/check_sorafs_reference_ffi_header.sh
 

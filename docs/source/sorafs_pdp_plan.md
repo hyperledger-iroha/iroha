@@ -14,16 +14,22 @@ signatures against council-verified admission records. Torii ships the
 authenticated `/v1/sorafs/pdp/challenge`, `/next`, `/proof`, `/status`, and
 `/export` protocol family. `/v1/sorafs/proof/stream` also accepts `pdp` only
 when the caller supplies the existing non-zero governed challenge ID; it
-rejects client-selected PDP sample counts and seeds. Persisted storage retains
-canonical PDP trees and produces witnesses through verified no-follow chunk
-reads.
+rejects client-selected PDP sample counts and seeds. That proof-stream route
+does not read the provider protocol's local scheduler state: it performs an
+exact `(pdp, challenge_id)` lookup in the finalized native proof-outcome ledger
+and returns one terminal row with complete commit provenance. Persisted storage
+retains canonical PDP trees and produces witnesses through verified no-follow
+chunk reads.
 
 This protocol is not production-ready while rejected or expired challenges
 still converge on the process-local repair coordinator. The native repair
 ledger exists, but PDP terminal handoff, retry reconciliation, and readback
 must use its finalized committed task/event projection before SF-13 can be
-promoted. Genuine multi-provider transport, restart, key-rotation, metrics,
-archive, and repair evidence also remains external rollout work.
+promoted. The provider protocol's canonical terminal archive also needs an
+authorized retry-safe `SubmitSorafsProofOutcome` transaction forwarder and
+committed-state reconciliation; the finalized proof-stream query does not
+populate that state. Genuine multi-provider transport, restart, key-rotation,
+metrics, archive, and repair evidence also remains external rollout work.
 `scripts/check_sorafs_pdp_rollout_evidence.py` now provides the fail-closed
 SF-13 rollout evidence gate for deployed PDP promotion, and
 `scripts/run_sorafs_pdp_rollout_evidence.py` provides the matching
@@ -151,7 +157,14 @@ Implemented locally:
   `proof_kind=pdp` as a challenge-bound proof kind.
   `sorafs_cli proof stream --proof-kind=pdp
   --challenge-id-hex=<governed-challenge-id>` emits the canonical request;
-  client-selected `--samples` and `--sample-seed` are rejected for PDP.
+  client-selected `--samples`, `--sample-seed`,
+  `--orchestrator-job-id-hex`, and `--deadline-ms` are rejected for PDP.
+- Finalized PDP proof-outcome state is keyed by the exact governed challenge
+  ID. The response projection carries `outcome_identity_hex` equal to
+  `challenge_id_hex`, the terminal outcome digest, the council-verified
+  admission envelope digest, finalized block height/hash, and commit
+  timestamp. Only `success` or a canonical terminal `failure` is valid;
+  `pending` and process-local-only states are not wire results.
 - Capacity telemetry, penalty policy, reputation scoring, and proof-health
   dashboards already reserve PDP counters so governance can account for PDP
   success/failure once provider submissions are live.
@@ -163,12 +176,15 @@ Shipped fail-closed surfaces:
   challenge to the provider's active council admission.
 - `/v1/sorafs/proof/stream` requires `challenge_id_hex` for PDP, rejects
   absent/zero IDs and client-controlled sampling fields, and binds the returned
-  durable status to the requested manifest and provider.
+  finalized terminal projection to the requested challenge, manifest, and
+  provider. Unknown or mismatched identities fail as not found rather than
+  exposing a different record.
 - The public OpenAPI description documents the five provider routes and
   challenge-bound PDP proof streaming as shipped V1 surfaces.
-- Missing protocol runtime, unknown challenge, admission mismatch, malformed
-  proof, archive failure, and repair-handoff failure are explicit errors; no
-  request falls back to PoR sampling or an unsigned local result.
+- Unknown or unfinalized outcomes, admission mismatch, malformed proof,
+  archive failure, unavailable authoritative state, and repair-handoff failure
+  are explicit errors; no request falls back to PoR sampling or an unsigned
+  local result.
 
 ## Protocol Target
 
@@ -249,12 +265,14 @@ The local V1 protocol gates are shipped:
    replay, and terminal-idempotency checks in the provider-submission pipeline.
 5. Governance DAG archival for accepted proofs and failure reports.
 6. An explicit repair-handoff boundary for `pdp_failure` events.
-7. OpenAPI coverage for the five provider routes and challenge-bound proof
-   streaming.
+7. An exact finalized proof-outcome query and OpenAPI coverage for the five
+   provider routes and challenge-bound proof streaming.
 
-The remaining authority gate is the sixth item: its target must be the
-finalized native repair ledger rather than `FileRepairStore` or any other
-process-local scheduler state.
+The remaining authority work is to drive the sixth item through the finalized
+native repair ledger rather than `FileRepairStore` or another process-local
+scheduler, and to forward each canonical terminal archive through
+`SubmitSorafsProofOutcome` with durable retry and committed-state
+reconciliation.
 
 ## CLI And SDK Surface
 
@@ -262,8 +280,9 @@ Shipped today:
 
 - `sorafs_cli proof stream --proof-kind=pdp
   --challenge-id-hex=<hex32>` serializes a challenge-bound
-  `ProofStreamRequestV1` and consumes the NDJSON status response. PDP sampling
-  remains fixed by the recorded challenge.
+  `ProofStreamRequestV1` and consumes its one-row finalized terminal NDJSON
+  projection. PDP sampling remains fixed by the recorded challenge; the route
+  never reports local `pending` status.
 - `sorafs-validate pdp --commitment <commitment.to> --challenge <challenge.to>
   --proof <proof.to>` validates the reference fixture shape and pair binding.
 - Canonical positive and negative PDP fixtures, the fail-closed rollout
@@ -298,8 +317,9 @@ Implemented:
 - CLI proof-stream tests that require the governed PDP challenge ID and reject
   client-selected PDP sampling against mocked gateways.
 - Torii tests for authenticated challenge enqueue/next-work/proof/status/export,
-  challenge-bound proof streaming, governance archival, repair handoff, and
-  telemetry counters.
+  exact finalized challenge-bound proof streaming without local storage,
+  request-scope mismatches, governance archival, repair handoff, and telemetry
+  counters.
 - Canonical `fixtures/sorafs_manifest/pdp/` commitment/challenge/proof samples.
 - Negative PDP fixtures for duplicate hot-leaf challenges, missing proof
   signatures, missing segment Merkle paths, missing hot-leaf Merkle paths,
@@ -314,6 +334,9 @@ Implemented:
 
 Required before production enablement:
 
+- Connect provider terminal archives to an authorized, retry-safe
+  `SubmitSorafsProofOutcome` transaction forwarder and reconcile the exact
+  finalized record after submission.
 - Replace the local repair coordinator target with finalized native repair
   transactions, committed task/event queries, durable retry reconciliation,
   and cross-peer exactly-once tests.
@@ -364,6 +387,9 @@ Completed local foundations:
 
 Remaining production gates:
 
+- Forward and reconcile every canonical provider terminal archive through the
+  native proof-outcome ledger; do not treat the provider protocol's local
+  status/export store as authoritative.
 - Cut PDP terminal repair handoff over to the finalized native repair ledger
   and delete the local-authority path.
 - Exercise admission-bound provider signatures, archive publication, restart,

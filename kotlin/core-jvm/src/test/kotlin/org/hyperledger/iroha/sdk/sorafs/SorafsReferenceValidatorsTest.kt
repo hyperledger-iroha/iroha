@@ -314,6 +314,96 @@ class SorafsReferenceValidatorsTest {
             generatedAtUnix = 123,
         )
         assertTrue(reordered.contains("\"status\": \"Error\""), reordered)
+
+        val blockSignatureOutcome =
+            SorafsReferenceValidators.validateGovernanceDagBlockJson(
+                fixture(
+                    "sorafs_manifest",
+                    "governance",
+                    "dag_block_bad_signature_v1.to",
+                ),
+                label = "dag_block_bad_signature_v1.to",
+                generatedAtUnix = 123,
+            )
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_bad_signature_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            blockSignatureOutcome,
+        )
+
+        val trailingBytesOutcome =
+            SorafsReferenceValidators.validateGovernanceDagBlockJson(
+                fixture(
+                    "sorafs_manifest",
+                    "governance",
+                    "dag_block_trailing_bytes_v1.to",
+                ),
+                label = "dag_block_trailing_bytes_v1.to",
+                generatedAtUnix = 123,
+            )
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_block_trailing_bytes_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            trailingBytesOutcome,
+        )
+
+        val headSignatureOutcome =
+            SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+                head = fixture(
+                    "sorafs_manifest",
+                    "governance",
+                    "dag_head_bad_signature_v1.to",
+                ),
+                blocks = listOf(first, second),
+                headLabel = "dag_head_bad_signature_v1.to",
+                blockLabels = listOf("dag_block_0_v1.to", "dag_block_1_v1.to"),
+                generatedAtUnix = 123,
+            )
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_signature_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            headSignatureOutcome,
+        )
+
+        val predecessorOutcome =
+            SorafsReferenceValidators.validateGovernanceDagHeadChainJson(
+                head = fixture(
+                    "sorafs_manifest",
+                    "governance",
+                    "dag_head_bad_predecessor_v1.to",
+                ),
+                blocks = listOf(
+                    first,
+                    fixture(
+                        "sorafs_manifest",
+                        "governance",
+                        "dag_block_1_bad_predecessor_v1.to",
+                    ),
+                ),
+                headLabel = "dag_head_bad_predecessor_v1.to",
+                blockLabels = listOf(
+                    "dag_block_0_v1.to",
+                    "dag_block_1_bad_predecessor_v1.to",
+                ),
+                generatedAtUnix = 123,
+            )
+        assertEquals(
+            fixture(
+                "sorafs_manifest",
+                "governance",
+                "dag_head_bad_predecessor_validation_outcome_v1.json",
+            ).toString(Charsets.UTF_8),
+            predecessorOutcome,
+        )
     }
 
     @Test

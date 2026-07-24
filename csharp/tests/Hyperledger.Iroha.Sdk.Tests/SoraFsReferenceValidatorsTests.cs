@@ -279,6 +279,13 @@ public sealed class SoraFsReferenceValidatorsTests
     {
         if (!SoraFsReferenceValidators.IsAvailable())
         {
+            Assert.False(
+                string.Equals(
+                    Environment.GetEnvironmentVariable(
+                        "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION"),
+                    "1",
+                    StringComparison.Ordinal),
+                "ABI-21 connect_norito_bridge with Governance DAG symbols is required.");
             return;
         }
 
@@ -354,6 +361,85 @@ public sealed class SoraFsReferenceValidatorsTests
             ("governance_dag_head", "governance-dag-head.to"),
             ("governance_dag_block", "governance-dag-block-0.to"),
             ("governance_dag_block", "governance-dag-block-1.to"));
+
+        var blockSignatureOutcome =
+            SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+                File.ReadAllBytes(
+                    Path.Combine(
+                        fixtureRoot,
+                        "dag_block_bad_signature_v1.to")),
+                "dag_block_bad_signature_v1.to",
+                null,
+                123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_block_bad_signature_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            blockSignatureOutcome);
+
+        var trailingBytesOutcome =
+            SoraFsReferenceValidators.ValidateGovernanceDagBlockJson(
+                File.ReadAllBytes(
+                    Path.Combine(
+                        fixtureRoot,
+                        "dag_block_trailing_bytes_v1.to")),
+                "dag_block_trailing_bytes_v1.to",
+                null,
+                123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_block_trailing_bytes_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            trailingBytesOutcome);
+
+        var headSignatureOutcome =
+            SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
+                File.ReadAllBytes(
+                    Path.Combine(
+                        fixtureRoot,
+                        "dag_head_bad_signature_v1.to")),
+                blocks,
+                "dag_head_bad_signature_v1.to",
+                123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_head_bad_signature_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            headSignatureOutcome);
+
+        var predecessorOutcome =
+            SoraFsReferenceValidators.ValidateGovernanceDagHeadChainJson(
+                File.ReadAllBytes(
+                    Path.Combine(
+                        fixtureRoot,
+                        "dag_head_bad_predecessor_v1.to")),
+                new[]
+                {
+                    new SoraFsGovernanceDagBlockInput(
+                        first,
+                        "dag_block_0_v1.to"),
+                    new SoraFsGovernanceDagBlockInput(
+                        File.ReadAllBytes(
+                            Path.Combine(
+                                fixtureRoot,
+                                "dag_block_1_bad_predecessor_v1.to")),
+                        "dag_block_1_bad_predecessor_v1.to"),
+                },
+                "dag_head_bad_predecessor_v1.to",
+                123);
+        Assert.Equal(
+            File.ReadAllText(
+                Path.Combine(
+                    fixtureRoot,
+                    "dag_head_bad_predecessor_validation_outcome_v1.json"),
+                Encoding.UTF8),
+            predecessorOutcome);
     }
 
     [Fact]

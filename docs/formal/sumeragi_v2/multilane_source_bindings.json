@@ -110,7 +110,7 @@
           "kind": "fn",
           "symbol": "lane_has_pending_work",
           "required_tokens": [
-            "lane_reservation_durability_faulted",
+            "transaction_selection_durability_faulted",
             "commit_barriers",
             "release_barriers",
             "completed_releases",
@@ -1148,12 +1148,21 @@
           "symbol": "Queue::lane_reservation_group_is_finalized_for_diagnostics",
           "required_tokens": [
             "MAX_MERGE_EXECUTION_ENTRYPOINTS",
-            "lane_reservation_durability_faulted",
+            "transaction_selection_durability_faulted",
             "store.journal.is_none()",
             "live_by_hash",
             "commit_barriers",
             "release_barriers",
             "completed_releases"
+          ]
+        },
+        {
+          "path": "crates/iroha_core/src/queue.rs",
+          "kind": "method",
+          "symbol": "Queue::transaction_selection_durability_faulted",
+          "required_tokens": [
+            "plan_journal_durability_faulted",
+            "lane_reservation_durability_faulted"
           ]
         },
         {

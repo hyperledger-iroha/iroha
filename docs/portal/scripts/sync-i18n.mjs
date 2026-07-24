@@ -372,9 +372,10 @@ async function pruneRetiredLocalizedCopies(refreshPrefixes) {
     );
     const existing = await collectExistingDocs(localeRoot);
     for (const doc of existing) {
+      const canonicalSource = canonicalSourcePathForTranslation(doc.relative);
       if (
-        shouldRefreshTranslation(doc.relative, refreshPrefixes) &&
-        isTranslationFile(path.basename(doc.relative))
+        canonicalSource &&
+        shouldRefreshTranslation(canonicalSource, refreshPrefixes)
       ) {
         await unlink(doc.absolute);
         pruned += 1;
@@ -417,6 +418,19 @@ export function buildLocalePath(relativePath, locale) {
     'current',
     relativePath,
   );
+}
+
+export function canonicalSourcePathForTranslation(relativePath) {
+  const normalized = relativePath.replaceAll('\\', '/');
+  const directory = path.posix.dirname(normalized);
+  const fileName = path.posix.basename(normalized);
+  if (!isTranslationFile(fileName)) {
+    return null;
+  }
+  const parts = fileName.split('.');
+  parts.splice(parts.length - 2, 1);
+  const canonicalName = parts.join('.');
+  return directory === '.' ? canonicalName : `${directory}/${canonicalName}`;
 }
 
 async function fileExists(candidate) {

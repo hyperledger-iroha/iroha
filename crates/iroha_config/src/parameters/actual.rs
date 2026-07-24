@@ -8061,6 +8061,10 @@ pub struct SorafsRuntimeRetention {
     pub state_entry_limit: usize,
     /// Maximum encoded size accepted for one auxiliary runtime checkpoint.
     pub checkpoint_max_bytes: Bytes<u64>,
+    /// Finalized reconciliation cadence for durable proof-outcome delivery.
+    pub proof_outcome_forwarder_interval: Duration,
+    /// Submission attempts allowed for one exact proof-outcome transaction.
+    pub proof_outcome_max_attempts: u32,
 }
 
 /// Durable admission-bound PDP provider protocol policy.
@@ -8318,6 +8322,11 @@ impl Default for SorafsRuntimeRetention {
             event_history_limit: defaults::sorafs::storage::RUNTIME_EVENT_HISTORY_LIMIT,
             state_entry_limit: defaults::sorafs::storage::RUNTIME_STATE_ENTRY_LIMIT,
             checkpoint_max_bytes: defaults::sorafs::storage::RUNTIME_CHECKPOINT_MAX_BYTES,
+            proof_outcome_forwarder_interval: Duration::from_millis(
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS.get(),
+            ),
+            proof_outcome_max_attempts:
+                defaults::sorafs::storage::RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS.get(),
         }
     }
 }

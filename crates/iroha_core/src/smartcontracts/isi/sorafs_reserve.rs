@@ -22,17 +22,21 @@ use iroha_data_model::{
     query::{
         error::{FindError, QueryExecutionFail},
         sorafs::prelude::{
-            FindSorafsReserveAppealById, FindSorafsReserveMovementById, FindSorafsReservePolicy,
+            FindSorafsReserveAppealById, FindSorafsReserveEvents,
+            FindSorafsReserveMovementById, FindSorafsReservePolicy,
             FindSorafsReserveProviderById,
         },
     },
     sorafs::{
         capacity::ProviderId,
         reserve::{
-            RESERVE_MAX_REASON_BYTES_V1, ReserveAppealRecordV1, ReserveAppealStatusV1,
-            ReserveAuthorityPolicyRecordV1, ReserveAuthorityPolicyV1, ReserveLifecycleStage,
-            ReserveMovementKindV1, ReserveMovementRecordV1, ReserveMovementStatusV1,
-            ReserveProviderAccountV1, ReserveTier,
+            RESERVE_COMMITTED_EVENT_MAX_BYTES_V1, RESERVE_MAX_REASON_BYTES_V1,
+            RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1, RESERVE_QUERY_MAX_ITEMS_V1,
+            ReserveAppealRecordV1, ReserveAppealStatusV1, ReserveAuthorityPolicyRecordV1,
+            ReserveAuthorityPolicyV1, ReserveFinalizedCursorV1, ReserveFinalizedEventPageV1,
+            ReserveFinalizedEventV1, ReserveLifecycleStage, ReserveMovementKindV1,
+            ReserveMovementRecordV1, ReserveMovementStatusV1, ReserveProviderAccountV1,
+            ReserveTier,
         },
     },
 };
@@ -49,9 +53,26 @@ const POLICY_STATE_KEY: &str = "sorafs_reserve_policy_v1";
 const PROVIDER_STATE_KEY_PREFIX: &str = "sorafs_reserve_provider_v1_";
 const MOVEMENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_movement_v1_";
 const APPEAL_STATE_KEY_PREFIX: &str = "sorafs_reserve_appeal_v1_";
+const EVENT_STATE_KEY_PREFIX: &str = "sorafs_reserve_event_v1_";
+const EVENT_JOURNAL_HEAD_STATE_KEY: &str = "sorafs_reserve_event_head_v1";
 const STATE_MAX_BYTES: usize = 2 * 1024 * 1024;
 const STATE_LIMITS: DecodeLimits =
     DecodeLimits::new(4_096, STATE_MAX_BYTES, 32_768, STATE_MAX_BYTES * 2, 64);
+
+#[derive(Clone, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ReservePersistedEventV1 {
+    sequence: u64,
+    target_block_height: u64,
+    event_index: u32,
+    event: SorafsReserveLedgerEvent,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, norito::NoritoSerialize, norito::NoritoDeserialize)]
+struct ReserveEventJournalHeadV1 {
+    last_sequence: u64,
+    last_target_block_height: u64,
+    last_event_index: u32,
+}
 
 fn invalid_parameter(message: impl Into<String>) -> InstructionExecutionError {
     InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
@@ -73,20 +94,24 @@ fn emit_reserve_event(
     provider_revision: u64,
     authority: &AccountId,
     now_unix: u64,
-) {
+) -> Result<(), InstructionExecutionError> {
+    let occurred_at_unix_ms = now_unix
+        .checked_mul(1_000)
+        .ok_or_else(|| corrupt_state("reserve event timestamp overflow"))?;
+    let event = SorafsReserveLedgerEvent {
+        kind,
+        provider_id,
+        operation_id,
+        policy_digest,
+        provider_revision,
+        authority: authority.clone(),
+        occurred_at_unix_ms,
+    };
+    append_reserve_event_journal(state_transaction, &event)?;
     state_transaction
         .world
-        .emit_events(Some(SorafsGatewayEvent::ReserveLedger(
-            SorafsReserveLedgerEvent {
-                kind,
-                provider_id,
-                operation_id,
-                policy_digest,
-                provider_revision,
-                authority: authority.clone(),
-                occurred_at_unix_ms: now_unix * 1_000,
-            },
-        )));
+        .emit_events(Some(SorafsGatewayEvent::ReserveLedger(event)));
+    Ok(())
 }
 
 fn has_permission(
@@ -146,6 +171,18 @@ fn appeal_key(appeal_id: [u8; 32]) -> Name {
     digest_key(APPEAL_STATE_KEY_PREFIX, appeal_id)
 }
 
+fn event_key(sequence: u64) -> Name {
+    Name::from_str(&format!("{EVENT_STATE_KEY_PREFIX}{sequence:016x}"))
+        .expect("static prefix plus fixed-width lowercase hex is a valid state key")
+}
+
+fn event_journal_head_key() -> &'static Name {
+    static KEY: OnceLock<Name> = OnceLock::new();
+    KEY.get_or_init(|| {
+        Name::from_str(EVENT_JOURNAL_HEAD_STATE_KEY).expect("static state key is valid")
+    })
+}
+
 fn encode_state<T: norito::core::NoritoSerialize>(
     value: &T,
     label: &str,
@@ -171,6 +208,310 @@ where
         )));
     }
     Ok(value)
+}
+
+fn validate_persisted_event(
+    record: &ReservePersistedEventV1,
+    expected_sequence: u64,
+) -> Result<(), InstructionExecutionError> {
+    if record.sequence == 0
+        || record.sequence != expected_sequence
+        || record.target_block_height == 0
+        || record.event.occurred_at_unix_ms == 0
+        || record.event.policy_digest == [0; 32]
+        || record
+            .event
+            .provider_id
+            .is_some_and(|provider_id| provider_id.as_bytes() == &[0; 32])
+        || record.event.operation_id == Some([0; 32])
+    {
+        return Err(corrupt_state(
+            "stored reserve event cursor or payload metadata is invalid",
+        ));
+    }
+    let shape_is_valid = match record.event.kind {
+        SorafsReserveLedgerEventKind::PolicyActivated => {
+            record.event.provider_id.is_none()
+                && record.event.operation_id.is_none()
+                && record.event.provider_revision == 0
+        }
+        SorafsReserveLedgerEventKind::ProviderRegistered => {
+            record.event.provider_id.is_some()
+                && record.event.operation_id.is_none()
+                && record.event.provider_revision == 1
+        }
+        SorafsReserveLedgerEventKind::MovementRequested
+        | SorafsReserveLedgerEventKind::MovementApproved
+        | SorafsReserveLedgerEventKind::MovementRejected
+        | SorafsReserveLedgerEventKind::AppealSubmitted
+        | SorafsReserveLedgerEventKind::AppealAccepted
+        | SorafsReserveLedgerEventKind::AppealRejected => {
+            record.event.provider_id.is_some()
+                && record.event.operation_id.is_some()
+                && record.event.provider_revision > 0
+        }
+        SorafsReserveLedgerEventKind::RentCharged
+        | SorafsReserveLedgerEventKind::LifecycleAdvanced
+        | SorafsReserveLedgerEventKind::CreditDrawn
+        | SorafsReserveLedgerEventKind::CreditRepaid => {
+            record.event.provider_id.is_some()
+                && record.event.operation_id.is_none()
+                && record.event.provider_revision > 0
+        }
+    };
+    if !shape_is_valid {
+        return Err(corrupt_state(
+            "stored reserve event payload shape is invalid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_event_successor(
+    previous: Option<&ReservePersistedEventV1>,
+    current: &ReservePersistedEventV1,
+) -> Result<(), InstructionExecutionError> {
+    let Some(previous) = previous else {
+        if current.sequence != 1 || current.event_index != 0 {
+            return Err(corrupt_state(
+                "reserve event journal does not begin at sequence one and block index zero",
+            ));
+        }
+        return Ok(());
+    };
+    if previous
+        .sequence
+        .checked_add(1)
+        .is_none_or(|next| current.sequence != next)
+    {
+        return Err(corrupt_state(
+            "reserve event journal sequence is not contiguous",
+        ));
+    }
+    match previous
+        .target_block_height
+        .cmp(&current.target_block_height)
+    {
+        core::cmp::Ordering::Less if current.event_index == 0 => Ok(()),
+        core::cmp::Ordering::Equal
+            if previous
+                .event_index
+                .checked_add(1)
+                .is_some_and(|next| current.event_index == next) =>
+        {
+            Ok(())
+        }
+        _ => Err(corrupt_state(
+            "reserve event journal block height/index ordering is invalid",
+        )),
+    }
+}
+
+fn read_persisted_event(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+) -> Result<Option<ReservePersistedEventV1>, InstructionExecutionError> {
+    if sequence == 0 {
+        return Err(corrupt_state("reserve event sequence zero cannot be read"));
+    }
+    let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) else {
+        return Ok(None);
+    };
+    if bytes.len() > RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 {
+        return Err(corrupt_state(format!(
+            "reserve committed event exceeds {RESERVE_COMMITTED_EVENT_MAX_BYTES_V1} bytes"
+        )));
+    }
+    let record: ReservePersistedEventV1 = decode_state(bytes, "reserve committed event")?;
+    validate_persisted_event(&record, sequence)?;
+    Ok(Some(record))
+}
+
+fn read_event_journal_head(
+    world: &impl WorldReadOnly,
+) -> Result<Option<ReserveEventJournalHeadV1>, InstructionExecutionError> {
+    let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
+        return Ok(None);
+    };
+    let head: ReserveEventJournalHeadV1 =
+        decode_state(bytes, "reserve event journal head")?;
+    if head.last_sequence == 0 || head.last_target_block_height == 0 {
+        return Err(corrupt_state(
+            "stored reserve event journal head is invalid",
+        ));
+    }
+    let record = read_persisted_event(world, head.last_sequence)?
+        .ok_or_else(|| corrupt_state("reserve event journal head references a missing event"))?;
+    if record.target_block_height != head.last_target_block_height
+        || record.event_index != head.last_event_index
+    {
+        return Err(corrupt_state(
+            "reserve event journal head does not match its terminal event",
+        ));
+    }
+    let predecessor = if head.last_sequence == 1 {
+        None
+    } else {
+        let predecessor_sequence = head.last_sequence - 1;
+        Some(
+            read_persisted_event(world, predecessor_sequence)?.ok_or_else(|| {
+                corrupt_state(format!(
+                    "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                ))
+            })?,
+        )
+    };
+    validate_event_successor(predecessor.as_ref(), &record)?;
+    Ok(Some(head))
+}
+
+fn ensure_no_event_after_head(
+    world: &impl WorldReadOnly,
+    head: Option<ReserveEventJournalHeadV1>,
+) -> Result<(), InstructionExecutionError> {
+    let prefix_start =
+        Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid");
+    let first_event_key = world
+        .smart_contract_state()
+        .range(prefix_start..)
+        .next()
+        .and_then(|(key, _)| {
+            key.to_string()
+                .starts_with(EVENT_STATE_KEY_PREFIX)
+                .then_some(key)
+        });
+    match (head, first_event_key) {
+        (None, None) => return Ok(()),
+        (None, Some(_)) => {
+            return Err(corrupt_state(
+                "reserve event journal contains records without a head",
+            ));
+        }
+        (Some(_), Some(key)) if *key == event_key(1) => {}
+        (Some(_), _) => {
+            return Err(corrupt_state(
+                "reserve event journal does not begin at sequence one",
+            ));
+        }
+    }
+    let start = head.map_or_else(
+        || Name::from_str(EVENT_STATE_KEY_PREFIX).expect("static event prefix is valid"),
+        |head| event_key(head.last_sequence),
+    );
+    for (key, _) in world.smart_contract_state().range(start..) {
+        let rendered = key.to_string();
+        if !rendered.starts_with(EVENT_STATE_KEY_PREFIX) {
+            break;
+        }
+        if head.is_some_and(|head| *key == event_key(head.last_sequence)) {
+            continue;
+        }
+        return Err(corrupt_state(
+            "reserve event journal contains a record beyond its head",
+        ));
+    }
+    Ok(())
+}
+
+fn append_reserve_event_journal(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    event: &SorafsReserveLedgerEvent,
+) -> Result<(), InstructionExecutionError> {
+    let committed_parent_height = u64::try_from(state_transaction.block_hashes().len())
+        .map_err(|_| corrupt_state("committed reserve parent height does not fit into u64"))?;
+    let target_block_height = committed_parent_height
+        .checked_add(1)
+        .ok_or_else(|| corrupt_state("reserve event target block height overflow"))?;
+    let executing_block_height = state_transaction._curr_block.height().get();
+    if target_block_height != executing_block_height {
+        return Err(corrupt_state(format!(
+            "reserve event target height {target_block_height} does not match executing block height {executing_block_height}"
+        )));
+    }
+    let head = read_event_journal_head(state_transaction.world())?;
+    ensure_no_event_after_head(state_transaction.world(), head)?;
+    let (sequence, event_index) = match head {
+        Some(head) => {
+            let sequence = head
+                .last_sequence
+                .checked_add(1)
+                .ok_or_else(|| corrupt_state("reserve event sequence overflow"))?;
+            let event_index = match head.last_target_block_height.cmp(&target_block_height) {
+                core::cmp::Ordering::Less => 0,
+                core::cmp::Ordering::Equal => head
+                    .last_event_index
+                    .checked_add(1)
+                    .ok_or_else(|| corrupt_state("reserve event block index overflow"))?,
+                core::cmp::Ordering::Greater => {
+                    return Err(corrupt_state(
+                        "reserve event target height regressed behind the journal head",
+                    ));
+                }
+            };
+            (sequence, event_index)
+        }
+        None => {
+            let policy = read_policy(state_transaction.world())?
+                .ok_or_else(|| corrupt_state("first reserve event has no active policy"))?;
+            if event.kind != SorafsReserveLedgerEventKind::PolicyActivated
+                || event.provider_id.is_some()
+                || event.operation_id.is_some()
+                || event.provider_revision != 0
+                || policy.policy.revision != 1
+                || policy.policy_digest != event.policy_digest
+            {
+                return Err(corrupt_state(
+                    "reserve event journal must begin with initial policy activation",
+                ));
+            }
+            (1, 0)
+        }
+    };
+    let key = event_key(sequence);
+    if state_transaction
+        .world
+        .smart_contract_state
+        .get(&key)
+        .is_some()
+    {
+        return Err(corrupt_state(
+            "reserve event journal sequence already exists",
+        ));
+    }
+    let record = ReservePersistedEventV1 {
+        sequence,
+        target_block_height,
+        event_index,
+        event: event.clone(),
+    };
+    validate_persisted_event(&record, sequence)?;
+    let previous = if sequence == 1 {
+        None
+    } else {
+        read_persisted_event(state_transaction.world(), sequence - 1)?
+    };
+    validate_event_successor(previous.as_ref(), &record)?;
+    let encoded_record = encode_state(&record, "reserve committed event")?;
+    if encoded_record.len() > RESERVE_COMMITTED_EVENT_MAX_BYTES_V1 {
+        return Err(corrupt_state(format!(
+            "encoded reserve committed event exceeds {RESERVE_COMMITTED_EVENT_MAX_BYTES_V1} bytes"
+        )));
+    }
+    let next_head = ReserveEventJournalHeadV1 {
+        last_sequence: sequence,
+        last_target_block_height: target_block_height,
+        last_event_index: event_index,
+    };
+    let encoded_head = encode_state(&next_head, "reserve event journal head")?;
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(key, encoded_record);
+    state_transaction
+        .world
+        .smart_contract_state
+        .insert(event_journal_head_key().clone(), encoded_head);
+    Ok(())
 }
 
 fn now_unix(
@@ -557,7 +898,7 @@ impl Execute for SetSorafsReservePolicy {
             0,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -615,7 +956,7 @@ impl Execute for RegisterSorafsReserveAccount {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -686,7 +1027,7 @@ impl Execute for RequestSorafsReserveMovement {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -828,7 +1169,7 @@ impl Execute for DecideSorafsReserveMovement {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -902,7 +1243,7 @@ impl Execute for ChargeSorafsReserveRent {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -958,7 +1299,7 @@ impl Execute for AdvanceSorafsReserveLifecycle {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1017,7 +1358,7 @@ impl Execute for DrawSorafsReserveCredit {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1092,7 +1433,7 @@ impl Execute for RepaySorafsReserveCredit {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1167,7 +1508,7 @@ impl Execute for SubmitSorafsReserveAppeal {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
@@ -1233,13 +1574,316 @@ impl Execute for DecideSorafsReserveAppeal {
             account.revision,
             authority,
             now,
-        );
+        )?;
         Ok(())
     }
 }
 
 fn query_failure(error: impl core::fmt::Display) -> QueryExecutionFail {
     QueryExecutionFail::Conversion(error.to_string())
+}
+
+const RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1: usize =
+    RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 * 4;
+const RESERVE_QUERY_MAX_EVENT_READ_RECORDS_V1: u32 = RESERVE_QUERY_MAX_ITEMS_V1 + 8;
+
+#[derive(Debug, Default)]
+struct ReserveEventQueryBudgetV1 {
+    records: u32,
+    bytes: usize,
+}
+
+impl ReserveEventQueryBudgetV1 {
+    fn inspect(&mut self, encoded_len: usize) -> Result<(), QueryExecutionFail> {
+        self.records = self.records.checked_add(1).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reserve committed-event query record counter overflow".to_owned(),
+            )
+        })?;
+        self.bytes = self.bytes.checked_add(encoded_len).ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reserve committed-event query read-byte counter overflow".to_owned(),
+            )
+        })?;
+        if self.records > RESERVE_QUERY_MAX_EVENT_READ_RECORDS_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "reserve committed-event query exceeds {RESERVE_QUERY_MAX_EVENT_READ_RECORDS_V1} inspected records"
+            )));
+        }
+        if self.bytes > RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "reserve committed-event query exceeds {RESERVE_QUERY_MAX_EVENT_READ_BYTES_V1} encoded read bytes"
+            )));
+        }
+        Ok(())
+    }
+}
+
+fn checked_query_limit(limit: u32) -> Result<usize, QueryExecutionFail> {
+    if !(1..=RESERVE_QUERY_MAX_ITEMS_V1).contains(&limit) {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "SoraFS reserve event query limit {limit} is outside 1..={RESERVE_QUERY_MAX_ITEMS_V1}"
+        )));
+    }
+    usize::try_from(limit).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "SoraFS reserve event query limit conversion failed".to_owned(),
+        )
+    })
+}
+
+fn resolve_finalized_cursor(
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<ReserveFinalizedCursorV1, QueryExecutionFail> {
+    let height = u64::try_from(state_ro.block_hashes().len()).map_err(|_| {
+        QueryExecutionFail::Conversion(
+            "finalized reserve height does not fit into u64".to_owned(),
+        )
+    })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .last()
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "finalized reserve queries require at least one committed block".to_owned(),
+            )
+        })?;
+    if height == 0 || block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(
+            "finalized reserve query anchor is invalid".to_owned(),
+        ));
+    }
+    Ok(ReserveFinalizedCursorV1 { height, block_hash })
+}
+
+fn resolve_query_finalized_cursor(
+    expected: Option<ReserveFinalizedCursorV1>,
+    state_ro: &impl crate::state::StateReadOnly,
+) -> Result<ReserveFinalizedCursorV1, QueryExecutionFail> {
+    let actual = resolve_finalized_cursor(state_ro)?;
+    if expected.is_some_and(|expected| expected != actual) {
+        return Err(QueryExecutionFail::Expired);
+    }
+    Ok(actual)
+}
+
+fn read_persisted_event_for_query(
+    world: &impl WorldReadOnly,
+    sequence: u64,
+    budget: &mut ReserveEventQueryBudgetV1,
+) -> Result<Option<ReservePersistedEventV1>, QueryExecutionFail> {
+    if let Some(bytes) = world.smart_contract_state().get(&event_key(sequence)) {
+        budget.inspect(bytes.len())?;
+    }
+    read_persisted_event(world, sequence).map_err(query_failure)
+}
+
+fn read_event_journal_head_for_query(
+    world: &impl WorldReadOnly,
+    budget: &mut ReserveEventQueryBudgetV1,
+) -> Result<Option<ReserveEventJournalHeadV1>, QueryExecutionFail> {
+    let Some(bytes) = world.smart_contract_state().get(event_journal_head_key()) else {
+        return Ok(None);
+    };
+    budget.inspect(bytes.len())?;
+    let head: ReserveEventJournalHeadV1 =
+        decode_state(bytes, "reserve event journal head").map_err(query_failure)?;
+    if head.last_sequence == 0 || head.last_target_block_height == 0 {
+        return Err(query_failure(
+            "stored reserve event journal head is invalid",
+        ));
+    }
+    let record = read_persisted_event_for_query(world, head.last_sequence, budget)?.ok_or_else(
+        || {
+            QueryExecutionFail::Conversion(
+                "reserve event journal head references a missing event".to_owned(),
+            )
+        },
+    )?;
+    if record.target_block_height != head.last_target_block_height
+        || record.event_index != head.last_event_index
+    {
+        return Err(QueryExecutionFail::Conversion(
+            "reserve event journal head does not match its terminal event".to_owned(),
+        ));
+    }
+    let predecessor = if head.last_sequence == 1 {
+        None
+    } else {
+        let predecessor_sequence = head.last_sequence - 1;
+        Some(
+            read_persisted_event_for_query(world, predecessor_sequence, budget)?.ok_or_else(
+                || {
+                    QueryExecutionFail::Conversion(format!(
+                        "reserve event journal is missing terminal predecessor sequence {predecessor_sequence}"
+                    ))
+                },
+            )?,
+        )
+    };
+    validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
+    Ok(Some(head))
+}
+
+fn resolve_committed_event(
+    state_ro: &impl crate::state::StateReadOnly,
+    record: &ReservePersistedEventV1,
+) -> Result<ReserveFinalizedEventV1, QueryExecutionFail> {
+    let hash_index = record
+        .target_block_height
+        .checked_sub(1)
+        .and_then(|height| usize::try_from(height).ok())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(
+                "reserve event target height cannot index finalized block hashes".to_owned(),
+            )
+        })?;
+    let block_hash = state_ro
+        .block_hashes()
+        .get(hash_index)
+        .map(|hash| *hash.as_ref())
+        .ok_or_else(|| {
+            QueryExecutionFail::Conversion(format!(
+                "reserve event sequence {} targets non-finalized block height {}",
+                record.sequence, record.target_block_height
+            ))
+        })?;
+    if block_hash == [0; 32] {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "reserve event sequence {} resolved a zero block hash",
+            record.sequence
+        )));
+    }
+    Ok(ReserveFinalizedEventV1 {
+        sequence: record.sequence,
+        block_height: record.target_block_height,
+        block_hash,
+        event_index: record.event_index,
+        event: record.event.clone(),
+    })
+}
+
+fn query_reserve_event_page(
+    query: &FindSorafsReserveEvents,
+    state_ro: &impl crate::state::StateReadOnly,
+    finalized_cursor: ReserveFinalizedCursorV1,
+) -> Result<ReserveFinalizedEventPageV1, QueryExecutionFail> {
+    let limit = checked_query_limit(query.limit)?;
+    let world = state_ro.world();
+    if read_policy(world).map_err(query_failure)?.is_none() {
+        return Err(QueryExecutionFail::Find(FindError::SorafsReservePolicy));
+    }
+    let mut budget = ReserveEventQueryBudgetV1::default();
+    let head = read_event_journal_head_for_query(world, &mut budget)?.ok_or_else(|| {
+        QueryExecutionFail::Conversion(
+            "active reserve state has no committed-event journal".to_owned(),
+        )
+    })?;
+    ensure_no_event_after_head(world, Some(head)).map_err(query_failure)?;
+    let mut previous = match query.after {
+        Some(after) => {
+            if after.sequence == 0 || after.sequence > head.last_sequence {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let record =
+                read_persisted_event_for_query(world, after.sequence, &mut budget)?
+                    .ok_or(QueryExecutionFail::Expired)?;
+            let resolved = resolve_committed_event(state_ro, &record)?;
+            if resolved.cursor() != after {
+                return Err(QueryExecutionFail::Expired);
+            }
+            let predecessor = if after.sequence == 1 {
+                None
+            } else {
+                let predecessor_sequence = after.sequence - 1;
+                Some(
+                    read_persisted_event_for_query(
+                        world,
+                        predecessor_sequence,
+                        &mut budget,
+                    )?
+                    .ok_or_else(|| {
+                        QueryExecutionFail::Conversion(format!(
+                            "reserve event journal is missing predecessor sequence {predecessor_sequence}"
+                        ))
+                    })?,
+                )
+            };
+            validate_event_successor(predecessor.as_ref(), &record).map_err(query_failure)?;
+            Some(record)
+        }
+        None => None,
+    };
+    let mut sequence = query
+        .after
+        .map_or(Some(1), |after| after.sequence.checked_add(1));
+    let mut events = Vec::with_capacity(limit);
+    let mut encoded_event_bytes = 0usize;
+    while let Some(current_sequence) = sequence {
+        if current_sequence > head.last_sequence || events.len() >= limit {
+            break;
+        }
+        let record = read_persisted_event_for_query(world, current_sequence, &mut budget)?
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(format!(
+                    "reserve event journal is missing sequence {current_sequence}"
+                ))
+            })?;
+        validate_event_successor(previous.as_ref(), &record).map_err(query_failure)?;
+        let resolved = resolve_committed_event(state_ro, &record)?;
+        encoded_event_bytes = encoded_event_bytes
+            .checked_add(
+                norito::to_bytes(&resolved)
+                    .map_err(|error| {
+                        QueryExecutionFail::Conversion(format!(
+                            "failed to encode committed reserve event: {error}"
+                        ))
+                    })?
+                    .len(),
+            )
+            .ok_or_else(|| {
+                QueryExecutionFail::Conversion(
+                    "committed reserve event page byte counter overflow".to_owned(),
+                )
+            })?;
+        if encoded_event_bytes > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+            return Err(QueryExecutionFail::Conversion(format!(
+                "committed reserve event page exceeds {RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1} bytes"
+            )));
+        }
+        previous = Some(record);
+        events.push(resolved);
+        sequence = current_sequence.checked_add(1);
+    }
+    let has_more = events
+        .last()
+        .is_some_and(|event| event.sequence < head.last_sequence);
+    let next_after = has_more.then(|| {
+        events
+            .last()
+            .expect("has_more requires a non-empty reserve event page")
+            .cursor()
+    });
+    let page = ReserveFinalizedEventPageV1 {
+        finalized_cursor,
+        events,
+        has_more,
+        next_after,
+    };
+    let encoded_len = norito::to_bytes(&page)
+        .map_err(|error| {
+            QueryExecutionFail::Conversion(format!(
+                "failed to encode committed reserve event page: {error}"
+            ))
+        })?
+        .len();
+    if encoded_len > RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1 {
+        return Err(QueryExecutionFail::Conversion(format!(
+            "committed reserve event page encodes to {encoded_len} bytes, above {RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1}"
+        )));
+    }
+    Ok(page)
 }
 
 impl ValidSingularQuery for FindSorafsReservePolicy {
@@ -1287,6 +1931,17 @@ impl ValidSingularQuery for FindSorafsReserveAppealById {
         read_appeal(state_ro.world(), self.appeal_id)
             .map_err(query_failure)?
             .ok_or_else(|| QueryExecutionFail::Find(FindError::SorafsReserveAppeal(self.appeal_id)))
+    }
+}
+
+impl ValidSingularQuery for FindSorafsReserveEvents {
+    fn execute(
+        &self,
+        state_ro: &impl crate::state::StateReadOnly,
+    ) -> Result<ReserveFinalizedEventPageV1, QueryExecutionFail> {
+        let finalized_cursor =
+            resolve_query_finalized_cursor(self.expected_finalized_cursor, state_ro)?;
+        query_reserve_event_page(self, state_ro, finalized_cursor)
     }
 }
 

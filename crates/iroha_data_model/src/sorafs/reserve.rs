@@ -19,6 +19,7 @@ use crate::{
     DeriveJsonDeserialize, DeriveJsonSerialize,
     account::AccountId,
     asset::AssetDefinitionId,
+    events::data::sorafs::SorafsReserveLedgerEvent,
     sorafs::{capacity::ProviderId, pin_registry::StorageClass},
 };
 
@@ -32,6 +33,12 @@ pub const RESERVE_MAX_REASON_BYTES_V1: usize = 2_048;
 pub const RESERVE_MAX_PENDING_MOVEMENTS_V1: u32 = 256;
 /// Hard ceiling for open reserve appeals per provider.
 pub const RESERVE_MAX_OPEN_APPEALS_V1: u32 = 16;
+/// Hard ceiling for one page of finalized reserve-ledger events.
+pub const RESERVE_QUERY_MAX_ITEMS_V1: u32 = 128;
+/// Hard ceiling for one encoded finalized reserve-ledger event page.
+pub const RESERVE_QUERY_MAX_EVENT_PAGE_BYTES_V1: usize = 1024 * 1024;
+/// Hard ceiling for one persisted reserve-ledger event record.
+pub const RESERVE_COMMITTED_EVENT_MAX_BYTES_V1: usize = 16 * 1024;
 /// Domain separator for authoritative reserve-policy digests.
 pub const RESERVE_AUTHORITY_POLICY_DIGEST_DOMAIN_V1: &[u8] = b"sorafs.reserve.authority-policy.v1";
 
@@ -1051,6 +1058,76 @@ pub struct ReserveAppealRecordV1 {
     pub rationale: Option<String>,
 }
 
+/// Finalized block anchor for one coherent reserve-ledger query result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveFinalizedCursorV1 {
+    /// Finalized block height observed by the immutable state view.
+    pub height: u64,
+    /// Finalized block hash resolved from that same immutable state view.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+}
+
+/// Exclusive cursor for one committed reserve-ledger event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveFinalizedEventCursorV1 {
+    /// Monotonic reserve-event sequence beginning at one.
+    pub sequence: u64,
+    /// Finalized block height containing the event.
+    pub block_height: u64,
+    /// Finalized block hash resolved only after the block commits.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Reserve-event index within the committing block.
+    pub event_index: u32,
+}
+
+/// Typed reserve-ledger event with an unambiguous finalized-chain cursor.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveFinalizedEventV1 {
+    /// Monotonic reserve-event sequence beginning at one.
+    pub sequence: u64,
+    /// Committing block height.
+    pub block_height: u64,
+    /// Committing block hash resolved from finalized state.
+    #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+    pub block_hash: [u8; 32],
+    /// Reserve-event index within the committing block.
+    pub event_index: u32,
+    /// Existing typed, payload-free native reserve-ledger event.
+    pub event: SorafsReserveLedgerEvent,
+}
+
+impl ReserveFinalizedEventV1 {
+    /// Return the exclusive cursor identifying this event.
+    #[must_use]
+    pub const fn cursor(&self) -> ReserveFinalizedEventCursorV1 {
+        ReserveFinalizedEventCursorV1 {
+            sequence: self.sequence,
+            block_height: self.block_height,
+            block_hash: self.block_hash,
+            event_index: self.event_index,
+        }
+    }
+}
+
+/// Cursor-bounded page of typed committed reserve-ledger events.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct ReserveFinalizedEventPageV1 {
+    /// Finalized state anchor shared by every event in the page.
+    pub finalized_cursor: ReserveFinalizedCursorV1,
+    /// Events in strictly increasing sequence and block/index order.
+    pub events: Vec<ReserveFinalizedEventV1>,
+    /// Whether at least one later committed event exists at this anchor.
+    pub has_more: bool,
+    /// Exclusive continuation cursor, present only when `has_more` is true.
+    pub next_after: Option<ReserveFinalizedEventCursorV1>,
+}
+
 fn validate_ratio(value: u32, field: ReserveRatioField) -> Result<(), ReservePolicyError> {
     if value == 0 || value > 1_000_000 {
         return Err(ReservePolicyError::InvalidRatio {
@@ -1521,5 +1598,62 @@ mod tests {
             ReservePolicyError::Overflow
         );
         assert_eq!(account, before);
+    }
+
+    #[test]
+    fn finalized_reserve_event_page_round_trips_canonically() {
+        use crate::events::data::sorafs::SorafsReserveLedgerEventKind;
+
+        let finalized_cursor = ReserveFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0x71; 32],
+        };
+        let event = ReserveFinalizedEventV1 {
+            sequence: 11,
+            block_height: finalized_cursor.height,
+            block_hash: finalized_cursor.block_hash,
+            event_index: 3,
+            event: SorafsReserveLedgerEvent {
+                kind: SorafsReserveLedgerEventKind::MovementApproved,
+                provider_id: Some(ProviderId::new([0x31; 32])),
+                operation_id: Some([0x41; 32]),
+                policy_digest: [0x51; 32],
+                provider_revision: 9,
+                authority: reserve_account().terms.provider_account,
+                occurred_at_unix_ms: 12_345,
+            },
+        };
+        let event_cursor = event.cursor();
+        let page = ReserveFinalizedEventPageV1 {
+            finalized_cursor,
+            events: vec![event],
+            has_more: true,
+            next_after: Some(event_cursor),
+        };
+
+        for encoded in [
+            norito::to_bytes(&finalized_cursor).expect("encode finalized cursor"),
+            norito::to_bytes(&event_cursor).expect("encode event cursor"),
+            norito::to_bytes(&page).expect("encode event page"),
+        ] {
+            assert!(!encoded.is_empty());
+        }
+        let encoded = norito::to_bytes(&page).expect("encode canonical event page");
+        let decoded: ReserveFinalizedEventPageV1 =
+            norito::decode_from_bytes(&encoded).expect("decode canonical event page");
+        assert_eq!(decoded, page);
+        assert_eq!(
+            norito::to_bytes(&decoded).expect("re-encode canonical event page"),
+            encoded
+        );
+
+        #[cfg(feature = "json")]
+        {
+            let encoded =
+                norito::json::to_vec(&page).expect("encode finalized reserve event page JSON");
+            let decoded: ReserveFinalizedEventPageV1 = norito::json::from_slice(&encoded)
+                .expect("decode finalized reserve event page JSON");
+            assert_eq!(decoded, page);
+        }
     }
 }

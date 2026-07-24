@@ -42,6 +42,14 @@ pub(super) enum ReservationJournalAppendFault {
     SyncAfterFullWrite,
 }
 
+/// Test-only durability boundary injected into the next compaction.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ReservationJournalCompactionFault {
+    /// Replace the journal inode, then fail before the parent-directory sync is acknowledged.
+    AfterRenameBeforeParentSync,
+}
+
 /// One append-only reservation journal operation.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 enum LaneQueueReservationJournalFrameV3 {
@@ -122,6 +130,8 @@ pub(super) struct LaneQueueReservationJournal {
     poisoned: bool,
     #[cfg(test)]
     next_append_fault: Option<ReservationJournalAppendFault>,
+    #[cfg(test)]
+    next_compaction_fault: Option<ReservationJournalCompactionFault>,
 }
 
 impl LaneQueueReservationJournal {
@@ -144,6 +154,8 @@ impl LaneQueueReservationJournal {
                 poisoned: false,
                 #[cfg(test)]
                 next_append_fault: None,
+                #[cfg(test)]
+                next_compaction_fault: None,
             },
             replay,
         ))
@@ -272,6 +284,15 @@ impl LaneQueueReservationJournal {
         self.next_append_fault = Some(fault);
     }
 
+    /// Inject one ambiguous compaction boundary for queue-level fail-closed tests.
+    #[cfg(test)]
+    pub(super) fn inject_next_compaction_fault(
+        &mut self,
+        fault: ReservationJournalCompactionFault,
+    ) {
+        self.next_compaction_fault = Some(fault);
+    }
+
     /// Whether an append may have crossed the durability boundary without acknowledgement.
     pub(super) const fn durability_ambiguous(&self) -> bool {
         self.poisoned
@@ -325,6 +346,15 @@ impl LaneQueueReservationJournal {
         };
         verify_open_regular_path(&tmp, &tmp_file)?;
         fs::rename(&tmp, &self.path)?;
+        #[cfg(test)]
+        if let Some(ReservationJournalCompactionFault::AfterRenameBeforeParentSync) =
+            self.next_compaction_fault.take()
+        {
+            self.poisoned = true;
+            return Err(io::Error::other(
+                "injected lane reservation journal compaction failure after rename",
+            ));
+        }
         // Keep the renamed inode open until the directory entry is synced. This also makes the
         // intended create -> write -> file sync -> rename -> directory sync ordering explicit.
         if let Err(error) = tmp_file.sync_all() {

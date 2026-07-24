@@ -21,6 +21,10 @@ const HEAD_FIXTURE = new URL(
   "../../../fixtures/sorafs_manifest/governance/dag_head_v1.to",
   import.meta.url,
 );
+const GOVERNANCE_FIXTURE_ROOT = new URL(
+  "../../../fixtures/sorafs_manifest/governance/",
+  import.meta.url,
+);
 
 function governanceFixtures() {
   return {
@@ -28,6 +32,16 @@ function governanceFixtures() {
     child: readFileSync(CHILD_BLOCK_FIXTURE),
     head: readFileSync(HEAD_FIXTURE),
   };
+}
+
+function governanceFixture(name) {
+  return readFileSync(new URL(name, GOVERNANCE_FIXTURE_ROOT));
+}
+
+function governanceOutcomeFixture(name) {
+  return JSON.parse(
+    readFileSync(new URL(name, GOVERNANCE_FIXTURE_ROOT), "utf8"),
+  );
 }
 
 test("validateGovernanceDagBlock accepts the canonical signed fixture", () => {
@@ -121,6 +135,76 @@ test("validateGovernanceDagHeadChain rejects reordered blocks", () => {
       "governance-dag-block-0.to",
       "governance-dag-block-1.to",
     ],
+  );
+});
+
+test("governance DAG validators match canonical noncanonical, signature, and predecessor vectors", () => {
+  const { root, child } = governanceFixtures();
+  const blockSignatureOutcome = validateGovernanceDagBlock(
+    governanceFixture("dag_block_bad_signature_v1.to"),
+    {
+      label: "dag_block_bad_signature_v1.to",
+      generatedAtUnix: 123,
+    },
+  );
+  assert.deepEqual(
+    blockSignatureOutcome,
+    governanceOutcomeFixture(
+      "dag_block_bad_signature_validation_outcome_v1.json",
+    ),
+  );
+
+  const trailingBytesOutcome = validateGovernanceDagBlock(
+    governanceFixture("dag_block_trailing_bytes_v1.to"),
+    {
+      label: "dag_block_trailing_bytes_v1.to",
+      generatedAtUnix: 123,
+    },
+  );
+  assert.deepEqual(
+    trailingBytesOutcome,
+    governanceOutcomeFixture(
+      "dag_block_trailing_bytes_validation_outcome_v1.json",
+    ),
+  );
+
+  const headSignatureOutcome = validateGovernanceDagHeadChain(
+    governanceFixture("dag_head_bad_signature_v1.to"),
+    [
+      { payload: root, label: "dag_block_0_v1.to" },
+      { payload: child, label: "dag_block_1_v1.to" },
+    ],
+    {
+      headLabel: "dag_head_bad_signature_v1.to",
+      generatedAtUnix: 123,
+    },
+  );
+  assert.deepEqual(
+    headSignatureOutcome,
+    governanceOutcomeFixture(
+      "dag_head_bad_signature_validation_outcome_v1.json",
+    ),
+  );
+
+  const predecessorOutcome = validateGovernanceDagHeadChain(
+    governanceFixture("dag_head_bad_predecessor_v1.to"),
+    [
+      { payload: root, label: "dag_block_0_v1.to" },
+      {
+        payload: governanceFixture("dag_block_1_bad_predecessor_v1.to"),
+        label: "dag_block_1_bad_predecessor_v1.to",
+      },
+    ],
+    {
+      headLabel: "dag_head_bad_predecessor_v1.to",
+      generatedAtUnix: 123,
+    },
+  );
+  assert.deepEqual(
+    predecessorOutcome,
+    governanceOutcomeFixture(
+      "dag_head_bad_predecessor_validation_outcome_v1.json",
+    ),
   );
 });
 

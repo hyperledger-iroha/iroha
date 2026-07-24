@@ -527,7 +527,7 @@ pub enum NetworkMessage {
     /// Soracloud local-read proxy response returned to the ingress node.
     SoracloudLocalReadProxyResponse(Box<soracloud_runtime::SoracloudLocalReadProxyResponseV1>),
     /// Torii proxy request routed across bounded Torii ingress proxy hops.
-    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV2>),
+    ToriiProxyRequest(Box<torii_proxy::ToriiProxyRequestV3>),
     /// Torii proxy response returned to the ingress node.
     ToriiProxyResponse(Box<torii_proxy::ToriiProxyResponseV1>),
     /// Norito Streaming control-plane frame.
@@ -990,8 +990,8 @@ mod tests {
             },
         },
         torii_proxy::{
-            TORII_PROXY_REQUEST_VERSION_V2, TORII_PROXY_RESPONSE_VERSION_V1,
-            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV1, ToriiProxyRequestV2,
+            TORII_PROXY_REQUEST_VERSION_V3, TORII_PROXY_RESPONSE_VERSION_V1,
+            ToriiProxyHttpResponseV1, ToriiProxyRequestKindV2, ToriiProxyRequestV3,
             ToriiProxyResponseFormatV1, ToriiProxyResponseV1, ToriiReadEndpointV1,
             ToriiReadProxyRequestV1, ToriiRouteHintV1,
         },
@@ -1740,13 +1740,13 @@ mod tests {
                 ),
             },
         ));
-        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV2 {
-            schema_version: TORII_PROXY_REQUEST_VERSION_V2,
+        let torii_request = NetworkMessage::ToriiProxyRequest(Box::new(ToriiProxyRequestV3 {
+            schema_version: TORII_PROXY_REQUEST_VERSION_V3,
             request_id: Hash::prehashed([0x14; 32]),
             hop_count: 1,
             max_hops: 3,
             visited_peer_ids: Vec::new(),
-            request: ToriiProxyRequestKindV1::Read(ToriiReadProxyRequestV1 {
+            request: ToriiProxyRequestKindV2::Read(ToriiReadProxyRequestV1 {
                 endpoint: ToriiReadEndpointV1::AccountsList,
                 expected_route: ToriiRouteHintV1 {
                     lane_id: LaneId::SINGLE,

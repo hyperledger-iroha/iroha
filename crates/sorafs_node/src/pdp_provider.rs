@@ -2389,6 +2389,7 @@ pub enum PdpProviderProtocolError {
 mod tests {
     use std::{
         collections::BTreeMap,
+        fs,
         sync::{Arc, Barrier, atomic::AtomicU64},
         thread,
     };
@@ -2405,6 +2406,11 @@ mod tests {
         sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1,
     };
     use tempfile::TempDir;
+
+    use crate::{
+        NodeHandle, NodeInitError, config::StorageConfig,
+        proof_outcome_forwarder::PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1,
+    };
 
     use super::*;
 
@@ -3290,6 +3296,127 @@ mod tests {
         ));
         assert_eq!(sink.archive_count(), 2, "archive receipt prevented replay");
         assert_eq!(sink.repair_count(), 2);
+    }
+
+    #[test]
+    fn proof_outcome_forwarder_node_startup_resumes_pdp_handoff_exactly_once_and_fails_closed() {
+        fn persist_archive_handoff_pending(config: &StorageConfig, epoch_id: u64) -> Fixture {
+            let fixture = fixture(epoch_id);
+            let state_dir = config.data_dir().join("pdp-provider");
+            let protocol = PdpProviderProtocol::open(config.pdp_provider_policy(), &state_dir)
+                .expect("open PDP protocol");
+            enqueue(&protocol, &fixture);
+            let sink = RecordingHandoff::failing(1, 0);
+            assert!(matches!(
+                protocol.submit_proof_for_challenge_bytes(
+                    fixture.challenge.challenge_id,
+                    &norito::to_bytes(&fixture.proof).expect("encode proof"),
+                    &fixture.admission,
+                    1_100,
+                    &sink,
+                ),
+                Err(PdpProviderProtocolError::ArchiveHandoff(_))
+            ));
+            let status = protocol
+                .challenge_status(&fixture.challenge.challenge_id)
+                .expect("challenge status")
+                .expect("retained challenge");
+            assert_eq!(status.lifecycle, PdpChallengeLifecycleV1::HandoffPending);
+            assert!(
+                protocol
+                    .terminal_outcome(&fixture.challenge.challenge_id)
+                    .expect("terminal lookup")
+                    .is_none(),
+                "archive failure must not advance the durable terminal lifecycle"
+            );
+            drop(protocol);
+            fixture
+        }
+
+        let happy_dir = TempDir::new().expect("happy-path tempdir");
+        let happy_root = happy_dir.path().canonicalize().expect("canonical tempdir");
+        let happy_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(happy_root.join("storage"))
+            .build();
+        let happy_fixture = persist_archive_handoff_pending(&happy_config, 51);
+
+        let first_restart =
+            NodeHandle::try_new(happy_config.clone()).expect("startup resumes PDP handoff");
+        let first_pending = first_restart
+            .pending_proof_outcome_deliveries(8)
+            .expect("pending proof outcomes");
+        assert_eq!(first_pending.len(), 1);
+        assert_eq!(
+            first_pending[0].identity_digest,
+            happy_fixture.challenge.challenge_id
+        );
+        assert!(
+            first_restart
+                .pdp_provider_protocol()
+                .expect("durable PDP protocol")
+                .terminal_outcome(&happy_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_some(),
+            "the PDP terminal lifecycle advances only after the proof outcome is durable"
+        );
+        let operation_id = first_pending[0].operation_id;
+        let outcome_digest = first_pending[0].outcome_digest;
+        drop(first_restart);
+
+        let second_restart =
+            NodeHandle::try_new(happy_config).expect("second startup remains idempotent");
+        let second_pending = second_restart
+            .pending_proof_outcome_deliveries(8)
+            .expect("pending proof outcomes after second restart");
+        assert_eq!(
+            second_pending.len(),
+            1,
+            "a terminal PDP handoff must enqueue one semantic operation"
+        );
+        assert_eq!(second_pending[0].operation_id, operation_id);
+        assert_eq!(second_pending[0].outcome_digest, outcome_digest);
+        drop(second_restart);
+
+        let poisoned_dir = TempDir::new().expect("poisoned-path tempdir");
+        let poisoned_root = poisoned_dir
+            .path()
+            .canonicalize()
+            .expect("canonical tempdir");
+        let poisoned_config = StorageConfig::builder()
+            .enabled(true)
+            .data_dir(poisoned_root.join("storage"))
+            .build();
+        let poisoned_fixture = persist_archive_handoff_pending(&poisoned_config, 52);
+        let outbox_dir = poisoned_config.data_dir().join("proof-outcome-forwarder");
+        fs::create_dir_all(&outbox_dir).expect("create outbox directory");
+        fs::write(
+            outbox_dir.join(PROOF_OUTCOME_OUTBOX_CHECKPOINT_FILE_NAME_V1),
+            b"poisoned proof outcome checkpoint",
+        )
+        .expect("write poisoned outbox checkpoint");
+
+        assert!(matches!(
+            NodeHandle::try_new(poisoned_config.clone()),
+            Err(NodeInitError::ProofOutcomeOutbox { .. })
+        ));
+        let restored = PdpProviderProtocol::open(
+            poisoned_config.pdp_provider_policy(),
+            &poisoned_config.data_dir().join("pdp-provider"),
+        )
+        .expect("reopen PDP protocol after failed node startup");
+        let status = restored
+            .challenge_status(&poisoned_fixture.challenge.challenge_id)
+            .expect("challenge status")
+            .expect("retained challenge");
+        assert_eq!(status.lifecycle, PdpChallengeLifecycleV1::HandoffPending);
+        assert!(
+            restored
+                .terminal_outcome(&poisoned_fixture.challenge.challenge_id)
+                .expect("terminal lookup")
+                .is_none(),
+            "untrusted outbox durability must abort startup before terminal acknowledgement"
+        );
     }
 
     #[test]

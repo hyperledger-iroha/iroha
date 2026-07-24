@@ -82,6 +82,14 @@ pub struct PotrRepairHandoffError(pub String);
 
 /// Exactly-once repair effect required for a missed-deadline PoTR receipt.
 pub trait PotrLatencyRepairHandoff: Send + Sync + std::fmt::Debug {
+    /// Enqueue the exact governed receipt for authoritative ledger submission.
+    fn enqueue_proof_outcome(
+        &self,
+        source_identity: [u8; 32],
+        receipt: &PotrReceiptV1,
+        admission_envelope_digest: [u8; 32],
+    ) -> Result<[u8; 32], PotrRepairHandoffError>;
+
     /// Enqueue a latency repair using the final signed receipt digest as identity.
     fn enqueue_latency_repair(
         &self,
@@ -125,6 +133,9 @@ pub struct PotrReceiptStatusV1 {
     /// Repair receipt, present after a missed-deadline handoff completes.
     #[norito(default)]
     pub repair_receipt_digest: Option<[u8; 32]>,
+    /// Delivery receipt proving the authoritative ledger outbox accepted this exact receipt.
+    #[norito(default)]
+    pub proof_outcome_receipt_digest: Option<[u8; 32]>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
@@ -139,6 +150,8 @@ struct StoredPotrReceiptV1 {
     #[norito(default)]
     repair_report: Option<RepairReportV1>,
     #[norito(default)]
+    proof_outcome_receipt_digest: Option<[u8; 32]>,
+    #[norito(default)]
     repair_receipt_digest: Option<[u8; 32]>,
 }
 
@@ -151,6 +164,7 @@ impl StoredPotrReceiptV1 {
             status: self.receipt.status,
             recorded_at_ms: self.receipt.recorded_at_ms,
             repair_receipt_digest: self.repair_receipt_digest,
+            proof_outcome_receipt_digest: self.proof_outcome_receipt_digest,
         }
     }
 }
@@ -331,6 +345,7 @@ impl PotrTracker {
                 governed_provider_public_key,
                 receipt,
                 repair_report,
+                proof_outcome_receipt_digest: None,
                 repair_receipt_digest: None,
             };
             validate_record(&record)?;
@@ -344,7 +359,7 @@ impl PotrTracker {
             false
         };
 
-        self.complete_latency_repair_locked(&mut durable, request_scope_digest, repair)?;
+        self.complete_terminal_handoffs_locked(&mut durable, request_scope_digest, repair)?;
         let status = durable
             .runtime
             .records
@@ -362,10 +377,10 @@ impl PotrTracker {
         })
     }
 
-    /// Retry every persisted missed-deadline repair that lacks a scheduler receipt.
+    /// Retry every persisted ledger or missed-deadline repair handoff.
     ///
     /// This is intended for startup recovery after the repair manager is ready.
-    pub fn resume_latency_repairs(
+    pub fn resume_terminal_handoffs(
         &self,
         repair: &dyn PotrLatencyRepairHandoff,
     ) -> Result<usize, PotrTrackerError> {
@@ -375,12 +390,13 @@ impl PotrTracker {
             .records
             .iter()
             .filter_map(|(scope, record)| {
-                (record.repair_report.is_some() && record.repair_receipt_digest.is_none())
-                    .then_some(*scope)
+                (record.proof_outcome_receipt_digest.is_none()
+                    || record.repair_report.is_some() && record.repair_receipt_digest.is_none())
+                .then_some(*scope)
             })
             .collect::<Vec<_>>();
         for scope in &pending {
-            self.complete_latency_repair_locked(&mut durable, *scope, repair)?;
+            self.complete_terminal_handoffs_locked(&mut durable, *scope, repair)?;
         }
         Ok(pending.len())
     }
@@ -476,7 +492,7 @@ impl PotrTracker {
             .collect())
     }
 
-    fn complete_latency_repair_locked(
+    fn complete_terminal_handoffs_locked(
         &self,
         durable: &mut DurableState,
         request_scope_digest: [u8; 32],
@@ -487,7 +503,40 @@ impl PotrTracker {
                 "missing PoTR receipt during repair handoff".to_owned(),
             ));
         };
-        let Some(report) = record.repair_report.as_ref() else {
+        if record.proof_outcome_receipt_digest.is_none() {
+            let receipt_digest = record.receipt_digest;
+            let proof_outcome_receipt = repair
+                .enqueue_proof_outcome(
+                    receipt_digest,
+                    &record.receipt,
+                    record.admission_envelope_digest,
+                )
+                .map_err(PotrTrackerError::ProofOutcomeHandoff)?;
+            if proof_outcome_receipt == [0; 32] {
+                return Err(PotrTrackerError::ZeroProofOutcomeReceipt);
+            }
+            let mut candidate = durable.runtime.clone();
+            candidate
+                .records
+                .get_mut(&request_scope_digest)
+                .ok_or_else(|| {
+                    PotrTrackerError::InvalidCheckpoint(
+                        "missing PoTR receipt while committing proof-outcome handoff".to_owned(),
+                    )
+                })?
+                .proof_outcome_receipt_digest = Some(proof_outcome_receipt);
+            self.commit_candidate(durable, candidate)?;
+        }
+        let record = durable
+            .runtime
+            .records
+            .get(&request_scope_digest)
+            .ok_or_else(|| {
+                PotrTrackerError::InvalidCheckpoint(
+                    "missing PoTR receipt after proof-outcome handoff".to_owned(),
+                )
+            })?;
+        let Some(report) = record.repair_report.clone() else {
             return Ok(());
         };
         if record.repair_receipt_digest.is_some() {
@@ -495,7 +544,7 @@ impl PotrTracker {
         }
         let receipt_digest = record.receipt_digest;
         let repair_receipt = repair
-            .enqueue_latency_repair(receipt_digest, report)
+            .enqueue_latency_repair(receipt_digest, &report)
             .map_err(PotrTrackerError::RepairHandoff)?;
         if repair_receipt == [0; 32] {
             return Err(PotrTrackerError::ZeroRepairReceipt);
@@ -654,6 +703,8 @@ fn validate_record(record: &StoredPotrReceiptV1) -> Result<(), PotrTrackerError>
             })
         || (record.receipt.status == PotrStatus::MissedDeadline) != record.repair_report.is_some()
         || record.repair_report.is_none() && record.repair_receipt_digest.is_some()
+        || record.proof_outcome_receipt_digest == Some([0; 32])
+        || record.repair_receipt_digest.is_some() && record.proof_outcome_receipt_digest.is_none()
     {
         return Err(PotrTrackerError::InvalidCheckpoint(
             "persisted PoTR receipt binding is inconsistent".to_owned(),
@@ -1092,9 +1143,15 @@ pub enum PotrTrackerError {
     /// The authoritative repair callback failed. The pending state remains durable.
     #[error("PoTR latency repair handoff failed: {0}")]
     RepairHandoff(#[source] PotrRepairHandoffError),
+    /// The authoritative ledger-delivery callback failed. The signed receipt remains durable.
+    #[error("PoTR proof-outcome ledger handoff failed: {0}")]
+    ProofOutcomeHandoff(#[source] PotrRepairHandoffError),
     /// A repair callback returned an inert receipt.
     #[error("PoTR latency repair handoff returned an all-zero receipt")]
     ZeroRepairReceipt,
+    /// A ledger-delivery callback returned an inert receipt.
+    #[error("PoTR proof-outcome ledger handoff returned an all-zero receipt")]
+    ZeroProofOutcomeReceipt,
     /// Canonical checkpoint encoding failed.
     #[error("PoTR canonical encoding failed: {0}")]
     CanonicalEncoding(String),
@@ -1152,15 +1209,26 @@ mod tests {
 
     #[derive(Debug, Default)]
     struct RecordingRepair {
+        proof_failures_remaining: AtomicU64,
         failures_remaining: AtomicU64,
+        proof_outcomes: Mutex<BTreeMap<[u8; 32], (PotrReceiptV1, [u8; 32], [u8; 32])>>,
         reports: Mutex<BTreeMap<[u8; 32], (RepairReportV1, [u8; 32])>>,
     }
 
     impl RecordingRepair {
         fn failing(count: u64) -> Self {
             Self {
+                proof_failures_remaining: AtomicU64::new(0),
                 failures_remaining: AtomicU64::new(count),
+                proof_outcomes: Mutex::new(BTreeMap::new()),
                 reports: Mutex::new(BTreeMap::new()),
+            }
+        }
+
+        fn proof_failing(count: u64) -> Self {
+            Self {
+                proof_failures_remaining: AtomicU64::new(count),
+                ..Self::default()
             }
         }
 
@@ -1177,6 +1245,60 @@ mod tests {
     }
 
     impl PotrLatencyRepairHandoff for RecordingRepair {
+        fn enqueue_proof_outcome(
+            &self,
+            source_identity: [u8; 32],
+            receipt: &PotrReceiptV1,
+            admission_envelope_digest: [u8; 32],
+        ) -> Result<[u8; 32], PotrRepairHandoffError> {
+            if self
+                .proof_failures_remaining
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    remaining.checked_sub(1)
+                })
+                .is_ok()
+            {
+                return Err(PotrRepairHandoffError(
+                    "injected proof-outcome outage".to_owned(),
+                ));
+            }
+            if receipt
+                .signed_receipt_digest()
+                .map_err(|error| PotrRepairHandoffError(error.to_string()))?
+                != source_identity
+            {
+                return Err(PotrRepairHandoffError(
+                    "proof-outcome source identity conflict".to_owned(),
+                ));
+            }
+            let bytes = norito::to_bytes(receipt)
+                .map_err(|error| PotrRepairHandoffError(error.to_string()))?;
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(b"test.potr.proof-outcome.v1\0");
+            hasher.update(&source_identity);
+            hasher.update(&admission_envelope_digest);
+            hasher.update(&bytes);
+            let operation_id = *hasher.finalize().as_bytes();
+            let mut proof_outcomes = self.proof_outcomes.lock().expect("proof-outcome lock");
+            match proof_outcomes.get(&source_identity) {
+                Some((existing, existing_admission, existing_operation))
+                    if existing == receipt && *existing_admission == admission_envelope_digest =>
+                {
+                    Ok(*existing_operation)
+                }
+                Some(_) => Err(PotrRepairHandoffError(
+                    "proof-outcome source identity conflict".to_owned(),
+                )),
+                None => {
+                    proof_outcomes.insert(
+                        source_identity,
+                        (receipt.clone(), admission_envelope_digest, operation_id),
+                    );
+                    Ok(operation_id)
+                }
+            }
+        }
+
         fn enqueue_latency_repair(
             &self,
             source_identity: [u8; 32],
@@ -1477,6 +1599,61 @@ mod tests {
     }
 
     #[test]
+    fn proof_outcome_outage_persists_receipt_and_restart_replays_before_repair() {
+        let (admission, gateway_key, provider_key) = governed_fixture();
+        let gateway_public = gateway_public_key(&gateway_key);
+        let receipt = signed_receipt(
+            &gateway_key,
+            &provider_key,
+            [0x49; 16],
+            PotrStatus::Success,
+            0,
+        );
+        let receipt_digest = receipt.signed_receipt_digest().expect("receipt digest");
+        let dir = TempDir::new().expect("state dir");
+        let failing = RecordingRepair::proof_failing(1);
+        let tracker =
+            PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
+                .expect("tracker");
+        assert!(matches!(
+            tracker.record_receipt(receipt, &gateway_public, &admission, &failing),
+            Err(PotrTrackerError::ProofOutcomeHandoff(_))
+        ));
+        let persisted = tracker
+            .status(&receipt_digest)
+            .expect("status")
+            .expect("persisted receipt");
+        assert_eq!(persisted.proof_outcome_receipt_digest, None);
+        assert_eq!(persisted.repair_receipt_digest, None);
+        drop(tracker);
+
+        let restored =
+            PotrTracker::open(dir.path(), 8, POTR_TRACKER_DEFAULT_CHECKPOINT_MAX_BYTES_V1)
+                .expect("restore");
+        let handoff = RecordingRepair::default();
+        assert_eq!(
+            restored
+                .resume_terminal_handoffs(&handoff)
+                .expect("resume terminal handoff"),
+            1
+        );
+        assert!(
+            restored
+                .status(&receipt_digest)
+                .expect("status")
+                .expect("persisted receipt")
+                .proof_outcome_receipt_digest
+                .is_some()
+        );
+        assert_eq!(
+            restored
+                .resume_terminal_handoffs(&handoff)
+                .expect("no pending handoff"),
+            0
+        );
+    }
+
+    #[test]
     fn repair_outage_persists_pending_identity_and_restart_replays_exactly_once() {
         let (admission, gateway_key, provider_key) = governed_fixture();
         let gateway_public = gateway_public_key(&gateway_key);
@@ -1513,7 +1690,7 @@ mod tests {
         let repair = RecordingRepair::default();
         assert_eq!(
             restored
-                .resume_latency_repairs(&repair)
+                .resume_terminal_handoffs(&repair)
                 .expect("resume repair"),
             1
         );
@@ -1521,7 +1698,7 @@ mod tests {
         assert_eq!(repair.count(), 1);
         assert_eq!(
             restored
-                .resume_latency_repairs(&repair)
+                .resume_terminal_handoffs(&repair)
                 .expect("no pending repair"),
             0
         );

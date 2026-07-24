@@ -56,6 +56,25 @@ This separation permits lane committees to progress independently without
 allowing network arrival order, machine speed, or local inventory to choose a
 global state order.
 
+## Durable ingress and proxy admission
+
+Torii proxy wire V3 carries an explicit transaction-admission mode. `Deferred`
+retains ordinary asynchronous queue behavior. `QueuePlanSynced` is the
+production durability boundary: the authoritative peer acknowledges only after
+the exact accepted transaction and routing plan are fsynced in its queue-plan
+journal. The admission mode participates in proxy request identity and survives
+forwarding unchanged; V2/no-mode proxy bytes are not implicitly decoded.
+
+For `QueuePlanSynced`, a failure before network dispatch is definitely
+unavailable. A lost response after P2P or HTTP dispatch is instead returned as
+`queue_plan_journal_outcome_unknown` with the canonical accepted-transaction
+hash so the caller can reconcile ownership. Hedged candidates are reduced
+deterministically: any valid indeterminate result dominates definite failures,
+non-retryable failures dominate generic retryable failures, and candidate order
+breaks ties. A remote indeterminate response is accepted only when its status,
+reject header, Norito error envelope, and transaction hash all match; malformed
+or unrelated evidence becomes `invalid_proxy_response`.
+
 ## Routing and horizontal capacity
 
 The canonical account identity remains domainless. Dataspace and lane routing

@@ -357,48 +357,85 @@ mod tests {
     };
 
     use super::*;
-    use crate::proof_stream::{ProofKind, ProofStreamItem, VerificationStatus};
+    use crate::proof_stream::ProofStreamItem;
+
+    fn sample_por_proof() -> (usize, crate::PorProof) {
+        let payload = (0_u16..512)
+            .map(|value| u8::try_from(value % 251).expect("fixture byte"))
+            .collect::<Vec<_>>();
+        let mut store = crate::ChunkStore::new();
+        store
+            .ingest_bytes(&payload)
+            .expect("ingest canonical PoR transport fixture");
+        store
+            .sample_leaves(1, 7, &payload)
+            .expect("sample canonical PoR transport fixture")
+            .into_iter()
+            .next()
+            .expect("one canonical PoR transport sample")
+    }
 
     fn sample_items() -> Vec<ProofStreamItem> {
+        let (flat_index, por_proof) = sample_por_proof();
+        let mut por = crate::por_json::sample_to_map(flat_index, &por_proof);
+        por.insert(
+            "manifest_digest_hex".into(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        por.insert(
+            "provider_id_hex".into(),
+            norito::json::Value::from("bb".repeat(32)),
+        );
+        por.insert("proof_kind".into(), norito::json::Value::from("por"));
+        por.insert("result".into(), norito::json::Value::from("success"));
+        por.insert("latency_ms".into(), norito::json::Value::from(42_u64));
+
+        let challenge_id = "ef".repeat(32);
+        let mut pdp = norito::json::Map::new();
+        pdp.insert(
+            "manifest_digest_hex".into(),
+            norito::json::Value::from("cc".repeat(32)),
+        );
+        pdp.insert(
+            "provider_id_hex".into(),
+            norito::json::Value::from("dd".repeat(32)),
+        );
+        pdp.insert(
+            "outcome_identity_hex".into(),
+            norito::json::Value::from(challenge_id.clone()),
+        );
+        pdp.insert(
+            "outcome_digest_hex".into(),
+            norito::json::Value::from("aa".repeat(32)),
+        );
+        pdp.insert(
+            "admission_envelope_digest_hex".into(),
+            norito::json::Value::from("ab".repeat(32)),
+        );
+        pdp.insert(
+            "finalized_block_height".into(),
+            norito::json::Value::from(7_u64),
+        );
+        pdp.insert(
+            "finalized_block_hash_hex".into(),
+            norito::json::Value::from("ac".repeat(32)),
+        );
+        pdp.insert(
+            "committed_at_ms".into(),
+            norito::json::Value::from(1_701_000_000_u64),
+        );
+        pdp.insert(
+            "challenge_id_hex".into(),
+            norito::json::Value::from(challenge_id),
+        );
+        pdp.insert("proof_kind".into(), norito::json::Value::from("pdp"));
+        pdp.insert("result".into(), norito::json::Value::from("success"));
+
         vec![
-            ProofStreamItem {
-                manifest_digest_hex: "aa".repeat(32),
-                provider_id_hex: "bb".repeat(32),
-                challenge_id_hex: None,
-                proof_kind: ProofKind::Por,
-                status: VerificationStatus::Success,
-                failure_reason: None,
-                latency_ms: Some(42),
-                deadline_ms: None,
-                sample_index: Some(3),
-                chunk_index: Some(1),
-                segment_index: Some(0),
-                leaf_index: Some(7),
-                tier: None,
-                trace_id: Some("ee".repeat(16)),
-                por_proof: None,
-                potr_receipt: None,
-                recorded_at_ms: Some(1_701_000_000),
-            },
-            ProofStreamItem {
-                manifest_digest_hex: "cc".repeat(32),
-                provider_id_hex: "dd".repeat(32),
-                challenge_id_hex: Some("ef".repeat(32)),
-                proof_kind: ProofKind::Pdp,
-                status: VerificationStatus::Pending,
-                failure_reason: None,
-                latency_ms: None,
-                deadline_ms: None,
-                sample_index: None,
-                chunk_index: None,
-                segment_index: None,
-                leaf_index: None,
-                tier: Some(crate::proof_stream::ProofTier::Hot),
-                trace_id: None,
-                por_proof: None,
-                potr_receipt: None,
-                recorded_at_ms: None,
-            },
+            ProofStreamItem::from_json(&norito::json::Value::Object(por))
+                .expect("canonical PoR transport fixture"),
+            ProofStreamItem::from_json(&norito::json::Value::Object(pdp))
+                .expect("canonical PDP transport fixture"),
         ]
     }
 

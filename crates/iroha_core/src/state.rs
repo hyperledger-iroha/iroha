@@ -17723,6 +17723,12 @@ impl World {
         &mut self.account_permissions
     }
 
+    /// Provides mutable access to SoraFS provider-owner bindings for tests and API scaffolding.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
+    pub fn provider_owners_mut_for_testing(&mut self) -> &mut Storage<ProviderId, AccountId> {
+        &mut self.provider_owners
+    }
+
     /// Provides mutable access to the Space Directory manifest registry for tests and API scaffolding.
     pub fn space_directory_manifests_mut_for_testing(
         &mut self,

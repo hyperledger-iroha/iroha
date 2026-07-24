@@ -1097,6 +1097,8 @@ mod model {
         FindSorafsReserveMovementById(sorafs::prelude::FindSorafsReserveMovementById),
         /// Fetch one authoritative reserve appeal.
         FindSorafsReserveAppealById(sorafs::prelude::FindSorafsReserveAppealById),
+        /// Fetch a cursor-bounded page of committed `SoraFS` reserve events.
+        FindSorafsReserveEvents(sorafs::prelude::FindSorafsReserveEvents),
         /// Fetch the active authoritative `SoraFS` `PoP` issuer policy.
         FindSorafsPopIssuerPolicy(sorafs::prelude::FindSorafsPopIssuerPolicy),
         /// Fetch one payload-free `PoP` credential commitment.
@@ -1125,6 +1127,8 @@ mod model {
         FindSorafsRepairStatus(sorafs::prelude::FindSorafsRepairStatus),
         /// Fetch a cursor-bounded page of committed repair-ledger events.
         FindSorafsRepairEvents(sorafs::prelude::FindSorafsRepairEvents),
+        /// Fetch one finalized chain-authoritative PDP/PoTR proof outcome.
+        FindSorafsProofOutcome(sorafs::prelude::FindSorafsProofOutcome),
         /// Fetch a cursor-bounded page of finalized PDP/PoTR proof-outcome events.
         FindSorafsProofOutcomeEvents(sorafs::prelude::FindSorafsProofOutcomeEvents),
         /// Fetch the active authoritative `SoraFS` moderation policy.
@@ -1271,6 +1275,8 @@ mod model {
         SorafsReserveMovement(crate::sorafs::reserve::ReserveMovementRecordV1),
         /// Authoritative reserve appeal.
         SorafsReserveAppeal(crate::sorafs::reserve::ReserveAppealRecordV1),
+        /// Cursor-bounded page of committed `SoraFS` reserve events.
+        SorafsReserveEventPage(crate::sorafs::reserve::ReserveFinalizedEventPageV1),
         /// Active authoritative `SoraFS` `PoP` issuer policy.
         SorafsPopIssuerPolicy(crate::sorafs::pop_registry::PopIssuerPolicyRecordV1),
         /// Payload-free authoritative `PoP` credential commitment.
@@ -1295,10 +1301,10 @@ mod model {
         SorafsRepairStatus(crate::sorafs::moderation_ledger::RepairFinalizedStatusV1),
         /// Cursor-bounded page of committed repair-ledger events.
         SorafsRepairEventPage(crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1),
+        /// Finalized chain-authoritative PDP or PoTR proof outcome.
+        SorafsProofOutcome(crate::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1),
         /// Cursor-bounded page of committed PDP/PoTR proof-outcome events.
-        SorafsProofOutcomeEventPage(
-            crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1,
-        ),
+        SorafsProofOutcomeEventPage(crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventPageV1),
         /// Active authoritative `SoraFS` moderation policy payload.
         SorafsModerationPolicy(crate::sorafs::moderation_ledger::ModerationLedgerPolicyRecord),
         /// Authoritative appeal intake, `PoP` snapshot, and sortition lifecycle.
@@ -5350,12 +5356,14 @@ pub mod sorafs {
                 ModerationFinalizedCursorV1, ModerationFinalizedEventCursorV1,
                 RepairFinalizedCursorV1, RepairFinalizedEventCursorV1,
             },
-            proof_ledger::{
-                ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
-            },
             orderbook::{
                 OrderbookFinalizedCursorV1, OrderbookFinalizedEventCursorV1,
                 OrderbookOrderStatusV1, OrderbookSettlementChannelStatusV1,
+            },
+            reserve::{ReserveFinalizedCursorV1, ReserveFinalizedEventCursorV1},
+            proof_ledger::{
+                ProofOutcomeFinalizedCursorV1, ProofOutcomeFinalizedEventCursorV1,
+                ProofOutcomeKindV1,
             },
         },
     };
@@ -5505,6 +5513,17 @@ pub mod sorafs {
             pub appeal_id: [u8; 32],
         }
 
+        /// Fetch an exclusive-cursor page of committed reserve-ledger events.
+        #[derive(Copy)]
+        pub struct FindSorafsReserveEvents {
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ReserveFinalizedCursorV1>,
+            /// Exclusive committed-event cursor.
+            pub after: Option<ReserveFinalizedEventCursorV1>,
+            /// Requested page size; validated against the hard query ceiling.
+            pub limit: u32,
+        }
+
         /// Fetch the active authoritative `PoP` issuer policy.
         #[derive(Copy)]
         pub struct FindSorafsPopIssuerPolicy;
@@ -5588,6 +5607,17 @@ pub mod sorafs {
             pub after: Option<RepairFinalizedEventCursorV1>,
             /// Requested page size; validated against the hard query ceiling.
             pub limit: u32,
+        }
+
+        /// Fetch one finalized chain-authoritative PDP or PoTR proof outcome.
+        #[derive(Copy)]
+        pub struct FindSorafsProofOutcome {
+            /// Proof protocol namespace for the exactly-once identity.
+            pub kind: ProofOutcomeKindV1,
+            /// Protocol-scoped challenge or request identity.
+            pub identity_digest: [u8; 32],
+            /// Optional finalized anchor; absent selects the latest committed view.
+            pub expected_finalized_cursor: Option<ProofOutcomeFinalizedCursorV1>,
         }
 
         /// Fetch an exclusive-cursor page of finalized PDP/PoTR proof-outcome events.
@@ -5866,6 +5896,16 @@ pub mod sorafs {
         }
     }
 
+    impl fmt::Display for FindSorafsReserveEvents {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find committed SoraFS reserve events with limit {}",
+                self.limit
+            )
+        }
+    }
+
     impl fmt::Display for FindSorafsPopIssuerPolicy {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
             f.write_str("Find active SoraFS PoP issuer policy")
@@ -5952,6 +5992,17 @@ pub mod sorafs {
                 f,
                 "Find committed SoraFS repair-ledger events with limit {}",
                 self.limit
+            )
+        }
+    }
+
+    impl fmt::Display for FindSorafsProofOutcome {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(
+                f,
+                "Find SoraFS {:?} proof outcome `{}`",
+                self.kind,
+                hex::encode(self.identity_digest)
             )
         }
     }
@@ -6085,10 +6136,10 @@ pub mod sorafs {
             FindSorafsPopCommitmentRootByVersion, FindSorafsPopCredentialCommitmentByDigest,
             FindSorafsPopIssuerPolicy, FindSorafsPopRegistryStatus,
             FindSorafsPopRevocationByNonceCommitment, FindSorafsPopRevocationPublicationByVersion,
-            FindSorafsProviderOwner, FindSorafsRepairEvents, FindSorafsRepairStatus,
-            FindSorafsProofOutcomeEvents, FindSorafsRepairTask, FindSorafsRepairTasks,
-            FindSorafsReserveAppealById,
-            FindSorafsReserveMovementById, FindSorafsReservePolicy, FindSorafsReserveProviderById,
+            FindSorafsProofOutcome, FindSorafsProofOutcomeEvents, FindSorafsProviderOwner,
+            FindSorafsRepairEvents, FindSorafsRepairStatus, FindSorafsRepairTask,
+            FindSorafsRepairTasks, FindSorafsReserveAppealById, FindSorafsReserveMovementById,
+            FindSorafsReserveEvents, FindSorafsReservePolicy, FindSorafsReserveProviderById,
         };
     }
 }
@@ -6188,6 +6239,10 @@ impl_sorafs_orderbook_singular_query!(
         => crate::sorafs::reserve::ReserveAppealRecordV1
 );
 impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsReserveEvents
+        => crate::sorafs::reserve::ReserveFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsPopIssuerPolicy
         => crate::sorafs::pop_registry::PopIssuerPolicyRecordV1
 );
@@ -6230,6 +6285,10 @@ impl_sorafs_orderbook_singular_query!(
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsRepairEvents
         => crate::sorafs::moderation_ledger::RepairFinalizedEventPageV1
+);
+impl_sorafs_orderbook_singular_query!(
+    sorafs::prelude::FindSorafsProofOutcome
+        => crate::sorafs::proof_ledger::ProofOutcomeFinalizedRecordV1
 );
 impl_sorafs_orderbook_singular_query!(
     sorafs::prelude::FindSorafsProofOutcomeEvents
@@ -6608,6 +6667,23 @@ pub mod error {
             AuthorityQuotaExceeded,
         }
 
+        /// Stable identity carried by a missing chain-authoritative `SoraFS` proof outcome.
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(
+            feature = "json",
+            derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+        )]
+        #[norito(deny_unknown_fields)]
+        pub struct SorafsProofOutcomeFindErrorV1 {
+            /// Proof protocol namespace.
+            pub kind: crate::sorafs::proof_ledger::ProofOutcomeKindV1,
+            /// Protocol-scoped challenge or request identity.
+            #[cfg_attr(feature = "json", norito(with = "crate::json_helpers::fixed_bytes"))]
+            pub identity_digest: [u8; 32],
+        }
+
         /// Type assertion error
         #[derive(
             Debug,
@@ -6712,6 +6788,8 @@ pub mod error {
             SorafsRepairTask(String),
             /// Failed to find chain-authoritative `SoraFS` repair status
             SorafsRepairStatus,
+            /// Failed to find chain-authoritative `SoraFS` proof outcome `{0:?}`
+            SorafsProofOutcome(SorafsProofOutcomeFindErrorV1),
             /// Failed to find the active authoritative `SoraFS` moderation policy
             SorafsModerationPolicy,
             /// Failed to find authoritative `SoraFS` moderation appeal `{0}`
@@ -7221,9 +7299,17 @@ mod tests {
             height: 7,
             block_hash: [0xA7; 32],
         };
+        let reserve_cursor = crate::sorafs::reserve::ReserveFinalizedCursorV1 {
+            height: 7,
+            block_hash: [0xB7; 32],
+        };
         let repair_cursor = crate::sorafs::moderation_ledger::RepairFinalizedCursorV1 {
             height: 8,
             block_hash: [0xA8; 32],
+        };
+        let proof_outcome_cursor = crate::sorafs::proof_ledger::ProofOutcomeFinalizedCursorV1 {
+            height: 9,
+            block_hash: [0xA9; 32],
         };
         let queries: Vec<SingularQueryBox> = vec![
             sorafs::prelude::FindSorafsOrderbookPolicy.into(),
@@ -7271,6 +7357,24 @@ mod tests {
                 25,
             )
             .into(),
+            sorafs::prelude::FindSorafsReservePolicy.into(),
+            sorafs::prelude::FindSorafsReserveProviderById::new(
+                crate::sorafs::capacity::ProviderId::new([0x1B; 32]),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsReserveMovementById::new([0x1C; 32]).into(),
+            sorafs::prelude::FindSorafsReserveAppealById::new([0x1D; 32]).into(),
+            sorafs::prelude::FindSorafsReserveEvents::new(
+                Some(reserve_cursor),
+                Some(crate::sorafs::reserve::ReserveFinalizedEventCursorV1 {
+                    sequence: 3,
+                    block_height: 7,
+                    block_hash: reserve_cursor.block_hash,
+                    event_index: 2,
+                }),
+                25,
+            )
+            .into(),
             sorafs::prelude::FindSorafsPopIssuerPolicy.into(),
             sorafs::prelude::FindSorafsPopCredentialCommitmentByDigest::new([0x21; 32]).into(),
             sorafs::prelude::FindSorafsPopCommitmentRootByVersion::new(2).into(),
@@ -7291,6 +7395,25 @@ mod tests {
                         block_height: 8,
                         block_hash: [0xA8; 32],
                         event_index: 2,
+                    },
+                ),
+                25,
+            )
+            .into(),
+            sorafs::prelude::FindSorafsProofOutcome::new(
+                crate::sorafs::proof_ledger::ProofOutcomeKindV1::Pdp,
+                [0x24; 32],
+                Some(proof_outcome_cursor),
+            )
+            .into(),
+            sorafs::prelude::FindSorafsProofOutcomeEvents::new(
+                Some(proof_outcome_cursor),
+                Some(
+                    crate::sorafs::proof_ledger::ProofOutcomeFinalizedEventCursorV1 {
+                        sequence: 7,
+                        block_height: 9,
+                        block_hash: [0xA9; 32],
+                        event_index: 0,
                     },
                 ),
                 25,

@@ -19,7 +19,7 @@ import json
 import sys
 from dataclasses import dataclass
 from fnmatch import fnmatch
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Iterable, List, Sequence, Set
 
 
@@ -408,13 +408,25 @@ def build_stub_content(
     return "\n\n".join([header, metadata, body])
 
 
-def ensure_stub(source: Path, translation: Path, lang: Language, *, dry_run: bool) -> str:
+def ensure_stub(
+    source: Path,
+    translation: Path,
+    lang: Language,
+    *,
+    dry_run: bool,
+    force_refresh: bool = False,
+) -> str:
     """Ensure that a stub file exists; return an action code."""
     try:
         source_rel = source.relative_to(REPO_ROOT)
     except ValueError:
         source_rel = source
     content = build_stub_content(source_rel, translation, lang, source)
+
+    if translation.is_symlink():
+        if force_refresh:
+            raise ValueError(f"refusing to refresh symlinked translation: {translation}")
+        return "skip"
 
     if translation.exists():
         try:
@@ -425,7 +437,7 @@ def ensure_stub(source: Path, translation: Path, lang: Language, *, dry_run: boo
         if existing == content:
             return "skip"
 
-        if not _is_managed_stub(existing, translation):
+        if not force_refresh and not _is_managed_stub(existing, translation):
             return "skip"
 
         if dry_run:
@@ -540,6 +552,34 @@ def is_stub_translation(path: Path) -> bool:
     return status is not None and status.casefold() == "needs-translation"
 
 
+def normalize_refresh_sources(
+    raw_sources: Sequence[str], available_sources: Sequence[Path]
+) -> Set[Path]:
+    """Validate exact canonical source paths selected for destructive refresh."""
+
+    available = set(available_sources)
+    selected: Set[Path] = set()
+    for raw_source in raw_sources:
+        normalized = raw_source.replace("\\", "/")
+        pure = PurePosixPath(normalized)
+        if (
+            not normalized
+            or pure.is_absolute()
+            or normalized.endswith("/")
+            or any(part in {"", ".", ".."} for part in pure.parts)
+        ):
+            raise ValueError(
+                f"refresh source must be a canonical repository-relative file: {raw_source}"
+            )
+        source = Path(*pure.parts)
+        if source not in available:
+            raise ValueError(
+                f"refresh source is not a configured canonical document: {raw_source}"
+            )
+        selected.add(source)
+    return selected
+
+
 def main(argv: Sequence[str]) -> int:
     parser = argparse.ArgumentParser(description="Synchronize documentation translation stubs.")
     parser.add_argument(
@@ -560,6 +600,17 @@ def main(argv: Sequence[str]) -> int:
         action="store_true",
         help="Exit non-zero if any stubs need to be created or updated (implies --dry-run).",
     )
+    parser.add_argument(
+        "--refresh-source",
+        dest="refresh_sources",
+        action="append",
+        default=[],
+        metavar="PATH",
+        help=(
+            "Replace every configured translation of one exact canonical source "
+            "with a traceable needs-translation stub. May be repeated."
+        ),
+    )
     args = parser.parse_args(argv)
     if args.check:
         args.dry_run = True
@@ -573,17 +624,32 @@ def main(argv: Sequence[str]) -> int:
         parser.error(f"Unknown language codes: {', '.join(sorted(unknown))}")
 
     sources = collect_source_files(manifest)
+    try:
+        refresh_sources = normalize_refresh_sources(args.refresh_sources, sources)
+    except ValueError as error:
+        parser.error(str(error))
+    selected_sources = (
+        [source for source in sources if source in refresh_sources]
+        if refresh_sources
+        else sources
+    )
     created: List[Path] = []
     skipped: List[Path] = []
     updated: List[Path] = []
 
-    for rel_path in sources:
+    for rel_path in selected_sources:
         for code in sorted(selected_codes):
             lang = code_to_language[code]
             translation_rel = compute_translation_path(rel_path, code)
             translation_abs = REPO_ROOT / translation_rel
             source_abs = REPO_ROOT / rel_path
-            action = ensure_stub(source_abs, translation_abs, lang, dry_run=args.dry_run)
+            action = ensure_stub(
+                source_abs,
+                translation_abs,
+                lang,
+                dry_run=args.dry_run,
+                force_refresh=rel_path in refresh_sources,
+            )
             if action == "create":
                 created.append(translation_rel)
                 print(f"[create] {translation_rel.as_posix()}")

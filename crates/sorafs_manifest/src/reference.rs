@@ -8357,6 +8357,94 @@ mod tests {
     }
 
     #[test]
+    fn committed_governance_dag_negative_outcomes_match_reference_validator() {
+        let read_fixture = |name: &str| {
+            fs::read(workspace_fixture(&format!(
+                "fixtures/sorafs_manifest/governance/{name}"
+            )))
+            .unwrap_or_else(|error| panic!("read governance DAG fixture `{name}`: {error}"))
+        };
+        let assert_outcome =
+            |outcome: &ValidationOutcomeV1, expected_name: &str, expected_code: &str| {
+                assert!(!outcome.is_ok(), "{outcome:?}");
+                assert_eq!(outcome.code, expected_code);
+                let actual = format!(
+                    "{}\n",
+                    norito::json::to_string_pretty(outcome).expect("encode outcome JSON")
+                );
+                let expected = String::from_utf8(read_fixture(expected_name))
+                    .expect("outcome fixture is UTF-8");
+                assert_eq!(actual, expected);
+            };
+
+        let bad_block_signature = read_fixture("dag_block_bad_signature_v1.to");
+        let outcome = validate_governance_dag_block_bytes(
+            &bad_block_signature,
+            "dag_block_bad_signature_v1.to",
+            None,
+            123,
+        );
+        assert_outcome(
+            &outcome,
+            "dag_block_bad_signature_validation_outcome_v1.json",
+            "SFS-SIG-006",
+        );
+
+        let trailing_bytes = read_fixture("dag_block_trailing_bytes_v1.to");
+        let outcome = validate_governance_dag_block_bytes(
+            &trailing_bytes,
+            "dag_block_trailing_bytes_v1.to",
+            None,
+            123,
+        );
+        assert_outcome(
+            &outcome,
+            "dag_block_trailing_bytes_validation_outcome_v1.json",
+            "SFS-NORITO-001",
+        );
+
+        let root = read_fixture("dag_block_0_v1.to");
+        let child = read_fixture("dag_block_1_v1.to");
+        let canonical_blocks = [
+            (root.as_slice(), "dag_block_0_v1.to".to_owned()),
+            (child.as_slice(), "dag_block_1_v1.to".to_owned()),
+        ];
+        let bad_head_signature = read_fixture("dag_head_bad_signature_v1.to");
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &bad_head_signature,
+            "dag_head_bad_signature_v1.to",
+            &canonical_blocks,
+            123,
+        );
+        assert_outcome(
+            &outcome,
+            "dag_head_bad_signature_validation_outcome_v1.json",
+            "SFS-SIG-007",
+        );
+
+        let bad_predecessor_child = read_fixture("dag_block_1_bad_predecessor_v1.to");
+        let bad_predecessor_blocks = [
+            (root.as_slice(), "dag_block_0_v1.to".to_owned()),
+            (
+                bad_predecessor_child.as_slice(),
+                "dag_block_1_bad_predecessor_v1.to".to_owned(),
+            ),
+        ];
+        let bad_predecessor_head = read_fixture("dag_head_bad_predecessor_v1.to");
+        let outcome = validate_governance_dag_head_chain_bytes(
+            &bad_predecessor_head,
+            "dag_head_bad_predecessor_v1.to",
+            &bad_predecessor_blocks,
+            123,
+        );
+        assert_outcome(
+            &outcome,
+            "dag_head_bad_predecessor_validation_outcome_v1.json",
+            "SFS-GOV-006",
+        );
+    }
+
+    #[test]
     fn validate_governance_dag_head_chain_bytes_rejects_noncanonical_order() {
         let (blocks, head) = signed_governance_dag_chain();
         let head_bytes = to_bytes(&head).expect("encode governance DAG head");

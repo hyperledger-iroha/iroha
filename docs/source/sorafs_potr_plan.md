@@ -1,23 +1,32 @@
 ---
 title: PoTR-Lite Deadline Proofs Status
-summary: Implemented SF-14 timed-retrieval receipt capture, validation, and replay status.
+summary: SF-14 signed receipt capture and exact finalized proof-outcome lookup.
 ---
 
 # PoTR-Lite Deadline Proofs Status
 
 ## Objectives
+
 - Deliver timed retrieval probes for hot (≤90s) and warm (≤5min) tiers.
 - Produce signed latency receipts for use in reputation and incentives.
 - Surface PoTR status in routing and gateway headers.
 
-> **Status (Jun 2026):** Torii now captures PoTR receipts on ranged SoraFS
-> gateway fetches, records them in the embedded SoraFS node, validates receipt
-> invariants/signatures through `sorafs_manifest::potr`, and replays cached
-> receipts through `/v1/sorafs/proof/stream` with `proof_kind=potr`. Remaining
-> SF-14 work is live multi-provider rollout evidence and PQ provider-signature
-> key distribution, now represented by governance-bound key-roster and
-> reputation-weight policy digests in rollout evidence, not local receipt
-> capture, validation, or replay wiring.
+> **Status (Jul 2026):** Torii captures PoTR receipts on ranged SoraFS gateway
+> fetches and validates their invariants and signatures through
+> `sorafs_manifest::potr`. The native `SubmitSorafsProofOutcome` instruction
+> validates and commits an authorized final canonical receipt.
+> `/v1/sorafs/proof/stream` with
+> `proof_kind=potr` no longer scans an embedded receipt cache: it derives the
+> exact request-scope identity from the requested manifest, provider, and
+> mandatory orchestrator job ID, then returns one terminal outcome from the
+> finalized chain view with complete commit provenance.
+>
+> A captured receipt does not become queryable until an authorized transaction
+> forwarder commits it. Remaining SF-14 work includes production
+> forwarding/reconciliation across that boundary, genuine live multi-provider
+> rollout evidence, and operator provisioning of the governed gateway/provider
+> key roster and reputation-weight policy. A process-local pending status or
+> cached-receipt replay path is not a valid substitute.
 > `scripts/check_sorafs_potr_rollout_evidence.py` now provides the fail-closed
 > SF-14 rollout evidence gate, and
 > `scripts/run_sorafs_potr_rollout_evidence.py` provides the reviewed
@@ -36,8 +45,9 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > `critical_alerts_firing` to `false` before promotion can report ready.
 > `scripts/build_sorafs_potr_canary.py` builds individual payload-free SF-14
 > canary artifacts for multi-provider probes, receipt validation, proof-stream
-> replay, reputation integration, observability, and governance approval
-> evidence. The builder requires reviewed deployment context, complete
+> finalized lookup (the evidence schema retains its historical replay label),
+> reputation integration, observability, and governance approval evidence. The
+> builder requires reviewed deployment context, complete
 > hot/warm tier, proof-stream route, and metric coverage where applicable,
 > rejects duplicate or unknown tier, route, and metric inputs before writing,
 > derived `tier_count` for the reviewed hot/warm tier inventory,
@@ -54,9 +64,13 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 > response-file examples cover multi-provider-probe and proof-stream canaries.
 
 ## Workflow
-1. Orchestrator/gateway issues a timed retrieval request with
-   `Sora-PoTR-Request: deadline=<millis>;tier=<hot|warm|archive>` plus optional
-   `request-id=<hex>` and `trace-id=<hex>` parameters.
+
+1. Orchestrator/gateway issues a timed retrieval request with the
+   `Sora-PoTR-Request` value
+   `deadline=<millis>;tier=<hot|warm|archive>;request-id=<32-lowercase-hex>`
+   plus an optional
+   `trace-id=<32-lowercase-hex>` parameter. The non-zero 16-byte request ID is
+   mandatory for a V1 final receipt and is the CLI's orchestrator job ID.
 2. Gateway responds with the requested range plus `Sora-PoTR-Receipt` and
    `Sora-PoTR-Status` headers containing a base64 Norito `PotrReceiptV1` with:
    - `manifest_digest`
@@ -65,13 +79,28 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
    - `requested_at_ms`, `responded_at_ms`, `recorded_at_ms`
    - `latency_ms`
    - `deadline_ms`, `tier`, `status`
-   - optional `request_id`, `trace_id`, and gateway/provider signatures
-3. The gateway validates the receipt before recording it. Invalid receipts are
-   dropped instead of being exposed through proof streams.
-4. Operators replay cached receipts with `sorafs_cli proof stream
-   --proof-kind=potr` or the raw `/v1/sorafs/proof/stream` endpoint.
+   - required `request_id`, Ed25519 gateway signature, and ML-DSA-65 provider
+     signature, plus an optional `trace_id`
+3. The gateway verifies the receipt, and an authorized retry-safe transaction
+   forwarder submits its exact canonical bytes for ledger commitment. The
+   native instruction rechecks both signatures and the active signer policy.
+   Invalid, unsigned, revoked-key, or non-canonical receipts are rejected.
+4. Operators read the exact finalized outcome with:
+
+   ```bash
+   sorafs_cli proof stream \
+     --proof-kind=potr \
+     --deadline-ms=90000 \
+     --orchestrator-job-id-hex=<32-lowercase-hex> \
+     --tier=hot
+   ```
+
+   The manifest and provider flags shown in the general proof-stream
+   documentation are also required. The route returns one terminal row, never
+   a local `pending` result or a receipt-history scan.
 
 ## Telemetry
+
 - Proof-stream metrics:
   `torii_sorafs_proof_stream_events_total{kind="potr",result,reason}`,
   `torii_sorafs_proof_stream_latency_ms_bucket{kind="potr"}`, and
@@ -79,61 +108,82 @@ summary: Implemented SF-14 timed-retrieval receipt capture, validation, and repl
 - Proof-health metrics:
   `torii_sorafs_proof_health_potr_breaches` and
   `torii_da_potr_bonus_micro_total`.
-- Reputation scoring consumes validated receipt summaries through the local
-  SoraFS reputation pipeline; live production weighting is rollout evidence.
+- Production reputation scoring must consume finalized proof-outcome events;
+  live production weighting remains rollout evidence.
 
 ## Headers
-- `Sora-PoTR-Request: deadline=90000;tier=hot`
+
+- `Sora-PoTR-Request` example:
+  `deadline=90000;tier=hot;request-id=<32-lowercase-hex>`
 - `Sora-PoTR-Receipt: <base64 PotrReceiptV1>`
-- `Sora-PoTR-Status: success|missed_deadline|provider_error`
+- `Sora-PoTR-Status` is one of `success`, `missed_deadline`,
+  `provider_error`, `gateway_error`, or `client_cancelled`.
 
 ## Signature Scheme & Verification
 
-- **Signature format:** `PotrReceiptV1` carries optional gateway and provider
-  signatures. Ed25519 is the current gateway default; ML-DSA/Dilithium3
-  provider attestations are schema-supported and remain gated on operator key
-  distribution.
+- **Signature format:** `PotrReceiptV1` uses optional fields at the codec level
+  so absence can be rejected explicitly, but a valid V1 final receipt requires
+  both signatures: Ed25519 for the gateway and ML-DSA-65 for the provider.
   ```norito
   struct PotrReceiptV1 {
       manifest_digest: Hash,
       provider_id: ProviderId,
-      tier: PotrTier,               // hot | warm
+      tier: PotrTier,               // hot | warm | archive
       deadline_ms: u32,
       latency_ms: u32,
       status: PotrStatus,           // success | missed_deadline | provider_error
+                                    // | gateway_error | client_cancelled
       requested_at_ms: Timestamp,
       responded_at_ms: Timestamp,
       recorded_at_ms: Timestamp,
       range_start: u64,
       range_end: u64,
-      request_id: Option<[u8; 16]>,
+      request_id: Option<[u8; 16]>, // Some(non-zero) required by V1 validation
       trace_id: Option<[u8; 16]>,
       gateway_signature: Option<PotrSignatureV1>,
       provider_signature: Option<PotrSignatureV1>,
   }
   ```
-- Clients verify the Ed25519 gateway signature today and may verify provider
-  ML-DSA signatures once governed provider keys are distributed.
-- Validation checks schema version, non-zero manifest/provider identifiers,
-  range ordering, timestamp ordering, success latency bounds, optional
-  signature lengths, and signature payload integrity.
+- Validation requires the exact algorithms and lengths, verifies both
+  signatures over the same domain-separated canonical unsigned receipt, and
+  binds the self-contained keys to the configured gateway trust anchor and the
+  council-verified provider admission record. Self-advertised keys alone never
+  authorize commitment.
+- Validation also checks schema version, non-zero manifest/provider/request
+  identifiers, range and timestamp ordering, latency/status consistency,
+  bounded optional notes, and canonical encoding. The authoritative receipt
+  digest covers the entire final signed receipt.
 
 ## Storage & Aggregation
 
-- **Gateway tracking:** The embedded SoraFS node retains a bounded recent receipt
-  history for diagnostics and proof-stream replay.
-- **API:** `POST /v1/sorafs/proof/stream` with `proof_kind=potr` streams cached
-  receipts filtered by manifest, provider, and tier.
-- **Security:** Receipts include optional `request_id` and `trace_id` values to
-  prevent replay/correlation ambiguity. Live governance archives should retain
-  the original fetch transcript and the proof-stream summary.
+- **Gateway tracking:** An embedded bounded receipt tracker may support local
+  diagnostics, but it is not authoritative and is never the PoTR
+  proof-stream source.
+- **Ledger identity:** The authoritative key is
+  `BLAKE3("sorafs.potr.request-scope.v1\0" || manifest_digest || provider_id
+  || request_id)`. A conflicting receipt for the same scope fails closed
+  instead of creating a second outcome.
+- **API:** `POST /v1/sorafs/proof/stream` with `proof_kind=potr` requires
+  `orchestrator_job_id_hex` and performs one exact finalized lookup. Manifest,
+  provider, deadline, optional tier, and signed receipt request ID must all
+  match the requested scope.
+- **Projection:** The NDJSON row carries `outcome_identity_hex`,
+  `outcome_digest_hex`, `admission_envelope_digest_hex`,
+  `finalized_block_height`, `finalized_block_hash_hex`, `committed_at_ms`, and
+  the exact final `receipt_b64`. The parser rejects missing provenance and any
+  JSON result/reason, timing, tier, trace, identity, or digest that disagrees
+  with the signed receipt.
+- **Security:** The required request ID prevents replay/correlation ambiguity;
+  `trace_id` remains optional. Unknown, unfinalized, or mismatched scopes return
+  no row and never fall back to embedded history.
 
 ## Reputation Oracle Integration
 
 - Reputation plan consumes PoTR data:
   - `success_potr_i` metric = ratio of `status=success` receipts for provider `i` over rolling 7 days.
-  - Missed deadlines (`status=missed_deadline`) contribute to penalty factors. Raw receipt data stored for transparency.
-- Reputation process fetches receipts via the API or directly from DAG batch export:
+  - Missed deadlines (`status=missed_deadline`) contribute to penalty factors.
+- Reputation ingestion must consume finalized proof-outcome events or another
+  finalized ledger projection, not process-local receipt history:
   - Aggregator job computes latency percentiles and success ratios, emitting `PotrStatsV1`.
   - These stats feed into the reputation scoring formula (`w_potr` weight in `sorafs_reputation_plan.md`).
 - **Alerts:** When a provider’s hot-tier success rate drops below 95% in the last 24h, trigger `sorafs_potr_degradation` alert and link to the reputation engine for investigation.
@@ -158,8 +208,9 @@ python3 scripts/run_sorafs_potr_rollout_evidence.py \
 ```
 
 The checker recognizes `sorafs.potr.*` SF-14 rollout schemas for
-multi-provider probes, receipt validation, proof-stream replay, reputation
-integration, observability, and governance approval. It fails closed on stale
+multi-provider probes, receipt validation, proof-stream finalized lookup
+(historically named replay in the evidence schema), reputation integration,
+observability, and governance approval. It fails closed on stale
 evidence, raw receipts, raw fetch transcripts, response bodies, transactions,
 tokens, secrets, under-sized provider or receipt samples, missing hot/warm tier
 coverage, hot/warm latency above threshold, missing gateway or provider
@@ -221,12 +272,13 @@ The rollout evidence scripts have focused Python coverage in:
 - `scripts/tests/check_sorafs_potr_rollout_evidence_test.py`
 - `scripts/tests/run_sorafs_potr_rollout_evidence_test.py`
 
-This status page is now a reference for the shipped local PoTR surface. Future
-updates should track live rollout evidence, governed provider PQ keys, and
+This status page is a reference for the native PoTR receipt and finalized-query
+contract. Future updates must track the retry-safe transaction-forwarding and
+reconciliation path, live rollout evidence, governed provider PQ keys, and
 reputation-weight changes that pass the SF-14 gate with validation,
 proof-stream, reputation, observability, and governance artifacts bound to the
-same multi-provider probe receipt summary digest, plus receipt-validation and
-reputation artifacts bound to governance-approved PQ key-roster and
-reputation-weight policy digests, rather than reintroducing draft local wiring
-tasks. Governance policy digests remain exposed as `valid_policy_digests`
-readiness metadata from the same governed approval artifacts.
+same multi-provider probe receipt summary digest. Receipt-validation and
+reputation artifacts must also bind to governance-approved PQ key-roster and
+reputation-weight policy digests. Governance policy digests remain exposed as
+`valid_policy_digests` readiness metadata from the same governed approval
+artifacts.

@@ -94,6 +94,8 @@ alias = "tenant.alpha"            # optional human friendly tag
 event_history_limit = 4_096
 state_entry_limit = 65_536
 checkpoint_max_bytes = "64 MiB"
+proof_outcome_forwarder_interval_ms = 1_000
+proof_outcome_max_attempts = 8
 
 adverts:
   stake_pointer = "stake.pool.v1:0x1234"
@@ -187,6 +189,20 @@ reference deployment intentionally fails startup until
 - `runtime.checkpoint_max_bytes`: maximum canonical Norito checkpoint size.
   Oversize, corrupt, symlinked, or non-regular checkpoints fail startup rather
   than resetting durable replay or penalty state.
+- `runtime.proof_outcome_forwarder_interval_ms`: finalized-chain reconciliation
+  cadence for durable PDP and PoTR outcome delivery.
+- `runtime.proof_outcome_max_attempts`: bounded attempts for one exact signed
+  outcome transaction before terminal dead-lettering.
+
+The proof-outcome forwarder reconciles against a height-and-block-hash cursor
+from one finalized state view. Before it claims or signs a ready delivery, it
+also requires the runtime signer's account to hold the exact
+provider-scoped `CanRecordSorafsProofOutcome` permission, directly or through
+a role, in finalized state. A missing or differently scoped grant defers the
+delivery without consuming a retry. The standard `irohad` launcher adapts its
+runtime-only common node key at this boundary; reference deployments can inject
+a PKCS#11/HSM implementation of `SoraFsProofOutcomeTransactionSigner` without
+giving that signer transaction-queue access.
 - `adverts`: structure used by the provider advert generator to fill
   `ProviderAdvertV1` fields (stake pointer, QoS hints, topics). If omitted the
   node uses defaults from the governance registry.

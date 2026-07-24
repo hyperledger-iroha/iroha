@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -14,11 +15,19 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _copy_workflows(target: Path) -> None:
-    for relative in (*automation.WORKFLOWS, *automation.RELEASE_DOCUMENTS):
+    for relative in (
+        *automation.WORKFLOWS,
+        *automation.RELEASE_DOCUMENTS,
+        *automation.RELEASE_AUTH_HISTORICAL_FINDINGS,
+        automation.PACKAGE_RELEASE_SMOKE_SCRIPT,
+    ):
         source = REPO_ROOT / relative
         destination = target / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(source.read_bytes())
+    for relative in automation.RELEASE_AUTH_ROOT_DOCUMENTS:
+        destination = target / relative
+        destination.write_text("# Release-auth test fixture\n", encoding="utf-8")
 
 
 def test_validate_release_automation_accepts_repository_contract() -> None:
@@ -28,6 +37,28 @@ def test_validate_release_automation_accepts_repository_contract() -> None:
         "workflow_count": 3,
         "workflows": sorted(automation.WORKFLOWS),
     }
+
+
+def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
+    workflow = (
+        REPO_ROOT / ".github" / "workflows" / "pr_csharp.yml"
+    ).read_text(encoding="utf-8")
+    validator_tests = (
+        REPO_ROOT
+        / "csharp"
+        / "tests"
+        / "Hyperledger.Iroha.Sdk.Tests"
+        / "SoraFsReferenceValidatorsTests.cs"
+    ).read_text(encoding="utf-8")
+
+    assert 'IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION: "1"' in workflow
+    assert "LD_LIBRARY_PATH: ${{ github.workspace }}/target/debug" in workflow
+    assert "cargo build --locked -p connect_norito_bridge" in workflow
+    assert "dotnet test Hyperledger.Iroha.Sdk.sln" in workflow
+    assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" in validator_tests
+    assert "ABI-21 connect_norito_bridge with Governance DAG symbols is required." in (
+        validator_tests
+    )
 
 
 @pytest.mark.parametrize(
@@ -706,6 +737,162 @@ def test_validate_release_automation_rejects_stale_release_document_claims(
         encoding="utf-8",
     )
     with pytest.raises(ValueError, match="stale release-document claim"):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("stale_reference", "finding"),
+    [
+        (
+            "sorafs_cli manifest sign --manifest manifest.to",
+            "retired local manifest-authentication command",
+        ),
+        (
+            "sorafs_cli manifest verify-signature --manifest manifest.to",
+            "retired local manifest-authentication command",
+        ),
+        (
+            "--identity-token-file=/run/release.jwt",
+            "retired identity-token signing option",
+        ),
+        (
+            "fixtures/sorafs_manifest/ci_sample/manifest.sig",
+            "retired ci_sample authentication artifact",
+        ),
+        (
+            "copy manifest.sign.summary.json into the release evidence",
+            "retired local manifest-authentication artifact",
+        ),
+        (
+            "openssl pkeyutl -sign -inkey release.pem -in manifest.json",
+            "generic OpenSSL/RSA signing command",
+        ),
+        (
+            "openssl dgst -sha256 -sign=release.pem manifest.json",
+            "generic OpenSSL/RSA signing command",
+        ),
+        (
+            "derive an Ed25519 signing key from the OIDC identity token",
+            "OIDC-derived local Ed25519 signing material",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_retired_auth_across_document_tree(
+    tmp_path: Path,
+    stale_reference: str,
+    finding: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    document = tmp_path / "docs/retired-release-auth.md"
+    document.write_text(f"# Retired path\n\n{stale_reference}\n", encoding="utf-8")
+    with pytest.raises(
+        ValueError,
+        match=rf"forbidden release-auth documentation reference \({finding}\)",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_release_auth_document_discovery_rejects_symlinked_entries(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    target = tmp_path / "outside-release-auth.md"
+    target.write_text("# External document\n", encoding="utf-8")
+    (tmp_path / "docs/symlinked-release-auth.md").symlink_to(target)
+
+    with pytest.raises(ValueError, match="must not contain symlinks"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_release_auth_document_discovery_rejects_hard_linked_documents(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    target = tmp_path / "docs/release-auth-source.md"
+    target.write_text("# Release authentication\n", encoding="utf-8")
+    os.link(target, tmp_path / "docs/release-auth-alias.md")
+
+    with pytest.raises(ValueError, match="must not be hard linked"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_release_auth_document_discovery_enforces_entry_budget(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _copy_workflows(tmp_path)
+    monkeypatch.setattr(automation, "MAX_RELEASE_AUTH_TREE_ENTRIES", 1)
+
+    with pytest.raises(ValueError, match="exceeds its entry limit"):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_historical_oidc_finding_remediation(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    relative = "docs/source/sorafs/reports/sf6_security_review.md"
+    document = tmp_path / relative
+    source = document.read_text(encoding="utf-8")
+    marker = "Removed that CLI surface and all production callers"
+    assert marker in source
+    document.write_text(
+        source.replace(marker, "Remediation pending", 1),
+        encoding="utf-8",
+    )
+    with pytest.raises(
+        ValueError,
+        match="OIDC-derived local Ed25519 signing material",
+    ):
+        automation.validate_release_automation(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("injection", "message"),
+    [
+        (
+            "openssl dgst -sha256 -sign release.pem dist/package.whl\n",
+            "generic OpenSSL/RSA signing is forbidden",
+        ),
+        (
+            '${OPENSSL_BIN} dgst -sha256 -sign release.pem dist/package.whl\n',
+            "generic OpenSSL/RSA signing is forbidden",
+        ),
+        (
+            "cosign sign-blob dist/package.whl\n",
+            "signing/provenance marker",
+        ),
+        (
+            "PYTHON_RELEASE_SIGNING_KEY=/run/private.pem\n",
+            "signing/provenance marker",
+        ),
+    ],
+)
+def test_validate_release_automation_rejects_package_smoke_signers(
+    tmp_path: Path,
+    injection: str,
+    message: str,
+) -> None:
+    _copy_workflows(tmp_path)
+    smoke = tmp_path / automation.PACKAGE_RELEASE_SMOKE_SCRIPT
+    smoke.write_text(
+        smoke.read_text(encoding="utf-8") + f"\n{injection}",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=message):
+        automation.validate_release_automation(tmp_path)
+
+
+def test_validate_release_automation_requires_external_auth_route_from_smoke(
+    tmp_path: Path,
+) -> None:
+    _copy_workflows(tmp_path)
+    smoke = tmp_path / automation.PACKAGE_RELEASE_SMOKE_SCRIPT
+    source = smoke.read_text(encoding="utf-8")
+    marker = "scripts/release_manifest_signing.py"
+    assert marker in source
+    smoke.write_text(source.replace(marker, "removed-auth-route", 1), encoding="utf-8")
+    with pytest.raises(ValueError, match="missing package-smoke contract marker"):
         automation.validate_release_automation(tmp_path)
 
 

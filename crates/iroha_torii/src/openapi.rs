@@ -2131,6 +2131,40 @@ fn bounded_integer_query_param(
     Value::Object(param)
 }
 
+fn canonical_nonzero_digest_query_param(name: &str, description: &str) -> Value {
+    let Value::Object(mut param) = string_query_param(name, description) else {
+        unreachable!("string query parameter helper always returns an object");
+    };
+    let Some(Value::Object(schema)) = param.get_mut("schema") else {
+        unreachable!("string query parameter helper always contains a schema object");
+    };
+    schema.insert("minLength".into(), Value::from(64_u64));
+    schema.insert("maxLength".into(), Value::from(64_u64));
+    schema.insert(
+        "pattern".into(),
+        Value::String("^(?!0{64}$)[0-9a-f]{64}$".to_owned()),
+    );
+    Value::Object(param)
+}
+
+fn repair_ticket_path_param() -> Value {
+    let Value::Object(mut param) =
+        string_path_param("ticket_id", "Canonical repair ticket identifier.")
+    else {
+        unreachable!("string path parameter helper always returns an object");
+    };
+    let Some(Value::Object(schema)) = param.get_mut("schema") else {
+        unreachable!("string path parameter helper always contains a schema object");
+    };
+    schema.insert("minLength".into(), Value::from(1_u64));
+    schema.insert("maxLength".into(), Value::from(256_u64));
+    schema.insert(
+        "pattern".into(),
+        Value::String("^[A-Z0-9_-]+$".to_owned()),
+    );
+    Value::Object(param)
+}
+
 fn bool_query_param(name: &str, description: &str) -> Value {
     let mut param = Map::new();
     param.insert("name".into(), Value::String(name.to_owned()));
@@ -5759,190 +5793,154 @@ fn sorafs_paths() -> Map {
     );
     paths.insert(
         "/v1/sorafs/audit/repair/report".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_repair_signed_transaction_operation(
             "Submit repair report.",
-            "Submit a SoraFS repair report.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsRepairTask` instruction. Torii performs route/type validation and then uses strict durable transaction ingress; authoritative state changes only after ledger commitment.",
         )),
     );
     paths.insert(
         "/v1/sorafs/audit/repair/slash".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Submit repair slash.",
-            "Submit a SoraFS repair slash.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(sorafs_repair_signed_transaction_operation(
+            "Escalate a repair task.",
+            "Submit a caller-signed transaction containing exactly one `ApplySorafsRepairTaskAction::Escalate` instruction. The terminal outcome and slash proposal commit atomically through strict durable transaction ingress.",
         )),
     );
     paths.insert(
         "/v1/sorafs/audit/repair/claim".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_repair_signed_transaction_operation(
             "Claim repair ticket.",
-            "Claim a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `ApplySorafsRepairTaskAction::Claim` instruction. Lease authority, revision, duration, and idempotency are enforced by the native ledger transition.",
         )),
     );
     paths.insert(
         "/v1/sorafs/audit/repair/heartbeat".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Repair heartbeat.",
-            "Record a SoraFS repair worker heartbeat (requires manifest_digest_hex, idempotency key, and worker signature).",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+        Value::Object(sorafs_repair_signed_transaction_operation(
+            "Renew a repair lease.",
+            "Submit a caller-signed transaction containing exactly one `ApplySorafsRepairTaskAction::Renew` instruction. The exact lease generation, expected task revision, duration, and idempotency key are committed by the native ledger transition.",
         )),
     );
     paths.insert(
         "/v1/sorafs/audit/repair/complete".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_repair_signed_transaction_operation(
             "Complete repair ticket.",
-            "Complete a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `ApplySorafsRepairTaskAction::Complete` instruction. Exactly-once terminal outcome and evidence-digest validation occur in the native ledger transition.",
         )),
     );
     paths.insert(
         "/v1/sorafs/audit/repair/fail".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
+        Value::Object(sorafs_repair_signed_transaction_operation(
             "Fail repair ticket.",
-            "Fail a SoraFS repair ticket (requires manifest_digest_hex, idempotency key, and worker signature).",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
+            "Submit a caller-signed transaction containing exactly one `ApplySorafsRepairTaskAction::Fail` instruction. Exactly-once terminal outcome and failure-digest validation occur in the native ledger transition.",
         )),
     );
-    let repair_status_query_params = vec![
-        string_query_param(
-            "status",
-            "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
+    paths.insert(
+        "/v1/sorafs/audit/repair/appeal".to_owned(),
+        Value::Object(sorafs_repair_signed_transaction_operation(
+            "Appeal a repair slash.",
+            "Submit a caller-signed transaction containing exactly one `SubmitSorafsRepairAppeal` instruction. Provider ownership, expected revision, replay protection, evidence digest, and bounded reason are enforced by the native ledger transition.",
+        )),
+    );
+    let repair_anchor_query_params = vec![
+        bounded_integer_query_param(
+            "expected_finalized_height",
+            "Optional non-zero finalized block height. Must be supplied together with expected_finalized_block_hash_hex.",
+            Some("uint64"),
+            1,
+            None,
         ),
-        string_query_param("provider", "Filter by provider id (hex)."),
+        canonical_nonzero_digest_query_param(
+            "expected_finalized_block_hash_hex",
+            "Optional canonical lowercase finalized block hash. Must be supplied together with expected_finalized_height.",
+        ),
     ];
     paths.insert(
         "/v1/sorafs/audit/repair/status".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "List repair status.",
-            "List SoraFS repair status across manifests (each entry includes Norito base64 record + ordered event log).",
+            "Fetch finalized repair status.",
+            "Fetch chain-authoritative repair counters anchored to one finalized block. A stale requested anchor returns 409 so clients can restart from the latest committed view.",
             "#/components/schemas/JsonValue",
-            repair_status_query_params.clone(),
+            repair_anchor_query_params.clone(),
         )),
     );
+    let mut repair_tasks_query_params = repair_anchor_query_params.clone();
+    repair_tasks_query_params.push(bounded_integer_query_param(
+        "limit",
+        "Bounded repair-task page size (default 50, maximum 500).",
+        Some("uint32"),
+        1,
+        Some(500),
+    ));
+    repair_tasks_query_params.push(canonical_nonzero_digest_query_param(
+        "after_task_id_hex",
+        "Optional exclusive immutable task-id cursor from the preceding finalized page.",
+    ));
     paths.insert(
-        "/v1/sorafs/audit/repair/status/{manifest_hex}".to_owned(),
+        "/v1/sorafs/audit/repair/tasks".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "Fetch repair status.",
-            "Fetch repair status for a manifest (each entry includes Norito base64 record + ordered event log).",
+            "List finalized repair tasks.",
+            "Return a bounded exclusive-cursor page of chain-authoritative repair tasks. Every row and continuation cursor shares the returned finalized block anchor.",
             "#/components/schemas/JsonValue",
-            vec![
-                string_path_param("manifest_hex", "Manifest hash (hex)."),
-                string_query_param(
-                    "status",
-                    "Filter by repair status (queued, verifying, in_progress, completed, failed, escalated).",
-                ),
-                string_query_param("provider", "Filter by provider id (hex)."),
-            ],
+            repair_tasks_query_params,
         )),
     );
-    let repair_events_query_params = vec![
-        integer_query_param(
-            "since",
-            "Return repair events with sequence greater than this cursor.",
-            Some("uint64"),
+    let mut repair_task_query_params = vec![repair_ticket_path_param()];
+    repair_task_query_params.extend(repair_anchor_query_params.clone());
+    paths.insert(
+        "/v1/sorafs/audit/repair/tasks/{ticket_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "SoraFS",
+            "Fetch one finalized repair task.",
+            "Fetch one chain-authoritative task, including lease, terminal outcome, slash, appeal, revision, and action receipts, at one finalized block anchor.",
+            "#/components/schemas/JsonValue",
+            repair_task_query_params,
+        )),
+    );
+    let mut repair_events_query_params = repair_anchor_query_params;
+    repair_events_query_params.extend([
+        bounded_integer_query_param(
+            "limit",
+            "Bounded committed-event page size (default 50, maximum 500).",
+            Some("uint32"),
+            1,
+            Some(500),
         ),
-        integer_query_param("limit", "Optional page size limit.", Some("uint64")),
-    ];
+        bounded_integer_query_param(
+            "after_sequence",
+            "Optional exclusive event sequence. Supply all four after_* fields together.",
+            Some("uint64"),
+            1,
+            None,
+        ),
+        bounded_integer_query_param(
+            "after_block_height",
+            "Optional committing block height. Supply all four after_* fields together.",
+            Some("uint64"),
+            1,
+            None,
+        ),
+        canonical_nonzero_digest_query_param(
+            "after_block_hash_hex",
+            "Optional canonical lowercase committing block hash. Supply all four after_* fields together.",
+        ),
+        bounded_integer_query_param(
+            "after_event_index",
+            "Optional event index within the committing block. Supply all four after_* fields together.",
+            Some("uint32"),
+            0,
+            Some(u64::from(u32::MAX)),
+        ),
+    ]);
     paths.insert(
         "/v1/sorafs/audit/repair/events".to_owned(),
         Value::Object(json_get_operation(
             "SoraFS",
-            "List repair events.",
-            "List local SoraFS repair task transition events after an optional sequence cursor. Supports `If-None-Match` with `ETag` validators.",
+            "List committed repair events.",
+            "Return a bounded exclusive-cursor page of typed, payload-free repair-ledger events from finalized chain state. Supports `If-None-Match` with a canonical-page `ETag`; clients poll this route for new committed events.",
             "#/components/schemas/JsonValue",
-            repair_events_query_params.clone(),
+            repair_events_query_params,
         )),
-    );
-    paths.insert(
-        "/v1/sorafs/audit/repair/events/stream".to_owned(),
-        Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("SoraFS".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Stream repair events.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String(
-                    "Stream local SoraFS repair task transition events as server-sent events. The stream emits an optional backlog selected by `since` and `limit`, then live task transitions keyed by repair status."
-                        .to_owned(),
-                ),
-            );
-            operation.insert("parameters".into(), Value::Array(repair_events_query_params.clone()));
-            let mut responses = Map::new();
-            responses.insert(
-                "200".into(),
-                event_stream_response("Server-sent repair task transition event stream."),
-            );
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("get".into(), Value::Object(operation));
-            methods
-        }),
-    );
-    paths.insert(
-        "/v1/sorafs/audit/repair/events/ws".to_owned(),
-        Value::Object({
-            let mut operation = Map::new();
-            operation.insert(
-                "tags".into(),
-                Value::Array(vec![Value::String("SoraFS".to_owned())]),
-            );
-            operation.insert(
-                "summary".into(),
-                Value::String("Connect to the repair event WebSocket.".to_owned()),
-            );
-            operation.insert(
-                "description".into(),
-                Value::String(
-                    "Upgrade to a SoraFS repair event WebSocket. The stream emits JSON text frames with `event` set to the repair status for the optional `since`/`limit` backlog and for live task transitions; lag frames use `event = lagged`."
-                        .to_owned(),
-                ),
-            );
-            operation.insert("parameters".into(), Value::Array(repair_events_query_params));
-            let mut responses = Map::new();
-            responses.insert(
-                "101".into(),
-                Value::Object({
-                    let mut response = Map::new();
-                    response.insert(
-                        "description".into(),
-                        Value::String("WebSocket upgrade accepted.".to_owned()),
-                    );
-                    response
-                }),
-            );
-            operation.insert("responses".into(), Value::Object(responses));
-            let mut methods = Map::new();
-            methods.insert("get".into(), Value::Object(operation));
-            methods
-        }),
     );
     paths.insert(
         "/v1/sorafs/appeals/pricing/config".to_owned(),
@@ -7085,22 +7083,15 @@ fn sorafs_paths() -> Map {
         Value::Object(json_post_operation(
             "SoraFS",
             "Request a PoR sample.",
-            "Request a proof-of-replication sample. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
-            "#/components/schemas/JsonValue",
+            "Request a proof-of-replication sample from this node's configured provider identity. The JSON `count` field must be between 1 and 500; the returned `samples` array is also capped by the stored manifest leaf count.",
+            "#/components/schemas/SorafsStoragePorSampleRequestV1",
             "#/components/schemas/JsonValue",
             Vec::new(),
         )),
     );
     paths.insert(
         "/v1/sorafs/proof/stream".to_owned(),
-        Value::Object(json_post_operation(
-            "SoraFS",
-            "Stream proofs.",
-            "Request an authenticated PoR, PDP, or PoTR proof stream payload. PoR `sample_count` must be between 1 and 500. PDP requires `challenge_id_hex` and rejects client-selected sampling inputs.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
+        Value::Object(sorafs_proof_stream_operation()),
     );
     for (path, summary, description) in [
         (
@@ -9294,6 +9285,83 @@ fn json_post_operation_with_success_status(
     methods
 }
 
+fn sorafs_proof_stream_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Stream canonical proofs.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Request authenticated PoR, PDP, or PoTR rows through the sole canonical V1 envelope. PoR accepts 1..=500 samples, PDP must name an existing governed challenge, and PoTR must name a positive deadline plus the orchestrator job id that derives its committed request-scope identity. Optional fields are omitted rather than null."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "requestBody".into(),
+        Value::Object(json_request_body(
+            "#/components/schemas/SorafsProofStreamHttpRequestV1",
+        )),
+    );
+
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        norito::json!({
+            "description": "A bounded newline-delimited stream of closed canonical proof rows.",
+            "content": {
+                "application/x-ndjson": {
+                    "schema": {
+                        "type": "string",
+                        "description": "Each non-empty line is one SorafsProofStreamItemV1 object."
+                    },
+                    "x-iroha-ndjson-item-schema": {
+                        "$ref": "#/components/schemas/SorafsProofStreamItemV1"
+                    }
+                }
+            }
+        }),
+    );
+    responses.insert(
+        "400".into(),
+        json_response(
+            "Malformed, noncanonical, duplicated, unknown, null, out-of-range, or proof-kind-incompatible request input.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response(
+            "The requested manifest or governed proof identity does not exist.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "422".into(),
+        json_response(
+            "The request is canonical but cannot be fulfilled by the selected provider or stored proof state.",
+            error_schema_reference(),
+        ),
+    );
+    responses.insert(
+        "503".into(),
+        json_response(
+            "SoraFS storage or its authoritative proof projection is unavailable.",
+            error_schema_reference(),
+        ),
+    );
+    operation.insert("responses".into(), Value::Object(responses));
+
+    let mut methods = Map::new();
+    methods.insert("post".into(), Value::Object(operation));
+    methods
+}
+
 fn json_delete_operation(
     tag: &str,
     summary: &str,
@@ -9642,6 +9710,21 @@ fn signed_transaction_submission_operation() -> Map {
             "#/components/schemas/ErrorEnvelope",
         ),
     );
+    methods
+}
+
+fn sorafs_repair_signed_transaction_operation(summary: &str, description: &str) -> Map {
+    let mut methods = signed_transaction_submission_operation();
+    let operation = methods
+        .get_mut("post")
+        .and_then(Value::as_object_mut)
+        .expect("signed transaction submission operation contains POST");
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("SoraFS".to_owned())]),
+    );
+    operation.insert("summary".into(), Value::String(summary.to_owned()));
+    operation.insert("description".into(), Value::String(description.to_owned()));
     methods
 }
 
@@ -16291,6 +16374,617 @@ fn insert_vpn_schemas(schemas: &mut Map) {
     );
 }
 
+fn insert_sorafs_proof_stream_schemas(schemas: &mut Map) {
+    schemas.insert(
+        "SorafsStoragePorSampleRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": ["manifest_id_hex", "provider_id_hex", "count"],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_id_hex": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Stored manifest identifier or manifest CID accepted by this node."
+                },
+                "provider_id_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "description": "Canonical lowercase provider identifier. It must exactly match this node's configured capacity-declaration provider."
+                },
+                "count": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "seed": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX),
+                    "description": "Optional deterministic sample seed. Omit when absent; null is invalid."
+                }
+            },
+            "description": "Closed provider-bound PoR sampling request. A missing provider binding returns 503 and a mismatch returns 403."
+        }),
+    );
+    schemas.insert(
+        "SorafsProofStreamPorRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "manifest_digest_hex",
+                "provider_id_hex",
+                "proof_kind",
+                "sample_count",
+                "nonce_b64"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase BLAKE3-256 manifest digest."
+                },
+                "provider_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase provider identifier."
+                },
+                "proof_kind": { "type": "string", "const": "por" },
+                "sample_count": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 500
+                },
+                "sample_seed": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "nonce_b64": {
+                    "type": "string",
+                    "minLength": 24,
+                    "maxLength": 24,
+                    "pattern": "^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$",
+                    "description": "Non-zero 16-byte nonce in exact canonical padded base64."
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["hot", "warm", "archive"],
+                    "description": "Optional canonical tier hint. Omit when absent; null is invalid."
+                }
+            },
+            "description": "Canonical PoR request. PDP challenge, PoTR deadline, and orchestrator job fields are not part of this closed object."
+        }),
+    );
+    schemas.insert(
+        "SorafsProofStreamPdpRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "manifest_digest_hex",
+                "provider_id_hex",
+                "proof_kind",
+                "challenge_id_hex",
+                "nonce_b64"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase BLAKE3-256 manifest digest."
+                },
+                "provider_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase provider identifier."
+                },
+                "proof_kind": { "type": "string", "const": "pdp" },
+                "challenge_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Existing non-zero governed challenge identifier. Client-selected sampling fields are forbidden."
+                },
+                "nonce_b64": {
+                    "type": "string",
+                    "minLength": 24,
+                    "maxLength": 24,
+                    "pattern": "^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$",
+                    "description": "Non-zero 16-byte nonce in exact canonical padded base64."
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["hot", "warm", "archive"],
+                    "description": "Optional canonical tier hint. Omit when absent; null is invalid."
+                }
+            },
+            "description": "Canonical PDP request bound to an already governed challenge. sample_count, sample_seed, deadline_ms, and orchestrator_job_id_hex are not accepted."
+        }),
+    );
+    schemas.insert(
+        "SorafsProofStreamPotrRequestV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "manifest_digest_hex",
+                "provider_id_hex",
+                "proof_kind",
+                "deadline_ms",
+                "nonce_b64",
+                "orchestrator_job_id_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase BLAKE3-256 manifest digest."
+                },
+                "provider_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$",
+                    "description": "Non-zero canonical lowercase provider identifier."
+                },
+                "proof_kind": { "type": "string", "const": "potr" },
+                "deadline_ms": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": (u32::MAX)
+                },
+                "nonce_b64": {
+                    "type": "string",
+                    "minLength": 24,
+                    "maxLength": 24,
+                    "pattern": "^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$",
+                    "description": "Non-zero 16-byte nonce in exact canonical padded base64."
+                },
+                "orchestrator_job_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{32}$)[0-9a-f]{32}$",
+                    "description": "Required non-zero 16-byte orchestrator job id that completes the exact committed-outcome lookup scope."
+                },
+                "tier": {
+                    "type": "string",
+                    "enum": ["hot", "warm", "archive"],
+                    "description": "Optional canonical tier hint. Omit when absent; null is invalid."
+                }
+            },
+            "description": "Canonical PoTR request. The required orchestrator job id derives the chain-authoritative request-scope identity with the manifest and provider. PDP challenge and client-selected sample fields are not part of this closed object."
+        }),
+    );
+    schemas.insert(
+        "SorafsProofStreamHttpRequestV1".to_owned(),
+        norito::json!({
+            "oneOf": [
+                { "$ref": "#/components/schemas/SorafsProofStreamPorRequestV1" },
+                { "$ref": "#/components/schemas/SorafsProofStreamPdpRequestV1" },
+                { "$ref": "#/components/schemas/SorafsProofStreamPotrRequestV1" }
+            ],
+            "description": "The sole canonical proof-stream HTTP envelope. Optional fields must be omitted rather than encoded as null; aliases, unknown fields, duplicate keys, noncanonical encodings, and kind-incompatible fields are rejected."
+        }),
+    );
+    schemas.insert(
+        "SorafsPorProofV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "payload_len",
+                "chunk_index",
+                "chunk_offset",
+                "chunk_length",
+                "chunk_digest_hex",
+                "chunk_root_hex",
+                "segment_index",
+                "segment_offset",
+                "segment_length",
+                "segment_digest_hex",
+                "leaf_index",
+                "leaf_offset",
+                "leaf_length",
+                "leaf_bytes_hex",
+                "leaf_digest_hex",
+                "segment_leaves_hex",
+                "chunk_segments_hex",
+                "chunk_roots_hex"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "payload_len": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "chunk_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": 2047
+                },
+                "chunk_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "chunk_length": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 4_194_304
+                },
+                "chunk_digest_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "chunk_root_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "segment_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": 63
+                },
+                "segment_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "segment_length": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 65_536
+                },
+                "segment_digest_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "leaf_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": 15
+                },
+                "leaf_offset": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 0,
+                    "maximum": (u64::MAX)
+                },
+                "leaf_length": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": 4_096
+                },
+                "leaf_bytes_hex": {
+                    "type": "string",
+                    "minLength": 2,
+                    "maxLength": 8_192,
+                    "pattern": "^(?:[0-9a-f]{2})+$",
+                    "description": "Canonical lowercase hexadecimal leaf bytes. Runtime verification requires the decoded length to equal leaf_length."
+                },
+                "leaf_digest_hex": {
+                    "type": "string",
+                    "minLength": 64,
+                    "maxLength": 64,
+                    "pattern": "^[0-9a-f]{64}$"
+                },
+                "segment_leaves_hex": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 16,
+                    "items": {
+                        "type": "string",
+                        "minLength": 64,
+                        "maxLength": 64,
+                        "pattern": "^[0-9a-f]{64}$"
+                    }
+                },
+                "chunk_segments_hex": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 64,
+                    "items": {
+                        "type": "string",
+                        "minLength": 64,
+                        "maxLength": 64,
+                        "pattern": "^[0-9a-f]{64}$"
+                    }
+                },
+                "chunk_roots_hex": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 2048,
+                    "items": {
+                        "type": "string",
+                        "minLength": 64,
+                        "maxLength": 64,
+                        "pattern": "^[0-9a-f]{64}$"
+                    }
+                }
+            },
+            "description": "Closed canonical PoR witness. The runtime additionally checks offset/length relationships, projected indices, every Merkle digest, and the derived root before emitting the row."
+        }),
+    );
+    schemas.insert(
+        "SorafsProofStreamItemV1".to_owned(),
+        norito::json!({
+            "type": "object",
+            "required": [
+                "manifest_digest_hex",
+                "provider_id_hex",
+                "proof_kind",
+                "result"
+            ],
+            "additionalProperties": false,
+            "properties": {
+                "manifest_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "provider_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "outcome_identity_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "outcome_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "admission_envelope_digest_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "finalized_block_height": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "finalized_block_hash_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "committed_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                },
+                "challenge_id_hex": {
+                    "type": "string",
+                    "pattern": "^(?!0{64}$)[0-9a-f]{64}$"
+                },
+                "proof_kind": { "type": "string", "enum": ["por", "pdp", "potr"] },
+                "result": { "type": "string", "enum": ["success", "failure"] },
+                "failure_reason": {
+                    "type": "string",
+                    "enum": [
+                        "deadline_expired",
+                        "submission_late",
+                        "future_timestamp",
+                        "invalid_proof",
+                        "admission_revoked",
+                        "admission_inactive",
+                        "storage_unavailable",
+                        "missed_deadline",
+                        "provider_error",
+                        "gateway_error",
+                        "client_cancelled"
+                    ]
+                },
+                "latency_ms": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "deadline_ms": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 1,
+                    "maximum": (u32::MAX)
+                },
+                "leaf_index_flat": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "chunk_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "segment_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "leaf_index": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0,
+                    "maximum": (u32::MAX)
+                },
+                "tier": { "type": "string", "enum": ["hot", "warm", "archive"] },
+                "trace_id": {
+                    "type": "string",
+                    "pattern": "^(?!0{32}$)[0-9a-f]{32}$"
+                },
+                "proof": {
+                    "$ref": "#/components/schemas/SorafsPorProofV1",
+                    "description": "Canonical PoR proof object; present only for PoR rows."
+                },
+                "receipt_b64": {
+                    "type": "string",
+                    "minLength": 4,
+                    "maxLength": 32768,
+                    "pattern": "^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$",
+                    "contentEncoding": "base64",
+                    "contentMediaType": "application/x-norito",
+                    "x-iroha-runtime-validation": {
+                        "decodedType": "sorafs_manifest::PotrReceiptV1",
+                        "requireByteIdenticalCanonicalReencode": true,
+                        "requireValidatedReceipt": true
+                    },
+                    "description": "Exact canonical padded base64 of the final signed PotrReceiptV1 Norito bytes. Runtime decoding validates the receipt and requires a byte-identical canonical Norito re-encoding; present only for PoTR rows."
+                },
+                "recorded_at_ms": {
+                    "type": "integer",
+                    "format": "uint64",
+                    "minimum": 1,
+                    "maximum": (u64::MAX)
+                }
+            },
+            "allOf": [
+                {
+                    "if": {
+                        "required": ["result"],
+                        "properties": { "result": { "const": "failure" } }
+                    },
+                    "then": { "required": ["failure_reason"] },
+                    "else": { "not": { "required": ["failure_reason"] } }
+                },
+                {
+                    "oneOf": [
+                        {
+                            "required": [
+                                "leaf_index_flat",
+                                "chunk_index",
+                                "segment_index",
+                                "leaf_index",
+                                "proof",
+                                "latency_ms"
+                            ],
+                            "properties": {
+                                "proof_kind": { "const": "por" },
+                                "result": { "const": "success" }
+                            },
+                            "not": {
+                                "anyOf": [
+                                    { "required": ["challenge_id_hex"] },
+                                    { "required": ["deadline_ms"] },
+                                    { "required": ["receipt_b64"] },
+                                    { "required": ["recorded_at_ms"] },
+                                    { "required": ["trace_id"] },
+                                    { "required": ["outcome_identity_hex"] },
+                                    { "required": ["outcome_digest_hex"] },
+                                    { "required": ["admission_envelope_digest_hex"] },
+                                    { "required": ["finalized_block_height"] },
+                                    { "required": ["finalized_block_hash_hex"] },
+                                    { "required": ["committed_at_ms"] }
+                                ]
+                            }
+                        },
+                        {
+                            "required": [
+                                "challenge_id_hex",
+                                "outcome_identity_hex",
+                                "outcome_digest_hex",
+                                "admission_envelope_digest_hex",
+                                "finalized_block_height",
+                                "finalized_block_hash_hex",
+                                "committed_at_ms"
+                            ],
+                            "properties": {
+                                "proof_kind": { "const": "pdp" },
+                                "failure_reason": {
+                                    "enum": [
+                                        "deadline_expired",
+                                        "submission_late",
+                                        "future_timestamp",
+                                        "invalid_proof",
+                                        "admission_revoked",
+                                        "admission_inactive",
+                                        "storage_unavailable"
+                                    ]
+                                }
+                            },
+                            "not": {
+                                "anyOf": [
+                                    { "required": ["latency_ms"] },
+                                    { "required": ["deadline_ms"] },
+                                    { "required": ["leaf_index_flat"] },
+                                    { "required": ["chunk_index"] },
+                                    { "required": ["segment_index"] },
+                                    { "required": ["leaf_index"] },
+                                    { "required": ["proof"] },
+                                    { "required": ["receipt_b64"] },
+                                    { "required": ["recorded_at_ms"] },
+                                    { "required": ["trace_id"] }
+                                ]
+                            }
+                        },
+                        {
+                            "required": [
+                                "latency_ms",
+                                "deadline_ms",
+                                "tier",
+                                "receipt_b64",
+                                "recorded_at_ms",
+                                "outcome_identity_hex",
+                                "outcome_digest_hex",
+                                "admission_envelope_digest_hex",
+                                "finalized_block_height",
+                                "finalized_block_hash_hex",
+                                "committed_at_ms"
+                            ],
+                            "properties": {
+                                "proof_kind": { "const": "potr" },
+                                "result": { "enum": ["success", "failure"] },
+                                "failure_reason": {
+                                    "enum": [
+                                        "missed_deadline",
+                                        "provider_error",
+                                        "gateway_error",
+                                        "client_cancelled"
+                                    ]
+                                }
+                            },
+                            "not": {
+                                "anyOf": [
+                                    { "required": ["challenge_id_hex"] },
+                                    { "required": ["leaf_index_flat"] },
+                                    { "required": ["chunk_index"] },
+                                    { "required": ["segment_index"] },
+                                    { "required": ["leaf_index"] },
+                                    { "required": ["proof"] }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ],
+            "description": "One closed canonical NDJSON proof row. PoTR identity, timing, tier, trace, result, and failure reason must match the embedded final signed receipt."
+        }),
+    );
+}
+
 fn openapi_schemas() -> Map {
     let max_sumeragi_validators =
         u64::try_from(iroha_data_model::block::consensus_v2::MAX_VALIDATORS_PER_HEIGHT)
@@ -16417,6 +17111,7 @@ fn openapi_schemas() -> Map {
         }),
     );
     insert_vpn_schemas(&mut schemas);
+    insert_sorafs_proof_stream_schemas(&mut schemas);
     schemas.insert(
         "PositiveXorQuantity".to_owned(),
         norito::json!({
@@ -25016,6 +25711,433 @@ mod tests {
         );
     }
 
+    #[test]
+    fn proof_stream_openapi_matches_the_closed_canonical_envelope() {
+        let document = generate_spec();
+        let operation = openapi_operation(&document, "/v1/sorafs/proof/stream", "post");
+        assert_eq!(
+            operation_request_schema_ref(operation, "/v1/sorafs/proof/stream"),
+            "#/components/schemas/SorafsProofStreamHttpRequestV1"
+        );
+
+        let success_content = operation
+            .get("responses")
+            .and_then(Value::as_object)
+            .and_then(|responses| responses.get("200"))
+            .and_then(Value::as_object)
+            .and_then(|response| response.get("content"))
+            .and_then(Value::as_object)
+            .expect("proof-stream success content");
+        assert_eq!(
+            success_content
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["application/x-ndjson"]
+        );
+        assert_eq!(
+            success_content
+                .get("application/x-ndjson")
+                .and_then(Value::as_object)
+                .and_then(|media| media.get("x-iroha-ndjson-item-schema"))
+                .and_then(Value::as_object)
+                .and_then(|schema| schema.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsProofStreamItemV1")
+        );
+
+        let schemas = component_schemas(&document);
+        let storage_por_operation =
+            openapi_operation(&document, "/v1/sorafs/storage/por-sample", "post");
+        assert_eq!(
+            operation_request_schema_ref(storage_por_operation, "/v1/sorafs/storage/por-sample"),
+            "#/components/schemas/SorafsStoragePorSampleRequestV1"
+        );
+        let storage_por_request = schemas
+            .get("SorafsStoragePorSampleRequestV1")
+            .and_then(Value::as_object)
+            .expect("provider-bound storage PoR request schema");
+        assert_eq!(
+            storage_por_request
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert!(
+            storage_por_request
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("storage PoR required fields")
+                .iter()
+                .any(|field| field.as_str() == Some("provider_id_hex")),
+            "storage PoR requests must bind the configured provider"
+        );
+        assert_eq!(
+            storage_por_request
+                .get("properties")
+                .and_then(Value::as_object)
+                .and_then(|properties| properties.get("provider_id_hex"))
+                .and_then(Value::as_object)
+                .and_then(|provider| provider.get("pattern"))
+                .and_then(Value::as_str),
+            Some("^[0-9a-f]{64}$")
+        );
+        let aggregate = schemas
+            .get("SorafsProofStreamHttpRequestV1")
+            .and_then(Value::as_object)
+            .expect("canonical proof-stream request schema");
+        let variants = aggregate
+            .get("oneOf")
+            .and_then(Value::as_array)
+            .expect("proof-stream request variants")
+            .iter()
+            .map(|variant| {
+                variant
+                    .get("$ref")
+                    .and_then(Value::as_str)
+                    .expect("proof-stream request variant reference")
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            variants,
+            [
+                "#/components/schemas/SorafsProofStreamPorRequestV1",
+                "#/components/schemas/SorafsProofStreamPdpRequestV1",
+                "#/components/schemas/SorafsProofStreamPotrRequestV1",
+            ]
+        );
+
+        for (name, kind, required_field, allowed_kind_fields, forbidden_kind_fields) in [
+            (
+                "SorafsProofStreamPorRequestV1",
+                "por",
+                "sample_count",
+                &["sample_count", "sample_seed"][..],
+                &["challenge_id_hex", "deadline_ms", "orchestrator_job_id_hex"][..],
+            ),
+            (
+                "SorafsProofStreamPdpRequestV1",
+                "pdp",
+                "challenge_id_hex",
+                &["challenge_id_hex"][..],
+                &[
+                    "sample_count",
+                    "sample_seed",
+                    "deadline_ms",
+                    "orchestrator_job_id_hex",
+                ][..],
+            ),
+            (
+                "SorafsProofStreamPotrRequestV1",
+                "potr",
+                "deadline_ms",
+                &["deadline_ms", "orchestrator_job_id_hex"][..],
+                &["challenge_id_hex", "sample_count", "sample_seed"][..],
+            ),
+        ] {
+            let schema = schemas
+                .get(name)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{name} schema"));
+            assert_eq!(
+                schema.get("additionalProperties").and_then(Value::as_bool),
+                Some(false),
+                "{name} must reject unknown and alias fields"
+            );
+            let required = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("proof request required fields");
+            assert!(
+                required
+                    .iter()
+                    .any(|field| field.as_str() == Some(required_field)),
+                "{name} must require {required_field}"
+            );
+            if kind == "potr" {
+                assert!(
+                    required
+                        .iter()
+                        .any(|field| field.as_str() == Some("orchestrator_job_id_hex")),
+                    "PoTR must require the request-scope job id"
+                );
+            }
+            let properties = schema
+                .get("properties")
+                .and_then(Value::as_object)
+                .expect("proof request properties");
+            assert_eq!(
+                properties
+                    .get("proof_kind")
+                    .and_then(Value::as_object)
+                    .and_then(|kind_schema| kind_schema.get("const"))
+                    .and_then(Value::as_str),
+                Some(kind)
+            );
+            for field in allowed_kind_fields {
+                assert!(
+                    properties.contains_key(*field),
+                    "{name} must publish {field}"
+                );
+            }
+            for field in forbidden_kind_fields {
+                assert!(
+                    !properties.contains_key(*field),
+                    "{name} must not publish incompatible field {field}"
+                );
+            }
+            assert_eq!(
+                properties
+                    .get("nonce_b64")
+                    .and_then(Value::as_object)
+                    .and_then(|nonce| nonce.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^(?!A{22}==$)[A-Za-z0-9+/]{21}[AQgw]==$")
+            );
+        }
+
+        let por_properties = schemas
+            .get("SorafsProofStreamPorRequestV1")
+            .and_then(|schema| schema.get("properties"))
+            .and_then(Value::as_object)
+            .expect("PoR request properties");
+        assert_eq!(
+            por_properties
+                .get("sample_count")
+                .and_then(Value::as_object)
+                .and_then(|count| count.get("maximum"))
+                .and_then(Value::as_u64),
+            Some(500)
+        );
+
+        let por_proof = schemas
+            .get("SorafsPorProofV1")
+            .and_then(Value::as_object)
+            .expect("closed PoR proof schema");
+        assert_eq!(
+            por_proof
+                .get("additionalProperties")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            por_proof
+                .get("required")
+                .and_then(Value::as_array)
+                .expect("PoR proof required fields")
+                .iter()
+                .filter_map(Value::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "payload_len",
+                "chunk_index",
+                "chunk_offset",
+                "chunk_length",
+                "chunk_digest_hex",
+                "chunk_root_hex",
+                "segment_index",
+                "segment_offset",
+                "segment_length",
+                "segment_digest_hex",
+                "leaf_index",
+                "leaf_offset",
+                "leaf_length",
+                "leaf_bytes_hex",
+                "leaf_digest_hex",
+                "segment_leaves_hex",
+                "chunk_segments_hex",
+                "chunk_roots_hex",
+            ]
+        );
+        let proof_properties = por_proof
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("PoR proof properties");
+        for digest_field in [
+            "chunk_digest_hex",
+            "chunk_root_hex",
+            "segment_digest_hex",
+            "leaf_digest_hex",
+        ] {
+            assert_eq!(
+                proof_properties
+                    .get(digest_field)
+                    .and_then(Value::as_object)
+                    .and_then(|field| field.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{digest_field} must require canonical lowercase digest hex"
+            );
+        }
+        let leaf_bytes = proof_properties
+            .get("leaf_bytes_hex")
+            .and_then(Value::as_object)
+            .expect("PoR leaf bytes schema");
+        assert_eq!(
+            leaf_bytes.get("pattern").and_then(Value::as_str),
+            Some("^(?:[0-9a-f]{2})+$")
+        );
+        assert_eq!(
+            leaf_bytes.get("maxLength").and_then(Value::as_u64),
+            Some(8_192)
+        );
+        for (field, maximum) in [
+            ("chunk_index", 2_047),
+            ("chunk_length", 4_194_304),
+            ("segment_index", 63),
+            ("segment_length", 65_536),
+            ("leaf_index", 15),
+            ("leaf_length", 4_096),
+        ] {
+            assert_eq!(
+                proof_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("maximum"))
+                    .and_then(Value::as_u64),
+                Some(maximum),
+                "{field} must publish the self-verifying runtime bound"
+            );
+        }
+        for (field, maximum) in [
+            ("segment_leaves_hex", 16),
+            ("chunk_segments_hex", 64),
+            ("chunk_roots_hex", 2_048),
+        ] {
+            let array = proof_properties
+                .get(field)
+                .and_then(Value::as_object)
+                .unwrap_or_else(|| panic!("{field} schema"));
+            assert_eq!(
+                array.get("minItems").and_then(Value::as_u64),
+                Some(1),
+                "{field} must not accept an empty Merkle level"
+            );
+            assert_eq!(
+                array.get("maxItems").and_then(Value::as_u64),
+                Some(maximum),
+                "{field} must publish the runtime allocation bound"
+            );
+            assert_eq!(
+                array
+                    .get("items")
+                    .and_then(Value::as_object)
+                    .and_then(|items| items.get("pattern"))
+                    .and_then(Value::as_str),
+                Some("^[0-9a-f]{64}$"),
+                "{field} entries must use canonical lowercase digest hex"
+            );
+        }
+
+        let item = schemas
+            .get("SorafsProofStreamItemV1")
+            .and_then(Value::as_object)
+            .expect("proof-stream item schema");
+        let item_properties = item
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("proof-stream item properties");
+        assert_eq!(
+            item_properties
+                .get("proof")
+                .and_then(Value::as_object)
+                .and_then(|proof| proof.get("$ref"))
+                .and_then(Value::as_str),
+            Some("#/components/schemas/SorafsPorProofV1")
+        );
+        for field in ["deadline_ms", "recorded_at_ms"] {
+            assert_eq!(
+                item_properties
+                    .get(field)
+                    .and_then(Value::as_object)
+                    .and_then(|schema| schema.get("minimum"))
+                    .and_then(Value::as_u64),
+                Some(1),
+                "{field} must reject the zero value forbidden by signed PoTR receipts"
+            );
+        }
+        let receipt = item_properties
+            .get("receipt_b64")
+            .and_then(Value::as_object)
+            .expect("PoTR receipt schema");
+        assert_eq!(
+            receipt.get("pattern").and_then(Value::as_str),
+            Some("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
+        );
+        assert_eq!(
+            receipt
+                .get("x-iroha-runtime-validation")
+                .and_then(Value::as_object)
+                .and_then(|validation| validation.get("requireByteIdenticalCanonicalReencode"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            receipt
+                .get("x-iroha-runtime-validation")
+                .and_then(Value::as_object)
+                .and_then(|validation| validation.get("requireValidatedReceipt"))
+                .and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let kind_variants = item
+            .get("allOf")
+            .and_then(Value::as_array)
+            .and_then(|all_of| all_of.get(1))
+            .and_then(|kind_constraint| kind_constraint.get("oneOf"))
+            .and_then(Value::as_array)
+            .expect("proof-kind response variants");
+        for (kind, expected_reasons) in [
+            (
+                "pdp",
+                &[
+                    "deadline_expired",
+                    "submission_late",
+                    "future_timestamp",
+                    "invalid_proof",
+                    "admission_revoked",
+                    "admission_inactive",
+                    "storage_unavailable",
+                ][..],
+            ),
+            (
+                "potr",
+                &[
+                    "missed_deadline",
+                    "provider_error",
+                    "gateway_error",
+                    "client_cancelled",
+                ][..],
+            ),
+        ] {
+            let variant = kind_variants
+                .iter()
+                .find(|variant| {
+                    variant
+                        .get("properties")
+                        .and_then(|properties| properties.get("proof_kind"))
+                        .and_then(|proof_kind| proof_kind.get("const"))
+                        .and_then(Value::as_str)
+                        == Some(kind)
+                })
+                .unwrap_or_else(|| panic!("{kind} response variant"));
+            assert_eq!(
+                variant
+                    .get("properties")
+                    .and_then(|properties| properties.get("failure_reason"))
+                    .and_then(|reason| reason.get("enum"))
+                    .and_then(Value::as_array)
+                    .expect("kind-specific failure reasons")
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>(),
+                expected_reasons,
+                "{kind} must expose only its canonical terminal failure statuses"
+            );
+        }
+    }
+
     #[cfg(feature = "app_api")]
     #[test]
     fn account_onboarding_openapi_exposes_plan_and_receipt_apply_only() {
@@ -27799,9 +28921,24 @@ mod tests {
         assert!(paths.contains_key("/v1/sorafs/reputation/events/stream"));
         assert!(paths.contains_key("/v1/sorafs/reputation/events/ws"));
         assert!(!paths.contains_key("/ws/reputation"));
+        for repair_command_path in [
+            "/v1/sorafs/audit/repair/report",
+            "/v1/sorafs/audit/repair/slash",
+            "/v1/sorafs/audit/repair/claim",
+            "/v1/sorafs/audit/repair/heartbeat",
+            "/v1/sorafs/audit/repair/complete",
+            "/v1/sorafs/audit/repair/fail",
+            "/v1/sorafs/audit/repair/appeal",
+        ] {
+            assert!(paths.contains_key(repair_command_path));
+        }
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/status"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/tasks"));
+        assert!(paths.contains_key("/v1/sorafs/audit/repair/tasks/{ticket_id}"));
         assert!(paths.contains_key("/v1/sorafs/audit/repair/events"));
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
-        assert!(paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
+        assert!(!paths.contains_key("/v1/sorafs/audit/repair/status/{manifest_hex}"));
+        assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/stream"));
+        assert!(!paths.contains_key("/v1/sorafs/audit/repair/events/ws"));
         for unsupported_path in [
             "/v1/sorafs/capacity/por-challenge",
             "/v1/sorafs/capacity/por",

@@ -11,6 +11,8 @@ mod router;
 pub(crate) mod routing_ledger;
 
 use core::time::Duration;
+#[cfg(test)]
+use std::sync::Barrier;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
@@ -71,14 +73,20 @@ use iroha_primitives::{numeric::Quantity, time::TimeSource};
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 #[cfg(any(test, feature = "telemetry"))]
 use ivm::ProgramMetadata;
-use journal::{QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalRecordV1};
+#[cfg(test)]
+use journal::QueuePlanJournalTestFault;
+use journal::{
+    QueuePlanJournal, QueuePlanJournalFlush, QueuePlanJournalLimits, QueuePlanJournalRecordV2,
+};
 use mv::storage::StorageReadOnly;
 use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
 #[cfg(test)]
-use reservation_journal::ReservationJournalAppendFault;
+use reservation_journal::{
+    ReservationJournalAppendFault, ReservationJournalCompactionFault,
+};
 use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
@@ -625,9 +633,9 @@ pub enum LaneQueueReservationError {
         "lane queue reservation journal cannot be installed while queue selection is in flight"
     )]
     InflightSelection,
-    /// Reservation ownership is ambiguous after a failed durability boundary.
+    /// Queue ownership is ambiguous after a failed durability boundary.
     #[error(
-        "lane queue reservation durability is faulted; transaction selection is disabled until restart recovery"
+        "queue durability is faulted; transaction selection is disabled until restart recovery"
     )]
     DurabilityFault,
     /// Reservation identity is malformed: {0}.
@@ -793,19 +801,17 @@ impl LaneQueueReservationStore {
             .ok_or(LaneQueueReservationError::JournalNotInstalled)
     }
 
-    fn maybe_compact(&mut self) {
+    fn compact_if_needed(&mut self) -> std::io::Result<()> {
         let live: Vec<_> = self.live_by_hash.values().cloned().collect();
         let committed = self.commit_barriers.clone();
         let release_barriers = self.release_barriers.clone();
         let completed_releases = self.completed_releases.clone();
         let Some(journal) = self.journal.as_mut() else {
-            return;
+            return Ok(());
         };
-        if let Err(error) =
-            journal.compact_if_needed(&live, &committed, &release_barriers, &completed_releases)
-        {
-            warn!(%error, "failed to compact lane queue reservation journal");
-        }
+        journal
+            .compact_if_needed(&live, &committed, &release_barriers, &completed_releases)
+            .map(|_| ())
     }
 }
 
@@ -1101,6 +1107,8 @@ pub struct Queue {
     lane_reservations: parking_lot::Mutex<LaneQueueReservationStore>,
     /// Live sponsor-program capacity holds keyed by signed transaction hash.
     fee_admission_reservations: parking_lot::Mutex<FeeAdmissionReservationStore>,
+    /// Sticky process-lifetime fault after an ambiguous pending-plan journal boundary.
+    plan_journal_durability_fault: AtomicBool,
     /// Sticky process-lifetime fault after an ambiguous reservation ownership write.
     lane_reservation_durability_fault: AtomicBool,
     /// Hashes of transactions removed from `txs` but still present in `tx_hashes`
@@ -1109,6 +1117,10 @@ pub struct Queue {
     txs_per_user: DashMap<AccountId, usize>,
     /// Lock to synchronize push and remove operations
     push_remove_lock: parking_lot::Mutex<()>,
+    /// Deterministic test handoff between a durability precheck and its protected recheck.
+    #[cfg(test)]
+    durability_observer_lock_handoff:
+        parking_lot::Mutex<Option<QueueDurabilityObserverLockHandoff>>,
     /// Monotonic counter tagging test guards with their queue order.
     #[cfg(test)]
     guard_sequence: AtomicU64,
@@ -1329,13 +1341,26 @@ pub struct QueuePlanJournalReplaySummary {
 struct DeferredQueuePlanJournalFlush(QueuePlanJournalFlush);
 
 impl DeferredQueuePlanJournalFlush {
-    fn combine(&mut self, other: QueuePlanJournalFlush) {
-        self.0 = self.0.combine(other);
-    }
-
     fn is_needed(self) -> bool {
         self.0.is_needed()
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanJournalAdmissionMode {
+    Skip,
+    /// Require a durable Put when a journal is installed, but allow queues
+    /// deliberately constructed without pending-plan persistence.
+    OptionalDurable,
+    /// Require both an installed journal and a durable exact Put.
+    RequiredDurable,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct QueueDurabilityObserverLockHandoff {
+    reached: Arc<Barrier>,
+    resume: Arc<Barrier>,
 }
 
 struct PreparedQueueAdmission {
@@ -1751,6 +1776,18 @@ pub enum Error {
         /// Stable machine-readable invalid-configuration code.
         code: FeeRejectionCode,
         /// Reason describing which Nexus fee configuration entry is invalid.
+        reason: String,
+    },
+    /// Queue plan journal definitely did not admit the transaction: {reason}
+    PlanJournalDurabilityRejected {
+        /// Payload-free description of the journal availability or I/O failure.
+        reason: String,
+    },
+    /// Queue plan journal admission outcome is unknown for transaction {transaction_hash}: {reason}
+    PlanJournalDurabilityIndeterminate {
+        /// Exact signed transaction hash clients must use for reconciliation.
+        transaction_hash: HashOf<iroha_data_model::transaction::SignedTransaction>,
+        /// Payload-free description of the ambiguous journal boundary.
         reason: String,
     },
 }
@@ -2255,6 +2292,22 @@ impl Queue {
         max_bytes_before_compact: u64,
         durable_writes: bool,
     ) -> std::io::Result<usize> {
+        let max_frame_payload_bytes = self.max_retained_bytes.get().min(u64::from(u32::MAX));
+        let max_file_bytes = max_bytes_before_compact
+            .checked_add(self.max_retained_bytes.get())
+            .and_then(|bytes| bytes.checked_add(max_frame_payload_bytes))
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "queue plan journal file limit overflow",
+                )
+            })?;
+        let limits = QueuePlanJournalLimits::new(
+            max_bytes_before_compact,
+            max_frame_payload_bytes,
+            max_file_bytes,
+            self.capacity.get(),
+        );
         let replayable = {
             let mut installed = self.plan_journal.lock();
             if self.plan_journal_disabled.load(Ordering::Acquire) {
@@ -2269,7 +2322,7 @@ impl Queue {
                     "queue plan journal is already installed",
                 ));
             }
-            let journal = QueuePlanJournal::open(path, max_bytes_before_compact, durable_writes)?;
+            let journal = QueuePlanJournal::open_with_limits(path, limits, durable_writes)?;
             let replayable = journal.live_record_count()?;
             *installed = Some(journal);
             replayable
@@ -2496,7 +2549,7 @@ impl Queue {
         excluded_entrypoint_hashes: &BTreeSet<HashOf<TransactionEntrypoint>>,
         routing_mode: LaneQueueReservationRoutingMode,
     ) -> Result<Vec<LaneReservedTransaction>, LaneQueueReservationError> {
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         scope.validate()?;
@@ -2512,7 +2565,7 @@ impl Queue {
         let _ = self.sync_nexus_routing_with_state(state);
 
         let _queue_guard = self.push_remove_lock.lock();
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         // Revalidate after acquiring queue ownership as a defense against any
@@ -2658,6 +2711,10 @@ impl Queue {
             return Ok(Vec::new());
         }
 
+        #[cfg(feature = "telemetry")]
+        let backpressure_telemetry = Some(state.metrics());
+        #[cfg(not(feature = "telemetry"))]
+        let backpressure_telemetry = None;
         let mut store = self.lane_reservations.lock();
         for (record, ..) in &selected {
             store.ensure_no_conflict(&record.key)?;
@@ -2666,17 +2723,11 @@ impl Queue {
             .journal_mut()?
             .put_batch(selected.iter().map(|(record, ..)| record.clone()).collect())
         {
-            let durability_ambiguous = store
-                .journal
-                .as_ref()
-                .is_some_and(LaneQueueReservationJournal::durability_ambiguous);
+            let publish_fault =
+                self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
-            if durability_ambiguous {
-                #[cfg(feature = "telemetry")]
-                let telemetry = Some(state.metrics());
-                #[cfg(not(feature = "telemetry"))]
-                let telemetry = None;
-                self.mark_lane_reservation_durability_fault(&error, telemetry);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(backpressure_telemetry);
             }
             return Err(LaneQueueReservationError::Journal(error));
         }
@@ -2690,8 +2741,11 @@ impl Queue {
                 .live_by_hash
                 .insert(record.key.signed_transaction_hash, record.clone());
         }
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
         drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(backpressure_telemetry);
+        }
 
         Ok(selected
             .into_iter()
@@ -2716,9 +2770,15 @@ impl Queue {
         &self,
         key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         key.validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let store = self.lane_reservations.lock();
         store.ensure_no_conflict(key)?;
         Ok(if store.exact(key) {
@@ -2739,9 +2799,15 @@ impl Queue {
         &self,
         key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         key.validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut store = self.lane_reservations.lock();
         store.ensure_no_conflict(key)?;
         store.ensure_not_release_prepared(key)?;
@@ -2755,10 +2821,22 @@ impl Queue {
         self.validate_live_reservation_against_queue(&record)?;
         let restored_fifo =
             self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
-        store.journal_mut()?.release(*key)?;
+        if let Err(error) = store.journal_mut()?.release(*key) {
+            let publish_fault =
+                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            drop(store);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
+            }
+            return Err(LaneQueueReservationError::Journal(error));
+        }
         store.live_by_hash.remove(&key.signed_transaction_hash);
         self.replace_fifo_locked(&restored_fifo);
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         Ok(LaneQueueReservationOutcome::Finalized)
     }
 
@@ -2778,6 +2856,9 @@ impl Queue {
         &self,
         keys: &[LaneQueueReservationKeyV1],
     ) -> Result<usize, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut signed_hashes = BTreeSet::new();
         for key in keys {
             key.validate()
@@ -2791,6 +2872,9 @@ impl Queue {
         }
 
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut store = self.lane_reservations.lock();
         for key in keys {
             store.ensure_no_conflict(key)?;
@@ -2825,11 +2909,23 @@ impl Queue {
         let restored_fifo = self.fifo_with_released_reservations_locked(&released_records)?;
 
         for (key, _) in &records {
-            store.journal_mut()?.release(*key)?;
+            if let Err(error) = store.journal_mut()?.release(*key) {
+                let publish_fault =
+                    self.latch_lane_reservation_durability_fault_locked(&store, &error);
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(LaneQueueReservationError::Journal(error));
+            }
             store.live_by_hash.remove(&key.signed_transaction_hash);
         }
         self.replace_fifo_locked(&restored_fifo);
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         Ok(records.len())
     }
 
@@ -2852,7 +2948,7 @@ impl Queue {
             .validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let _queue_guard = self.push_remove_lock.lock();
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         let mut store = self.lane_reservations.lock();
@@ -2895,18 +2991,20 @@ impl Queue {
             ));
         }
         if let Err(error) = store.journal_mut()?.prepare_release(barrier.clone()) {
-            let ambiguous = store
-                .journal
-                .as_ref()
-                .is_some_and(LaneQueueReservationJournal::durability_ambiguous);
+            let publish_fault =
+                self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
-            if ambiguous {
-                self.mark_lane_reservation_durability_fault(&error, None);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
             }
             return Err(LaneQueueReservationError::Journal(error));
         }
         store.release_barriers.push(barrier.clone());
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         Ok(LaneQueueReservationOutcome::Finalized)
     }
 
@@ -2929,7 +3027,7 @@ impl Queue {
             .validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let _queue_guard = self.push_remove_lock.lock();
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return Err(LaneQueueReservationError::DurabilityFault);
         }
         let mut store = self.lane_reservations.lock();
@@ -2980,13 +3078,11 @@ impl Queue {
                 .validate()
                 .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
             if let Err(error) = store.journal_mut()?.complete_release(completion.clone()) {
-                let ambiguous = store
-                    .journal
-                    .as_ref()
-                    .is_some_and(LaneQueueReservationJournal::durability_ambiguous);
+                let publish_fault =
+                    self.latch_lane_reservation_durability_fault_locked(&store, &error);
                 drop(store);
-                if ambiguous {
-                    self.mark_lane_reservation_durability_fault(&error, None);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
                 }
                 return Err(LaneQueueReservationError::Journal(error));
             }
@@ -2999,18 +3095,18 @@ impl Queue {
         }
 
         if let Err(error) = self.finalize_one_completed_release_locked(&mut store, barrier) {
-            let ambiguous = store
-                .journal
-                .as_ref()
-                .is_some_and(LaneQueueReservationJournal::durability_ambiguous);
+            let publish_fault = self.lane_reservation_durability_faulted();
             drop(store);
-            if ambiguous && let LaneQueueReservationError::Journal(journal_error) = &error {
-                self.mark_lane_reservation_durability_fault(journal_error, None);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
             }
             return Err(error);
         }
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
         drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         self.publish_backpressure_state(self.active_len(), None);
         Ok(finalized)
     }
@@ -3046,9 +3142,15 @@ impl Queue {
         &self,
         key: &LaneQueueReservationKeyV1,
     ) -> Result<LaneQueueReservationOutcome, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         key.validate()
             .map_err(|reason| LaneQueueReservationError::InvalidIdentity(reason.to_owned()))?;
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut store = self.lane_reservations.lock();
         store.ensure_no_conflict(key)?;
         store.ensure_not_release_prepared(key)?;
@@ -3063,7 +3165,15 @@ impl Queue {
         let newly_committed = live_record.is_some();
         if let Some(record) = live_record.as_ref() {
             self.validate_live_reservation_against_queue(record)?;
-            store.journal_mut()?.commit(*key)?;
+            if let Err(error) = store.journal_mut()?.commit(*key) {
+                let publish_fault =
+                    self.latch_lane_reservation_durability_fault_locked(&store, &error);
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(LaneQueueReservationError::Journal(error));
+            }
             store.live_by_hash.remove(&key.signed_transaction_hash);
             if !store.commit_barriers.contains(key) {
                 store.commit_barriers.push(*key);
@@ -3085,8 +3195,11 @@ impl Queue {
                 // Keep the durable commit barrier indefinitely when no pending-plan journal is
                 // installed. If one is installed later, installation finalizes these barriers
                 // before any replay can make the old plan eligible.
-                store.maybe_compact();
+                let publish_fault = self.compact_lane_reservations_locked(&mut store);
                 drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
                 self.publish_backpressure_state(self.active_len(), None);
                 return Ok(if newly_committed {
                     LaneQueueReservationOutcome::Finalized
@@ -3095,23 +3208,33 @@ impl Queue {
                 });
             }
             Err(error) => {
-                store.maybe_compact();
+                let publish_fault = self.compact_lane_reservations_locked(&mut store);
                 drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
                 self.publish_backpressure_state(self.active_len(), None);
                 return Err(LaneQueueReservationError::Journal(error));
             }
         }
         if let Err(error) = store.journal_mut()?.forget_commit(*key) {
-            store.maybe_compact();
+            let publish_fault =
+                self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
+            }
             self.publish_backpressure_state(self.active_len(), None);
             return Err(LaneQueueReservationError::Journal(error));
         }
         store
             .commit_barriers
             .retain(|committed_key| committed_key != key);
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
         drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         self.publish_backpressure_state(self.active_len(), None);
         Ok(if newly_committed {
             LaneQueueReservationOutcome::Finalized
@@ -3136,6 +3259,9 @@ impl Queue {
     where
         F: FnMut(&LaneQueueReservationKeyV1) -> bool,
     {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut orphaned = Vec::new();
         for key in candidates {
             if matching_kura_payload_exists(key) {
@@ -3158,12 +3284,18 @@ impl Queue {
         lane_id: LaneId,
         lane_incarnation: Hash,
     ) -> Result<usize, LaneQueueReservationError> {
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         if hash_is_zero(lane_incarnation) {
             return Err(LaneQueueReservationError::InvalidIdentity(
                 "lane incarnation must be non-zero".to_owned(),
             ));
         }
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return Err(LaneQueueReservationError::DurabilityFault);
+        }
         let mut store = self.lane_reservations.lock();
         let records: Vec<_> = store
             .live_by_hash
@@ -3189,14 +3321,26 @@ impl Queue {
         let mut records = records;
         records.sort_by_key(|record| record.fifo_order.ordinal);
         let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;
-        store.journal_mut()?.prune(lane_id, lane_incarnation)?;
+        if let Err(error) = store.journal_mut()?.prune(lane_id, lane_incarnation) {
+            let publish_fault =
+                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            drop(store);
+            if publish_fault {
+                self.publish_latched_lane_reservation_durability_fault(None);
+            }
+            return Err(LaneQueueReservationError::Journal(error));
+        }
         for record in &records {
             store
                 .live_by_hash
                 .remove(&record.key.signed_transaction_hash);
         }
         self.replace_fifo_locked(&restored_fifo);
-        store.maybe_compact();
+        let publish_fault = self.compact_lane_reservations_locked(&mut store);
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
         Ok(records.len())
     }
 
@@ -3229,7 +3373,7 @@ impl Queue {
     ) -> bool {
         if keys.is_empty()
             || keys.len() > iroha_data_model::merge::MAX_MERGE_EXECUTION_ENTRYPOINTS
-            || self.lane_reservation_durability_faulted()
+            || self.transaction_selection_durability_faulted()
         {
             return false;
         }
@@ -3240,7 +3384,12 @@ impl Queue {
             return false;
         }
 
+        #[cfg(test)]
+        self.wait_for_durability_observer_lock_handoff_for_test();
         let store = self.lane_reservations.lock();
+        if self.transaction_selection_durability_faulted() {
+            return false;
+        }
         if store.journal.is_none() {
             return false;
         }
@@ -3282,10 +3431,15 @@ impl Queue {
         dataspace_id: DataSpaceId,
         lane_incarnation: Hash,
     ) -> bool {
-        if hash_is_zero(lane_incarnation) || self.lane_reservation_durability_faulted() {
+        if hash_is_zero(lane_incarnation) || self.transaction_selection_durability_faulted() {
             return true;
         }
+        #[cfg(test)]
+        self.wait_for_durability_observer_lock_handoff_for_test();
         let _queue_guard = self.push_remove_lock.lock();
+        if self.transaction_selection_durability_faulted() {
+            return true;
+        }
         let reservations = self.lane_reservations.lock();
         let exact_reservation = |key: &LaneQueueReservationKeyV1| {
             key.lane_id == lane_id
@@ -3349,6 +3503,12 @@ impl Queue {
         self.lane_reservations.lock().journal.is_some()
     }
 
+    /// Return whether pending-plan durability is ambiguous until restart recovery.
+    #[must_use]
+    pub fn plan_journal_durability_faulted(&self) -> bool {
+        self.plan_journal_durability_fault.load(Ordering::Acquire)
+    }
+
     /// Return whether transaction selection is disabled after an ambiguous reservation append.
     ///
     /// This fault is intentionally sticky for the process lifetime. Restart journal recovery is
@@ -3360,20 +3520,88 @@ impl Queue {
             .load(Ordering::Acquire)
     }
 
-    fn mark_lane_reservation_durability_fault(
+    /// Return whether any queue-ownership journal requires restart recovery.
+    #[must_use]
+    pub fn transaction_selection_durability_faulted(&self) -> bool {
+        self.plan_journal_durability_faulted() || self.lane_reservation_durability_faulted()
+    }
+
+    #[cfg(test)]
+    fn wait_for_durability_observer_lock_handoff_for_test(&self) {
+        let handoff = self.durability_observer_lock_handoff.lock().take();
+        if let Some(handoff) = handoff {
+            handoff.reached.wait();
+            handoff.resume.wait();
+        }
+    }
+
+    fn mark_plan_journal_durability_fault(
         &self,
         error: &std::io::Error,
         telemetry: Option<&StateTelemetry>,
     ) {
         if !self
-            .lane_reservation_durability_fault
+            .plan_journal_durability_fault
             .swap(true, Ordering::AcqRel)
         {
+            iroha_logger::error!(
+                %error,
+                "queue plan journal durability became ambiguous; disabling admission and transaction selection until restart recovery"
+            );
+        }
+        self.publish_backpressure_state(self.active_len(), telemetry);
+        status::set_tx_queue_pressure(self.pressure_snapshot());
+    }
+
+    /// Latch an ambiguous reservation-journal boundary while its store snapshot is locked.
+    ///
+    /// Returning `true` means callers must publish the resulting fail-closed backpressure state
+    /// only after releasing the reservation-store lock.
+    fn latch_lane_reservation_durability_fault_locked(
+        &self,
+        store: &LaneQueueReservationStore,
+        error: &std::io::Error,
+    ) -> bool {
+        if !store
+            .journal
+            .as_ref()
+            .is_some_and(LaneQueueReservationJournal::durability_ambiguous)
+        {
+            return false;
+        }
+        let newly_latched = !self
+            .lane_reservation_durability_fault
+            .swap(true, Ordering::AcqRel);
+        if newly_latched {
             iroha_logger::error!(
                 %error,
                 "lane queue reservation durability became ambiguous; disabling all transaction selection until restart recovery"
             );
         }
+        true
+    }
+
+    /// Compact the reservation journal and latch any ambiguous failure before the store unlocks.
+    ///
+    /// Compaction is maintenance after an already durable ownership transition, so a
+    /// non-ambiguous failure remains a warning rather than changing that operation's result.
+    /// Ambiguous failures poison all transaction selection until startup recovery.
+    fn compact_lane_reservations_locked(
+        &self,
+        store: &mut LaneQueueReservationStore,
+    ) -> bool {
+        let Err(error) = store.compact_if_needed() else {
+            return false;
+        };
+        warn!(%error, "failed to compact lane queue reservation journal");
+        self.latch_lane_reservation_durability_fault_locked(store, &error)
+    }
+
+    /// Publish a reservation durability fault after every reservation-store guard is released.
+    fn publish_latched_lane_reservation_durability_fault(
+        &self,
+        telemetry: Option<&StateTelemetry>,
+    ) {
         self.publish_backpressure_state(self.active_len(), telemetry);
         status::set_tx_queue_pressure(self.pressure_snapshot());
     }
@@ -3588,7 +3816,11 @@ impl Queue {
             };
             prepared.enqueued_at_ms = record.enqueue_timestamp_ms;
 
-            match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry, false) {
+            match self.enqueue_prepared_admissions(
+                vec![prepared],
+                backpressure_telemetry,
+                PlanJournalAdmissionMode::Skip,
+            ) {
                 Ok(notifications) => {
                     summary.replayed = summary.replayed.saturating_add(notifications.len());
                     self.publish_admission_notifications(&notifications);
@@ -3608,37 +3840,74 @@ impl Queue {
             Ok(())
         })?;
 
-        self.record_plan_journal_removes(journal_removals);
+        self.record_plan_journal_removes_durable(journal_removals)?;
         self.finalize_completed_releases()
             .map_err(std::io::Error::other)?;
 
         Ok(summary)
     }
 
-    fn record_plan_journal_put_deferred(
+    fn record_plan_journal_put_durable(
         &self,
         tx: &AcceptedTransaction<'_>,
         hash: SignedTxHash,
         routing_plan: &RoutingPlan,
         enqueue_timestamp_ms: u64,
-    ) -> DeferredQueuePlanJournalFlush {
+        required: bool,
+    ) -> Result<(), (std::io::Error, bool)> {
         let mut guard = self.plan_journal.lock();
         let Some(journal) = guard.as_mut() else {
-            return DeferredQueuePlanJournalFlush::default();
+            if !required {
+                return Ok(());
+            }
+            let reason = if self.plan_journal_disabled.load(Ordering::Acquire) {
+                "queue plan journal is disabled"
+            } else {
+                "queue plan journal startup is incomplete"
+            };
+            return Err((
+                std::io::Error::new(std::io::ErrorKind::NotConnected, reason),
+                false,
+            ));
         };
-        let record = QueuePlanJournalRecordV1::new(
+        let record = QueuePlanJournalRecordV2::new(
             tx.entrypoint().clone(),
             hash,
             routing_plan.clone(),
             enqueue_timestamp_ms,
         );
-        match journal.put_deferred_flush(record) {
-            Ok(flush) => DeferredQueuePlanJournalFlush(flush),
-            Err(error) => {
-                warn!(%error, tx = %hash, "failed to append queue plan journal put");
-                DeferredQueuePlanJournalFlush::default()
+        if let Err(error) = journal.put_strict_durable(record) {
+            let indeterminate = error.is_indeterminate();
+            let journal_faulted = error.journal_faulted();
+            let error = error.into_source();
+            drop(guard);
+            if journal_faulted {
+                self.mark_plan_journal_durability_fault(&error, None);
             }
+            return Err((error, indeterminate));
         }
+        Ok(())
+    }
+
+    #[cfg(test)]
+    fn inject_plan_journal_fault(&self, fault: QueuePlanJournalTestFault) {
+        self.plan_journal
+            .lock()
+            .as_ref()
+            .expect("queue plan journal must be installed before fault injection")
+            .inject_fault(fault);
+    }
+
+    #[cfg(test)]
+    fn inject_plan_journal_fault_script(
+        &self,
+        faults: impl IntoIterator<Item = QueuePlanJournalTestFault>,
+    ) {
+        self.plan_journal
+            .lock()
+            .as_ref()
+            .expect("queue plan journal must be installed before fault injection")
+            .inject_fault_script(faults);
     }
 
     fn record_plan_journal_remove(&self, hash: SignedTxHash, routing_plan: &RoutingPlan) {
@@ -3664,10 +3933,18 @@ impl Queue {
                 PlanJournalDurability::StartupPending
             });
         };
-        let _ = journal.remove_many_deferred_flush([(hash, plan_digest)])?;
+        if let Err(error) = journal.remove_many_deferred_flush([(hash, plan_digest)]) {
+            drop(guard);
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(error);
+        }
         // Forgetting the reservation Commit barrier depends on this exact tombstone surviving
         // power loss, including file-length metadata and the journal directory entry.
-        journal.sync_all_with_parent()?;
+        if let Err(error) = journal.sync_all_with_parent() {
+            drop(guard);
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(error);
+        }
         Ok(PlanJournalDurability::Synced)
     }
 
@@ -3687,14 +3964,37 @@ impl Queue {
             Ok(flush) => DeferredQueuePlanJournalFlush(flush),
             Err(error) => {
                 warn!(%error, removed, "failed to append queue plan journal removes");
+                drop(guard);
+                self.mark_plan_journal_durability_fault(&error, None);
                 DeferredQueuePlanJournalFlush::default()
             }
         }
     }
 
-    fn record_plan_journal_removes(&self, removals: Vec<(SignedTxHash, Hash)>) {
-        let flush = self.record_plan_journal_removes_deferred(removals);
-        self.flush_plan_journal_deferred(flush);
+    fn record_plan_journal_removes_durable(
+        &self,
+        removals: Vec<(SignedTxHash, Hash)>,
+    ) -> std::io::Result<()> {
+        if removals.is_empty() {
+            return Ok(());
+        }
+        let mut guard = self.plan_journal.lock();
+        let journal = guard.as_mut().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "queue plan journal is not installed during startup replay",
+            )
+        })?;
+        let result = journal
+            .remove_many_deferred_flush(removals)
+            .and_then(|_| journal.sync_all_with_parent())
+            .and_then(|_| journal.compact_if_needed());
+        if let Err(error) = result {
+            drop(guard);
+            self.mark_plan_journal_durability_fault(&error, None);
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn flush_plan_journal_deferred(&self, flush: DeferredQueuePlanJournalFlush) {
@@ -3710,6 +4010,8 @@ impl Queue {
                 Ok(file) => Some(file),
                 Err(error) => {
                     warn!(%error, "failed to clone queue plan journal sync handle");
+                    drop(guard);
+                    self.mark_plan_journal_durability_fault(&error, None);
                     None
                 }
             }
@@ -3720,6 +4022,7 @@ impl Queue {
             && let Err(error) = file.sync_data()
         {
             warn!(%error, "failed to sync queue plan journal");
+            self.mark_plan_journal_durability_fault(&error, None);
         }
         if flush.0.compact() {
             let mut guard = self.plan_journal.lock();
@@ -3728,6 +4031,8 @@ impl Queue {
             };
             if let Err(error) = journal.compact_if_needed() {
                 warn!(%error, "failed to compact queue plan journal");
+                drop(guard);
+                self.mark_plan_journal_durability_fault(&error, None);
             }
         }
     }
@@ -4719,8 +5024,11 @@ impl Queue {
                 fee_admission_reservations: parking_lot::Mutex::new(
                     FeeAdmissionReservationStore::default(),
                 ),
+                plan_journal_durability_fault: AtomicBool::new(false),
                 lane_reservation_durability_fault: AtomicBool::new(false),
                 push_remove_lock: parking_lot::Mutex::new(()),
+                #[cfg(test)]
+                durability_observer_lock_handoff: parking_lot::Mutex::new(None),
                 #[cfg(test)]
                 guard_sequence: AtomicU64::new(0),
                 inflight_guards: AtomicUsize::new(0),
@@ -5609,6 +5917,7 @@ impl Queue {
             routing_plan,
             &mut state_access,
             gossip_payload,
+            PlanJournalAdmissionMode::OptionalDurable,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )
@@ -5625,7 +5934,13 @@ impl Queue {
         state: &State,
         gossip_payload: Option<Arc<Vec<u8>>>,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, None, gossip_payload)
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            None,
+            gossip_payload,
+            PlanJournalAdmissionMode::OptionalDurable,
+        )
     }
 
     #[allow(clippy::too_many_lines)]
@@ -5635,6 +5950,7 @@ impl Queue {
         state: &State,
         routing_plan: Option<RoutingPlan>,
         gossip_payload: Option<Arc<Vec<u8>>>,
+        plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<RoutingDecision, Failure> {
         let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
         let nexus = self.sync_nexus_routing_with_state(state);
@@ -5700,6 +6016,7 @@ impl Queue {
             routing_plan,
             &mut state_access,
             gossip_payload,
+            plan_journal_mode,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
         )
@@ -5713,6 +6030,7 @@ impl Queue {
         routing_plan: RoutingPlan,
         state_access: &mut C,
         gossip_payload: Option<Arc<Vec<u8>>>,
+        plan_journal_mode: PlanJournalAdmissionMode,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
         let routing_decision = routing_plan.coordinator_route();
@@ -5729,7 +6047,11 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
 
-        match self.enqueue_prepared_admissions(vec![prepared], backpressure_telemetry, true) {
+        match self.enqueue_prepared_admissions(
+            vec![prepared],
+            backpressure_telemetry,
+            plan_journal_mode,
+        ) {
             Ok(notifications) => {
                 self.publish_admission_notifications(&notifications);
                 Ok(routing_decision)
@@ -6107,18 +6429,36 @@ impl Queue {
         &self,
         prepared: Vec<PreparedQueueAdmission>,
         telemetry: Option<&StateTelemetry>,
-        record_plan_journal: bool,
+        plan_journal_mode: PlanJournalAdmissionMode,
     ) -> Result<Vec<QueueAdmissionNotification>, (Vec<QueueAdmissionNotification>, Failure)> {
         let mut notifications = Vec::with_capacity(prepared.len());
         let mut failure = None;
         let batch_duplicate_idx = first_batch_duplicate_index(&prepared);
-        let mut journal_flush = DeferredQueuePlanJournalFlush::default();
         #[cfg(feature = "telemetry")]
         let mut dirty_teu_lanes = BTreeSet::new();
         #[cfg(feature = "telemetry")]
         let mut dirty_teu_dataspaces = BTreeSet::new();
         {
             let _guard = self.push_remove_lock.lock();
+            if plan_journal_mode != PlanJournalAdmissionMode::Skip
+                && self.transaction_selection_durability_faulted()
+                && let Some(admission) = prepared.first()
+            {
+                let reason = if self.plan_journal_durability_faulted() {
+                    "queue plan journal is faulted; restart recovery is required"
+                } else {
+                    "queue reservation journal is faulted; restart recovery is required"
+                };
+                return Err((
+                    notifications,
+                    Failure {
+                        tx: admission.checked.as_accepted().clone().into(),
+                        err: Error::PlanJournalDurabilityRejected {
+                            reason: reason.to_owned(),
+                        },
+                    },
+                ));
+            }
             let base_len = self.active_len();
             let capacity = self.capacity.get();
             let base_retained_bytes = self.retained_bytes();
@@ -6312,14 +6652,66 @@ impl Queue {
                 }
                 self.insert_tx_encoded_len(hash, encoded_len);
                 self.tx_gas_cost.insert(hash, proposal_gas_cost);
-                if record_plan_journal {
-                    let flush = self.record_plan_journal_put_deferred(
-                        tx_arc.as_accepted(),
-                        hash,
-                        &routing_plan,
-                        enqueued_at_ms,
+                let journal_result = match plan_journal_mode {
+                    PlanJournalAdmissionMode::Skip => Ok(()),
+                    PlanJournalAdmissionMode::OptionalDurable => self
+                        .record_plan_journal_put_durable(
+                            tx_arc.as_accepted(),
+                            hash,
+                            &routing_plan,
+                            enqueued_at_ms,
+                            false,
+                        ),
+                    PlanJournalAdmissionMode::RequiredDurable => self
+                        .record_plan_journal_put_durable(
+                            tx_arc.as_accepted(),
+                            hash,
+                            &routing_plan,
+                            enqueued_at_ms,
+                            true,
+                        ),
+                };
+                if let Err((error, indeterminate)) = journal_result {
+                    warn!(
+                        tx = %hash,
+                        %error,
+                        "queue admission failed before durable acknowledgement"
                     );
-                    journal_flush.combine(flush.0);
+                    let failed_tx = tx_arc.as_accepted().clone();
+                    let removed = HashSet::from([hash]);
+                    self.remove_hashes_from_fifo_locked(&removed);
+                    if self.txs.remove(&hash).is_some() {
+                        self.untrack_active_transaction();
+                    }
+                    if fee_reserved {
+                        self.fee_admission_reservations.lock().release(&hash);
+                    }
+                    if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                        routing_ledger::discard_plan_if_matches(&hash, &plan);
+                    } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                    }
+                    self.routing_decisions.remove(&hash);
+                    self.remove_tx_encoded_len(&hash);
+                    self.tx_gas_cost.remove(&hash);
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.fifo_order_by_hash.remove(&hash);
+                    self.remove_queued_age(&hash);
+                    let err = if indeterminate {
+                        Error::PlanJournalDurabilityIndeterminate {
+                            transaction_hash: hash,
+                            reason: error.to_string(),
+                        }
+                    } else {
+                        Error::PlanJournalDurabilityRejected {
+                            reason: error.to_string(),
+                        }
+                    };
+                    failure = Some(Failure {
+                        tx: Box::new(failed_tx),
+                        err,
+                    });
+                    break;
                 }
                 drop(tx_arc);
                 self.track_expiry_hash(hash);
@@ -6350,7 +6742,6 @@ impl Queue {
             }
             self.apply_per_user_tx_count_increments(applied_user_increments);
         }
-        self.flush_plan_journal_deferred(journal_flush);
         if let Err(error) = self.finalize_completed_releases() {
             let ambiguous = self
                 .lane_reservations
@@ -6476,6 +6867,7 @@ impl Queue {
             state,
             Some(routing_plan),
             gossip_payload,
+            PlanJournalAdmissionMode::OptionalDurable,
         )
         .map(|_| ())
     }
@@ -6526,7 +6918,33 @@ impl Queue {
         state: &State,
         routing_plan: RoutingPlan,
     ) -> Result<RoutingDecision, Failure> {
-        self.push_with_lane_internal_with_state_and_routing(tx, state, Some(routing_plan), None)
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            None,
+            PlanJournalAdmissionMode::OptionalDurable,
+        )
+    }
+
+    /// Push a transaction using a caller-provided routing plan and acknowledge only after its
+    /// exact pending-plan record crosses a file-and-directory durability boundary.
+    ///
+    /// # Errors
+    /// Fails closed when the queue plan journal is unavailable or its append/sync fails.
+    pub fn push_with_lane_with_state_and_routing_plan_strict_durable(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        routing_plan: RoutingPlan,
+    ) -> Result<RoutingDecision, Failure> {
+        self.push_with_lane_internal_with_state_and_routing(
+            tx,
+            state,
+            Some(routing_plan),
+            None,
+            PlanJournalAdmissionMode::RequiredDurable,
+        )
     }
 
     /// Push an input-ordered batch of accepted transactions using caller-provided full routing
@@ -6616,7 +7034,11 @@ impl Queue {
             }
         }
 
-        match self.enqueue_prepared_admissions(prepared, backpressure_telemetry, true) {
+        match self.enqueue_prepared_admissions(
+            prepared,
+            backpressure_telemetry,
+            PlanJournalAdmissionMode::OptionalDurable,
+        ) {
             Ok(notifications) => {
                 let accepted = notifications.len();
                 self.publish_admission_notifications(&notifications);
@@ -6721,9 +7143,17 @@ impl Queue {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
         let enqueue_at_ms = Self::duration_to_millis(self.time_source.get_unix_time());
-        let mut journal_flush = DeferredQueuePlanJournalFlush::default();
         {
             let _guard = self.push_remove_lock.lock();
+            if self.transaction_selection_durability_faulted() {
+                return Err(Failure {
+                    tx: Box::new(checked.into_accepted()),
+                    err: Error::PlanJournalDurabilityRejected {
+                        reason: "queue durability is faulted; restart recovery is required"
+                            .to_owned(),
+                    },
+                });
+            }
             let restored_reservation =
                 match self.restored_reservation_matches_admission(hash, &checked, &routing_plan) {
                     Ok(restored) => restored,
@@ -6836,13 +7266,53 @@ impl Queue {
             }
             self.insert_tx_encoded_len(hash, encoded_len);
             self.tx_gas_cost.insert(hash, proposal_gas_cost);
-            let flush = self.record_plan_journal_put_deferred(
+            if let Err((error, indeterminate)) = self.record_plan_journal_put_durable(
                 tx_arc.as_accepted(),
                 hash,
                 &routing_plan,
                 enqueue_at_ms,
-            );
-            journal_flush.combine(flush.0);
+                false,
+            ) {
+                warn!(
+                    tx = %hash,
+                    %error,
+                    "consensus requeue failed before durable queue ownership"
+                );
+                let failed_tx = tx_arc.as_accepted().clone();
+                self.remove_hashes_from_fifo_locked(&HashSet::from([hash]));
+                if self.txs.remove(&hash).is_some() {
+                    self.untrack_active_transaction();
+                }
+                self.fee_admission_reservations.lock().release(&hash);
+                if let Some((_, plan)) = self.routing_plans.remove(&hash) {
+                    routing_ledger::discard_plan_if_matches(&hash, &plan);
+                } else if let Some((_, decision)) = self.routing_decisions.remove(&hash) {
+                    routing_ledger::discard_if_matches(&hash, decision);
+                }
+                self.routing_decisions.remove(&hash);
+                self.remove_tx_encoded_len(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.fifo_order_by_hash.remove(&hash);
+                self.remove_queued_age(&hash);
+                if let Some(authority) = failed_tx.authority_opt() {
+                    self.decrease_per_user_tx_count(authority);
+                }
+                self.publish_backpressure_state(self.active_len(), backpressure_telemetry);
+                return Err(Failure {
+                    tx: Box::new(failed_tx),
+                    err: if indeterminate {
+                        Error::PlanJournalDurabilityIndeterminate {
+                            transaction_hash: hash,
+                            reason: error.to_string(),
+                        }
+                    } else {
+                        Error::PlanJournalDurabilityRejected {
+                            reason: error.to_string(),
+                        }
+                    },
+                });
+            }
             drop(tx_arc);
             self.track_expiry_hash(hash);
             #[cfg(feature = "telemetry")]
@@ -6857,7 +7327,6 @@ impl Queue {
                 );
             }
         }
-        self.flush_plan_journal_deferred(journal_flush);
         #[cfg(feature = "telemetry")]
         self.publish_teu_backlog_metric_keys(
             Some(telemetry_handle),
@@ -7388,7 +7857,7 @@ impl Queue {
         &self,
         backpressure_telemetry: Option<&StateTelemetry>,
     ) -> bool {
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return false;
         }
         if !self.tx_hashes.is_empty() || self.active_len() == 0 {
@@ -7399,7 +7868,7 @@ impl Queue {
         }
 
         let _guard = self.push_remove_lock.lock();
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return false;
         }
         if !self.tx_hashes.is_empty() || self.active_len() == 0 {
@@ -8235,7 +8704,7 @@ impl Queue {
 
     fn pop_queued_hash(&self) -> Option<SignedTxHash> {
         let _queue_guard = self.push_remove_lock.lock();
-        if self.lane_reservation_durability_faulted() {
+        if self.transaction_selection_durability_faulted() {
             return None;
         }
         let live_reservations = self.lane_reservations.lock().live_hashes();
@@ -8343,9 +8812,9 @@ impl Queue {
         let oldest_queued_tx_age_ms = self.oldest_queued_tx_age_ms();
         // Backpressure has no legacy durability-fault dimension. Project the sticky fail-closed
         // state onto count saturation so every existing admission, status, and consensus consumer
-        // remains stopped; `lane_reservation_durability_faulted` exposes the exact diagnosis.
-        let saturated_by_count =
-            self.lane_reservation_durability_faulted() || tracked_tx_count >= self.capacity.get();
+        // remains stopped; the component fault accessors expose the exact diagnosis.
+        let saturated_by_count = self.transaction_selection_durability_faulted()
+            || tracked_tx_count >= self.capacity.get();
         let saturated_by_bytes =
             retained_bytes.saturating_add(TX_RETAINED_OVERHEAD_BYTES) > max_retained_bytes.get();
         let age_budget_ms = self.pressure_age_budget_ms.load(Ordering::Relaxed);
@@ -12959,6 +13428,765 @@ pub mod tests {
     }
 
     #[test]
+    fn strict_queue_plan_journal_admission_replays_exact_transaction_after_restart() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict_queue_plan_journal.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, false)
+            .expect("install journal");
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let entrypoint = tx.entrypoint().clone();
+        let entrypoint_bytes =
+            norito::to_bytes(&entrypoint).expect("encode exact submitted entrypoint");
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan.clone())
+            .expect("strict durable admission");
+
+        // Reopen before the admitted queue (and its file handle) is dropped. This models a crash
+        // at the acknowledgement boundary: replay must not depend on a graceful close flush.
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, false)
+                .expect("install replay journal"),
+            1
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay strict journal");
+
+        assert_eq!(summary.records, 1);
+        assert_eq!(summary.replayed, 1);
+        let replayed = replay_queue.txs.get(&hash).expect("replayed transaction");
+        assert_eq!(replayed.value().as_accepted().entrypoint(), &entrypoint);
+        assert_eq!(
+            norito::to_bytes(replayed.value().as_accepted().entrypoint())
+                .expect("encode replayed entrypoint"),
+            entrypoint_bytes,
+            "crash replay must preserve byte-identical caller-signed transaction material"
+        );
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&hash)
+                .expect("replayed routing plan"),
+            plan
+        );
+    }
+
+    #[test]
+    fn strict_queue_plan_journal_rejects_when_uninstalled_or_explicitly_disabled() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+
+        let startup_pending = accepted_tx_by_someone(&time_source);
+        let startup_pending_plan = queue
+            .route_plan_with_state(&startup_pending, &state)
+            .expect("route startup-pending transaction");
+        let startup_pending_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(
+                startup_pending,
+                &state,
+                startup_pending_plan,
+            )
+            .expect_err("strict admission requires an installed journal");
+        assert!(matches!(
+            startup_pending_error.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason.contains("startup is incomplete")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert!(!queue.plan_journal_durability_faulted());
+
+        queue
+            .finalize_plan_journal_startup_disabled()
+            .expect("finalize journal-disabled startup");
+        let disabled = accepted_tx_by_someone(&time_source);
+        let disabled_plan = queue
+            .route_plan_with_state(&disabled, &state)
+            .expect("route journal-disabled transaction");
+        let disabled_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(
+                disabled,
+                &state,
+                disabled_plan,
+            )
+            .expect_err("strict admission must reject an explicitly disabled journal");
+        assert!(matches!(
+            disabled_error.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason.contains("journal is disabled")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert!(
+            !queue.plan_journal_durability_faulted(),
+            "known journal absence is not a durability ambiguity"
+        );
+    }
+
+    #[test]
+    fn journal_enabled_optional_admission_faults_never_acknowledge_and_recover_zero_or_one_owner() {
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let cases = [
+            (
+                "prewrite",
+                vec![QueuePlanJournalTestFault::PutBeforeAppend],
+                false,
+                0,
+            ),
+            (
+                "partial",
+                vec![QueuePlanJournalTestFault::PutPartialWrite],
+                false,
+                0,
+            ),
+            (
+                "put-sync-cleanup",
+                vec![QueuePlanJournalTestFault::PutSync],
+                false,
+                0,
+            ),
+            (
+                "cleanup-prewrite",
+                vec![
+                    QueuePlanJournalTestFault::PutSync,
+                    QueuePlanJournalTestFault::CleanupBeforeAppend,
+                ],
+                true,
+                1,
+            ),
+        ];
+
+        for (label, faults, expect_indeterminate, expected_replayable) in cases {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let journal_path = dir.path().join(format!("optional-{label}.norito"));
+            let queue = Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::clone(&router),
+                &[],
+            );
+            queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("install optional-admission journal");
+            queue.inject_plan_journal_fault_script(faults);
+
+            let tx = accepted_tx_by_someone(&time_source);
+            let hash = tx.hash();
+            let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+            let error = queue
+                .push_with_lane_with_state_and_routing_plan(tx, &state, plan)
+                .expect_err("journal-enabled optional admission must propagate durability faults");
+
+            match error.err {
+                Error::PlanJournalDurabilityIndeterminate {
+                    transaction_hash, ..
+                } => {
+                    assert!(
+                        expect_indeterminate,
+                        "unexpected indeterminate outcome for {label}"
+                    );
+                    assert_eq!(transaction_hash, hash);
+                }
+                Error::PlanJournalDurabilityRejected { .. } => assert!(
+                    !expect_indeterminate,
+                    "unexpected definite rejection for {label}"
+                ),
+                other => panic!("unexpected optional-admission error for {label}: {other:?}"),
+            }
+            assert_eq!(queue.active_len(), 0, "failed admission leaked for {label}");
+            assert!(
+                !queue.txs.contains_key(&hash),
+                "failed admission retained process ownership for {label}"
+            );
+            drop(queue);
+
+            let replay_queue = Queue::test_with_router_for_routes(
+                config_factory(),
+                &time_source,
+                Arc::clone(&router),
+                &[],
+            );
+            assert_eq!(
+                replay_queue
+                    .install_plan_journal(&journal_path, 1024 * 1024, true)
+                    .expect("repair and reopen optional-admission journal"),
+                expected_replayable,
+                "unexpected recovered live record count for {label}"
+            );
+            let summary = replay_queue
+                .replay_plan_journal(&state)
+                .expect("reconcile optional-admission journal");
+            assert_eq!(summary.replayed, expected_replayable);
+            assert_eq!(replay_queue.active_len(), expected_replayable);
+            assert_eq!(
+                replay_queue.txs.contains_key(&hash),
+                expected_replayable == 1,
+                "restart ownership must match exact durable evidence for {label}"
+            );
+        }
+    }
+
+    #[test]
+    fn strict_queue_plan_journal_write_failure_rejects_without_live_record() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict_queue_plan_write_failure.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::PutPartialWrite);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        let error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+            .expect_err("injected journal write failure must reject");
+
+        assert!(matches!(
+            error.err,
+            Error::PlanJournalDurabilityRejected { .. }
+        ));
+        let next_tx = accepted_tx_by_someone(&time_source);
+        let next_plan = queue
+            .route_plan_with_state(&next_tx, &state)
+            .expect("route after write failure");
+        let next_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(next_tx, &state, next_plan)
+            .expect_err("a torn journal tail must poison later strict admission");
+        assert!(matches!(
+            next_error.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason.contains("restart recovery is required")
+        ));
+        assert_eq!(queue.active_len(), 0);
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen journal after write failure"),
+            0
+        );
+    }
+
+    #[test]
+    fn strict_queue_plan_journal_sync_failure_rejects_and_tombstones_put() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("strict_queue_plan_sync_failure.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+        queue.inject_plan_journal_fault(QueuePlanJournalTestFault::PutSync);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        let error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+            .expect_err("injected journal sync failure must reject");
+
+        assert!(matches!(
+            error.err,
+            Error::PlanJournalDurabilityRejected { .. }
+        ));
+        assert_eq!(queue.active_len(), 0);
+        assert!(
+            !queue.plan_journal_durability_faulted(),
+            "a durably synchronized cleanup proves the failed Put is not live"
+        );
+
+        let next_tx = accepted_tx_by_someone(&time_source);
+        let next_hash = next_tx.hash();
+        let next_plan = queue
+            .route_plan_with_state(&next_tx, &state)
+            .expect("route after durable cleanup");
+        queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(next_tx, &state, next_plan)
+            .expect("a durable cleanup must leave strict admission healthy");
+        assert_eq!(queue.active_len(), 1);
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen journal after sync failure"),
+            1,
+            "only the later acknowledged transaction may remain replayable"
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay journal after durable cleanup");
+        assert_eq!(summary.replayed, 1);
+        assert!(replay_queue.txs.contains_key(&next_hash));
+    }
+
+    #[test]
+    fn strict_queue_plan_journal_cleanup_prewrite_failure_is_unknown_and_replays_exact_put() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir
+            .path()
+            .join("strict_queue_plan_cleanup_prewrite_failure.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router.clone(), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+        queue.inject_plan_journal_fault_script([
+            QueuePlanJournalTestFault::PutSync,
+            QueuePlanJournalTestFault::CleanupBeforeAppend,
+        ]);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.hash();
+        let entrypoint = tx.entrypoint().clone();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        let error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan.clone())
+            .expect_err("missing cleanup must make the exact Put outcome unknown");
+
+        assert!(matches!(
+            error.err,
+            Error::PlanJournalDurabilityIndeterminate {
+                transaction_hash,
+                ..
+            } if transaction_hash == hash
+        ));
+        assert!(queue.plan_journal_durability_faulted());
+        assert_eq!(
+            queue.active_len(),
+            0,
+            "the uncertain admission must relinquish in-memory queue ownership"
+        );
+        drop(queue);
+
+        let replay_queue =
+            Queue::test_with_router_for_routes(config_factory(), &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen outcome-unknown journal"),
+            1,
+            "the complete Put must survive when cleanup never started"
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("reconcile outcome-unknown Put");
+        assert_eq!(summary.replayed, 1);
+        let replayed = replay_queue
+            .txs
+            .get(&hash)
+            .expect("reconciled exact transaction");
+        assert_eq!(replayed.value().as_accepted().entrypoint(), &entrypoint);
+        assert_eq!(
+            *replay_queue
+                .routing_plans
+                .get(&hash)
+                .expect("reconciled exact routing plan"),
+            plan
+        );
+    }
+
+    #[test]
+    fn strict_queue_plan_journal_rollback_sync_failure_is_indeterminate_and_faults_queue() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir
+            .path()
+            .join("strict_queue_plan_rollback_sync_failure.norito");
+        let mut state = State::new(
+            world_with_test_domains(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let queue = Arc::new(Queue::test_with_router_for_routes(
+            config_factory(),
+            &time_source,
+            router,
+            &[],
+        ));
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install journal");
+
+        let already_queued = accepted_tx_by_someone(&time_source);
+        let already_queued_hash = already_queued.hash();
+        let already_queued_plan = queue
+            .route_plan_with_state(&already_queued, &state)
+            .expect("route existing transaction");
+        queue
+            .push_with_lane_with_state_and_routing_plan(already_queued, &state, already_queued_plan)
+            .expect("admit existing transaction before durability fault");
+        queue.inject_plan_journal_fault_script([
+            QueuePlanJournalTestFault::PutSync,
+            QueuePlanJournalTestFault::CleanupSync,
+        ]);
+
+        let tx = accepted_tx_by_someone(&time_source);
+        let hash = tx.as_ref().hash();
+        let plan = queue.route_plan_with_state(&tx, &state).expect("route");
+        let error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(tx, &state, plan)
+            .expect_err("failed put and rollback syncs must be indeterminate");
+
+        assert!(matches!(
+            error.err,
+            Error::PlanJournalDurabilityIndeterminate {
+                transaction_hash,
+                ..
+            } if transaction_hash == hash
+        ));
+        assert!(queue.plan_journal_durability_faulted());
+        assert!(queue.transaction_selection_durability_faulted());
+        assert_eq!(
+            queue.active_len(),
+            1,
+            "the failed strict admission must not disturb earlier queue ownership"
+        );
+        assert!(
+            queue.pressure_snapshot().saturated_by_count,
+            "sticky durability ambiguity must surface through the bounded pressure snapshot"
+        );
+        assert!(
+            queue.current_backpressure().is_saturated(),
+            "the published backpressure state must stop upstream admission"
+        );
+        assert_eq!(
+            queue.pop_queued_hash(),
+            None,
+            "global selection must remain stopped while journal outcome is ambiguous"
+        );
+        assert!(
+            queue.txs.contains_key(&already_queued_hash),
+            "stopped selection must retain the earlier transaction"
+        );
+        assert!(
+            queue.lane_has_pending_work(
+                LaneId::new(97),
+                DataSpaceId::new(97),
+                Hash::new(b"queue-plan-journal-fault-drain-probe"),
+            ),
+            "drain validation must fail closed for every lane while ownership is ambiguous"
+        );
+        let mut global = Vec::new();
+        queue.get_transactions_for_block_with_state(&state, nonzero!(1_usize), &mut global);
+        assert!(
+            global.is_empty(),
+            "the public global carrier selection path must remain stopped"
+        );
+        assert!(matches!(
+            queue.reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"plan-journal-fault-owner",
+                    b"plan-journal-fault-proposal",
+                ),
+                nonzero!(1_usize),
+            ),
+            Err(LaneQueueReservationError::DurabilityFault)
+        ));
+        assert!(
+            queue.txs.contains_key(&already_queued_hash),
+            "neither public selection path may consume earlier ordinary ownership"
+        );
+
+        let next_tx = accepted_tx_by_someone(&time_source);
+        let next_plan = queue
+            .route_plan_with_state(&next_tx, &state)
+            .expect("route after indeterminate durability");
+        let next_error = queue
+            .push_with_lane_with_state_and_routing_plan_strict_durable(next_tx, &state, next_plan)
+            .expect_err("sticky durability fault must reject later admission");
+        assert!(matches!(
+            next_error.err,
+            Error::PlanJournalDurabilityRejected { ref reason }
+                if reason.contains("restart recovery is required")
+        ));
+    }
+
+    #[test]
+    fn queue_plan_journal_replay_tombstones_malformed_committed_expired_and_rejected_records() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let journal_path = dir.path().join("queue_plan_replay_outcomes.norito");
+        let (policy_authority, policy_keypair) = gen_account_in("wonderland");
+        let policy_domain_id =
+            DomainId::try_new("wonderland", "universal").expect("policy domain id");
+        let policy_domain = Domain::new(policy_domain_id.clone()).build(&policy_authority);
+        let policy_account = Account::new(policy_authority.clone()).build(&policy_authority);
+        let policy_asset_definition_id = AssetDefinitionId::new(
+            policy_domain_id,
+            "replayzkpolicy".parse().expect("policy asset name"),
+        );
+        let policy_asset_definition = AssetDefinition::numeric(policy_asset_definition_id.clone())
+            .with_name(policy_asset_definition_id.name().to_string())
+            .confidential_policy(
+                iroha_data_model::asset::definition::AssetConfidentialPolicy::convertible(),
+            )
+            .build(&policy_authority);
+        let mut world = World::with([policy_domain], [policy_account], [policy_asset_definition]);
+        let mut zk_state = crate::state::ZkAssetState::default();
+        zk_state.mode = iroha_data_model::isi::zk::ZkAssetMode::Hybrid;
+        zk_state.allow_shield = false;
+        zk_state.allow_unshield = true;
+        world
+            .zk_assets
+            .insert(policy_asset_definition_id.clone(), zk_state);
+        let mut state = State::new(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let mut nexus = state.nexus_snapshot();
+        nexus.enabled = false;
+        state
+            .set_nexus(nexus)
+            .expect("apply disabled Nexus state for legacy route test");
+        let (time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let router: Arc<dyn LaneRouter> = Arc::new(StaticRouter {
+            lane: LaneId::SINGLE,
+            dataspace: DataSpaceId::UNIVERSAL,
+        });
+        let mut config = config_factory();
+        config.capacity = nonzero!(8_usize);
+        config.capacity_per_user = nonzero!(1_usize);
+        let queue =
+            Queue::test_with_router_for_routes(config, &time_source, Arc::clone(&router), &[]);
+        queue
+            .install_plan_journal(&journal_path, 1024 * 1024, true)
+            .expect("install outcome journal");
+        let plan =
+            RoutingPlan::single(RoutingDecision::new(LaneId::SINGLE, DataSpaceId::UNIVERSAL));
+
+        let malformed = accepted_tx_by_someone(&time_source);
+        let committed = accepted_tx_by_someone(&time_source);
+        let expired = accepted_tx_by_someone(&time_source);
+        {
+            let mut transactions = state.transactions.block();
+            transactions.insert_block_with_single_tx(committed.hash(), nonzero!(1_usize));
+            transactions.commit().expect("commit replay fixture hash");
+        }
+
+        time_handle.advance(config.transaction_time_to_live + Duration::from_millis(1));
+        let preparation_rejected = accepted_tx_with(
+            policy_authority.clone(),
+            &policy_keypair,
+            &time_source,
+            vec![InstructionBox::from(
+                iroha_data_model::isi::zk::Shield::new(
+                    policy_asset_definition_id,
+                    policy_authority,
+                    10_u128,
+                    [3; 32],
+                    iroha_data_model::confidential::ConfidentialEncryptedPayload::default(),
+                ),
+            )],
+            Metadata::default(),
+        );
+        let (same_authority, same_authority_key) = gen_account_in("wonderland");
+        let accepted = accepted_tx_by(same_authority.clone(), &same_authority_key, &time_source);
+        time_handle.advance(Duration::from_millis(1));
+        let rejected = accepted_tx_by(same_authority, &same_authority_key, &time_source);
+        assert_ne!(accepted.hash(), rejected.hash());
+
+        let records = [
+            QueuePlanJournalRecordV2::new(
+                malformed.entrypoint().clone(),
+                HashOf::from_untyped_unchecked(Hash::new(b"malformed-queue-plan-record-hash")),
+                plan.clone(),
+                1,
+            ),
+            QueuePlanJournalRecordV2::new(
+                committed.entrypoint().clone(),
+                committed.hash(),
+                plan.clone(),
+                2,
+            ),
+            QueuePlanJournalRecordV2::new(
+                expired.entrypoint().clone(),
+                expired.hash(),
+                plan.clone(),
+                3,
+            ),
+            QueuePlanJournalRecordV2::new(
+                preparation_rejected.entrypoint().clone(),
+                preparation_rejected.hash(),
+                plan.clone(),
+                4,
+            ),
+            QueuePlanJournalRecordV2::new(
+                accepted.entrypoint().clone(),
+                accepted.hash(),
+                plan.clone(),
+                5,
+            ),
+            QueuePlanJournalRecordV2::new(rejected.entrypoint().clone(), rejected.hash(), plan, 6),
+        ];
+        {
+            let mut journal_guard = queue.plan_journal.lock();
+            let journal = journal_guard.as_mut().expect("installed outcome journal");
+            let mut flush = QueuePlanJournalFlush::default();
+            for record in records {
+                flush = flush.combine(
+                    journal
+                        .put_deferred_flush(record)
+                        .expect("append replay outcome"),
+                );
+            }
+            journal.flush_deferred(flush).expect("sync replay outcomes");
+        }
+        drop(queue);
+
+        let replay_queue = Queue::test_with_router_for_routes(config, &time_source, router, &[]);
+        assert_eq!(
+            replay_queue
+                .install_plan_journal(&journal_path, 1024 * 1024, true)
+                .expect("reopen outcome journal"),
+            6
+        );
+        let summary = replay_queue
+            .replay_plan_journal(&state)
+            .expect("replay every terminal outcome");
+
+        assert_eq!(
+            summary,
+            QueuePlanJournalReplaySummary {
+                records: 6,
+                replayed: 1,
+                tombstoned_committed: 1,
+                tombstoned_expired: 1,
+                tombstoned_stale: 0,
+                tombstoned_malformed: 1,
+                rejected: 2,
+            }
+        );
+        assert_eq!(replay_queue.active_len(), 1);
+        assert!(replay_queue.txs.contains_key(&accepted.hash()));
+        assert!(!replay_queue.txs.contains_key(&preparation_rejected.hash()));
+        assert!(!replay_queue.txs.contains_key(&rejected.hash()));
+        assert_eq!(
+            replay_queue
+                .plan_journal
+                .lock()
+                .as_ref()
+                .expect("installed replay journal")
+                .live_record_count()
+                .expect("count surviving replay record"),
+            1,
+            "every terminal record must be durably tombstoned"
+        );
+    }
+
+    #[test]
     fn queue_plan_journal_tombstones_stale_plan_after_restart() {
         let dir = tempfile::tempdir().expect("tempdir");
         let journal_path = dir.path().join("queue_plan_journal.norito");
@@ -12984,13 +14212,15 @@ pub mod tests {
         let tx = accepted_tx_by_someone(&time_source);
         let hash = tx.hash();
         let plan = RoutingPlan::single(RoutingDecision::new(lane, dataspace));
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist replay fixture");
         drop(queue);
 
         let replay_router: Arc<dyn LaneRouter> = Arc::new(StaticRouter { lane, dataspace });
@@ -13098,13 +14328,15 @@ pub mod tests {
             })
             .expect("stale plan resolves against stale Nexus catalogs");
         assert_eq!(stale_plan.coordinator_route(), old_route);
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &stale_plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &stale_plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist stale-plan fixture");
         drop(queue);
 
         let replay_queue = Queue::test(config_factory(), &time_source);
@@ -13266,13 +14498,15 @@ pub mod tests {
             stale_plan.coordinator_route(),
             RoutingDecision::new(lane, old_dataspace)
         );
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &stale_plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &stale_plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist stale-dataspace fixture");
         drop(queue);
 
         let replay_queue = Queue::test(config_factory(), &time_source);
@@ -13397,13 +14631,15 @@ pub mod tests {
         let (tx, stale_plan) =
             selected.expect("fixture should find a transaction routed to elastic lane");
         let hash = tx.hash();
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &stale_plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &stale_plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist stale-elastic-plan fixture");
         drop(queue);
 
         {
@@ -13505,13 +14741,15 @@ pub mod tests {
         let hash = tx.hash();
         let forged_plan =
             RoutingPlan::single(RoutingDecision::new(LaneId::new(1), DataSpaceId::UNIVERSAL));
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &forged_plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &forged_plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist forged future-lane fixture");
         drop(queue);
 
         let replay_queue = Queue::test(config_factory(), &time_source);
@@ -13683,13 +14921,15 @@ pub mod tests {
             .expect("install journal");
 
         let hash = tx.hash();
-        let flush = queue.record_plan_journal_put_deferred(
-            &tx,
-            hash,
-            &stale_plan,
-            Queue::duration_to_millis(time_source.get_unix_time()),
-        );
-        queue.flush_plan_journal_deferred(flush);
+        queue
+            .record_plan_journal_put_durable(
+                &tx,
+                hash,
+                &stale_plan,
+                Queue::duration_to_millis(time_source.get_unix_time()),
+                true,
+            )
+            .expect("persist stale Native participant fixture");
         drop(queue);
 
         let replay_queue = Queue::test(config_factory(), &time_source);
@@ -20509,6 +21749,64 @@ pub mod tests {
         );
     }
 
+    #[test]
+    fn lane_reservation_group_diagnostics_rechecks_fault_after_store_lock_handoff() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let state = lane_reservation_test_state();
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let dir = tempdir().expect("tempdir");
+        install_test_reservation_journal(&queue, &dir);
+        queue
+            .push_with_lane_with_state(accepted_tx_by_someone(&time_source), &state)
+            .expect("enqueue diagnostic handoff reservation");
+        let key = *queue
+            .reserve_transactions_for_lane(
+                &state,
+                lane_reservation_scope(
+                    &state,
+                    b"diagnostic-handoff-owner",
+                    b"diagnostic-handoff-proposal",
+                ),
+                nonzero!(1_usize),
+            )
+            .expect("reserve diagnostic handoff transaction")[0]
+            .key();
+        queue
+            .commit_lane_reservation(&key)
+            .expect("commit diagnostic handoff reservation");
+        queue
+            .finalize_plan_journal_startup_disabled()
+            .expect("forget diagnostic handoff commit barrier");
+        assert!(
+            queue.lane_reservation_group_is_finalized_for_diagnostics(&[key]),
+            "healthy replay state must initially prove finalization"
+        );
+
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        *queue.durability_observer_lock_handoff.lock() = Some(QueueDurabilityObserverLockHandoff {
+            reached: Arc::clone(&reached),
+            resume: Arc::clone(&resume),
+        });
+        let reservation_guard = queue.lane_reservations.lock();
+        let observer_queue = Arc::clone(&queue);
+        let observer = std::thread::spawn(move || {
+            observer_queue.lane_reservation_group_is_finalized_for_diagnostics(&[key])
+        });
+
+        reached.wait();
+        queue
+            .plan_journal_durability_fault
+            .store(true, Ordering::Release);
+        resume.wait();
+        drop(reservation_guard);
+
+        assert!(
+            !observer.join().expect("join diagnostic handoff observer"),
+            "a fault published after the optimistic precheck must fail the protected snapshot closed"
+        );
+    }
+
     fn lane_reservation_release_barrier(
         keys: Vec<LaneQueueReservationKeyV1>,
         retirement_seed: &[u8],
@@ -21299,6 +22597,43 @@ pub mod tests {
         assert!(
             queue.lane_has_pending_work(LaneId::new(88), DataSpaceId::new(88), other_incarnation,),
             "ambiguous reservation durability must fail closed for every drain query",
+        );
+    }
+
+    #[test]
+    fn lane_pending_work_rechecks_durability_fault_after_queue_lock_handoff() {
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+        let lane_id = LaneId::new(91);
+        let dataspace_id = DataSpaceId::new(91);
+        let lane_incarnation = Hash::new(b"pending-work-lock-handoff-incarnation");
+        assert!(
+            !queue.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation),
+            "an unrelated healthy empty route must initially be drainable"
+        );
+
+        let reached = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        *queue.durability_observer_lock_handoff.lock() = Some(QueueDurabilityObserverLockHandoff {
+            reached: Arc::clone(&reached),
+            resume: Arc::clone(&resume),
+        });
+        let queue_guard = queue.push_remove_lock.lock();
+        let observer_queue = Arc::clone(&queue);
+        let observer = std::thread::spawn(move || {
+            observer_queue.lane_has_pending_work(lane_id, dataspace_id, lane_incarnation)
+        });
+
+        reached.wait();
+        queue
+            .plan_journal_durability_fault
+            .store(true, Ordering::Release);
+        resume.wait();
+        drop(queue_guard);
+
+        assert!(
+            observer.join().expect("join pending-work handoff observer"),
+            "a fault published after the optimistic precheck must block drain under the queue lock"
         );
     }
 

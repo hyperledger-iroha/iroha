@@ -933,6 +933,8 @@ fn minimal_config_snapshot() {
                         checkpoint_max_bytes: Bytes(
                             67108864,
                         ),
+                        proof_outcome_forwarder_interval: 1s,
+                        proof_outcome_max_attempts: 8,
                     },
                     alias: None,
                     adverts: SorafsAdvertOverrides {
