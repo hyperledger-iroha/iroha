@@ -636,13 +636,21 @@ mod tests {
         let wire_id = Instruction::id(&*instruction);
         let payload = Instruction::dyn_encode(&*instruction);
         let framed = frame_instruction_payload(wire_id, &payload).expect("frame enact instruction");
-        norito::json!({
-            "ok": true,
-            "tx_instructions": [{
-                "wire_id": wire_id,
-                "payload_hex": hex::encode(framed),
-            }],
-        })
+        let tx_instruction = json_object(vec![
+            ("wire_id", json_value(&wire_id).expect("encode wire id")),
+            (
+                "payload_hex",
+                json_value(&hex::encode(framed)).expect("encode framed payload"),
+            ),
+        ])
+        .expect("build enact draft instruction");
+        let tx_instructions =
+            json_array(vec![tx_instruction]).expect("build enact draft instruction list");
+        json_object(vec![
+            ("ok", json_value(&true).expect("encode draft status")),
+            ("tx_instructions", tx_instructions),
+        ])
+        .expect("build enact draft response")
     }
 
     #[test]

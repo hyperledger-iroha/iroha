@@ -486,18 +486,30 @@ pub mod isi {
                     .clone()
                     .unwrap_or_else(|| contract_subject.clone());
                 let action = iroha_data_model::trigger::action::Action::new(
-                    Executable::Ivm(IvmBytecode::from_compiled(callback_contract.code_bytes)),
+                    Executable::ContractCall(
+                        iroha_data_model::transaction::executable::ContractInvocation {
+                            contract_address: callback_contract.contract_address,
+                            expected_code_hash: callback_contract.code_hash,
+                            entrypoint: descriptor.callback.entrypoint.clone(),
+                            arguments: None,
+                        },
+                    ),
                     descriptor.repeats,
                     trigger_authority,
                     descriptor.filter.clone(),
                 )
                 .with_metadata(metadata);
                 let trigger = Trigger::new(descriptor.id.clone(), action);
-                // Contract lifecycle authority does not grant the right to
-                // schedule execution as an unrelated account. Reuse normal
-                // trigger-owner authorization so an explicit descriptor
-                // authority requires CanRegisterTrigger for that account.
-                register_trigger_internal(authority, state_transaction, trigger, false)?;
+                // The lifecycle path may register only a manifest trigger owned
+                // by this contract's exact derived subject. The subject account
+                // must already exist. Explicit unrelated authorities continue
+                // through normal CanRegisterTrigger authorization.
+                register_trigger_internal(
+                    authority,
+                    state_transaction,
+                    trigger,
+                    Some(contract_subject),
+                )?;
             }
         }
         Ok(())
@@ -6754,9 +6766,10 @@ pub mod isi {
         .into()
     }
 
-    fn require_absent_validation_fee_payout_effect_permission(
+    fn require_absent_validation_fee_runtime_permission(
         state_transaction: &StateTransaction<'_, '_>,
         permission: &Permission,
+        permission_label: &str,
     ) -> Result<(), Error> {
         if state_transaction
             .world
@@ -6765,8 +6778,10 @@ pub mod isi {
             .any(|(_, permissions)| permissions.iter().any(|candidate| candidate == permission))
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee payout lifecycle requires its derived asset effect permission to be absent before enactment"
-                    .into(),
+                format!(
+                    "validation-fee payout lifecycle requires {permission_label} to be absent before enactment"
+                )
+                .into(),
             ));
         }
         if state_transaction
@@ -6776,50 +6791,71 @@ pub mod isi {
             .any(|(_, role)| role.permissions().any(|candidate| candidate == permission))
         {
             return Err(InstructionExecutionError::InvariantViolation(
-                "validation-fee payout lifecycle forbids role ownership of its derived asset effect permission"
-                    .into(),
+                format!(
+                    "validation-fee payout lifecycle forbids role ownership of {permission_label}"
+                )
+                .into(),
             ));
         }
         Ok(())
     }
 
-    fn install_derived_validation_fee_payout_effect_permission_with_validation<F>(
-        permission: Permission,
-        required_holder: &AccountId,
+    fn install_derived_validation_fee_runtime_permissions_with_validation<F>(
+        permissions: Vec<(Permission, AccountId, &'static str)>,
         state_transaction: &mut StateTransaction<'_, '_>,
         validate_installed: F,
     ) -> Result<(), Error>
     where
         F: FnOnce(&StateTransaction<'_, '_>) -> Result<(), Error>,
     {
-        require_absent_validation_fee_payout_effect_permission(state_transaction, &permission)?;
-        state_transaction
-            .world
-            .add_account_permission(required_holder, permission.clone());
-        if let Err(error) = validate_installed(state_transaction) {
+        for (permission, _, permission_label) in &permissions {
+            require_absent_validation_fee_runtime_permission(
+                state_transaction,
+                permission,
+                permission_label,
+            )?;
+        }
+        for (permission, required_holder, _) in &permissions {
             state_transaction
                 .world
-                .remove_account_permission(required_holder, &permission);
-            state_transaction.invalidate_permission_cache_for_account(required_holder);
+                .add_account_permission(required_holder, permission.clone());
+        }
+        if let Err(error) = validate_installed(state_transaction) {
+            for (permission, required_holder, _) in &permissions {
+                state_transaction
+                    .world
+                    .remove_account_permission(required_holder, permission);
+                state_transaction.invalidate_permission_cache_for_account(required_holder);
+            }
             return Err(error);
         }
 
-        state_transaction
-            .world
-            .emit_events(Some(AccountEvent::PermissionAdded(
-                AccountPermissionChanged {
-                    account: required_holder.clone(),
-                    permission,
-                },
-            )));
-        state_transaction.invalidate_permission_cache_for_account(required_holder);
+        for (permission, required_holder, _) in permissions {
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::PermissionAdded(
+                    AccountPermissionChanged {
+                        account: required_holder.clone(),
+                        permission,
+                    },
+                )));
+            state_transaction.invalidate_permission_cache_for_account(&required_holder);
+        }
         Ok(())
     }
 
-    fn install_derived_validation_fee_payout_effect_permission(
+    fn install_derived_validation_fee_runtime_permissions(
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &mut StateTransaction<'_, '_>,
     ) -> Result<(), Error> {
+        state_transaction
+            .world
+            .account(&binding.treasury_account_id)
+            .map_err(|_| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle wrapper subject account does not exist".into(),
+                )
+            })?;
         state_transaction
             .world
             .account(&binding.pool_vault_account_id)
@@ -6828,16 +6864,57 @@ pub mod isi {
                     "validation-fee payout lifecycle pool subject account does not exist".into(),
                 )
             })?;
-        let permission = validation_fee_payout_effect_permission(binding);
-        install_derived_validation_fee_payout_effect_permission_with_validation(
-            permission,
-            &binding.pool_vault_account_id,
+        let pool_contract_address = state_transaction
+            .world
+            .contract_subject_addresses
+            .get(&binding.pool_vault_account_id)
+            .cloned()
+            .ok_or_else(|| {
+                InstructionExecutionError::InvariantViolation(
+                    "validation-fee payout lifecycle pool vault must be an active contract subject"
+                        .into(),
+                )
+            })?;
+        let permissions = validation_fee_runtime_permissions(binding, &pool_contract_address);
+        install_derived_validation_fee_runtime_permissions_with_validation(
+            permissions,
             state_transaction,
             |state_transaction| {
                 validate_validation_fee_payout_lifecycle_runtime(binding, state_transaction)
             },
         )?;
         Ok(())
+    }
+
+    fn validation_fee_runtime_permissions(
+        binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
+        pool_contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Vec<(Permission, AccountId, &'static str)> {
+        vec![
+            (
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: binding.contract_address.clone(),
+                    entrypoint: binding.entrypoint.to_string(),
+                }
+                .into(),
+                binding.treasury_account_id.clone(),
+                "the wrapper payout selector",
+            ),
+            (
+                iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                    contract: pool_contract_address.clone(),
+                    entrypoint: crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
+                }
+                .into(),
+                binding.treasury_account_id.clone(),
+                "the pool swap selector",
+            ),
+            (
+                validation_fee_payout_effect_permission(binding),
+                binding.pool_vault_account_id.clone(),
+                "the wrapper SBD asset transfer effect",
+            ),
+        ]
     }
 
     fn validate_validation_fee_payout_lifecycle_runtime(
@@ -6865,7 +6942,7 @@ pub mod isi {
     fn validate_validation_fee_payout_lifecycle_runtime_with_effect(
         binding: &iroha_data_model::validation_fee::ValidationFeeTreasuryPayoutBindingV1,
         state_transaction: &StateTransaction<'_, '_>,
-        require_derived_effect: bool,
+        require_derived_permissions: bool,
     ) -> Result<(), Error> {
         let record = fetch_bound_contract_record(state_transaction, &binding.contract_address)
             .ok_or_else(|| {
@@ -7036,43 +7113,23 @@ pub mod isi {
             ));
         }
 
-        let wrapper_permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: binding.contract_address.clone(),
-                entrypoint: binding.entrypoint.to_string(),
+        for (permission, required_holder, permission_label) in
+            validation_fee_runtime_permissions(binding, &pool_contract_address)
+        {
+            if require_derived_permissions {
+                require_sole_direct_validation_fee_runtime_permission_holder(
+                    state_transaction,
+                    &permission,
+                    &required_holder,
+                    permission_label,
+                )?;
+            } else {
+                require_absent_validation_fee_runtime_permission(
+                    state_transaction,
+                    &permission,
+                    permission_label,
+                )?;
             }
-            .into();
-        require_sole_direct_validation_fee_runtime_permission_holder(
-            state_transaction,
-            &wrapper_permission,
-            &binding.treasury_account_id,
-            "the wrapper payout selector",
-        )?;
-        let pool_permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: pool_contract_address,
-                entrypoint: crate::validation_fee::VALIDATION_FEE_POOL_SWAP_ENTRYPOINT.to_owned(),
-            }
-            .into();
-        require_sole_direct_validation_fee_runtime_permission_holder(
-            state_transaction,
-            &pool_permission,
-            &binding.treasury_account_id,
-            "the pool swap selector",
-        )?;
-        let wrapper_sbd_transfer_permission = validation_fee_payout_effect_permission(binding);
-        if require_derived_effect {
-            require_sole_direct_validation_fee_runtime_permission_holder(
-                state_transaction,
-                &wrapper_sbd_transfer_permission,
-                &binding.pool_vault_account_id,
-                "the wrapper SBD asset transfer effect",
-            )?;
-        } else {
-            require_absent_validation_fee_payout_effect_permission(
-                state_transaction,
-                &wrapper_sbd_transfer_permission,
-            )?;
         }
         Ok(())
     }
@@ -7173,7 +7230,7 @@ pub mod isi {
                         enactment_height,
                         state_transaction,
                     )?;
-                    install_derived_validation_fee_payout_effect_permission(
+                    install_derived_validation_fee_runtime_permissions(
                         &payload.payout_binding,
                         state_transaction,
                     )?;
@@ -20923,7 +20980,7 @@ pub mod isi {
         }
 
         #[test]
-        fn validation_fee_derived_effect_rejects_preexisting_direct_and_role_holders() {
+        fn validation_fee_derived_runtime_permission_rejects_preexisting_direct_and_role_holders() {
             use iroha_data_model::permission::Permissions;
             use iroha_executor_data_model::permission::asset::CanTransferAsset;
 
@@ -20950,15 +21007,22 @@ pub mod isi {
             }
             .into();
 
-            super::require_absent_validation_fee_payout_effect_permission(&stx, &permission)
-                .expect("an absent effect permission is eligible for protected derivation");
+            super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect("an absent effect permission is eligible for protected derivation");
 
             stx.world
                 .account_permissions
                 .insert(BOB_ID.clone(), Permissions::from([permission.clone()]));
-            let direct_error =
-                super::require_absent_validation_fee_payout_effect_permission(&stx, &permission)
-                    .expect_err("a caller-made direct effect grant must fail closed");
+            let direct_error = super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect_err("a caller-made direct effect grant must fail closed");
             assert!(
                 format!("{direct_error:?}").contains("absent before enactment"),
                 "unexpected direct-holder error: {direct_error:?}"
@@ -20970,9 +21034,12 @@ pub mod isi {
                 .add_permission(permission.clone())
                 .build(&ALICE_ID);
             stx.world.roles.insert(role_id, role);
-            let role_error =
-                super::require_absent_validation_fee_payout_effect_permission(&stx, &permission)
-                    .expect_err("a role-owned effect grant must fail closed");
+            let role_error = super::require_absent_validation_fee_runtime_permission(
+                &stx,
+                &permission,
+                "the wrapper SBD asset transfer effect",
+            )
+            .expect_err("a role-owned effect grant must fail closed");
             assert!(
                 format!("{role_error:?}").contains("forbids role ownership"),
                 "unexpected role-holder error: {role_error:?}"
@@ -20987,8 +21054,9 @@ pub mod isi {
         }
 
         #[test]
-        fn validation_fee_derived_effect_rolls_back_when_post_install_validation_fails() {
+        fn validation_fee_derived_runtime_permissions_roll_back_atomically() {
             use iroha_executor_data_model::permission::asset::CanTransferAsset;
+            use iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint;
 
             let state = State::new_for_testing(
                 World::default(),
@@ -21008,34 +21076,65 @@ pub mod isi {
             let asset_definition_id: AssetDefinitionId = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
                 .parse()
                 .expect("canonical asset definition id");
-            let permission: Permission = CanTransferAsset {
+            let effect_permission: Permission = CanTransferAsset {
                 asset: AssetId::new(asset_definition_id, ALICE_ID.clone()),
             }
             .into();
+            let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("canonical contract address");
+            let wrapper_permission: Permission = CanInvokeContractEntrypoint {
+                contract: contract_address.clone(),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            }
+            .into();
+            let pool_permission: Permission = CanInvokeContractEntrypoint {
+                contract: contract_address,
+                entrypoint: "swap_exact_in_quote_public".to_owned(),
+            }
+            .into();
+            let permissions = vec![
+                (
+                    wrapper_permission.clone(),
+                    ALICE_ID.clone(),
+                    "the wrapper payout selector",
+                ),
+                (
+                    pool_permission.clone(),
+                    ALICE_ID.clone(),
+                    "the pool swap selector",
+                ),
+                (
+                    effect_permission.clone(),
+                    BOB_ID.clone(),
+                    "the wrapper SBD asset transfer effect",
+                ),
+            ];
 
-            let error =
-                super::install_derived_validation_fee_payout_effect_permission_with_validation(
-                    permission.clone(),
-                    &BOB_ID,
-                    &mut stx,
-                    |_| {
-                        Err(InstructionExecutionError::InvariantViolation(
-                            "forced post-install topology failure".into(),
-                        ))
-                    },
-                )
-                .expect_err("post-install validation failure must reject lifecycle derivation");
+            let error = super::install_derived_validation_fee_runtime_permissions_with_validation(
+                permissions,
+                &mut stx,
+                |_| {
+                    Err(InstructionExecutionError::InvariantViolation(
+                        "forced post-install topology failure".into(),
+                    ))
+                },
+            )
+            .expect_err("post-install validation failure must reject lifecycle derivation");
             assert!(
                 format!("{error:?}").contains("forced post-install topology failure"),
                 "unexpected rollback error: {error:?}"
             );
-            assert!(
-                stx.world
-                    .account_permissions
-                    .iter()
-                    .all(|(_, permissions)| !permissions.contains(&permission)),
-                "failed post-install validation must roll back the derived effect token"
-            );
+            for permission in [wrapper_permission, pool_permission, effect_permission] {
+                assert!(
+                    stx.world
+                        .account_permissions
+                        .iter()
+                        .all(|(_, permissions)| !permissions.contains(&permission)),
+                    "failed post-install validation must roll back every derived permission"
+                );
+            }
         }
 
         fn fee_sponsor_revision_fixture(
@@ -24642,15 +24741,20 @@ seiyaku GovernanceLifecycle {
                 }) if pending_code_hash == code_hash
             ));
             let trigger_id: TriggerId = "governance_wake".parse().expect("trigger id");
-            assert!(
-                transaction
-                    .world
-                    .triggers
-                    .time_triggers()
-                    .get(&trigger_id)
-                    .is_some(),
-                "governance binding must register exact manifest triggers"
-            );
+            let action = transaction
+                .world
+                .triggers
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("governance binding must register exact manifest triggers");
+            let invocation = match action.executable() {
+                ExecutableRef::ContractCall(invocation) => invocation,
+                _ => panic!("manifest trigger must retain a typed contract call"),
+            };
+            assert_eq!(invocation.contract_address, payload.contract_address);
+            assert_eq!(invocation.expected_code_hash, code_hash);
+            assert_eq!(invocation.entrypoint, "run");
+            assert!(invocation.arguments.is_none());
         }
 
         #[test]

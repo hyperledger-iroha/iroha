@@ -15,8 +15,8 @@ path = "src/main.rs"
 blake3 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 hex = { workspace = true }
-iroha_crypto = { workspace = true }
-iroha_data_model = { workspace = true }
+iroha_crypto = { workspace = true, features = ["pqc"] }
+iroha_data_model = { workspace = true, features = ["governance"] }
 nix = { version = "0.30.1", features = ["signal"] }
 norito = { workspace = true }
 quinn = { version = "0.11.9", default-features = false, features = ["rustls", "runtime-tokio"] }

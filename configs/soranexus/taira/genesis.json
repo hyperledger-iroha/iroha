@@ -431,7 +431,7 @@
                     {
                       "kind": "native_instruction",
                       "value": {
-                        "wire_id": "iroha_data_model::isi::smart_contract_code::ActivateContractInstance"
+                        "wire_id": "iroha_data_model::isi::smart_contract_code::CommitContractDeployment"
                       }
                     },
                     {
@@ -558,6 +558,16 @@
                     "name": "cbsi_web"
                   }
                 }
+              }
+            }
+          }
+        },
+        {
+          "Grant": {
+            "Permission": {
+              "destination": "testuﾛ1PｵEmｷjMZZﾑﾙeｱﾁﾎﾅﾂﾊmECepdbﾎｳ2uWﾃｸﾊﾘvｵi2ｦP1Y18A",
+              "object": {
+                "name": "CanRegisterSmartContractCode"
               }
             }
           }

@@ -37,11 +37,12 @@ use iroha_data_model::{
     nexus::DataSpaceId,
     parameter::Parameter,
     prelude::*,
-    smart_contract::ContractAddress,
-    transaction::{
-        Executable, IvmBytecode, IvmProved, SignedTransaction, executable::ContractInvocation,
+    smart_contract::{
+        ContractAddress,
+        manifest::{TriggerCallback, TriggerDescriptor},
     },
-    trigger::action::{Action, Repeats},
+    transaction::{Executable, IvmBytecode, IvmProved, SignedTransaction},
+    trigger::action::Repeats,
     validation_fee::{
         VALIDATION_FEE_DS_SCALE, VALIDATION_FEE_INSTRUCTION_INDEX_METADATA_KEY,
         VALIDATION_FEE_POLICY_ACTIVATION_DELAY_BLOCKS, VALIDATION_FEE_POLICY_HASH_METADATA_KEY,
@@ -154,7 +155,19 @@ fn payout_contract_artifact() -> (
         write_keys: Vec::new(),
         access_hints_complete: None,
         access_hints_skipped: Vec::new(),
-        triggers: Vec::new(),
+        triggers: vec![TriggerDescriptor {
+            id: "validation_fee_payout_tick"
+                .parse()
+                .expect("payout trigger id"),
+            repeats: Repeats::Indefinitely,
+            filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+            authority: None,
+            metadata: Metadata::default(),
+            callback: TriggerCallback {
+                namespace: None,
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            },
+        }],
     };
     let interface = ivm::EmbeddedContractInterfaceV1 {
         seiyaku_name: "ValidationFeePayout".to_owned(),
@@ -608,15 +621,6 @@ fn install_validation_fee_policy(
         Grant::account_permission(register_permission, authority.clone())
             .execute(authority, &mut stx)
             .expect("grant payout-contract registration authority");
-        let payout_subject = payout_contract_address().subject_id();
-        let register_trigger_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
-                authority: payout_subject.clone(),
-            }
-            .into();
-        Grant::account_permission(register_trigger_permission, authority.clone())
-            .execute(authority, &mut stx)
-            .expect("grant exact payout-trigger registration authority");
         let (contract_artifact, contract_manifest) = payout_contract_artifact();
         let registered_code_hash = iroha_core::smartcontracts::code::register_code_bytes(
             authority,
@@ -657,42 +661,6 @@ fn install_validation_fee_policy(
             &mut stx,
         )
         .expect("activate pool contract");
-        let wrapper_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: payout_contract_address(),
-                entrypoint: "autonomous_validation_fee_tick".to_owned(),
-            }
-            .into();
-        Grant::account_permission(wrapper_permission, payout_subject.clone())
-            .execute(authority, &mut stx)
-            .expect("grant wrapper subject its exact autonomous selector");
-        let pool_permission: iroha_data_model::permission::Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: pool_contract_address(),
-                entrypoint: "swap_exact_in_quote_public".to_owned(),
-            }
-            .into();
-        Grant::account_permission(pool_permission, payout_subject.clone())
-            .execute(authority, &mut stx)
-            .expect("grant wrapper subject its exact pool selector");
-        Register::trigger(Trigger::new(
-            "validation_fee_payout_tick"
-                .parse()
-                .expect("payout trigger id"),
-            Action::new(
-                Executable::ContractCall(ContractInvocation {
-                    contract_address: payout_contract_address(),
-                    expected_code_hash: registered_code_hash,
-                    entrypoint: "autonomous_validation_fee_tick".to_owned(),
-                    arguments: None,
-                }),
-                Repeats::Indefinitely,
-                payout_subject,
-                EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
-            ),
-        ))
-        .execute(authority, &mut stx)
-        .expect("register exact autonomous payout trigger");
         assert_eq!(
             seed_open_proposal(
                 payout_lifecycle_proposal(&policy),
@@ -728,6 +696,18 @@ fn install_validation_fee_policy(
             iroha_core::state::GovernanceProposalStatus::Proposed
         );
         assert!(proposal.finalization_evidence.is_none());
+        let wrapper_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: payout_contract_address(),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            }
+            .into();
+        let pool_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: pool_contract_address(),
+                entrypoint: "swap_exact_in_quote_public".to_owned(),
+            }
+            .into();
         let derived_effect_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::asset::CanTransferAsset {
                 asset: AssetId::new(
@@ -736,13 +716,26 @@ fn install_validation_fee_policy(
                 ),
             }
             .into();
-        assert!(
-            view.world()
-                .account_permissions()
-                .iter()
-                .all(|(_, permissions)| !permissions.contains(&derived_effect_permission)),
-            "the wrapper-owned SBD effect token must not exist before protected lifecycle enactment"
-        );
+        for (permission, label) in [
+            (wrapper_permission, "wrapper selector"),
+            (pool_permission, "pool selector"),
+            (derived_effect_permission, "wrapper-owned SBD effect"),
+        ] {
+            assert!(
+                view.world()
+                    .account_permissions()
+                    .iter()
+                    .all(|(_, permissions)| !permissions.contains(&permission)),
+                "{label} permission must not exist before protected lifecycle enactment"
+            );
+            assert!(
+                view.world()
+                    .roles()
+                    .iter()
+                    .all(|(_, role)| !role.permissions().any(|candidate| candidate == &permission)),
+                "{label} permission must not be role-owned before protected lifecycle enactment"
+            );
+        }
         assert_eq!(
             view.world()
                 .governance_referenda()
@@ -804,6 +797,18 @@ fn install_validation_fee_policy(
             proposal.enacted_at_height,
             Some(TEST_LIFECYCLE_ENACTMENT_HEIGHT)
         );
+        let wrapper_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: payout_contract_address(),
+                entrypoint: "autonomous_validation_fee_tick".to_owned(),
+            }
+            .into();
+        let pool_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
+                contract: pool_contract_address(),
+                entrypoint: "swap_exact_in_quote_public".to_owned(),
+            }
+            .into();
         let derived_effect_permission: iroha_data_model::permission::Permission =
             iroha_executor_data_model::permission::asset::CanTransferAsset {
                 asset: AssetId::new(
@@ -812,33 +817,48 @@ fn install_validation_fee_policy(
                 ),
             }
             .into();
-        let direct_holders = view
-            .world()
-            .account_permissions()
-            .iter()
-            .filter_map(|(account_id, permissions)| {
-                permissions
-                    .contains(&derived_effect_permission)
-                    .then_some(account_id)
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            direct_holders,
-            vec![
-                &policy
-                    .treasury_payout_binding
-                    .as_ref()
-                    .expect("payout binding")
-                    .pool_vault_account_id
-            ],
-            "protected lifecycle enactment must atomically derive the sole pool effect grant"
-        );
-        assert!(
-            view.world().roles().iter().all(|(_, role)| !role
-                .permissions()
-                .any(|permission| permission == &derived_effect_permission)),
-            "the derived pool effect grant must never be role-owned"
-        );
+        let payout_binding = policy
+            .treasury_payout_binding
+            .as_ref()
+            .expect("payout binding");
+        for (permission, required_holder, label) in [
+            (
+                wrapper_permission,
+                &payout_binding.treasury_account_id,
+                "wrapper selector",
+            ),
+            (
+                pool_permission,
+                &payout_binding.treasury_account_id,
+                "pool selector",
+            ),
+            (
+                derived_effect_permission,
+                &payout_binding.pool_vault_account_id,
+                "wrapper-owned SBD effect",
+            ),
+        ] {
+            let direct_holders = view
+                .world()
+                .account_permissions()
+                .iter()
+                .filter_map(|(account_id, permissions)| {
+                    permissions.contains(&permission).then_some(account_id)
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                direct_holders,
+                vec![required_holder],
+                "protected lifecycle enactment must atomically derive the sole {label} grant"
+            );
+            assert!(
+                view.world()
+                    .roles()
+                    .iter()
+                    .all(|(_, role)| !role.permissions().any(|candidate| candidate == &permission)),
+                "the derived {label} grant must never be role-owned"
+            );
+        }
     }
 
     // H=4: only after the lifecycle enactment is persisted, seed the policy

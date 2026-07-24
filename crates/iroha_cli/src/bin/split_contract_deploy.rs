@@ -15,13 +15,12 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{
         isi::smart_contract_code::{
-            ActivateContractInstance, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
+            CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
             SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
         },
         metadata::Metadata,
         name::Name,
         prelude::*,
-        smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY,
         transaction::{FeePaymentIntent, TransactionBuilder},
     },
 };
@@ -46,17 +45,21 @@ struct Args {
     code_file: PathBuf,
     #[arg(long)]
     contract_address: String,
+    #[arg(long)]
+    contract_alias: String,
     #[arg(long, default_value = "universal")]
     dataspace: String,
     #[arg(long)]
     deploy_nonce: u64,
     #[arg(long, default_value_t = 753)]
     chain_discriminant: u16,
+    #[arg(long)]
+    lease_expiry_ms: Option<u64>,
+    #[arg(long)]
+    expected_previous_contract_address: Option<String>,
     /// Canonical JSON file selecting authority or an exact sponsor-program revision.
     #[arg(long, value_name = "PATH")]
     fee_payment_json: PathBuf,
-    #[arg(long, default_value_t = false)]
-    route_anchor_authority_account: bool,
     #[arg(long)]
     out_dir: Option<PathBuf>,
     #[arg(long, default_value_t = false)]
@@ -191,7 +194,7 @@ fn native_upload_report(plan: &NativeUploadPlan) -> norito::json::Value {
 fn deployment_transaction_sequence(
     upload_plan: NativeUploadPlan,
     register_manifest_tx: SignedTransaction,
-    activate_tx: SignedTransaction,
+    commit_tx: SignedTransaction,
 ) -> Vec<(String, String, SignedTransaction)> {
     let NativeUploadPlan {
         mut pre_stage,
@@ -204,7 +207,7 @@ fn deployment_transaction_sequence(
         "register-manifest".to_owned(),
         register_manifest_tx,
     ));
-    pre_stage.push(("activate".to_owned(), "activate".to_owned(), activate_tx));
+    pre_stage.push(("commit".to_owned(), "commit".to_owned(), commit_tx));
     pre_stage
 }
 
@@ -213,7 +216,6 @@ fn build_native_upload_plan(
     authority: &AccountId,
     private_key: &PrivateKey,
     metadata: &Metadata,
-    route_anchor_instruction: Option<InstructionBox>,
     code_hash: Hash,
     code: &[u8],
 ) -> Result<NativeUploadPlan> {
@@ -236,12 +238,7 @@ fn build_native_upload_plan(
     for (index, chunk) in code.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
         let chunk_index =
             u32::try_from(index).wrap_err("contract upload index does not fit u32")?;
-        let mut instructions = Vec::with_capacity(3);
-        if index == 0
-            && let Some(anchor) = route_anchor_instruction.clone()
-        {
-            instructions.push(anchor);
-        }
+        let mut instructions = Vec::with_capacity(2);
         instructions.push(InstructionBox::from(UploadSmartContractCodeChunk {
             code_hash,
             total_size,
@@ -349,6 +346,35 @@ fn read_fee_payment_file(path: &Path) -> Result<FeePaymentIntent> {
     Ok(intent)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn build_commit_transaction(
+    chain: &ChainId,
+    authority: &AccountId,
+    private_key: &PrivateKey,
+    metadata: Metadata,
+    expected_deploy_nonce: u64,
+    contract_address: iroha::data_model::smart_contract::ContractAddress,
+    code_hash: Hash,
+    contract_alias: iroha::data_model::smart_contract::ContractAlias,
+    lease_expiry_ms: Option<u64>,
+    expected_previous_contract_address: Option<iroha::data_model::smart_contract::ContractAddress>,
+) -> Result<SignedTransaction> {
+    sign_transaction(
+        chain,
+        authority,
+        private_key,
+        metadata,
+        [InstructionBox::from(CommitContractDeployment {
+            expected_deploy_nonce,
+            contract_address,
+            code_hash,
+            contract_alias,
+            lease_expiry_ms,
+            expected_previous_contract_address,
+        })],
+    )
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
     let config = Config::load(LoadPath::Explicit(&args.config))
@@ -368,6 +394,16 @@ fn main() -> Result<()> {
         .contract_address
         .parse()
         .wrap_err("failed to parse --contract-address")?;
+    let contract_alias: iroha::data_model::smart_contract::ContractAlias = args
+        .contract_alias
+        .parse()
+        .wrap_err("failed to parse --contract-alias")?;
+    let expected_previous_contract_address = args
+        .expected_previous_contract_address
+        .as_deref()
+        .map(str::parse)
+        .transpose()
+        .wrap_err("failed to parse --expected-previous-contract-address")?;
 
     let code =
         fs::read(&args.code_file).wrap_err_with(|| format!("read {}", args.code_file.display()))?;
@@ -378,28 +414,18 @@ fn main() -> Result<()> {
         .try_signed(&signer)
         .wrap_err("failed to sign contract manifest")?;
     let code_hash = verified.code_hash;
-    let nonce_key = Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)
-        .expect("static contract deploy nonce metadata key is valid");
     let next_nonce = args
         .deploy_nonce
         .checked_add(1)
         .ok_or_else(|| eyre!("deploy nonce overflow"))?;
     let mut tx_metadata = Metadata::default();
     insert_contract_deployment_address_metadata(&mut tx_metadata, &contract_address);
-    let route_anchor_instruction = args.route_anchor_authority_account.then(|| {
-        InstructionBox::from(SetKeyValue::account(
-            authority.clone(),
-            nonce_key.clone(),
-            Json::new(args.deploy_nonce),
-        ))
-    });
 
     let upload_plan = build_native_upload_plan(
         &client.chain,
         &authority,
         &private_key,
         &tx_metadata,
-        route_anchor_instruction,
         code_hash,
         &code,
     )?;
@@ -416,31 +442,31 @@ fn main() -> Result<()> {
     let (register_manifest_tx, register_manifest_quote) =
         quote_and_resign_transaction(&client, register_manifest_tx, &fee_payment, &private_key)?;
     fee_quotes.push(register_manifest_quote);
-    let activate_tx = sign_transaction(
+    let commit_tx = build_commit_transaction(
         &client.chain,
         &authority,
         &private_key,
         tx_metadata,
-        [
-            InstructionBox::from(ActivateContractInstance {
-                contract_address: contract_address.clone(),
-                code_hash,
-            }),
-            InstructionBox::from(SetKeyValue::account(
-                authority.clone(),
-                nonce_key,
-                Json::new(next_nonce),
-            )),
-        ],
+        args.deploy_nonce,
+        contract_address.clone(),
+        code_hash,
+        contract_alias.clone(),
+        args.lease_expiry_ms,
+        expected_previous_contract_address.clone(),
     )?;
-    let (activate_tx, activate_quote) =
-        quote_and_resign_transaction(&client, activate_tx, &fee_payment, &private_key)?;
-    fee_quotes.push(activate_quote);
+    let (commit_tx, commit_quote) =
+        quote_and_resign_transaction(&client, commit_tx, &fee_payment, &private_key)?;
+    fee_quotes.push(commit_quote);
 
     let register_manifest_hash = register_manifest_tx.hash();
-    let activate_hash = activate_tx.hash();
+    let commit_hash = commit_tx.hash();
+    let contract_subject_account = contract_address
+        .subject_id()
+        .to_i105_for_discriminant(args.chain_discriminant)
+        .map_err(|err| eyre!(err.to_string()))
+        .wrap_err("failed to encode contract subject for the target chain")?;
     let planned_transactions =
-        deployment_transaction_sequence(upload_plan, register_manifest_tx, activate_tx);
+        deployment_transaction_sequence(upload_plan, register_manifest_tx, commit_tx);
 
     let written = if let Some(out_dir) = args.out_dir.as_deref() {
         Some(
@@ -465,10 +491,23 @@ fn main() -> Result<()> {
             "submitted".to_owned(),
             norito::json::Value::Bool(!args.emit_only),
         ),
+        ("chain_id".to_owned(), client.chain.to_string().into()),
+        (
+            "chain_discriminant".to_owned(),
+            u64::from(args.chain_discriminant).into(),
+        ),
         ("dataspace".to_owned(), args.dataspace.into()),
         (
             "contract_address".to_owned(),
             contract_address.to_string().into(),
+        ),
+        (
+            "contract_alias".to_owned(),
+            contract_alias.to_string().into(),
+        ),
+        (
+            "contract_subject_account".to_owned(),
+            contract_subject_account.into(),
         ),
         ("deploy_nonce".to_owned(), args.deploy_nonce.into()),
         ("next_deploy_nonce".to_owned(), next_nonce.into()),
@@ -480,15 +519,18 @@ fn main() -> Result<()> {
             "register_manifest_tx_hash".to_owned(),
             register_manifest_hash.to_string().into(),
         ),
-        (
-            "activate_tx_hash".to_owned(),
-            activate_hash.to_string().into(),
-        ),
+        ("commit_tx_hash".to_owned(), commit_hash.to_string().into()),
         (
             "fee_quotes".to_owned(),
             norito::json::to_value(&fee_quotes).wrap_err("encode split-deploy fee quotes")?,
         ),
     ]);
+    fields.insert(
+        "expected_previous_contract_address".to_owned(),
+        expected_previous_contract_address.map_or(norito::json::Value::Null, |address| {
+            address.to_string().into()
+        }),
+    );
     let norito::json::Value::Object(upload_report) = upload_report else {
         unreachable!("native upload report is always an object");
     };
@@ -672,6 +714,55 @@ mod tests {
     }
 
     #[test]
+    fn commit_transaction_uses_native_nonce_cas_without_generic_metadata_write() -> Result<()> {
+        let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let contract_address = iroha::data_model::smart_contract::ContractAddress::derive(
+            369,
+            &authority,
+            7,
+            DataSpaceId::UNIVERSAL,
+        )?;
+        let contract_alias: iroha::data_model::smart_contract::ContractAlias =
+            "validation_fee_pool::universal".parse()?;
+        let code_hash = Hash::new(b"reviewed-contract-artifact");
+        let transaction = build_commit_transaction(
+            &ChainId::from("split-contract-deploy-native-commit-test"),
+            &authority,
+            key_pair.private_key(),
+            Metadata::default(),
+            7,
+            contract_address.clone(),
+            code_hash,
+            contract_alias.clone(),
+            None,
+            None,
+        )?;
+
+        let Executable::Instructions(instructions) = transaction.instructions() else {
+            panic!("native contract commit must use one instruction transaction");
+        };
+        assert_eq!(instructions.len(), 1);
+        let commit = instructions[0]
+            .as_any()
+            .downcast_ref::<CommitContractDeployment>()
+            .expect("deployment must use the native nonce/alias CAS instruction");
+        assert_eq!(commit.expected_deploy_nonce, 7);
+        assert_eq!(commit.contract_address, contract_address);
+        assert_eq!(commit.code_hash, code_hash);
+        assert_eq!(commit.contract_alias, contract_alias);
+        assert!(commit.expected_previous_contract_address.is_none());
+        assert!(
+            instructions[0]
+                .as_any()
+                .downcast_ref::<iroha::data_model::isi::SetKeyValueBox>()
+                .is_none(),
+            "generic account metadata writes cannot advance the reserved deploy nonce"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn native_upload_plan_rejects_empty_artifact() {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -680,7 +771,6 @@ mod tests {
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
-            None,
             Hash::new(b""),
             &[],
         );
@@ -702,7 +792,6 @@ mod tests {
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
-            None,
             Hash::new(b"not-the-canonical-artifact-hash"),
             &code,
         );
@@ -715,21 +804,15 @@ mod tests {
     }
 
     #[test]
-    fn one_chunk_upload_bootstraps_then_uploads_and_finalizes() -> Result<()> {
+    fn one_chunk_upload_uploads_and_finalizes_without_reserved_nonce_mutation() -> Result<()> {
         let key_pair = checked_split_contract_deploy_ed25519_key_fixture();
         let authority = AccountId::new(key_pair.public_key().clone());
         let code = vec![0x5a; SMART_CONTRACT_CODE_CHUNK_BYTES];
-        let anchor = InstructionBox::from(SetKeyValue::account(
-            authority.clone(),
-            Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)?,
-            Json::new(0_u64),
-        ));
         let plan = build_native_upload_plan(
             &ChainId::from("split-contract-deploy-native-upload-test"),
             &authority,
             key_pair.private_key(),
             &Metadata::default(),
-            Some(anchor),
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -739,23 +822,17 @@ mod tests {
         let Executable::Instructions(instructions) = plan.finalize.2.instructions() else {
             panic!("native upload must use instruction transactions");
         };
-        assert_eq!(instructions.len(), 3);
-        assert!(
-            instructions[0]
-                .as_any()
-                .downcast_ref::<iroha::data_model::isi::SetKeyValueBox>()
-                .is_some()
-        );
-        let upload = instructions[1]
+        assert_eq!(instructions.len(), 2);
+        let upload = instructions[0]
             .as_any()
             .downcast_ref::<UploadSmartContractCodeChunk>()
-            .expect("one-chunk transaction uploads code after bootstrap");
+            .expect("one-chunk transaction uploads code");
         assert_eq!(upload.code_hash, ivm::contract_code_hash(&code));
         assert_eq!(upload.total_size, u64::try_from(code.len())?);
         assert_eq!(upload.chunk_index, 0);
         assert_eq!(upload.chunk_count, 1);
         assert_eq!(upload.chunk, code);
-        let finalize = instructions[2]
+        let finalize = instructions[1]
             .as_any()
             .downcast_ref::<FinalizeSmartContractCodeUpload>()
             .expect("one-chunk transaction finalizes after upload");
@@ -801,18 +878,12 @@ mod tests {
             DataSpaceId::UNIVERSAL,
         )?;
         insert_contract_deployment_address_metadata(&mut metadata, &contract_address);
-        let anchor = InstructionBox::from(SetKeyValue::account(
-            authority.clone(),
-            Name::from_str(CONTRACT_DEPLOY_NONCE_METADATA_KEY)?,
-            Json::new(0_u64),
-        ));
         let code_hash = ivm::contract_code_hash(&code);
         let plan = build_native_upload_plan(
             &ChainId::from("split-contract-deploy-large-native-upload-test"),
             &authority,
             key_pair.private_key(),
             &metadata,
-            Some(anchor),
             code_hash,
             &code,
         )?;
@@ -880,7 +951,7 @@ mod tests {
             assert_eq!(upload.chunk.len(), expected_chunk_len);
             assert!(upload.chunk.len() < code.len());
             rebuilt.extend_from_slice(&upload.chunk);
-            let bootstrap_count = instructions
+            let reserved_nonce_mutation_count = instructions
                 .iter()
                 .filter(|instruction| {
                     instruction
@@ -889,7 +960,7 @@ mod tests {
                         .is_some()
                 })
                 .count();
-            assert_eq!(bootstrap_count, usize::from(index == 0));
+            assert_eq!(reserved_nonce_mutation_count, 0);
             let finalize_count = instructions
                 .iter()
                 .filter(|instruction| {
@@ -915,7 +986,7 @@ mod tests {
             }
             assert_eq!(
                 instructions.len(),
-                1 + usize::from(index == 0) + usize::from(index + 1 == expected_count)
+                1 + usize::from(index + 1 == expected_count)
             );
         }
         assert_eq!(rebuilt, code);
@@ -953,7 +1024,6 @@ mod tests {
             &authority,
             key_pair.private_key(),
             &metadata,
-            None,
             ivm::contract_code_hash(&code),
             &code,
         )?;
@@ -976,7 +1046,7 @@ mod tests {
             "register-bytes-chunk-0002-of-0003",
             "register-bytes-finalize",
             "register-manifest",
-            "activate",
+            "commit",
         ];
         assert_eq!(
             sequence

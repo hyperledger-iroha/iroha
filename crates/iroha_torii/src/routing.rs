@@ -34177,6 +34177,356 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
     }
 }
 
+#[cfg(feature = "app_api")]
+fn manifest_policy_from_dto(dto: &PinPolicyDto) -> ManifestPinPolicy {
+    let storage_class = match dto.storage_class {
+        PinPolicyStorageClassDto::Hot => ManifestStorageClass::Hot,
+        PinPolicyStorageClassDto::Warm => ManifestStorageClass::Warm,
+        PinPolicyStorageClassDto::Cold => ManifestStorageClass::Cold,
+    };
+    ManifestPinPolicy {
+        min_replicas: dto.min_replicas,
+        storage_class,
+        retention_epoch: dto.retention_epoch,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn validate_manifest_payload_matches_request(
+    req: &RegisterPinManifestDto,
+    constraints: &ManifestPinPolicyConstraints,
+    expected_digest: &[u8; 32],
+    expected_chunk_digest: &[u8; 32],
+    expected_policy: &ManifestPinPolicy,
+) -> Result<(Vec<u8>, ManifestV1)> {
+    let Some(manifest_b64) = req.manifest_b64.as_ref() else {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_required",
+            "manifest_b64 is required because pin registration stores the canonical manifest payload",
+        ));
+    };
+
+    let manifest_bytes = base64::engine::general_purpose::STANDARD
+        .decode(manifest_b64.as_bytes())
+        .map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_base64_invalid",
+                format!("invalid base64 in manifest_b64: {err}"),
+            )
+        })?;
+    let manifest =
+        sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes).map_err(|err| {
+            sorafs_pin_validation_error(
+                "sorafs_pin_manifest_payload_decode_failed",
+                format!("invalid canonical Norito ManifestV1 in manifest_b64: {err}"),
+            )
+        })?;
+
+    validate_manifest(&manifest, constraints).map_err(|err| {
+        sorafs_pin_manifest_validation_error("sorafs_pin_manifest_payload_invalid", err)
+    })?;
+
+    let digest = manifest.digest().map_err(|err| {
+        sorafs_pin_validation_error(
+            "sorafs_pin_manifest_payload_digest_failed",
+            format!("failed to digest manifest_b64: {err}"),
+        )
+    })?;
+    if digest.as_bytes() != expected_digest {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_digest_mismatch",
+            format!(
+                "manifest_b64 digest {} does not match manifest_digest_hex {}",
+                hex::encode(digest.as_bytes()),
+                hex::encode(expected_digest)
+            ),
+        ));
+    }
+
+    if manifest.chunking.profile_id.0 != req.chunker_profile_id
+        || manifest.chunking.namespace != req.chunker_namespace
+        || manifest.chunking.name != req.chunker_name
+        || manifest.chunking.semver != req.chunker_semver
+        || manifest.chunking.multihash_code != req.chunker_multihash_code
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunker_mismatch",
+            "manifest_b64 chunker descriptor does not match request chunker fields",
+        ));
+    }
+
+    if manifest.content_length != req.content_length {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_content_length_mismatch",
+            format!(
+                "manifest_b64 content_length {} does not match request content_length {}",
+                manifest.content_length, req.content_length
+            ),
+        ));
+    }
+
+    if &manifest.chunk_digest_sha3_256 != expected_chunk_digest {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_chunk_digest_mismatch",
+            "manifest_b64 chunk_digest_sha3_256 does not match request chunk_digest_sha3_256_hex",
+        ));
+    }
+
+    if manifest.pin_policy.min_replicas != expected_policy.min_replicas
+        || manifest.pin_policy.storage_class != expected_policy.storage_class
+        || manifest.pin_policy.retention_epoch != expected_policy.retention_epoch
+    {
+        return Err(sorafs_pin_validation_error(
+            "sorafs_pin_manifest_policy_mismatch",
+            "manifest_b64 pin_policy does not match request pin_policy",
+        ));
+    }
+
+    Ok((manifest_bytes, manifest))
+}
+
+fn convert_manifest_policy(
+    policy: &ManifestPinPolicy,
+) -> iroha_data_model::sorafs::pin_registry::PinPolicy {
+    use iroha_data_model::sorafs::pin_registry::StorageClass as DmStorageClass;
+    let storage_class = match policy.storage_class {
+        ManifestStorageClass::Hot => DmStorageClass::Hot,
+        ManifestStorageClass::Warm => DmStorageClass::Warm,
+        ManifestStorageClass::Cold => DmStorageClass::Cold,
+    };
+    iroha_data_model::sorafs::pin_registry::PinPolicy {
+        min_replicas: policy.min_replicas,
+        storage_class,
+        retention_epoch: policy.retention_epoch,
+    }
+}
+
+#[cfg(feature = "app_api")]
+pub fn parse_report_iso_week(label: &str) -> Result<PorReportIsoWeek, Error> {
+    let (year_part, week_part) = label
+        .split_once("-W")
+        .ok_or_else(|| conversion_error("ISO week must be formatted as YYYY-Www".to_string()))?;
+    let year: u16 = year_part
+        .parse()
+        .map_err(|err| conversion_error(format!("invalid ISO week year `{year_part}`: {err}")))?;
+    let week: u8 = week_part
+        .parse()
+        .map_err(|err| conversion_error(format!("invalid ISO week number `{week_part}`: {err}")))?;
+    let cycle = PorReportIsoWeek { year, week };
+    cycle
+        .validate()
+        .map_err(|err| conversion_error(format!("invalid ISO week `{label}`: {err}")))?;
+    Ok(cycle)
+}
+
+fn sorafs_pin_manifest_validation_error(code: &'static str, err: ManifestValidationError) -> Error {
+    sorafs_pin_validation_error(code, format!("manifest validation failed: {err}"))
+}
+
+fn sorafs_pin_validation_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppQueryValidation {
+        code,
+        message: message.into(),
+    }
+}
+
+#[allow(clippy::redundant_pub_crate)]
+pub(crate) fn conversion_error(message: String) -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+    ))
+}
+
+#[cfg(feature = "app_api")]
+fn contract_not_found_error(code: &'static str, message: impl Into<String>) -> Error {
+    Error::AppNotFound {
+        code,
+        message: message.into(),
+    }
+}
+
+fn reject_server_side_signing(endpoint: &'static str) -> Error {
+    conversion_error(format!(
+        "{endpoint} no longer accepts private_key payloads; submit a locally signed transaction instead"
+    ))
+}
+
+fn deal_engine_error(err: DealEngineError) -> Error {
+    use DealEngineError as E;
+    match err {
+        E::ZeroDeposit => Error::AppQueryValidation {
+            code: "sorafs_deal_zero_deposit",
+            message: "deal engine deposits must be greater than zero".to_owned(),
+        },
+        E::ResourceExhausted { .. } => capacity_limit_error(),
+        E::BalanceOverflow { resource } => Error::AppConflict {
+            code: "sorafs_deal_balance_overflow",
+            message: format!("deal engine balance overflow for `{resource}`"),
+        },
+        E::FundingSequenceMismatch {
+            account_kind,
+            expected,
+            found,
+        } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_conflict",
+            message: format!(
+                "{account_kind} funding sequence {found} does not equal next expected sequence {expected}"
+            ),
+        },
+        E::FundingSequenceOverflow { account_kind } => Error::AppConflict {
+            code: "sorafs_deal_funding_sequence_exhausted",
+            message: format!("{account_kind} funding sequence space is exhausted"),
+        },
+        E::InvalidProposal(reason) => Error::AppQueryValidation {
+            code: "sorafs_deal_proposal_invalid",
+            message: reason,
+        },
+        E::UnknownProvider(provider) => Error::AppNotFound {
+            code: "sorafs_deal_provider_not_found",
+            message: format!("unknown provider {}", hex::encode(provider.as_bytes())),
+        },
+        E::UnknownClient(client) => Error::AppNotFound {
+            code: "sorafs_deal_client_not_found",
+            message: format!("unknown client {}", hex::encode(client.as_bytes())),
+        },
+        E::InsufficientBond {
+            provider,
+            required,
+            available,
+        } => Error::AppConflict {
+            code: "sorafs_deal_bond_insufficient",
+            message: format!(
+                "insufficient bond for provider {} (required {required}, available {available})",
+                hex::encode(provider.as_bytes())
+            ),
+        },
+        E::DuplicateDeal(deal) => Error::AppConflict {
+            code: "sorafs_deal_already_exists",
+            message: format!("deal {} already exists", hex::encode(deal.as_bytes())),
+        },
+        E::UnknownDeal(deal) => Error::AppNotFound {
+            code: "sorafs_deal_not_found",
+            message: format!("deal {} not found", hex::encode(deal.as_bytes())),
+        },
+        E::DealInactive(deal) => Error::AppConflict {
+            code: "sorafs_deal_inactive",
+            message: format!("deal {} is not active", hex::encode(deal.as_bytes())),
+        },
+        E::ActivationOutOfRange {
+            deal_id,
+            activation_epoch,
+            start,
+            end,
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_activation_epoch_invalid",
+            message: format!(
+                "activation epoch {activation_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UsageEpochOutOfRange {
+            deal_id,
+            usage_epoch,
+            start,
+            end,
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_usage_epoch_invalid",
+            message: format!(
+                "usage epoch {usage_epoch} outside [{start}, {end}] for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UsageEpochNotMonotonic {
+            deal_id,
+            usage_epoch,
+            previous_epoch,
+        } => Error::AppConflict {
+            code: "sorafs_deal_usage_epoch_conflict",
+            message: format!(
+                "usage epoch {usage_epoch} is not after prior epoch {previous_epoch} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidTicket { deal_id, reason } => Error::AppQueryValidation {
+            code: "sorafs_deal_ticket_invalid",
+            message: format!(
+                "invalid micropayment ticket for deal {}: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::UnsafeCancellation { deal_id, reason } => Error::AppConflict {
+            code: "sorafs_deal_cancellation_unsafe",
+            message: format!(
+                "deal {} cannot be cancelled: {reason}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::InvalidCancellationReason => Error::AppQueryValidation {
+            code: "sorafs_deal_cancellation_reason_invalid",
+            message:
+                "deal cancellation reason must be canonical, non-empty, control-free, and bounded"
+                    .to_owned(),
+        },
+        E::TicketReplay { deal_id, ticket_id } => Error::AppConflict {
+            code: "sorafs_deal_ticket_replay",
+            message: format!(
+                "micropayment ticket {} was already consumed for deal {}",
+                hex::encode(ticket_id.as_bytes()),
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::SettlementWindowMismatch {
+            deal_id,
+            settlement_epoch,
+            window_epochs,
+        } => Error::AppQueryValidation {
+            code: "sorafs_deal_settlement_epoch_invalid",
+            message: format!(
+                "settlement epoch {settlement_epoch} does not satisfy window length {window_epochs} for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::SettlementEpochOverflow(deal_id) => Error::AppConflict {
+            code: "sorafs_deal_settlement_epoch_exhausted",
+            message: format!(
+                "next settlement epoch overflows for deal {}",
+                hex::encode(deal_id.as_bytes())
+            ),
+        },
+        E::AllocationFailed { resource } => Error::AppServiceUnavailable {
+            code: "sorafs_deal_allocation_failed",
+            message: format!("deal engine could not reserve memory for `{resource}`"),
+        },
+        E::MetadataEncoding(err) => Error::AppQueryValidation {
+            code: "sorafs_deal_metadata_encoding_invalid",
+            message: format!("metadata encoding failed: {err}"),
+        },
+        E::InvalidCheckpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_invalid",
+            message: format!("invalid deal runtime checkpoint: {reason}"),
+        },
+        E::Checkpoint(reason) => Error::AppServiceUnavailable {
+            code: "sorafs_deal_checkpoint_failed",
+            message: format!("deal runtime checkpoint failed: {reason}"),
+        },
+        E::StateLockPoisoned => Error::AppServiceUnavailable {
+            code: "sorafs_deal_state_poisoned",
+            message: "deal engine state lock poisoned".to_owned(),
+        },
+    }
+}
+
+fn capacity_limit_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+    ))
+}
+
+fn quota_limit_error(err: QuotaExceeded) -> Error {
+    let _ = err;
+    capacity_limit_error()
+}
+
 #[cfg(test)]
 mod sorafs_runtime_error_mapping_tests {
     use super::*;

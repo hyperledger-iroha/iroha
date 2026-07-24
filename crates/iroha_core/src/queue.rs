@@ -83,11 +83,9 @@ use norito::codec::{Decode, Encode};
 #[cfg(test)]
 use norito::core as ncore;
 use parking_lot::RwLock;
-#[cfg(test)]
-use reservation_journal::{
-    ReservationJournalAppendFault, ReservationJournalCompactionFault,
-};
 use reservation_journal::{LANE_QUEUE_RESERVATION_JOURNAL_VERSION, LaneQueueReservationJournal};
+#[cfg(test)]
+use reservation_journal::{ReservationJournalAppendFault, ReservationJournalCompactionFault};
 pub(crate) use router::routable_lane_ids_for_nexus_at_height;
 pub use router::{
     ConfigLaneRouter, LaneRouter, NativeAmxRoutingPlan, RouteLeg, RouteLegRole, RoutingDecision,
@@ -2349,7 +2347,7 @@ impl Queue {
             self.plan_journal_disabled.store(true, Ordering::Release);
         }
         self.finalize_commit_barriers()?;
-        self.finalize_completed_releases()
+        self.finalize_completed_releases(None)
     }
 
     /// Install and replay the crash-safe lane queue reservation journal.
@@ -2460,8 +2458,28 @@ impl Queue {
             }
         }
         store.journal = Some(journal);
-        self.finalize_commit_barriers_locked(&mut store)?;
-        self.finalize_completed_releases_locked(&mut store)?;
+        let publish_fault = match self.finalize_commit_barriers_locked(&mut store) {
+            Ok(publish_fault) => publish_fault,
+            Err(error) => {
+                let publish_fault = self.lane_reservation_durability_faulted();
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(error);
+            }
+        };
+        let publish_fault = match self.finalize_completed_releases_locked(&mut store) {
+            Ok(release_publish_fault) => publish_fault || release_publish_fault,
+            Err(error) => {
+                let publish_fault = publish_fault || self.lane_reservation_durability_faulted();
+                drop(store);
+                if publish_fault {
+                    self.publish_latched_lane_reservation_durability_fault(None);
+                }
+                return Err(error);
+            }
+        };
         let summary = LaneQueueReservationReplaySummary {
             restored: store.live_by_hash.len(),
             awaiting_transaction_replay,
@@ -2470,7 +2488,11 @@ impl Queue {
             completed_releases: store.completed_releases.len(),
         };
         drop(store);
-        self.publish_backpressure_state(self.active_len(), None);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        } else {
+            self.publish_backpressure_state(self.active_len(), None);
+        }
         Ok(summary)
     }
 
@@ -2723,8 +2745,7 @@ impl Queue {
             .journal_mut()?
             .put_batch(selected.iter().map(|(record, ..)| record.clone()).collect())
         {
-            let publish_fault =
-                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
             if publish_fault {
                 self.publish_latched_lane_reservation_durability_fault(backpressure_telemetry);
@@ -2822,8 +2843,7 @@ impl Queue {
         let restored_fifo =
             self.fifo_with_released_reservations_locked(core::slice::from_ref(&record))?;
         if let Err(error) = store.journal_mut()?.release(*key) {
-            let publish_fault =
-                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
             if publish_fault {
                 self.publish_latched_lane_reservation_durability_fault(None);
@@ -2991,8 +3011,7 @@ impl Queue {
             ));
         }
         if let Err(error) = store.journal_mut()?.prepare_release(barrier.clone()) {
-            let publish_fault =
-                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
             if publish_fault {
                 self.publish_latched_lane_reservation_durability_fault(None);
@@ -3218,8 +3237,7 @@ impl Queue {
             }
         }
         if let Err(error) = store.journal_mut()?.forget_commit(*key) {
-            let publish_fault =
-                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
             if publish_fault {
                 self.publish_latched_lane_reservation_durability_fault(None);
@@ -3322,8 +3340,7 @@ impl Queue {
         records.sort_by_key(|record| record.fifo_order.ordinal);
         let restored_fifo = self.fifo_with_released_reservations_locked(&records)?;
         if let Err(error) = store.journal_mut()?.prune(lane_id, lane_incarnation) {
-            let publish_fault =
-                self.latch_lane_reservation_durability_fault_locked(&store, &error);
+            let publish_fault = self.latch_lane_reservation_durability_fault_locked(&store, &error);
             drop(store);
             if publish_fault {
                 self.publish_latched_lane_reservation_durability_fault(None);
@@ -3586,10 +3603,7 @@ impl Queue {
     /// Compaction is maintenance after an already durable ownership transition, so a
     /// non-ambiguous failure remains a warning rather than changing that operation's result.
     /// Ambiguous failures poison all transaction selection until startup recovery.
-    fn compact_lane_reservations_locked(
-        &self,
-        store: &mut LaneQueueReservationStore,
-    ) -> bool {
+    fn compact_lane_reservations_locked(&self, store: &mut LaneQueueReservationStore) -> bool {
         let Err(error) = store.compact_if_needed() else {
             return false;
         };
@@ -3642,9 +3656,13 @@ impl Queue {
         let restored_fifo =
             self.fifo_with_released_reservations_locked(&completion.ordered_records)?;
         self.replace_fifo_locked(&restored_fifo);
-        store
+        if let Err(error) = store
             .journal_mut()?
-            .forget_release(completion.barrier.clone())?;
+            .forget_release(completion.barrier.clone())
+        {
+            let _ = self.latch_lane_reservation_durability_fault_locked(store, &error);
+            return Err(LaneQueueReservationError::Journal(error));
+        }
         store.completed_releases.remove(index);
         Ok(true)
     }
@@ -3652,7 +3670,7 @@ impl Queue {
     fn finalize_completed_releases_locked(
         &self,
         store: &mut LaneQueueReservationStore,
-    ) -> Result<(), LaneQueueReservationError> {
+    ) -> Result<bool, LaneQueueReservationError> {
         let barriers = store
             .completed_releases
             .iter()
@@ -3661,20 +3679,31 @@ impl Queue {
         for barrier in barriers {
             let _ = self.finalize_one_completed_release_locked(store, &barrier)?;
         }
-        store.maybe_compact();
-        Ok(())
+        Ok(self.compact_lane_reservations_locked(store))
     }
 
-    fn finalize_completed_releases(&self) -> Result<(), LaneQueueReservationError> {
+    fn finalize_completed_releases(
+        &self,
+        telemetry: Option<&StateTelemetry>,
+    ) -> Result<(), LaneQueueReservationError> {
         let _queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
-        self.finalize_completed_releases_locked(&mut store)
+        let result = self.finalize_completed_releases_locked(&mut store);
+        let publish_fault = match &result {
+            Ok(publish_fault) => *publish_fault,
+            Err(_) => self.lane_reservation_durability_faulted(),
+        };
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(telemetry);
+        }
+        result.map(|_| ())
     }
 
     fn finalize_commit_barriers_locked(
         &self,
         store: &mut LaneQueueReservationStore,
-    ) -> Result<(), LaneQueueReservationError> {
+    ) -> Result<bool, LaneQueueReservationError> {
         let barriers = store.commit_barriers.clone();
         for key in barriers {
             let hash = key.signed_transaction_hash;
@@ -3698,19 +3727,30 @@ impl Queue {
                     break;
                 }
             }
-            store.journal_mut()?.forget_commit(key)?;
+            if let Err(error) = store.journal_mut()?.forget_commit(key) {
+                let _ = self.latch_lane_reservation_durability_fault_locked(store, &error);
+                return Err(LaneQueueReservationError::Journal(error));
+            }
             store
                 .commit_barriers
                 .retain(|committed_key| *committed_key != key);
         }
-        store.maybe_compact();
-        Ok(())
+        Ok(self.compact_lane_reservations_locked(store))
     }
 
     fn finalize_commit_barriers(&self) -> Result<(), LaneQueueReservationError> {
         let _queue_guard = self.push_remove_lock.lock();
         let mut store = self.lane_reservations.lock();
-        self.finalize_commit_barriers_locked(&mut store)
+        let result = self.finalize_commit_barriers_locked(&mut store);
+        let publish_fault = match &result {
+            Ok(publish_fault) => *publish_fault,
+            Err(_) => self.lane_reservation_durability_faulted(),
+        };
+        drop(store);
+        if publish_fault {
+            self.publish_latched_lane_reservation_durability_fault(None);
+        }
+        result.map(|_| ())
     }
 
     /// Replay live pending queue-plan journal records against the current state.
@@ -3841,7 +3881,7 @@ impl Queue {
         })?;
 
         self.record_plan_journal_removes_durable(journal_removals)?;
-        self.finalize_completed_releases()
+        self.finalize_completed_releases(backpressure_telemetry)
             .map_err(std::io::Error::other)?;
 
         Ok(summary)
@@ -6742,16 +6782,7 @@ impl Queue {
             }
             self.apply_per_user_tx_count_increments(applied_user_increments);
         }
-        if let Err(error) = self.finalize_completed_releases() {
-            let ambiguous = self
-                .lane_reservations
-                .lock()
-                .journal
-                .as_ref()
-                .is_some_and(LaneQueueReservationJournal::durability_ambiguous);
-            if ambiguous && let LaneQueueReservationError::Journal(journal_error) = &error {
-                self.mark_lane_reservation_durability_fault(journal_error, telemetry);
-            }
+        if let Err(error) = self.finalize_completed_releases(telemetry) {
             warn!(%error, "failed to finish a replayed lane reservation release");
         }
         #[cfg(feature = "telemetry")]

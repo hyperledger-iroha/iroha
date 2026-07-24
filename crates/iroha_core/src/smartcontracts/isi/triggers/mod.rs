@@ -242,7 +242,7 @@ pub mod isi {
         authority: &AccountId,
         state_transaction: &mut StateTransaction<'_, '_>,
         trigger: Trigger,
-        skip_permission_check: bool,
+        preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
 
@@ -258,11 +258,25 @@ pub mod isi {
                 .fuel(),
         )?;
 
-        if !skip_permission_check {
+        {
             // Enforce minimal permission: only genesis block, the trigger owner,
-            // domain owner of the trigger owner, or an account with
-            // CanRegisterTrigger{authority: <owner>} may register the trigger.
+            // domain owner of the trigger owner, an account with
+            // CanRegisterTrigger{authority: <owner>}, or the contract lifecycle
+            // path for its exact derived and already-registered subject may
+            // register the trigger.
             let owner = new_trigger.action().authority().clone();
+            let is_preauthorized_manifest_contract_subject =
+                preauthorized_manifest_contract_subject.is_some_and(|subject| subject == &owner);
+            if is_preauthorized_manifest_contract_subject {
+                state_transaction.world.account(&owner).map_err(|_| {
+                    Error::InvalidParameter(InvalidParameterError::SmartContract(
+                        format!(
+                            "contract manifest trigger authority `{owner}` must be registered before activation"
+                        )
+                        .into(),
+                    ))
+                })?;
+            }
             let is_genesis = state_transaction._curr_block.is_genesis();
             let is_owner = authority == &owner;
             let mut is_domain_owner = false;
@@ -295,7 +309,12 @@ pub mod isi {
             }
             let has_permission =
                 (!is_genesis) && state_transaction.can_register_trigger_for(authority, &owner);
-            if !(is_genesis || is_owner || is_domain_owner || has_permission) {
+            if !(is_genesis
+                || is_owner
+                || is_domain_owner
+                || has_permission
+                || is_preauthorized_manifest_contract_subject)
+            {
                 return Err(Error::InvalidParameter(
                     InvalidParameterError::SmartContract(format!(
                         "Missing CanRegisterTrigger{{authority: {owner}}} permission for {authority}"
@@ -465,7 +484,7 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            register_trigger_internal(authority, state_transaction, self.object().clone(), false)
+            register_trigger_internal(authority, state_transaction, self.object().clone(), None)
         }
     }
 
